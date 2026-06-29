@@ -1,0 +1,39 @@
+{
+  "name": "@babariviere/pi-extensions",
+  "version": "0.1.0",
+  "description": "Personal pi extensions: web search/fetch, secrets injection, Linear/PR helpers, context + footer UI.",
+  "type": "module",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "coding-agent"
+  ],
+  "license": "MIT",
+  "author": "babariviere",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/babariviere/pi-extensions.git"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "pi": {
+    "extensions": [
+      "extensions/*.ts",
+      "extensions/*/index.ts"
+    ]
+  },
+  "dependencies": {
+    "parse5": "^7.2.1"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  },
+  "scripts": {
+    "test": "node --import tsx --test extensions/monitor/utils.test.ts",
+    "typecheck": "tsc -p tsconfig.json"
+  }
+}
