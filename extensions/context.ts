@@ -8,7 +8,7 @@
  * - current context window usage + session totals (tokens/cost)
  */
 
-import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext, ToolResultEvent } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext, Theme, ToolResultEvent } from "@earendil-works/pi-coding-agent";
 import { DynamicBorder } from "@earendil-works/pi-coding-agent";
 import { Container, Key, Text, matchesKey, type Component, type TUI } from "@earendil-works/pi-tui";
 import os from "node:os";
@@ -141,26 +141,35 @@ type SkillLoadedEntryData = {
 	path: string;
 };
 
+/** Minimal view of a session entry; the SDK's union is wider than we need here. */
+type SessionEntryLike = {
+	type?: string;
+	customType?: string;
+	data?: unknown;
+	message?: { role?: string; usage?: Record<string, unknown> };
+};
+
 function getLoadedSkillsFromSession(ctx: ExtensionContext): Set<string> {
 	const out = new Set<string>();
 	for (const e of ctx.sessionManager.getEntries()) {
-		if ((e as any)?.type !== "custom") continue;
-		if ((e as any)?.customType !== SKILL_LOADED_ENTRY) continue;
-		const data = (e as any)?.data as SkillLoadedEntryData | undefined;
+		const entry = e as SessionEntryLike;
+		if (entry.type !== "custom") continue;
+		if (entry.customType !== SKILL_LOADED_ENTRY) continue;
+		const data = entry.data as SkillLoadedEntryData | undefined;
 		if (data?.name) out.add(data.name);
 	}
 	return out;
 }
 
-function extractCostTotal(usage: any): number {
-	if (!usage) return 0;
-	const c = usage?.cost;
+function extractCostTotal(usage: unknown): number {
+	if (!usage || typeof usage !== "object") return 0;
+	const c = (usage as { cost?: unknown }).cost;
 	if (typeof c === "number") return Number.isFinite(c) ? c : 0;
 	if (typeof c === "string") {
 		const n = Number(c);
 		return Number.isFinite(n) ? n : 0;
 	}
-	const t = c?.total;
+	const t = c && typeof c === "object" ? (c as { total?: unknown }).total : undefined;
 	if (typeof t === "number") return Number.isFinite(t) ? t : 0;
 	if (typeof t === "string") {
 		const n = Number(t);
@@ -183,9 +192,10 @@ function sumSessionUsage(ctx: ExtensionCommandContext): {
 	let cacheWrite = 0;
 	let totalCost = 0;
 
-	for (const entry of ctx.sessionManager.getEntries()) {
-		if ((entry as any)?.type !== "message") continue;
-		const msg = (entry as any)?.message;
+	for (const e of ctx.sessionManager.getEntries()) {
+		const entry = e as SessionEntryLike;
+		if (entry.type !== "message") continue;
+		const msg = entry.message;
 		if (!msg || msg.role !== "assistant") continue;
 		const usage = msg.usage;
 		if (!usage) continue;
@@ -215,7 +225,7 @@ function shortenPath(p: string, cwd: string): string {
 }
 
 function renderUsageBar(
-	theme: any,
+	theme: Theme,
 	parts: { system: number; tools: number; convo: number; remaining: number },
 	total: number,
 	width: number,
@@ -274,14 +284,14 @@ type ContextViewData = {
 
 class ContextView implements Component {
 	private tui: TUI;
-	private theme: any;
+	private theme: Theme;
 	private onDone: () => void;
 	private data: ContextViewData;
 	private container: Container;
 	private body: Text;
 	private cachedWidth?: number;
 
-	constructor(tui: TUI, theme: any, data: ContextViewData, onDone: () => void) {
+	constructor(tui: TUI, theme: Theme, data: ContextViewData, onDone: () => void) {
 		this.tui = tui;
 		this.theme = theme;
 		this.data = data;

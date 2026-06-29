@@ -1,10 +1,10 @@
 /**
  * secret-mask.ts — pure, dependency-free secret masking utilities.
  *
- * No imports from @mariozechner or any external module.
- * ES2022 stdlib only (String.replaceAll, RegExp, etc.).
+ * No external module imports. ES2022 stdlib only (String.replaceAll,
+ * RegExp, etc.).
  *
- * Consumed by: extensions/secrets.ts
+ * Consumed by: extensions/secrets/index.ts
  */
 
 // ---------------------------------------------------------------------------
@@ -43,7 +43,9 @@ export function partialMask(
 ): string {
 	const minLength = showStart + showEnd + mask.length + 2;
 	if (token.length < minLength) return mask;
-	return token.slice(0, showStart) + mask + token.slice(-showEnd);
+	// token.slice(-0) === token.slice(0) (the whole token), so guard showEnd=0.
+	const end = showEnd > 0 ? token.slice(-showEnd) : "";
+	return token.slice(0, showStart) + mask + end;
 }
 
 // ---------------------------------------------------------------------------
@@ -89,14 +91,18 @@ export const SECRET_PATTERNS: SecretPattern[] = [
 	// 6. GitHub fine-grained PAT (github_pat_)
 	{
 		label: "github-pat-fine",
-		re: /\bgithub_pat_[0-9A-Za-z_]{82}\b/g,
+		// Length is nominally 82 chars but can drift; allow a range so a longer
+		// token is not printed in full.
+		re: /\bgithub_pat_[0-9A-Za-z_]{59,255}\b/g,
 		showStart: 13,
 		showEnd: 2,
 	},
 	// 7. GitHub short tokens (ghp_, gho_, ghu_, ghs_, ghr_)
 	{
 		label: "github-tokens",
-		re: /\bgh[pousr]_[0-9A-Za-z]{36}\b/g,
+		// Classic length is 36 after the prefix, but GitHub has lengthened
+		// tokens before; match a range so length drift does not leak the token.
+		re: /\bgh[pousr]_[0-9A-Za-z]{36,255}\b/g,
 		showStart: 6,
 		showEnd: 2,
 	},
@@ -362,7 +368,7 @@ export function maskUrls(text: string): string {
  * Uses underscore as word boundary (consistent with env var naming).
  */
 const SENSITIVE_EXCLUSIONS =
-	/(?:^|_)(?:PUBLIC|DISPLAY|KEYBOARD|MONKEY|TURKEY|BYPASS|PASSTHROUGH)(?:_|$)/;
+	/(?:^|_)(?:PUBLIC|DISPLAY|KEYBOARD|MONKEY|TURKEY|BYPASS|PASSTHROUGH)(?:_|$)|(?:^|_)(?:SORT|PARTITION|PRIMARY|FOREIGN|IDEMPOTENCY|ROUTING|GROUPING|SHARD|MAP)_KEY(?:_|$)/;
 
 /**
  * Names that indicate the value should be treated as a secret.

@@ -26,6 +26,9 @@
   "dependencies": {
     "parse5": "^7.2.1"
   },
+  "devDependencies": {
+    "tsx": "^4.19.2"
+  },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
     "@earendil-works/pi-ai": "*",
@@ -33,7 +36,7 @@
     "typebox": "*"
   },
   "scripts": {
-    "test": "node --import tsx --test extensions/monitor/utils.test.ts",
+    "test": "node --import tsx --test 'extensions/**/*.test.ts'",
     "typecheck": "tsc -p tsconfig.json"
   }
 }

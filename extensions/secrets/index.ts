@@ -13,7 +13,7 @@
  * API keys, JWTs, AWS keys, etc.) even without fnox.
  *
  * Install:
- *   Place in ~/.pi/agent/extensions/secrets.ts
+ *   Place in ~/.pi/agent/extensions/secrets/ (this file is the entrypoint).
  *   Or add to ~/.pi/agent/settings.json: { "extensions": ["/path/to/secrets"] }
  */
 
@@ -25,9 +25,6 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { createLocalBashOperations, isToolCallEventType } from "@earendil-works/pi-coding-agent";
 import { scrubText, type SecretEntry } from "./secret-mask";
 
-/**
- * Find the nearest fnox.toml file by searching up from cwd
- */
 /**
  * Resolve the shell pi is configured to use, so ! commands match the agent
  * bash tool. Reads shellPath from pi's global settings.json, falls back to
@@ -48,6 +45,7 @@ function resolveShellPath(): string | undefined {
 	return process.env.SHELL || undefined;
 }
 
+/** Find the nearest fnox.toml file by searching up from cwd. */
 function findFnoxConfig(cwd: string): string | null {
 	let dir = cwd;
 	for (let i = 0; i < 20; i++) {
@@ -121,6 +119,8 @@ export default function (pi: ExtensionAPI) {
 	pi.on("tool_result", async (event) => {
 		const secrets = await getSecrets();
 
+		// event.content is the SDK's content-part union; keep it untyped here so the
+		// returned shape still matches the tool_result handler's expected type.
 		const scrubbed = event.content.map((c: any) =>
 			c.type === "text" ? { ...c, text: scrubText(c.text, secrets) } : c,
 		);
@@ -135,7 +135,7 @@ export default function (pi: ExtensionAPI) {
 		const localOps = createLocalBashOperations({ shellPath: resolveShellPath() });
 		return {
 			operations: {
-				exec: async (command: string, execCwd: string, options: any) => {
+				exec: async (command: string, execCwd: string, options: Parameters<typeof localOps.exec>[2]) => {
 					const secrets = await getSecrets();
 					const injectedEnv: Record<string, string> = {};
 					for (const secret of secrets) {

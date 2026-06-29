@@ -7,6 +7,51 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
+/** Max bytes we will buffer from a network response body (10 MB). */
+export const MAX_RESPONSE_BYTES = 10 * 1024 * 1024;
+
+export class ResponseTooLargeError extends Error {
+	constructor(maxBytes: number) {
+		super(`Response body exceeded the ${maxBytes}-byte limit`);
+		this.name = "ResponseTooLargeError";
+	}
+}
+
+/**
+ * Read a response body as UTF-8 text, aborting once more than `maxBytes` have
+ * been received so a hostile or oversized URL cannot exhaust memory. Falls back
+ * to `res.text()` when the body is not a readable stream.
+ */
+export async function readTextCapped(res: Response, maxBytes = MAX_RESPONSE_BYTES): Promise<string> {
+	const body = res.body;
+	if (!body) return await res.text();
+	const reader = body.getReader();
+	const chunks: Uint8Array[] = [];
+	let total = 0;
+	try {
+		while (true) {
+			const { done, value } = await reader.read();
+			if (done) break;
+			if (!value) continue;
+			total += value.byteLength;
+			if (total > maxBytes) {
+				await reader.cancel();
+				throw new ResponseTooLargeError(maxBytes);
+			}
+			chunks.push(value);
+		}
+	} finally {
+		reader.releaseLock();
+	}
+	const out = new Uint8Array(total);
+	let offset = 0;
+	for (const chunk of chunks) {
+		out.set(chunk, offset);
+		offset += chunk.byteLength;
+	}
+	return new TextDecoder("utf-8").decode(out);
+}
+
 /**
  * Load a secret by name. Order of precedence:
  *   1. process.env[name]
@@ -81,11 +126,11 @@ export function parseGitHubRepoUrl(input: string): GitHubRepoRef | null {
 	};
 }
 
-/** True for raw.githubusercontent.com URLs, which we fetch as raw bytes. */
+/** True for https raw.githubusercontent.com URLs, which we fetch as raw bytes. */
 export function isRawGitHubUrl(input: string): boolean {
 	try {
 		const url = new URL(input);
-		return url.hostname.toLowerCase() === "raw.githubusercontent.com";
+		return url.protocol === "https:" && url.hostname.toLowerCase() === "raw.githubusercontent.com";
 	} catch {
 		return false;
 	}
@@ -97,7 +142,12 @@ export function isRawGitHubUrl(input: string): boolean {
  * and as non-interpolated git arguments.
  */
 export function isSafeSegment(segment: string): boolean {
-	return /^[A-Za-z0-9._-]+$/.test(segment) && segment !== "." && segment !== "..";
+	return (
+		/^[A-Za-z0-9._-]+$/.test(segment) &&
+		!segment.startsWith("-") &&
+		segment !== "." &&
+		segment !== ".."
+	);
 }
 
 /**

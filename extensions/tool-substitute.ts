@@ -34,18 +34,41 @@ const replacements: Record<string, string> = {
 const SHELL_OPERATORS = "&&|\\|\\||[|;&\\n]|\\$\\(|`";
 
 /**
+ * Resolve the effective command name for one segment, looking past common
+ * prefixes that would otherwise hide the real command:
+ *   - leading env assignments: `GIT_PAGER=cat git log`
+ *   - the `env` launcher (with its own assignments/flags): `env git push`
+ *   - absolute/relative paths: `/usr/bin/git`, `./git` -> basename `git`
+ * Best-effort only (token-based, not a real shell parse).
+ */
+function effectiveCommandName(segment: string): string {
+	const tokens = segment.trim().split(/\s+/).filter(Boolean);
+	let i = 0;
+	// Skip leading VAR=value env assignments.
+	while (i < tokens.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i])) i++;
+	// Skip an `env` launcher plus its flags and inline assignments.
+	if (i < tokens.length && basename(tokens[i]) === "env") {
+		i++;
+		while (i < tokens.length && (tokens[i].startsWith("-") || /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i]))) i++;
+	}
+	if (i >= tokens.length) return "";
+	return basename(tokens[i]);
+}
+
+/** Final path component, stripping any directory prefix (e.g. /usr/bin/git -> git). */
+function basename(token: string): string {
+	const parts = token.split("/");
+	return parts[parts.length - 1] ?? token;
+}
+
+/**
  * Extract command names from a shell command string.
  * Only returns words that appear in command position (first token after
  * shell operators like &&, ||, |, ;, &, newlines, or start of string).
  */
 function getCommandNames(command: string): string[] {
 	const segments = command.split(new RegExp(`\\s*(?:${SHELL_OPERATORS})\\s*`));
-	return segments
-		.map((seg) => {
-			const match = seg.trim().match(/^(\w+)/);
-			return match ? match[1] : "";
-		})
-		.filter(Boolean);
+	return segments.map((seg) => effectiveCommandName(seg)).filter(Boolean);
 }
 
 // Only git is enforced (with auto-conversion). find/grep are suggestions only.

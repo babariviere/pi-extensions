@@ -5,6 +5,8 @@
  *   GET https://defuddle.md/<url>
  */
 
+import { readTextCapped } from "../utils.ts";
+
 export interface DefuddleResult {
 	title?: string;
 	date?: string;
@@ -46,7 +48,7 @@ export async function defuddleFetch(targetUrl: string, options: DefuddleOptions)
 			throw new DefuddleError(`defuddle.md returned HTTP ${res.status} for ${targetUrl}`);
 		}
 
-		const body = await res.text();
+		const body = await readTextCapped(res);
 		return { ...parseFrontmatter(body), contentType };
 	} finally {
 		clearTimeout(timer);

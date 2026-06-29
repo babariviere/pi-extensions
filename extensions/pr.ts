@@ -17,7 +17,7 @@
  *   /autofix-stop       Stop the background CI watcher.
  */
 
-import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext, Theme } from "@earendil-works/pi-coding-agent";
 import { Key, matchesKey, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 
 const STATUS_KEY = "autofix";
@@ -154,7 +154,14 @@ async function fetchUnresolvedReviewComments(pi: ExtensionAPI, pr: PrInfo): Prom
 		const t = line.trim();
 		if (!t) continue;
 		try {
-			const o = JSON.parse(t) as any;
+			const o = JSON.parse(t) as {
+				id?: number;
+				user?: string;
+				path?: string;
+				line?: number;
+				body?: string;
+				url?: string;
+			};
 			if (typeof o.id !== "number") continue;
 			out.push({
 				id: o.id,
@@ -276,7 +283,7 @@ async function selectComments(ctx: ExtensionCommandContext, comments: Comment[])
 // UI: CI failure popup (only shown while the agent is idle)
 // ---------------------------------------------------------------------------
 
-function checkGlyph(c: Check, theme: any): string {
+function checkGlyph(c: Check, theme: Theme): string {
 	if (c.bucket === "pass") return theme.fg("success", "✓");
 	if (c.bucket === "fail") return theme.fg("error", "✗");
 	if (c.bucket === "cancel") return theme.fg("warning", "⊘");
@@ -293,7 +300,7 @@ function checkStateLabel(c: Check): string {
 const BUCKET_RANK: Record<string, number> = { pending: 0, fail: 1, cancel: 2, skipping: 3, pass: 4 };
 
 /** Render the CI checks as widget lines so the user can follow progress while idle. */
-function renderChecksWidget(pr: PrInfo, checks: Check[], theme: any): string[] {
+function renderChecksWidget(pr: PrInfo, checks: Check[], theme: Theme): string[] {
 	const counts = {
 		running: checks.filter((c) => c.bucket === "pending" && /IN_PROGRESS|RUNNING/i.test(c.state)).length,
 		waiting: checks.filter((c) => c.bucket === "pending" && !/IN_PROGRESS|RUNNING/i.test(c.state)).length,

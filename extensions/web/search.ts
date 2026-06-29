@@ -39,7 +39,7 @@ export function createWebSearchTool(settings: WebSettings = DEFAULT_SETTINGS) {
 		async execute(_toolCallId, params, signal) {
 			const limit = clamp(params.limit ?? settings.searchLimit, 1, settings.maxSearchLimit);
 			try {
-				const results = await kagiSearch(params.query, { limit, signal });
+				const results = await kagiSearch(params.query, { limit, signal, timeoutMs: settings.fetchTimeout });
 				return { content: [{ type: "text" as const, text: formatResults(results) }], details: undefined };
 			} catch (err) {
 				const message =

@@ -14,7 +14,7 @@ import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { defuddleFetch, DefuddleError } from "./fetch/defuddle.ts";
 import { DEFAULT_SETTINGS, type WebSettings } from "./settings.ts";
-import { cloneCachePath, type GitHubRepoRef, isRawGitHubUrl, parseGitHubRepoUrl } from "./utils.ts";
+import { cloneCachePath, type GitHubRepoRef, isRawGitHubUrl, parseGitHubRepoUrl, readTextCapped } from "./utils.ts";
 
 type TextResult = { content: { type: "text"; text: string }[]; details: undefined };
 
@@ -107,7 +107,7 @@ async function fetchRaw(url: string, timeout: number, signal?: AbortSignal): Pro
 		if (/^image\/|application\/octet-stream|application\/pdf/i.test(contentType)) {
 			return text(`Binary content (content-type: ${contentType}); not rendered. URL: ${url}`);
 		}
-		const body = await res.text();
+		const body = await readTextCapped(res);
 		return text(body);
 	} catch (err) {
 		return text(`Failed to fetch raw content: ${err instanceof Error ? err.message : String(err)}`, true);

@@ -7,7 +7,7 @@
  */
 
 import { type DefaultTreeAdapterTypes, parse } from "parse5";
-import { loadSecret } from "../utils.ts";
+import { loadSecret, readTextCapped } from "../utils.ts";
 
 type ChildNode = DefaultTreeAdapterTypes.ChildNode;
 type Element = DefaultTreeAdapterTypes.Element;
@@ -40,9 +40,14 @@ export function getKagiToken(): string | undefined {
 	return loadSecret(KAGI_TOKEN_ENV);
 }
 
+/** Default per-attempt network timeout (ms) when the caller omits one. */
+const DEFAULT_TIMEOUT_MS = 30_000;
+
 interface SearchOptions {
 	limit: number;
 	signal?: AbortSignal;
+	/** Per-attempt network timeout in ms (default 30s). */
+	timeoutMs?: number;
 	/** Internal: max retry attempts on 429/5xx. */
 	maxRetries?: number;
 }
@@ -63,10 +68,16 @@ export async function kagiSearch(query: string, options: SearchOptions): Promise
 
 async function fetchSearchHtml(query: string, token: string, options: SearchOptions): Promise<string> {
 	const maxRetries = options.maxRetries ?? 3;
+	const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 	const url = `https://kagi.com/html/search?q=${encodeURIComponent(query)}`;
 
 	let lastError: unknown;
 	for (let attempt = 0; attempt <= maxRetries; attempt++) {
+		// Per-attempt timeout so a hung socket cannot stall the search forever.
+		const controller = new AbortController();
+		const timer = setTimeout(() => controller.abort(), timeoutMs);
+		const onAbort = () => controller.abort();
+		options.signal?.addEventListener("abort", onAbort, { once: true });
 		try {
 			const res = await fetch(url, {
 				headers: {
@@ -74,10 +85,10 @@ async function fetchSearchHtml(query: string, token: string, options: SearchOpti
 					"User-Agent": "Mozilla/5.0 (compatible; pi-web-extension)",
 					Accept: "text/html",
 				},
-				signal: options.signal,
+				signal: controller.signal,
 			});
 
-			if (res.ok) return await res.text();
+			if (res.ok) return await readTextCapped(res);
 
 			if (RETRYABLE_STATUS.has(res.status) && attempt < maxRetries) {
 				await backoff(attempt, options.signal);
@@ -92,6 +103,9 @@ async function fetchSearchHtml(query: string, token: string, options: SearchOpti
 				await backoff(attempt, options.signal);
 				continue;
 			}
+		} finally {
+			clearTimeout(timer);
+			options.signal?.removeEventListener("abort", onAbort);
 		}
 	}
 	throw lastError instanceof Error ? lastError : new Error("Kagi search failed");
