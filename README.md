@@ -15,10 +15,8 @@ Personal extensions for [pi](https://github.com/earendil-works/pi).
 
 ## Install
 
-This is a private repo, so install over SSH:
-
 ```bash
-pi install git:git@github.com:babariviere/pi-extensions
+pi install git:github.com/babariviere/pi-extensions
 ```
 
 pi clones it into `~/.pi/agent/git/...` and runs `npm install`. Pull updates
