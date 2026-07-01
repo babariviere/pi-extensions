@@ -66,30 +66,68 @@ function snapshot(path: string): Snapshot {
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
+function isStable(a: Snapshot, b: Snapshot): boolean {
+	return a.exists && b.exists && a.size === b.size && a.mtimeMs === b.mtimeMs && b.size > 0;
+}
+
 /**
- * Poll until the output file exists and is stable (unchanged size+mtime across
- * one interval), or the overall timeout elapses. Returns whether it stabilized.
+ * Why a run finished waiting:
+ * - `stable`   the output file appeared and stopped changing (success path)
+ * - `finished` the agent went idle/exited without producing a stable file
+ * - `gone`     the pane vanished (e.g. the user terminated the subagent)
+ * - `timeout`  none of the above happened before the deadline
  */
-export async function waitForStableFile(
+export type RunOutcome = "stable" | "finished" | "gone" | "timeout";
+
+/**
+ * Wait for a run to complete by racing two signals: the output file becoming
+ * stable (polled cheaply via fs.stat), and an optional `agentSignal` promise
+ * that resolves when the agent finishes (`finished`) or its pane is terminated
+ * (`gone`). The agentSignal is expected to come from a blocking herdr wait, so
+ * no process polling happens here.
+ *
+ * The file check is the success path. When the agent signal fires we still allow
+ * a short grace window for a final write to land, preferring `stable` if it does.
+ */
+export async function waitForRunCompletion(
 	path: string,
-	opts: { timeoutMs: number; intervalMs?: number; isDone?: () => boolean },
-): Promise<boolean> {
+	opts: {
+		timeoutMs: number;
+		intervalMs?: number;
+		graceMs?: number;
+		agentSignal?: Promise<"finished" | "gone">;
+	},
+): Promise<RunOutcome> {
 	const interval = opts.intervalMs ?? 400;
+	const grace = opts.graceMs ?? 2500;
 	const deadline = Date.now() + opts.timeoutMs;
+
+	let signal: "finished" | "gone" | undefined;
+	opts.agentSignal?.then((s) => {
+		signal = s;
+	}).catch(() => {});
+
 	let prev = snapshot(path);
 	while (Date.now() < deadline) {
 		await sleep(interval);
 		const cur = snapshot(path);
-		if (cur.exists && prev.exists && cur.size === prev.size && cur.mtimeMs === prev.mtimeMs && cur.size > 0) {
-			return true;
-		}
-		// If the pane reports done and the file already exists, accept it.
-		if (cur.exists && cur.size > 0 && opts.isDone?.()) {
-			return true;
-		}
+		if (isStable(prev, cur)) return "stable";
 		prev = cur;
+
+		if (signal) {
+			// Grace: give a final write a chance to land before finalizing.
+			const graceDeadline = Math.min(deadline, Date.now() + grace);
+			let gp = snapshot(path);
+			while (Date.now() < graceDeadline) {
+				await sleep(interval);
+				const gc = snapshot(path);
+				if (isStable(gp, gc)) return "stable";
+				gp = gc;
+			}
+			return signal;
+		}
 	}
-	return snapshot(path).exists;
+	return "timeout";
 }
 
 export function readOutputFile(path: string): string | undefined {

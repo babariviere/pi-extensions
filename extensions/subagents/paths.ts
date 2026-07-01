@@ -32,6 +32,7 @@ export interface RunPaths {
 	outputPath: string;
 	sessionPath: string;
 	promptPath: string;
+	launchPath: string;
 }
 
 export function runPaths(sessionId: string | undefined, runId: string, agent: string, index: number): RunPaths {
@@ -42,6 +43,7 @@ export function runPaths(sessionId: string | undefined, runId: string, agent: st
 		outputPath: join(dir, `${stem}.md`),
 		sessionPath: join(dir, `${stem}.session.jsonl`),
 		promptPath: join(dir, `${stem}.prompt.md`),
+		launchPath: join(dir, `${stem}.launch.sh`),
 	};
 }
 

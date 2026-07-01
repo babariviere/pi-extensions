@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { paneLabel, parseHerdrJson, parsePaneId, parseTab, parseTabs } from "./herdr.ts";
+import { findAgentStatus, paneLabel, parseHerdrJson, parsePaneId, parseTab, parseTabs } from "./herdr.ts";
 
 test("parseHerdrJson reads the JSON line and extracts result", () => {
 	const out = parseHerdrJson('{"id":"cli:tab:list","result":{"tabs":[]}}');
@@ -57,6 +57,14 @@ test("paneLabel combines the agent name with a clamped single-line task slug", (
 	assert.equal(paneLabel("worker", "line one\nline two\ttabbed"), "worker \u00b7 line one line two tabbed");
 	const long = paneLabel("reviewer", "a".repeat(80), 10);
 	assert.equal(long, `reviewer \u00b7 ${"a".repeat(10)}\u2026`);
+});
+
+test("findAgentStatus locates agent_status at any nesting depth", () => {
+	assert.equal(findAgentStatus({ agent_status: "idle" }), "idle");
+	assert.equal(findAgentStatus({ pane: { agent_status: "working" } }), "working");
+	assert.equal(findAgentStatus({ result: { panes: [{ agent_status: "done" }] } }), "done");
+	assert.equal(findAgentStatus({ nope: true }), undefined);
+	assert.equal(findAgentStatus(null), undefined);
 });
 
 test("parsePaneId reads direct and nested pane ids", () => {
