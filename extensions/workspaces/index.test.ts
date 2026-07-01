@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { isValidName, parseHerdrWorkspaces } from "./workspace.ts";
+import { isValidName, parseHerdrWorkspaces } from "./index.ts";
 
 test("isValidName accepts safe names, rejects the rest", () => {
 	assert.ok(isValidName("feature-x"));
