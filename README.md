@@ -7,6 +7,7 @@ Personal extensions for [pi](https://github.com/earendil-works/pi).
 | `web` | `web_search` (Kagi) + `fetch_content` (defuddle.md / git clone) |
 | `secrets` | Inject secrets from the `fnox` CLI into bash env, with output masking |
 | `linear` | Resolve Linear issues and move them through workflow states |
+| `workspace` | Manage jj workspaces (list/create/switch/delete) with herdr integration |
 | `pr` | GitHub pull request helpers |
 | `context` | Context-window usage + session token/cost footer data |
 | `footer` | Custom footer rendering |
