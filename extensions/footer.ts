@@ -4,7 +4,7 @@
  * A minimal footer that merges the old status-line + usage-status extensions:
  *
  *	 Line 1:	<context gauge>													 <model> • <thinking>
- *	 Line 2:	Claude <5h bar %> <Week bar %> <extra> ⟳<reset>		(Claude models only)
+ *	 Line 2:	Claude <5h bar %> <Week bar %> <extra> ⟳ <reset>		(Claude models only)
  *
  * Left side	→ context window usage + Claude subscription usage.
  * Right side → model id + thinking level.
@@ -442,7 +442,7 @@ function renderContextGauge(
 	return theme.fg("dim", "ctx ") + bar + " " + theme.fg("dim", pct + counts);
 }
 
-/** Build the Claude usage line: `Claude 5h ━━──── 30% Week ━──── 12% ⟳2h34m`. */
+/** Build the Claude usage line: `Claude 5h ━━──── 30% Week ━──── 12% ⟳ 2h34m`. */
 function renderUsageLine(snapshot: UsageSnapshot, theme: Theme): string {
 	const dim = (s: string) => theme.fg("dim", s);
 
@@ -464,7 +464,7 @@ function renderUsageLine(snapshot: UsageSnapshot, theme: Theme): string {
 
 	const fiveHour = snapshot.windows.find((w) => w.label === "5h");
 	const timeLeft = formatTimeLeft(fiveHour?.resetsAt);
-	if (timeLeft) segments.push(dim(`⟳${timeLeft}`));
+	if (timeLeft) segments.push(dim(`⟳ ${timeLeft}`));
 
 	return segments.join(" ");
 }
