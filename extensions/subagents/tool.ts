@@ -189,6 +189,7 @@ export function createSubagentTool(getSessionRef: () => SessionRef) {
 
 			const baseCtx = {
 				sessionId: ref.sessionId,
+				sessionFile: ref.sessionFile,
 				runId,
 				cwd: ref.cwd,
 				timeoutMs: DEFAULT_RUN_TIMEOUT_MS,

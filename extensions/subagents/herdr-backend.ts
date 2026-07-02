@@ -53,6 +53,7 @@ export const SUBAGENTS_TAB_LABEL = "subagents";
 
 export interface HerdrContext {
 	sessionId: string | undefined;
+	sessionFile: string | undefined;
 	runId: string;
 	cwd: string;
 	timeoutMs: number;
@@ -118,7 +119,7 @@ interface SpawnedRun {
 
 /** Write the per-run files and the launcher script; no herdr calls yet. */
 function prepareRun(req: RunRequest, ctx: HerdrContext, defaultProvider: string | undefined): PreparedRun {
-	const paths = runPaths(ctx.sessionId, ctx.runId, req.agent.config.name, req.index);
+	const paths = runPaths(ctx.sessionFile, ctx.sessionId, ctx.runId, req.agent.config.name, req.index);
 	ensureRunDir(paths.dir);
 
 	const hasPrompt = req.agent.systemPrompt.trim().length > 0;

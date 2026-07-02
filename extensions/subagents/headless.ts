@@ -20,6 +20,7 @@ import {
 
 export interface HeadlessContext {
 	sessionId: string | undefined;
+	sessionFile: string | undefined;
 	runId: string;
 	cwd: string;
 	timeoutMs: number;
@@ -28,7 +29,7 @@ export interface HeadlessContext {
 }
 
 export function runHeadless(req: RunRequest, ctx: HeadlessContext): Promise<RunResult> {
-	const paths = runPaths(ctx.sessionId, ctx.runId, req.agent.config.name, req.index);
+	const paths = runPaths(ctx.sessionFile, ctx.sessionId, ctx.runId, req.agent.config.name, req.index);
 	ensureRunDir(paths.dir);
 
 	const hasPrompt = req.agent.systemPrompt.trim().length > 0;
