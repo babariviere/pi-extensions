@@ -8,7 +8,15 @@ import { OUTPUT_PATH_ENV } from "./constants.ts";
 import { buildChildArgs } from "./pi-args.ts";
 import { runPaths } from "./paths.ts";
 import { readDefaultProvider } from "./settings.ts";
-import { ensureRunDir, type OnStatus, readOutputFile, type RunRequest, type RunResult, writeSystemPrompt } from "./run.ts";
+import {
+	ensureRunDir,
+	type OnStatus,
+	readLastAssistantText,
+	readOutputFile,
+	type RunRequest,
+	type RunResult,
+	writeSystemPrompt,
+} from "./run.ts";
 
 export interface HeadlessContext {
 	sessionId: string | undefined;
@@ -57,7 +65,7 @@ export function runHeadless(req: RunRequest, ctx: HeadlessContext): Promise<RunR
 
 		const timer = setTimeout(() => {
 			child.kill("SIGKILL");
-			finish(buildResult(req, paths.outputPath, null, stdout, `timed out after ${ctx.timeoutMs}ms`));
+			finish(buildResult(req, paths.outputPath, paths.sessionPath, null, stdout, `timed out after ${ctx.timeoutMs}ms`));
 		}, ctx.timeoutMs);
 
 		const onAbort = () => child.kill("SIGKILL");
@@ -70,11 +78,11 @@ export function runHeadless(req: RunRequest, ctx: HeadlessContext): Promise<RunR
 			stderr += d.toString("utf-8");
 		});
 		child.on("error", (err) => {
-			finish(buildResult(req, paths.outputPath, null, stdout, err.message));
+			finish(buildResult(req, paths.outputPath, paths.sessionPath, null, stdout, err.message));
 		});
 		child.on("close", (code) => {
 			const err = code === 0 ? undefined : (stderr.trim() || `pi exited with code ${code}`);
-			finish(buildResult(req, paths.outputPath, code, stdout, err));
+			finish(buildResult(req, paths.outputPath, paths.sessionPath, code, stdout, err));
 		});
 	});
 }
@@ -82,11 +90,15 @@ export function runHeadless(req: RunRequest, ctx: HeadlessContext): Promise<RunR
 function buildResult(
 	req: RunRequest,
 	outputPath: string,
+	sessionPath: string,
 	exitCode: number | null,
 	stdout: string,
 	error: string | undefined,
 ): RunResult {
-	const fileOutput = readOutputFile(outputPath);
+	// Prefer the submit_result file; otherwise recover the agent's final answer
+	// from the child session transcript (it may have ended with a plain message
+	// instead of calling submit_result), then fall back to captured stdout.
+	const fileOutput = readOutputFile(outputPath) ?? readLastAssistantText(sessionPath);
 	const output = fileOutput ?? stdout.trim();
 	const ok = exitCode === 0 && (fileOutput !== undefined || stdout.trim().length > 0);
 	return {

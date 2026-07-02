@@ -138,3 +138,46 @@ export function readOutputFile(path: string): string | undefined {
 		return undefined;
 	}
 }
+
+/**
+ * Recover a run's result from the child pi session transcript when the output
+ * file is missing. Agents sometimes end their turn with a plain assistant
+ * message instead of calling the submit_result tool (reviewers are especially
+ * prone to this), which leaves a complete answer on disk but no output file.
+ * Returns the concatenated text of the last assistant message, or undefined
+ * when the transcript is unreadable or has no assistant text.
+ */
+export function readLastAssistantText(sessionPath: string): string | undefined {
+	let raw: string;
+	try {
+		raw = readFileSync(sessionPath, "utf-8");
+	} catch {
+		return undefined;
+	}
+	let last: string | undefined;
+	for (const line of raw.split(/\r?\n/)) {
+		const trimmed = line.trim();
+		if (!trimmed.startsWith("{")) continue;
+		let obj: unknown;
+		try {
+			obj = JSON.parse(trimmed);
+		} catch {
+			continue;
+		}
+		const msg = (obj as { message?: { role?: unknown; content?: unknown } }).message;
+		if (!msg || msg.role !== "assistant" || !Array.isArray(msg.content)) continue;
+		const text = msg.content
+			.filter(
+				(c): c is { type: string; text: string } =>
+					!!c &&
+					typeof c === "object" &&
+					(c as { type?: unknown }).type === "text" &&
+					typeof (c as { text?: unknown }).text === "string",
+			)
+			.map((c) => c.text)
+			.join("")
+			.trim();
+		if (text.length > 0) last = text;
+	}
+	return last;
+}

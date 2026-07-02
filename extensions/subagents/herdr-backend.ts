@@ -40,6 +40,7 @@ import { readDefaultProvider } from "./settings.ts";
 import {
 	ensureRunDir,
 	type OnStatus,
+	readLastAssistantText,
 	readOutputFile,
 	type RunOutcome,
 	type RunRequest,
@@ -101,6 +102,7 @@ export async function runInHerdr(reqs: RunRequest[], ctx: HerdrContext): Promise
 interface PreparedRun {
 	req: RunRequest;
 	outputPath: string;
+	sessionPath: string;
 	launchPath: string;
 	paneId?: string;
 	error?: string;
@@ -109,6 +111,7 @@ interface PreparedRun {
 interface SpawnedRun {
 	req: RunRequest;
 	outputPath: string;
+	sessionPath: string;
 	paneId?: string;
 	error?: string;
 }
@@ -134,14 +137,14 @@ function prepareRun(req: RunRequest, ctx: HerdrContext, defaultProvider: string 
 	const script = `#!/bin/sh\nexport ${OUTPUT_PATH_ENV}=${shQuote(paths.outputPath)}\nexec pi ${args.map(shQuote).join(" ")}\n`;
 	writeFileSync(paths.launchPath, script, { mode: 0o700 });
 
-	return { req, outputPath: paths.outputPath, launchPath: paths.launchPath };
+	return { req, outputPath: paths.outputPath, sessionPath: paths.sessionPath, launchPath: paths.launchPath };
 }
 
 /** Rename the pane and start pi in it via the launcher script. */
 async function launchRun(p: PreparedRun, ctx: HerdrContext): Promise<SpawnedRun> {
 	if (p.error || !p.paneId) {
 		ctx.onStatus?.(p.req.index, { state: "failed", paneId: p.paneId, outputPath: p.outputPath });
-		return { req: p.req, outputPath: p.outputPath, paneId: p.paneId, error: p.error ?? "no pane" };
+		return { req: p.req, outputPath: p.outputPath, sessionPath: p.sessionPath, paneId: p.paneId, error: p.error ?? "no pane" };
 	}
 
 	await renamePane(p.paneId, paneLabel(p.req.agent.config.name, p.req.task));
@@ -156,6 +159,7 @@ async function launchRun(p: PreparedRun, ctx: HerdrContext): Promise<SpawnedRun>
 	return {
 		req: p.req,
 		outputPath: p.outputPath,
+		sessionPath: p.sessionPath,
 		paneId: p.paneId,
 		error: started.ok ? undefined : started.error,
 	};
@@ -190,12 +194,19 @@ async function settleRun(s: SpawnedRun, ctx: HerdrContext): Promise<RunResult> {
 	}
 
 	let output = readOutputFile(s.outputPath);
-	if (output === undefined && paneId) {
-		// The pane may have finished/errored without writing; fall back to scrollback.
-		output = await readPane(paneId);
+	if (output === undefined) {
+		// The agent finished without writing the output file. This commonly means
+		// it ended its turn with a plain assistant message instead of calling
+		// submit_result. Recover the result from the child session transcript
+		// (complete and on disk), then fall back to pane scrollback.
+		output = readLastAssistantText(s.sessionPath);
+		if (output === undefined && paneId) output = await readPane(paneId);
 	}
 
-	const ok = outcome === "stable" && output !== undefined;
+	// Success when we have usable output and the agent actually finished its turn
+	// (`stable` = wrote the file; `finished` = went idle, result recovered above).
+	// A `gone`/`timeout` outcome stays failed even if scrollback yielded text.
+	const ok = output !== undefined && (outcome === "stable" || outcome === "finished");
 	report(ok);
 	return {
 		agent: s.req.agent.config.name,
