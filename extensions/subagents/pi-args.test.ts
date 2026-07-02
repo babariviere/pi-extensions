@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { type DiscoveredAgent } from "./discovery.ts";
-import { applyThinkingSuffix, buildChildArgs, qualifyModel } from "./pi-args.ts";
+import { SUBMIT_RESULT_TOOL } from "./constants.ts";
+import { applyThinkingSuffix, buildChildArgs, qualifyModel, resultToolPath } from "./pi-args.ts";
 
 function agent(overrides: Partial<DiscoveredAgent["config"]> = {}, systemPrompt = "You are worker."): DiscoveredAgent {
 	return {
@@ -26,12 +27,39 @@ test("applyThinkingSuffix appends when missing and skips when present or off", (
 	assert.equal(applyThinkingSuffix("model", undefined), "model");
 });
 
-test("buildChildArgs always sets session and injects the output instruction into the task", () => {
+test("buildChildArgs always sets session and instructs the agent to submit its result", () => {
 	const args = buildChildArgs(agent(), "do the thing", opts);
 	assert.deepEqual(args.slice(0, 2), ["--session", opts.sessionFile]);
 	const taskArg = args[args.length - 1];
 	assert.ok(taskArg.startsWith("Task: do the thing"));
-	assert.ok(taskArg.includes(opts.outputPath));
+	assert.ok(taskArg.includes(SUBMIT_RESULT_TOOL));
+	// The output path must never leak to the agent; it travels via env instead.
+	assert.ok(!taskArg.includes(opts.outputPath));
+});
+
+test("buildChildArgs loads the result-tool extension via -e", () => {
+	const args = buildChildArgs(agent(), "t", opts);
+	const idx = args.indexOf("--extension");
+	assert.ok(idx !== -1);
+	assert.equal(args[idx + 1], resultToolPath());
+	assert.ok(resultToolPath().endsWith("result-tool.ts"));
+});
+
+test("buildChildArgs appends the result tool to a declared tools allowlist", () => {
+	const args = buildChildArgs(agent({ tools: ["read", "grep"] }), "t", opts);
+	const toolsIdx = args.indexOf("--tools");
+	assert.equal(args[toolsIdx + 1], `read,grep,${SUBMIT_RESULT_TOOL}`);
+});
+
+test("buildChildArgs does not duplicate the result tool if already allowlisted", () => {
+	const args = buildChildArgs(agent({ tools: ["read", SUBMIT_RESULT_TOOL] }), "t", opts);
+	const toolsIdx = args.indexOf("--tools");
+	assert.equal(args[toolsIdx + 1], `read,${SUBMIT_RESULT_TOOL}`);
+});
+
+test("buildChildArgs omits --tools when the agent declares no allowlist", () => {
+	const args = buildChildArgs(agent({}), "t", opts);
+	assert.ok(!args.includes("--tools"));
 });
 
 test("qualifyModel prefixes a bare model with the default provider only when needed", () => {
@@ -67,7 +95,7 @@ test("buildChildArgs adds model with thinking suffix and tools list", () => {
 	const modelIdx = args.indexOf("--model");
 	assert.equal(args[modelIdx + 1], "claude-opus-4-8:low");
 	const toolsIdx = args.indexOf("--tools");
-	assert.equal(args[toolsIdx + 1], "read,bash");
+	assert.equal(args[toolsIdx + 1], `read,bash,${SUBMIT_RESULT_TOOL}`);
 });
 
 test("buildChildArgs honors systemPromptMode (replace vs append)", () => {

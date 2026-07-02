@@ -4,6 +4,7 @@
  */
 
 import { spawn } from "node:child_process";
+import { OUTPUT_PATH_ENV } from "./constants.ts";
 import { buildChildArgs } from "./pi-args.ts";
 import { runPaths } from "./paths.ts";
 import { readDefaultProvider } from "./settings.ts";
@@ -27,7 +28,6 @@ export function runHeadless(req: RunRequest, ctx: HeadlessContext): Promise<RunR
 
 	const args = buildChildArgs(req.agent, req.task, {
 		sessionFile: paths.sessionPath,
-		outputPath: paths.outputPath,
 		systemPromptFile: hasPrompt ? paths.promptPath : undefined,
 		defaultProvider: readDefaultProvider(ctx.cwd),
 	});
@@ -37,7 +37,10 @@ export function runHeadless(req: RunRequest, ctx: HeadlessContext): Promise<RunR
 		let stderr = "";
 		let settled = false;
 
-		const child = spawn("pi", args, { cwd: ctx.cwd, env: process.env });
+		const child = spawn("pi", args, {
+			cwd: ctx.cwd,
+			env: { ...process.env, [OUTPUT_PATH_ENV]: paths.outputPath },
+		});
 		ctx.onStatus?.(req.index, { state: "running", outputPath: paths.outputPath });
 
 		const finish = (result: RunResult) => {

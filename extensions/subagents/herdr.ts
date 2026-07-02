@@ -39,7 +39,10 @@ export function runHerdr(args: string[], timeoutMs = 10000, signal?: AbortSignal
 				resolve({ ok: false, error: (stderr || err.message || "herdr command failed").trim(), stdout: text });
 				return;
 			}
-			resolve({ ok: false, error: "could not parse herdr output", stdout: text });
+			// Clean exit with no JSON payload: some herdr commands (e.g. `pane run`)
+			// succeed silently. Treat exit 0 as success with an empty result; callers
+			// that need a parsed value already handle an empty result as undefined.
+			resolve({ ok: true, result: {}, stdout: text });
 		});
 	});
 }

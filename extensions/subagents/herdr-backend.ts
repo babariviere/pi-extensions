@@ -22,6 +22,7 @@
 
 import { writeFileSync } from "node:fs";
 
+import { OUTPUT_PATH_ENV } from "./constants.ts";
 import {
 	closeTab,
 	createTab,
@@ -122,14 +123,15 @@ function prepareRun(req: RunRequest, ctx: HerdrContext, defaultProvider: string 
 
 	const args = buildChildArgs(req.agent, req.task, {
 		sessionFile: paths.sessionPath,
-		outputPath: paths.outputPath,
 		systemPromptFile: hasPrompt ? paths.promptPath : undefined,
 		defaultProvider,
 	});
 
 	// A tiny POSIX launcher keeps all argument quoting inside /bin/sh, avoiding
-	// pane-shell (fish/zsh) quoting differences. `exec` makes pi the pane process.
-	const script = `#!/bin/sh\nexec pi ${args.map(shQuote).join(" ")}\n`;
+	// pane-shell (fish/zsh) quoting differences. It exports the output path so the
+	// child-side result tool knows where to write, then `exec`s pi as the pane
+	// process.
+	const script = `#!/bin/sh\nexport ${OUTPUT_PATH_ENV}=${shQuote(paths.outputPath)}\nexec pi ${args.map(shQuote).join(" ")}\n`;
 	writeFileSync(paths.launchPath, script, { mode: 0o700 });
 
 	return { req, outputPath: paths.outputPath, launchPath: paths.launchPath };

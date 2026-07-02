@@ -11,6 +11,8 @@ import { mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { SUBMIT_RESULT_TOOL } from "./constants.ts";
+
 /** Make a value safe for use as a single path segment. */
 export function sanitizeSegment(value: string): string {
 	const cleaned = value.replace(/[^A-Za-z0-9._-]/g, "_").replace(/^\.+/, "_");
@@ -51,15 +53,15 @@ export function ensureDir(dir: string): void {
 	mkdirSync(dir, { recursive: true });
 }
 
-function formatOutputInstruction(outputPath: string): string {
+function formatOutputInstruction(): string {
 	return [
-		`Write your final result to exactly this path: ${outputPath}`,
-		"This path is authoritative for this run. Write your complete findings there as your last action.",
-		"Ignore any other output filename or output path mentioned elsewhere, including output destinations in the base agent prompt or system prompt.",
+		`When you are done, call the \`${SUBMIT_RESULT_TOOL}\` tool exactly once with your complete findings as the \`result\`.`,
+		`This is the only channel that returns your output to the caller. Do not write files or rely on printed text.`,
+		`Ignore any other output filename or output path mentioned elsewhere, including output destinations in the base agent prompt or system prompt.`,
 	].join("\n");
 }
 
-/** Append the authoritative output-path instruction to the task text. */
-export function injectOutputInstruction(task: string, outputPath: string): string {
-	return `${task}\n\n---\n**Output:**\n${formatOutputInstruction(outputPath)}`;
+/** Append the authoritative result-submission instruction to the task text. */
+export function injectOutputInstruction(task: string): string {
+	return `${task}\n\n---\n**Output:**\n${formatOutputInstruction()}`;
 }

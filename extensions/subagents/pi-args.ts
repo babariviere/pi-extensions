@@ -19,8 +19,17 @@
  * to the wrong provider (Bedrock). See `settings.ts` and `qualifyModel`.
  */
 
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
+
+import { SUBMIT_RESULT_TOOL } from "./constants.ts";
 import { type DiscoveredAgent } from "./discovery.ts";
 import { injectOutputInstruction } from "./paths.ts";
+
+/** Absolute path to the child-side result-tool extension, next to this file. */
+export function resultToolPath(): string {
+	return join(dirname(fileURLToPath(import.meta.url)), "result-tool.ts");
+}
 
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"];
 
@@ -46,7 +55,6 @@ export function qualifyModel(model: string | undefined, defaultProvider: string 
 
 export interface ChildInvocationOpts {
 	sessionFile: string;
-	outputPath: string;
 	/** Path the system-prompt body was written to (caller writes it before spawn). */
 	systemPromptFile?: string;
 	/** Provider used to qualify a bare agent model (resolved from settings). */
@@ -63,9 +71,19 @@ export function buildChildArgs(agent: DiscoveredAgent, task: string, opts: Child
 	const model = applyThinkingSuffix(qualifyModel(agent.config.model, opts.defaultProvider), agent.config.thinking);
 	if (model) args.push("--model", model);
 
+	// When the agent declares a tool allowlist, append the result tool so pi's
+	// `--tools` filter (which also gates custom/extension tools) doesn't drop it.
+	// With no allowlist all tools are enabled, so nothing to add.
 	if (agent.config.tools && agent.config.tools.length > 0) {
-		args.push("--tools", agent.config.tools.join(","));
+		const tools = agent.config.tools.includes(SUBMIT_RESULT_TOOL)
+			? agent.config.tools
+			: [...agent.config.tools, SUBMIT_RESULT_TOOL];
+		args.push("--tools", tools.join(","));
 	}
+
+	// Load the child-side result tool so the agent can hand its output back
+	// without needing write/bash access or knowing the output path.
+	args.push("--extension", resultToolPath());
 
 	if (opts.systemPromptFile && agent.systemPrompt.trim().length > 0) {
 		const flag = agent.config.systemPromptMode === "append" ? "--append-system-prompt" : "--system-prompt";
@@ -80,7 +98,7 @@ export function buildChildArgs(agent: DiscoveredAgent, task: string, opts: Child
 		args.push("--no-context-files");
 	}
 
-	const finalTask = injectOutputInstruction(task, opts.outputPath);
+	const finalTask = injectOutputInstruction(task);
 	args.push(`Task: ${finalTask}`);
 
 	return args;

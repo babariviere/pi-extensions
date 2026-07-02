@@ -1,6 +1,41 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
-import { findAgentStatus, paneLabel, parseHerdrJson, parsePaneId, parseTab, parseTabs } from "./herdr.ts";
+import { findAgentStatus, paneLabel, parseHerdrJson, parsePaneId, parseTab, parseTabs, runHerdr } from "./herdr.ts";
+
+/** Install a fake `herdr` on PATH that runs `body` (a /bin/sh snippet). */
+function withFakeHerdr<T>(body: string, fn: () => Promise<T>): Promise<T> {
+	const dir = mkdtempSync(join(tmpdir(), "fake-herdr-"));
+	writeFileSync(join(dir, "herdr"), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
+	const prevPath = process.env.PATH;
+	process.env.PATH = `${dir}:${prevPath ?? ""}`;
+	return fn().finally(() => {
+		process.env.PATH = prevPath;
+	});
+}
+
+test("runHerdr treats a clean exit with empty stdout as success", async () => {
+	const res = await withFakeHerdr("exit 0", () => runHerdr(["pane", "run", "wA:p1", "echo hi"]));
+	assert.equal(res.ok, true);
+	assert.deepEqual(res.result, {});
+});
+
+test("runHerdr reports failure when the command exits non-zero", async () => {
+	const res = await withFakeHerdr("echo boom 1>&2; exit 1", () => runHerdr(["pane", "run", "wA:p1", "x"]));
+	assert.equal(res.ok, false);
+	assert.match(res.error ?? "", /boom/);
+});
+
+test("runHerdr parses JSON stdout on success", async () => {
+	const res = await withFakeHerdr(`echo '{"id":"x","result":{"pane_id":"wA:p9"}}'`, () =>
+		runHerdr(["pane", "get", "wA:p9"]),
+	);
+	assert.equal(res.ok, true);
+	assert.deepEqual(res.result, { pane_id: "wA:p9" });
+});
+
 
 test("parseHerdrJson reads the JSON line and extracts result", () => {
 	const out = parseHerdrJson('{"id":"cli:tab:list","result":{"tabs":[]}}');
