@@ -464,7 +464,7 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			ctx.ui.notify(`review-comments: handing ${picked.length} comment(s) to the agent`, "info");
-			pi.sendUserMessage(buildCommentsPrompt(pr, picked));
+			pi.sendUserMessage(buildCommentsPrompt(pr, picked), ctx.isIdle() ? undefined : { deliverAs: "followUp" });
 		},
 	});
 
