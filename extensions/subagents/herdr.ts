@@ -179,13 +179,21 @@ export async function closeTab(tabId: string): Promise<void> {
 	await runHerdr(["tab", "close", tabId]);
 }
 
+export type SplitDirection = "right" | "down";
+
 /**
- * Split an existing pane vertically and return the new pane's id. `ratio` is the
- * fraction of space the EXISTING pane keeps (the new pane gets `1 - ratio`), as
- * confirmed against the herdr CLI. Used to build an evenly-sized pane stack.
+ * Split an existing pane and return the new pane's id. `direction` is "right"
+ * (new pane to the right) or "down" (new pane below). `ratio` is the fraction of
+ * space the EXISTING pane keeps (the new pane gets `1 - ratio`), as confirmed
+ * against the herdr CLI. Used to build an evenly-sized grid of panes.
  */
-export async function splitPaneDown(paneId: string, ratio: number, cwd?: string): Promise<{ ok: boolean; paneId?: string; error?: string }> {
-	const args = ["pane", "split", paneId, "--direction", "down", "--ratio", ratio.toFixed(4), "--no-focus"];
+export async function splitPane(
+	paneId: string,
+	direction: SplitDirection,
+	ratio: number,
+	cwd?: string,
+): Promise<{ ok: boolean; paneId?: string; error?: string }> {
+	const args = ["pane", "split", paneId, "--direction", direction, "--ratio", ratio.toFixed(4), "--no-focus"];
 	if (cwd) args.push("--cwd", cwd);
 	const res = await runHerdr(args);
 	if (!res.ok) return { ok: false, error: res.error };

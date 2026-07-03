@@ -2,17 +2,20 @@
  * herdr backend: spawn each subagent as a `pi` instance in its own pane inside a
  * fresh "subagents" tab, then wait for each run's output file to settle.
  *
- * Lifecycle: create a fresh tab per run, build an evenly-sized vertical stack of
- * panes (reusing the tab's root pane as the first one), launch one titled `pi`
- * per agent, and once every run has settled and its output has been read, close
- * the whole tab (removing all panes). Panes are live while running so the user
- * can watch and interact; they are torn down only after the batch completes.
+ * Lifecycle: create a fresh tab per run, build an evenly-sized grid of panes
+ * (reusing the tab's root pane as the first cell), launch one titled `pi` per
+ * agent, and once every run has settled and its output has been read, close the
+ * whole tab (removing all panes). Panes are live while running so the user can
+ * watch and interact; they are torn down only after the batch completes.
  *
  * Balance: `herdr agent start` cannot set a split ratio, so spawning N agents by
  * repeatedly splitting the focused pane squashed later panes (50/25/12.5...).
- * Instead we split panes ourselves with computed ratios so every pane ends up
- * ~1/N of the height, then launch `pi` in each via a tiny launcher script. Split
- * panes inherit HERDR_* env, so pi still self-reports as an agent.
+ * Stacking them all vertically also squashes each into a thin strip. Instead we
+ * tile them into a grid (see computeGrid): split the root into even columns with
+ * `right` splits, then split each column into even rows with `down` splits, so
+ * every pane gets a usable rectangle. We then launch `pi` in each via a tiny
+ * launcher script. Split panes inherit HERDR_* env, so pi still self-reports as
+ * an agent.
  *
  * Completion: each run races the output file becoming stable against a blocking
  * `herdr wait agent-status` (idle-after-working, or pane gone) rather than
@@ -23,6 +26,7 @@
 import { writeFileSync } from "node:fs";
 
 import { OUTPUT_PATH_ENV } from "./constants.ts";
+import { computeGrid } from "./grid.ts";
 import {
 	closeTab,
 	createTab,
@@ -31,7 +35,7 @@ import {
 	readPane,
 	renamePane,
 	runInPane,
-	splitPaneDown,
+	splitPane,
 	waitForAgentFinish,
 } from "./herdr.ts";
 import { buildChildArgs } from "./pi-args.ts";
@@ -73,21 +77,9 @@ export async function runInHerdr(reqs: RunRequest[], ctx: HerdrContext): Promise
 	const defaultProvider = readDefaultProvider(ctx.cwd);
 	const prepared = reqs.map((req) => prepareRun(req, ctx, defaultProvider));
 
-	// Build an evenly-sized vertical stack. The tab's root pane is pane 0; each
-	// subsequent pane is made by splitting the previously-created pane with ratio
-	// 1/(N-k+1), which leaves every pane at ~1/N of the height.
-	const n = prepared.length;
-	let prevPaneId = tab.rootPaneId;
-	for (let k = 1; k < n; k++) {
-		const split = await splitPaneDown(prevPaneId, 1 / (n - k + 1), ctx.cwd);
-		if (!split.ok || !split.paneId) {
-			prepared[k].error = split.error ?? "failed to split pane";
-			continue;
-		}
-		prepared[k].paneId = split.paneId;
-		prevPaneId = split.paneId;
-	}
-	prepared[0].paneId = tab.rootPaneId;
+	// Build an evenly-sized grid so panes get usable rectangles instead of thin
+	// stacked strips. Cells are filled column-major (left-to-right, top-to-bottom).
+	await buildGrid(prepared, tab.rootPaneId, ctx.cwd);
 
 	// Launch pi in every pane now that the geometry is settled.
 	const spawned = await Promise.all(prepared.map((p) => launchRun(p, ctx)));
@@ -98,6 +90,69 @@ export async function runInHerdr(reqs: RunRequest[], ctx: HerdrContext): Promise
 	await closeTab(tab.tabId);
 
 	return results;
+}
+
+/**
+ * Split `rootPaneId` into a grid and assign a pane id to each prepared run,
+ * column-major. First we carve the root into even columns with `right` splits,
+ * then each column into even rows with `down` splits. Each split keeps the
+ * existing pane at ratio 1/(remaining) of that axis, so both columns and rows
+ * come out evenly sized. On a split failure the affected run is marked with an
+ * error and skipped; the rest of the grid still builds.
+ */
+async function buildGrid(prepared: PreparedRun[], rootPaneId: string, cwd: string): Promise<void> {
+	const { cols, rowsPerCol } = computeGrid(prepared.length);
+
+	// Carve out the column panes (left-to-right). The root pane becomes column 0;
+	// each further column is split off the remaining right-hand region.
+	const columnPanes: string[] = [rootPaneId];
+	let rightRegion = rootPaneId;
+	for (let c = 1; c < cols; c++) {
+		const split = await splitPane(rightRegion, "right", 1 / (cols - c + 1), cwd);
+		if (!split.ok || !split.paneId) {
+			// Can't create this column: mark every run that would have landed in it.
+			const missing = split.error ?? "failed to split column";
+			for (let cc = c; cc < cols; cc++) markColumnFailed(prepared, rowsPerCol, cc, missing);
+			break;
+		}
+		columnPanes.push(split.paneId);
+		rightRegion = split.paneId;
+	}
+
+	// Split each column into its rows (top-to-bottom) and assign cells.
+	let idx = 0;
+	for (let c = 0; c < cols; c++) {
+		const rows = rowsPerCol[c];
+		const columnPane = columnPanes[c];
+		if (columnPane === undefined) {
+			idx += rows; // column never created; runs already marked failed above.
+			continue;
+		}
+		let bottomRegion = columnPane;
+		if (idx < prepared.length) prepared[idx].paneId = columnPane; // first row reuses the column pane
+		idx++;
+		for (let r = 1; r < rows; r++) {
+			const split = await splitPane(bottomRegion, "down", 1 / (rows - r + 1), cwd);
+			if (!split.ok || !split.paneId) {
+				if (idx < prepared.length) prepared[idx].error = split.error ?? "failed to split row";
+				idx++;
+				continue;
+			}
+			if (idx < prepared.length) prepared[idx].paneId = split.paneId;
+			bottomRegion = split.paneId;
+			idx++;
+		}
+	}
+}
+
+/** Mark every prepared run that maps to column `col` as failed with `error`. */
+function markColumnFailed(prepared: PreparedRun[], rowsPerCol: number[], col: number, error: string): void {
+	let start = 0;
+	for (let c = 0; c < col; c++) start += rowsPerCol[c];
+	for (let r = 0; r < rowsPerCol[col]; r++) {
+		const i = start + r;
+		if (i < prepared.length && !prepared[i].error) prepared[i].error = error;
+	}
 }
 
 interface PreparedRun {
