@@ -78,6 +78,14 @@ test("renderProgress can wrap terminal glyphs in ANSI color when requested", () 
 	assert.ok(!renderProgress(model, 1_000).includes("\u001b["));
 });
 
+test("renderProgress wraps active spinner glyphs in orange when color requested", () => {
+	const model: AgentProgress[] = [{ name: "worker", scope: "user", state: "running", startedAt: 0 }];
+	assert.ok(renderProgress(model, 1_000, { frame: 0, color: true }).includes(`\u001b[38;5;208m${SPINNER_FRAMES[0]}\u001b[0m`));
+	// spawning is also active and orange
+	const spawning: AgentProgress[] = [{ name: "reviewer", scope: "user", state: "spawning", startedAt: 0 }];
+	assert.ok(renderProgress(spawning, 1_000, { frame: 0, color: true }).includes(`\u001b[38;5;208m${SPINNER_FRAMES[0]}\u001b[0m`));
+});
+
 test("applyStatus updates the row at the given index and preserves others", () => {
 	const model: AgentProgress[] = [
 		{ name: "worker", scope: "user", state: "spawning", startedAt: 0 },

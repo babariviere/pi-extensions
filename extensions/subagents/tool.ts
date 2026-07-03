@@ -32,7 +32,7 @@ function text(body: string): TextResult {
 }
 
 const DEFAULT_RUN_TIMEOUT_MS = 30 * 60 * 1000;
-const PROGRESS_TICK_MS = 1000;
+const PROGRESS_TICK_MS = 100;
 
 /** Per-agent live progress row for the in-progress indicator. */
 export interface AgentProgress {
@@ -55,7 +55,7 @@ const STATE_LABEL: Record<RunState, string> = {
 
 /** Braille spinner frames for active rows; advanced by the caller each tick. */
 export const SPINNER_FRAMES = ["\u280b", "\u2819", "\u2839", "\u2838", "\u283c", "\u2834", "\u2826", "\u2827", "\u2807", "\u280f"];
-const ANSI = { green: "\u001b[32m", red: "\u001b[31m", reset: "\u001b[0m" };
+const ANSI = { green: "\u001b[32m", red: "\u001b[31m", orange: "\u001b[38;5;208m", reset: "\u001b[0m" };
 
 /** Status glyph for a row: spinner while active, check/cross when terminal. */
 export function stateGlyph(state: RunState, frame: number): string {
@@ -106,6 +106,7 @@ function colorGlyph(glyph: string, state: RunState, color: boolean | undefined):
 	if (!color) return glyph;
 	if (state === "done") return `${ANSI.green}${glyph}${ANSI.reset}`;
 	if (state === "failed") return `${ANSI.red}${glyph}${ANSI.reset}`;
+	if (state === "spawning" || state === "running") return `${ANSI.orange}${glyph}${ANSI.reset}`;
 	return glyph;
 }
 
