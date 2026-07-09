@@ -4,7 +4,7 @@ Personal extensions for [pi](https://github.com/earendil-works/pi).
 
 | Extension | Description |
 |-----------|-------------|
-| `web` | `web_search` (Kagi) + `fetch_content` (defuddle.md / git clone) |
+| `web` | `web_search` (Kagi) + `fetch_content` (local defuddle / git clone) |
 | `secrets` | Inject secrets from the `fnox` CLI into bash env, with output masking |
 | `linear` | Resolve Linear issues and move them through workflow states |
 | `workspaces` | Manage jj workspaces (list/create/switch/delete) with herdr integration |

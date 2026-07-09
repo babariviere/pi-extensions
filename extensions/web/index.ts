@@ -3,7 +3,7 @@
  *
  * Two tools:
  *   - web_search    : ranked web links + snippets via Kagi (consumer session token).
- *   - fetch_content : URL -> Markdown (defuddle.md), with a git-repo fast path
+ *   - fetch_content : URL -> Markdown (local defuddle), with a git-repo fast path
  *                     that clones + summarizes instead of scraping.
  *
  * Command:

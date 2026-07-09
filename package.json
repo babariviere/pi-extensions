@@ -24,14 +24,16 @@
     ]
   },
   "dependencies": {
+    "defuddle": "^0.19.1",
+    "linkedom": "^0.18.13",
     "parse5": "^7.2.1"
   },
   "devDependencies": {
     "tsx": "^4.19.2"
   },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": "*",
     "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
     "@earendil-works/pi-tui": "*",
     "typebox": "*"
   },

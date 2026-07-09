@@ -4,7 +4,7 @@
  * Dispatch order:
  *   1. GitHub repo URL (root / tree / blob) -> clone + reuse, return summary.
  *   2. raw.githubusercontent.com           -> fetch raw bytes directly.
- *   3. Anything else                        -> defuddle.md -> Markdown.
+ *   3. Anything else                        -> fetch + local defuddle -> Markdown.
  */
 
 import { spawn } from "node:child_process";
@@ -31,7 +31,7 @@ export function createFetchContentTool(settings: WebSettings = DEFAULT_SETTINGS)
 		description:
 			"Fetch a URL as Markdown. GitHub repo URLs (root/tree/blob) are cloned locally and summarized " +
 			"so you can read/grep/ls the source; raw.githubusercontent.com is fetched directly; everything " +
-			"else is converted to Markdown via defuddle.md.",
+			"else is fetched and converted to Markdown via the defuddle library.",
 		promptSnippet: "Fetch a URL as Markdown (clones GitHub repos for local inspection)",
 		parameters: Type.Object({
 			url: Type.String({ description: "URL to fetch" }),
@@ -74,8 +74,8 @@ async function fetchViaDefuddle(url: string, timeout: number, signal?: AbortSign
 
 		if (!result.markdown) {
 			const note = result.contentType
-				? `defuddle.md returned no extractable content (content-type: ${result.contentType}).`
-				: "defuddle.md returned no extractable content.";
+				? `No extractable content (content-type: ${result.contentType}).`
+				: "No extractable content.";
 			return text(meta ? `${meta}\n\n${note}` : note);
 		}
 
