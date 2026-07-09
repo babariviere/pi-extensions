@@ -27,8 +27,6 @@ export interface AgentConfig {
 	systemPromptMode?: "replace" | "append";
 	inheritProjectContext?: boolean;
 	inheritSkills?: boolean;
-	/** From `defaultContext`/`context`; informational only (fork/fresh not implemented). */
-	context?: "fork" | "fresh";
 	output?: string;
 }
 
@@ -116,8 +114,6 @@ function asBool(value: FrontmatterValue | undefined): boolean | undefined {
 /** Map raw frontmatter data to a typed agent config, ignoring unknown keys. */
 export function toAgentConfig(data: Record<string, FrontmatterValue>, fallbackName: string): AgentConfig {
 	const name = asString(data.name)?.trim() || fallbackName;
-	const contextRaw = asString(data.defaultContext ?? data.context)?.trim();
-	const context = contextRaw === "fork" || contextRaw === "fresh" ? contextRaw : undefined;
 	const modeRaw = asString(data.systemPromptMode)?.trim();
 	const systemPromptMode = modeRaw === "replace" || modeRaw === "append" ? modeRaw : undefined;
 
@@ -130,7 +126,6 @@ export function toAgentConfig(data: Record<string, FrontmatterValue>, fallbackNa
 		systemPromptMode,
 		inheritProjectContext: asBool(data.inheritProjectContext),
 		inheritSkills: asBool(data.inheritSkills),
-		context,
 		output: asString(data.output)?.trim(),
 	};
 }

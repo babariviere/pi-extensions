@@ -54,7 +54,6 @@ test("toAgentConfig maps fields and normalizes enums", () => {
 			"model: claude-sonnet-5",
 			"thinking: medium",
 			"systemPromptMode: replace",
-			"defaultContext: fresh",
 			"tools: read, grep",
 			"inheritSkills: false",
 			"---",
@@ -66,16 +65,14 @@ test("toAgentConfig maps fields and normalizes enums", () => {
 	assert.equal(cfg.model, "claude-sonnet-5");
 	assert.equal(cfg.thinking, "medium");
 	assert.equal(cfg.systemPromptMode, "replace");
-	assert.equal(cfg.context, "fresh");
 	assert.deepEqual(cfg.tools, ["read", "grep"]);
 	assert.equal(cfg.inheritSkills, false);
 });
 
 test("toAgentConfig falls back to file stem name and drops invalid enums", () => {
-	const cfg = toAgentConfig({ systemPromptMode: "weird", defaultContext: "nope" }, "my-agent");
+	const cfg = toAgentConfig({ systemPromptMode: "weird" }, "my-agent");
 	assert.equal(cfg.name, "my-agent");
 	assert.equal(cfg.systemPromptMode, undefined);
-	assert.equal(cfg.context, undefined);
 });
 
 test("toAgentConfig handles single-item tools string", () => {
