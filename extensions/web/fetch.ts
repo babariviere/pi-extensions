@@ -5,6 +5,7 @@
  *   1. GitHub repo URL (root / tree / blob) -> clone + reuse, return summary.
  *   2. raw.githubusercontent.com           -> fetch raw bytes directly.
  *   3. Anything else                        -> fetch + local defuddle -> Markdown.
+ *      When that is blocked or empty, fall back to a headed-Chrome CDP fetch.
  */
 
 import { spawn } from "node:child_process";
@@ -12,7 +13,8 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { defuddleFetch, DefuddleError } from "./fetch/defuddle.ts";
+import { browserFetch } from "./fetch/browser.ts";
+import { defuddleFetch, DefuddleError, type DefuddleResult } from "./fetch/defuddle.ts";
 import { DEFAULT_SETTINGS, type WebSettings } from "./settings.ts";
 import { cloneCachePath, type GitHubRepoRef, isRawGitHubUrl, parseGitHubRepoUrl, readTextCapped } from "./utils.ts";
 
@@ -57,36 +59,73 @@ export function createFetchContentTool(settings: WebSettings = DEFAULT_SETTINGS)
 				return await fetchRaw(url, timeout, signal);
 			}
 
-			return await fetchViaDefuddle(url, timeout, signal);
+			return await fetchViaDefuddle(url, timeout, settings, signal);
 		},
 	});
 }
 
 // --- defuddle path ----------------------------------------------------------
 
-async function fetchViaDefuddle(url: string, timeout: number, signal?: AbortSignal): Promise<TextResult> {
+async function fetchViaDefuddle(
+	url: string,
+	timeout: number,
+	settings: WebSettings,
+	signal?: AbortSignal,
+): Promise<TextResult> {
 	try {
 		const result = await defuddleFetch(url, { timeout, signal });
-		const header: string[] = [];
-		if (result.title) header.push(`# ${result.title}`);
-		if (result.date) header.push(`*${result.date}*`);
-		const meta = header.join("\n");
-
-		if (!result.markdown) {
-			const note = result.contentType
-				? `No extractable content (content-type: ${result.contentType}).`
-				: "No extractable content.";
-			return text(meta ? `${meta}\n\n${note}` : note);
+		// Direct fetch reached the page but got nothing extractable (e.g. a
+		// JS-rendered shell): try the browser before giving up.
+		if (!result.markdown && settings.browserFallback) {
+			const viaBrowser = await escalateToBrowser(url, settings, signal);
+			if (viaBrowser?.markdown) return renderDefuddle(viaBrowser);
 		}
-
-		const body = meta ? `${meta}\n\n${result.markdown}` : result.markdown;
-		return text(body);
+		return renderDefuddle(result);
 	} catch (err) {
+		// Direct fetch was blocked (e.g. Cloudflare 403): try the browser.
+		if (settings.browserFallback) {
+			const viaBrowser = await escalateToBrowser(url, settings, signal);
+			if (viaBrowser?.markdown) return renderDefuddle(viaBrowser);
+		}
 		const message =
 			err instanceof DefuddleError
 				? err.message
 				: `fetch_content failed: ${err instanceof Error ? err.message : String(err)}`;
 		return text(message, true);
+	}
+}
+
+function renderDefuddle(result: DefuddleResult): TextResult {
+	const header: string[] = [];
+	if (result.title) header.push(`# ${result.title}`);
+	if (result.date) header.push(`*${result.date}*`);
+	const meta = header.join("\n");
+
+	if (!result.markdown) {
+		const note = result.contentType
+			? `No extractable content (content-type: ${result.contentType}).`
+			: "No extractable content.";
+		return text(meta ? `${meta}\n\n${note}` : note);
+	}
+
+	const body = meta ? `${meta}\n\n${result.markdown}` : result.markdown;
+	return text(body);
+}
+
+/** Attempt the browser fallback, swallowing failures so the caller can degrade. */
+async function escalateToBrowser(
+	url: string,
+	settings: WebSettings,
+	signal?: AbortSignal,
+): Promise<DefuddleResult | null> {
+	try {
+		return await browserFetch(url, {
+			timeout: settings.browserTimeout,
+			port: settings.browserCdpPort,
+			signal,
+		});
+	} catch {
+		return null;
 	}
 }
 

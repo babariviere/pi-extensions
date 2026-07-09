@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { isBlockedFetchHost, isRawGitHubUrl, isSafeSegment, parseGitHubRepoUrl } from "./utils.ts";
+import { browserProfileDir, isBlockedFetchHost, isRawGitHubUrl, isSafeSegment, parseGitHubRepoUrl } from "./utils.ts";
 
 test("isSafeSegment accepts plain owner/repo names", () => {
 	assert.equal(isSafeSegment("babariviere"), true);
@@ -67,5 +67,18 @@ test("isBlockedFetchHost flags loopback, private, and link-local hosts", () => {
 test("isBlockedFetchHost allows public hosts", () => {
 	for (const host of ["example.com", "8.8.8.8", "172.32.0.1", "192.169.0.1", "1.1.1.1"]) {
 		assert.equal(isBlockedFetchHost(host), false, `expected ${host} to be allowed`);
+	}
+});
+
+test("browserProfileDir honors XDG_CACHE_HOME then falls back to ~/.cache", () => {
+	const prev = process.env.XDG_CACHE_HOME;
+	try {
+		process.env.XDG_CACHE_HOME = "/tmp/xdg";
+		assert.equal(browserProfileDir(), "/tmp/xdg/pi-web-extension/chrome-profile");
+		delete process.env.XDG_CACHE_HOME;
+		assert.match(browserProfileDir(), /\/\.cache\/pi-web-extension\/chrome-profile$/);
+	} finally {
+		if (prev === undefined) delete process.env.XDG_CACHE_HOME;
+		else process.env.XDG_CACHE_HOME = prev;
 	}
 });

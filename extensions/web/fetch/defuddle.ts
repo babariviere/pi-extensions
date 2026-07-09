@@ -110,7 +110,7 @@ export async function extractMarkdown(
 }
 
 /** Reject non-http(s) schemes and internal/loopback hosts before fetching. */
-function assertSafeUrl(input: string): void {
+export function assertSafeUrl(input: string): void {
 	let url: URL;
 	try {
 		url = new URL(input);
