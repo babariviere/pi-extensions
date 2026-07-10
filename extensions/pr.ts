@@ -185,7 +185,7 @@ function buildCiPrompt(pr: PrInfo, failed: Check[]): string {
 	for (const c of failed) lines.push(`- ${c.name} [${c.state}] ${c.link}`);
 	lines.push(
 		"",
-		"Investigate the failures (use the `gh` CLI, e.g. `gh run view --log-failed <run-id>`, or `gh api`), fix the root cause in the code, create a conventional commit with jj, and push so CI re-runs.",
+		"Investigate the failures (use the `gh` CLI, e.g. `gh run view --log-failed <run-id>`, or `gh api`), fix the root cause in the code and push so CI re-runs. You don't need to watch CI after pushing; the autofix watcher will report back if it fails again.",
 	);
 	return lines.join("\n");
 }
@@ -197,7 +197,7 @@ function buildCommentsPrompt(pr: PrInfo, comments: Comment[]): string {
 		lines.push(`${i + 1}. [${loc}] (@${c.user}) ${c.body}`);
 		if (c.url) lines.push(`   ${c.url}`);
 	});
-	lines.push("", "Make the necessary code changes and create a conventional commit with jj.");
+	lines.push("", "Make the necessary code changes.");
 	return lines.join("\n");
 }
 
