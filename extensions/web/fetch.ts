@@ -9,9 +9,17 @@
  */
 
 import { spawn } from "node:child_process";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { defineTool } from "@earendil-works/pi-coding-agent";
+import {
+	DEFAULT_MAX_BYTES,
+	DEFAULT_MAX_LINES,
+	defineTool,
+	formatSize,
+	truncateHead,
+} from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { browserFetch } from "./fetch/browser.ts";
 import { defuddleFetch, DefuddleError, type DefuddleResult } from "./fetch/defuddle.ts";
@@ -26,6 +34,34 @@ function text(body: string, _isError = false): TextResult {
 	return { content: [{ type: "text", text: body }], details: undefined };
 }
 
+/**
+ * Return fetched content, truncating from the head when it exceeds the standard
+ * tool limits (2000 lines or 50KB, whichever is hit first). When truncated, the
+ * full content is written to a temp file and its path is appended in a footer so
+ * the model can read the rest with the read tool.
+ */
+function cappedText(body: string): TextResult {
+	const result = truncateHead(body);
+	if (!result.truncated) return text(body);
+
+	const id = randomBytes(8).toString("hex");
+	const fullOutputPath = join(tmpdir(), `pi-fetch-${id}.md`);
+	try {
+		writeFileSync(fullOutputPath, body);
+	} catch {
+		// If we cannot persist the full content, still return the truncated view.
+		return text(result.content);
+	}
+
+	const footer =
+		result.truncatedBy === "lines"
+			? `[Showing lines 1-${result.outputLines} of ${result.totalLines}. Full content: ${fullOutputPath}]`
+			: `[Showing first ${formatSize(result.outputBytes)} of ${formatSize(result.totalBytes)} (${formatSize(
+					result.maxBytes ?? DEFAULT_MAX_BYTES,
+				)} limit). Full content: ${fullOutputPath}]`;
+	return text(`${result.content}\n\n${footer}`);
+}
+
 export function createFetchContentTool(settings: WebSettings = DEFAULT_SETTINGS) {
 	return defineTool({
 		name: "fetch_content",
@@ -33,7 +69,9 @@ export function createFetchContentTool(settings: WebSettings = DEFAULT_SETTINGS)
 		description:
 			"Fetch a URL as Markdown. GitHub repo URLs (root/tree/blob) are cloned locally and summarized " +
 			"so you can read/grep/ls the source; raw.githubusercontent.com is fetched directly; everything " +
-			"else is fetched and converted to Markdown via the defuddle library.",
+			"else is fetched and converted to Markdown via the defuddle library. " +
+			`Content is truncated to the first ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB ` +
+			"(whichever is hit first); if truncated, the full content is saved to a temp file.",
 		promptSnippet: "Fetch a URL as Markdown (clones GitHub repos for local inspection)",
 		parameters: Type.Object({
 			url: Type.String({ description: "URL to fetch" }),
@@ -109,7 +147,7 @@ function renderDefuddle(result: DefuddleResult): TextResult {
 	}
 
 	const body = meta ? `${meta}\n\n${result.markdown}` : result.markdown;
-	return text(body);
+	return cappedText(body);
 }
 
 /** Attempt the browser fallback, swallowing failures so the caller can degrade. */
@@ -147,7 +185,7 @@ async function fetchRaw(url: string, timeout: number, signal?: AbortSignal): Pro
 			return text(`Binary content (content-type: ${contentType}); not rendered. URL: ${url}`);
 		}
 		const body = await readTextCapped(res);
-		return text(body);
+		return cappedText(body);
 	} catch (err) {
 		return text(`Failed to fetch raw content: ${err instanceof Error ? err.message : String(err)}`, true);
 	} finally {
