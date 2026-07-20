@@ -13,6 +13,7 @@ Personal extensions for [pi](https://github.com/earendil-works/pi).
 | `context` | Context-window usage + session token/cost footer data |
 | `footer` | Custom footer rendering |
 | `tool-substitute` | Rewrite tool calls (e.g. git -> jj, grep -> rg) |
+| `todos` | File-based todos in `.pi/todos` with a `/todos` TUI manager ([origin](https://github.com/mitsuhiko/agent-stuff/blob/main/extensions/todos.ts)) |
 | `preview-system-prompt` | Dump the assembled system prompt |
 
 ## Install
