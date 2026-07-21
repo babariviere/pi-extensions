@@ -125,9 +125,16 @@ export function applyStatus(model: AgentProgress[], index: number, update: RunSt
 	}
 }
 
+const MODEL_DESC =
+	"Override the agent's model for this run (e.g. \"claude-sonnet-5\" or \"anthropic/claude-opus-4-8\"). " +
+	"Use to diversify parallel runs and decorrelate errors (e.g. review on two model families).";
+const THINKING_DESC = "Override the agent's thinking level for this run (off|minimal|low|medium|high|xhigh).";
+
 const TaskItem = Type.Object({
 	agent: Type.String({ description: "Name of a discovered agent to run" }),
 	task: Type.String({ description: "The concrete task for that agent" }),
+	model: Type.Optional(Type.String({ description: MODEL_DESC })),
+	thinking: Type.Optional(Type.String({ description: THINKING_DESC })),
 });
 
 export function createSubagentTool(getSessionRef: () => SessionRef) {
@@ -137,13 +144,17 @@ export function createSubagentTool(getSessionRef: () => SessionRef) {
 		description:
 			"Delegate work to a custom agent. Use { action: \"list\" } to see available agents, " +
 			"{ agent, task } to run one, or { tasks: [{ agent, task }, ...] } to run several in parallel " +
-			"(waits for all to finish). In herdr, each subagent runs in a live pane inside a dedicated " +
-			"'subagents' tab so you can watch and interact; otherwise it runs headlessly.",
+			"(waits for all to finish). Each run may set an optional `model`/`thinking` to override the " +
+			"agent's frontmatter, so you can diversify parallel runs across model families. In herdr, each " +
+			"subagent runs in a live pane inside a dedicated 'subagents' tab so you can watch and interact; " +
+			"otherwise it runs headlessly.",
 		promptSnippet: "List or run custom subagents (headless, or live herdr panes)",
 		parameters: Type.Object({
 			action: Type.Optional(Type.Literal("list", { description: "List available agents" })),
 			agent: Type.Optional(Type.String({ description: "Agent name for a single run" })),
 			task: Type.Optional(Type.String({ description: "Task for a single run" })),
+			model: Type.Optional(Type.String({ description: MODEL_DESC })),
+			thinking: Type.Optional(Type.String({ description: THINKING_DESC })),
 			tasks: Type.Optional(Type.Array(TaskItem, { description: "Multiple agent/task pairs to run in parallel" })),
 		}),
 		async execute(_toolCallId, params, signal, onUpdate, _ctx) {
@@ -164,7 +175,8 @@ export function createSubagentTool(getSessionRef: () => SessionRef) {
 				if (!agent) {
 					return text(unknownAgentError(item.agent, agents));
 				}
-				resolved.push({ agent, task: item.task, index: i });
+				const overrides = item.model || item.thinking ? { model: item.model, thinking: item.thinking } : undefined;
+				resolved.push({ agent, task: item.task, index: i, overrides });
 			}
 
 			const runId = newRunId();
@@ -221,11 +233,15 @@ export function createSubagentTool(getSessionRef: () => SessionRef) {
 	});
 }
 
+type NormalizedItem = { agent: string; task: string; model?: string; thinking?: string };
+
 function normalizeRequests(params: {
 	agent?: string;
 	task?: string;
-	tasks?: { agent: string; task: string }[];
-}): { items: { agent: string; task: string }[] } | { error: string } {
+	model?: string;
+	thinking?: string;
+	tasks?: NormalizedItem[];
+}): { items: NormalizedItem[] } | { error: string } {
 	const hasSingle = !!params.agent || !!params.task;
 	const hasParallel = Array.isArray(params.tasks) && params.tasks.length > 0;
 
@@ -239,7 +255,7 @@ function normalizeRequests(params: {
 		if (!params.agent || !params.task) {
 			return { error: "A single run needs both `agent` and `task`." };
 		}
-		return { items: [{ agent: params.agent, task: params.task }] };
+		return { items: [{ agent: params.agent, task: params.task, model: params.model, thinking: params.thinking }] };
 	}
 	return { error: "Nothing to do. Use { action: \"list\" }, { agent, task }, or { tasks: [...] }." };
 }

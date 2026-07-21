@@ -10,6 +10,12 @@ export interface RunRequest {
 	agent: DiscoveredAgent;
 	task: string;
 	index: number;
+	/**
+	 * Per-run overrides of the agent's frontmatter, used to diversify parallel
+	 * runs (e.g. run the same reviewer on Opus and Sonnet to decorrelate errors).
+	 * Undefined fields fall back to the agent config.
+	 */
+	overrides?: { model?: string; thinking?: string };
 }
 
 /** Live lifecycle state of a single run, surfaced to the in-progress indicator. */

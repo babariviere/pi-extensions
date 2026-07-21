@@ -59,6 +59,10 @@ export interface ChildInvocationOpts {
 	systemPromptFile?: string;
 	/** Provider used to qualify a bare agent model (resolved from settings). */
 	defaultProvider?: string;
+	/** Per-run model override; takes precedence over the agent's frontmatter model. */
+	modelOverride?: string;
+	/** Per-run thinking override; takes precedence over the agent's frontmatter thinking. */
+	thinkingOverride?: string;
 }
 
 /**
@@ -68,7 +72,9 @@ export interface ChildInvocationOpts {
 export function buildChildArgs(agent: DiscoveredAgent, task: string, opts: ChildInvocationOpts): string[] {
 	const args: string[] = ["--session", opts.sessionFile];
 
-	const model = applyThinkingSuffix(qualifyModel(agent.config.model, opts.defaultProvider), agent.config.thinking);
+	const baseModel = opts.modelOverride ?? agent.config.model;
+	const thinking = opts.thinkingOverride ?? agent.config.thinking;
+	const model = applyThinkingSuffix(qualifyModel(baseModel, opts.defaultProvider), thinking);
 	if (model) args.push("--model", model);
 
 	// When the agent declares a tool allowlist, append the result tool so pi's

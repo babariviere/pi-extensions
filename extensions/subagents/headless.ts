@@ -39,6 +39,8 @@ export function runHeadless(req: RunRequest, ctx: HeadlessContext): Promise<RunR
 		sessionFile: paths.sessionPath,
 		systemPromptFile: hasPrompt ? paths.promptPath : undefined,
 		defaultProvider: readDefaultProvider(ctx.cwd),
+		modelOverride: req.overrides?.model,
+		thinkingOverride: req.overrides?.thinking,
 	});
 
 	return new Promise<RunResult>((resolve) => {

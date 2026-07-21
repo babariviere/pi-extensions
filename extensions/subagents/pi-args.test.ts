@@ -98,6 +98,33 @@ test("buildChildArgs adds model with thinking suffix and tools list", () => {
 	assert.equal(args[toolsIdx + 1], `read,bash,${SUBMIT_RESULT_TOOL}`);
 });
 
+test("buildChildArgs modelOverride takes precedence over the agent's frontmatter model", () => {
+	const args = buildChildArgs(
+		agent({ model: "claude-opus-4-8", thinking: "low" }),
+		"t",
+		{ ...opts, defaultProvider: "anthropic", modelOverride: "claude-sonnet-5" },
+	);
+	const modelIdx = args.indexOf("--model");
+	// Override is qualified with the default provider and keeps the agent's thinking.
+	assert.equal(args[modelIdx + 1], "anthropic/claude-sonnet-5:low");
+});
+
+test("buildChildArgs thinkingOverride takes precedence over the agent's frontmatter thinking", () => {
+	const args = buildChildArgs(
+		agent({ model: "claude-opus-4-8", thinking: "low" }),
+		"t",
+		{ ...opts, defaultProvider: "anthropic", thinkingOverride: "high" },
+	);
+	const modelIdx = args.indexOf("--model");
+	assert.equal(args[modelIdx + 1], "anthropic/claude-opus-4-8:high");
+});
+
+test("buildChildArgs modelOverride works when the agent declares no model", () => {
+	const args = buildChildArgs(agent({}), "t", { ...opts, defaultProvider: "anthropic", modelOverride: "claude-sonnet-5" });
+	const modelIdx = args.indexOf("--model");
+	assert.equal(args[modelIdx + 1], "anthropic/claude-sonnet-5");
+});
+
 test("buildChildArgs honors systemPromptMode (replace vs append)", () => {
 	const replace = buildChildArgs(agent({ systemPromptMode: "replace" }), "t", opts);
 	assert.ok(replace.includes("--system-prompt"));

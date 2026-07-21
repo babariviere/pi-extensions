@@ -184,6 +184,8 @@ function prepareRun(req: RunRequest, ctx: HerdrContext, defaultProvider: string 
 		sessionFile: paths.sessionPath,
 		systemPromptFile: hasPrompt ? paths.promptPath : undefined,
 		defaultProvider,
+		modelOverride: req.overrides?.model,
+		thinkingOverride: req.overrides?.thinking,
 	});
 
 	// A tiny POSIX launcher keeps all argument quoting inside /bin/sh, avoiding
