@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { type DiscoveredAgent } from "./discovery.ts";
 import { SUBMIT_RESULT_TOOL } from "./constants.ts";
-import { applyThinkingSuffix, buildChildArgs, qualifyModel, resultToolPath, stripThinkingSuffix } from "./pi-args.ts";
+import { buildChildArgs, extractThinkingSuffix, qualifyModel, resultToolPath, stripThinkingSuffix } from "./pi-args.ts";
 
 function agent(overrides: Partial<DiscoveredAgent["config"]> = {}, systemPrompt = "You are worker."): DiscoveredAgent {
 	return {
@@ -27,12 +27,12 @@ test("stripThinkingSuffix removes a known thinking suffix and leaves other colon
 	assert.equal(stripThinkingSuffix("provider:model"), "provider:model");
 });
 
-test("applyThinkingSuffix appends when missing and skips when present or off", () => {
-	assert.equal(applyThinkingSuffix("model", "high"), "model:high");
-	assert.equal(applyThinkingSuffix("model:low", "high"), "model:low");
-	assert.equal(applyThinkingSuffix("model", "off"), "model");
-	assert.equal(applyThinkingSuffix(undefined, "high"), undefined);
-	assert.equal(applyThinkingSuffix("model", undefined), "model");
+test("extractThinkingSuffix returns the level only for a valid trailing suffix", () => {
+	assert.equal(extractThinkingSuffix("model:high"), "high");
+	assert.equal(extractThinkingSuffix("model:low"), "low");
+	assert.equal(extractThinkingSuffix("model"), undefined);
+	assert.equal(extractThinkingSuffix("provider/model"), undefined);
+	assert.equal(extractThinkingSuffix("model:bogus"), undefined);
 });
 
 test("buildChildArgs always sets session and instructs the agent to submit its result", () => {
@@ -78,14 +78,16 @@ test("qualifyModel prefixes a bare model with the default provider only when nee
 	assert.equal(qualifyModel("", "anthropic"), "");
 });
 
-test("buildChildArgs qualifies a bare model with the default provider before the thinking suffix", () => {
+test("buildChildArgs qualifies a bare model and passes thinking via --thinking", () => {
 	const args = buildChildArgs(
 		agent({ model: "claude-opus-4-8", thinking: "low" }),
 		"t",
 		{ ...opts, defaultProvider: "anthropic" },
 	);
 	const modelIdx = args.indexOf("--model");
-	assert.equal(args[modelIdx + 1], "anthropic/claude-opus-4-8:low");
+	assert.equal(args[modelIdx + 1], "anthropic/claude-opus-4-8");
+	const thinkingIdx = args.indexOf("--thinking");
+	assert.equal(args[thinkingIdx + 1], "low");
 });
 
 test("buildChildArgs leaves an already-qualified model untouched", () => {
@@ -95,13 +97,27 @@ test("buildChildArgs leaves an already-qualified model untouched", () => {
 		{ ...opts, defaultProvider: "openai" },
 	);
 	const modelIdx = args.indexOf("--model");
-	assert.equal(args[modelIdx + 1], "anthropic/claude-opus-4-8:low");
+	assert.equal(args[modelIdx + 1], "anthropic/claude-opus-4-8");
 });
 
-test("buildChildArgs adds model with thinking suffix and tools list", () => {
+test("buildChildArgs passes thinking via --thinking even when the agent declares no model", () => {
+	const args = buildChildArgs(agent({ thinking: "high" }), "t", { ...opts, defaultProvider: "anthropic" });
+	assert.ok(!args.includes("--model"));
+	const thinkingIdx = args.indexOf("--thinking");
+	assert.equal(args[thinkingIdx + 1], "high");
+});
+
+test("buildChildArgs omits --thinking when thinking is unset or off", () => {
+	assert.ok(!buildChildArgs(agent({ model: "claude-opus-4-8" }), "t", opts).includes("--thinking"));
+	assert.ok(!buildChildArgs(agent({ model: "claude-opus-4-8", thinking: "off" }), "t", opts).includes("--thinking"));
+});
+
+test("buildChildArgs adds model and tools list without a thinking suffix", () => {
 	const args = buildChildArgs(agent({ model: "claude-opus-4-8", thinking: "low", tools: ["read", "bash"] }), "t", opts);
 	const modelIdx = args.indexOf("--model");
-	assert.equal(args[modelIdx + 1], "claude-opus-4-8:low");
+	assert.equal(args[modelIdx + 1], "claude-opus-4-8");
+	const thinkingIdx = args.indexOf("--thinking");
+	assert.equal(args[thinkingIdx + 1], "low");
 	const toolsIdx = args.indexOf("--tools");
 	assert.equal(args[toolsIdx + 1], `read,bash,${SUBMIT_RESULT_TOOL}`);
 });
@@ -114,7 +130,9 @@ test("buildChildArgs modelOverride takes precedence over the agent's frontmatter
 	);
 	const modelIdx = args.indexOf("--model");
 	// Override is qualified with the default provider and keeps the agent's thinking.
-	assert.equal(args[modelIdx + 1], "anthropic/claude-sonnet-5:low");
+	assert.equal(args[modelIdx + 1], "anthropic/claude-sonnet-5");
+	const thinkingIdx = args.indexOf("--thinking");
+	assert.equal(args[thinkingIdx + 1], "low");
 });
 
 test("buildChildArgs thinkingOverride takes precedence over the agent's frontmatter thinking", () => {
@@ -124,7 +142,21 @@ test("buildChildArgs thinkingOverride takes precedence over the agent's frontmat
 		{ ...opts, defaultProvider: "anthropic", thinkingOverride: "high" },
 	);
 	const modelIdx = args.indexOf("--model");
-	assert.equal(args[modelIdx + 1], "anthropic/claude-opus-4-8:high");
+	assert.equal(args[modelIdx + 1], "anthropic/claude-opus-4-8");
+	const thinkingIdx = args.indexOf("--thinking");
+	assert.equal(args[thinkingIdx + 1], "high");
+});
+
+test("buildChildArgs takes the thinking level from a suffix embedded in the model override", () => {
+	const args = buildChildArgs(
+		agent({ thinking: "low" }),
+		"t",
+		{ ...opts, defaultProvider: "anthropic", modelOverride: "claude-sonnet-5:high" },
+	);
+	const modelIdx = args.indexOf("--model");
+	assert.equal(args[modelIdx + 1], "anthropic/claude-sonnet-5");
+	const thinkingIdx = args.indexOf("--thinking");
+	assert.equal(args[thinkingIdx + 1], "high");
 });
 
 test("buildChildArgs modelOverride works when the agent declares no model", () => {

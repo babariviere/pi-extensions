@@ -42,12 +42,13 @@ export function stripThinkingSuffix(model: string): string {
 	return model;
 }
 
-/** Append a `:thinking` suffix to a model id when appropriate. */
-export function applyThinkingSuffix(model: string | undefined, thinking: string | undefined): string | undefined {
-	if (!model || !thinking || thinking === "off") return model;
+/** Extract a trailing `:thinking` suffix from a model id, if one is present. */
+export function extractThinkingSuffix(model: string): string | undefined {
 	const colonIdx = model.lastIndexOf(":");
-	if (colonIdx !== -1 && THINKING_LEVELS.includes(model.substring(colonIdx + 1))) return model;
-	return `${model}:${thinking}`;
+	if (colonIdx !== -1 && THINKING_LEVELS.includes(model.substring(colonIdx + 1))) {
+		return model.substring(colonIdx + 1);
+	}
+	return undefined;
 }
 
 /**
@@ -81,10 +82,18 @@ export interface ChildInvocationOpts {
 export function buildChildArgs(agent: DiscoveredAgent, task: string, opts: ChildInvocationOpts): string[] {
 	const args: string[] = ["--session", opts.sessionFile];
 
+	// Resolve the model and thinking level independently. Thinking travels via
+	// pi's dedicated `--thinking` flag rather than a model suffix, so an agent
+	// that declares only `thinking` (no `model`) still gets its level applied
+	// instead of silently falling back to the child's default thinking.
 	const baseModel = opts.modelOverride ?? agent.config.model;
-	const thinking = opts.thinkingOverride ?? agent.config.thinking;
-	const model = applyThinkingSuffix(qualifyModel(baseModel, opts.defaultProvider), thinking);
+	const qualified = qualifyModel(baseModel, opts.defaultProvider);
+	const model = qualified ? stripThinkingSuffix(qualified) : undefined;
+	// Thinking precedence: explicit override, then a suffix embedded in the chosen
+	// model, then the agent's frontmatter thinking.
+	const thinking = opts.thinkingOverride ?? (qualified ? extractThinkingSuffix(qualified) : undefined) ?? agent.config.thinking;
 	if (model) args.push("--model", model);
+	if (thinking && thinking !== "off") args.push("--thinking", thinking);
 
 	// When the agent declares a tool allowlist, append the result tool so pi's
 	// `--tools` filter (which also gates custom/extension tools) doesn't drop it.
