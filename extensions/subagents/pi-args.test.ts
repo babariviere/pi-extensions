@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { type DiscoveredAgent } from "./discovery.ts";
 import { SUBMIT_RESULT_TOOL } from "./constants.ts";
-import { applyThinkingSuffix, buildChildArgs, qualifyModel, resultToolPath } from "./pi-args.ts";
+import { applyThinkingSuffix, buildChildArgs, qualifyModel, resultToolPath, stripThinkingSuffix } from "./pi-args.ts";
 
 function agent(overrides: Partial<DiscoveredAgent["config"]> = {}, systemPrompt = "You are worker."): DiscoveredAgent {
 	return {
@@ -18,6 +18,14 @@ const opts = {
 	outputPath: "/tmp/run/worker-0.md",
 	systemPromptFile: "/tmp/run/worker-0.prompt.md",
 };
+
+test("stripThinkingSuffix removes a known thinking suffix and leaves other colons alone", () => {
+	assert.equal(stripThinkingSuffix("claude-opus-4-8:low"), "claude-opus-4-8");
+	assert.equal(stripThinkingSuffix("anthropic/claude-opus-4-8:high"), "anthropic/claude-opus-4-8");
+	assert.equal(stripThinkingSuffix("claude-opus-4-8"), "claude-opus-4-8");
+	// A colon that is not a thinking level is preserved.
+	assert.equal(stripThinkingSuffix("provider:model"), "provider:model");
+});
 
 test("applyThinkingSuffix appends when missing and skips when present or off", () => {
 	assert.equal(applyThinkingSuffix("model", "high"), "model:high");

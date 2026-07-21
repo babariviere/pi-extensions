@@ -31,7 +31,16 @@ export function resultToolPath(): string {
 	return join(dirname(fileURLToPath(import.meta.url)), "result-tool.ts");
 }
 
-const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"];
+export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"];
+
+/** Strip a trailing `:thinking` suffix from a model id, if one is present. */
+export function stripThinkingSuffix(model: string): string {
+	const colonIdx = model.lastIndexOf(":");
+	if (colonIdx !== -1 && THINKING_LEVELS.includes(model.substring(colonIdx + 1))) {
+		return model.substring(0, colonIdx);
+	}
+	return model;
+}
 
 /** Append a `:thinking` suffix to a model id when appropriate. */
 export function applyThinkingSuffix(model: string | undefined, thinking: string | undefined): string | undefined {

@@ -17,7 +17,9 @@ import { runHeadless } from "./headless.ts";
 import { isInHerdr } from "./herdr.ts";
 import { runInHerdr } from "./herdr-backend.ts";
 import { newRunId } from "./paths.ts";
+import { qualifyModel, stripThinkingSuffix, THINKING_LEVELS } from "./pi-args.ts";
 import { type RunRequest, type RunResult, type RunState, type RunStatusUpdate } from "./run.ts";
+import { readDefaultProvider, readEnabledModels } from "./settings.ts";
 
 export interface SessionRef {
 	sessionId: string | undefined;
@@ -127,7 +129,8 @@ export function applyStatus(model: AgentProgress[], index: number, update: RunSt
 
 const MODEL_DESC =
 	"Override the agent's model for this run (e.g. \"claude-sonnet-5\" or \"anthropic/claude-opus-4-8\"). " +
-	"Use to diversify parallel runs and decorrelate errors (e.g. review on two model families).";
+	"Use to diversify parallel runs and decorrelate errors (e.g. review on two model families). " +
+	"Must be one of the user's enabledModels when that allowlist is configured; unavailable/pricey models are rejected.";
 const THINKING_DESC = "Override the agent's thinking level for this run (off|minimal|low|medium|high|xhigh).";
 
 const TaskItem = Type.Object({
@@ -167,6 +170,9 @@ export function createSubagentTool(getSessionRef: () => SessionRef) {
 
 			const requested = normalizeRequests(params);
 			if ("error" in requested) return text(requested.error);
+
+			const overrideError = validateOverrides(requested.items, ref.cwd);
+			if (overrideError) return text(overrideError);
 
 			const resolved: RunRequest[] = [];
 			for (let i = 0; i < requested.items.length; i++) {
@@ -234,6 +240,36 @@ export function createSubagentTool(getSessionRef: () => SessionRef) {
 }
 
 type NormalizedItem = { agent: string; task: string; model?: string; thinking?: string };
+
+/** True when `model` (ignoring any thinking suffix / provider prefix) is in the allowlist. */
+function isModelEnabled(model: string, enabled: string[], provider: string | undefined): boolean {
+	const bare = stripThinkingSuffix(model);
+	const candidates = new Set([model, bare, qualifyModel(bare, provider)].filter((v): v is string => !!v));
+	return enabled.some((e) => candidates.has(e) || candidates.has(stripThinkingSuffix(e)));
+}
+
+/**
+ * Validate per-run overrides before spawning. `thinking` must be a known level.
+ * A `model` override is checked against the user's `enabledModels` allowlist so
+ * a run cannot silently use an unavailable or pricey model. When no allowlist is
+ * configured (empty), model overrides are unrestricted.
+ */
+function validateOverrides(items: NormalizedItem[], cwd: string): string | undefined {
+	const enabled = readEnabledModels(cwd);
+	const provider = readDefaultProvider(cwd);
+	for (const item of items) {
+		if (item.thinking && !THINKING_LEVELS.includes(item.thinking)) {
+			return `Invalid thinking level '${item.thinking}' for agent '${item.agent}'. Allowed: ${THINKING_LEVELS.join(", ")}.`;
+		}
+		if (item.model && enabled.length > 0 && !isModelEnabled(item.model, enabled, provider)) {
+			return (
+				`Model override '${item.model}' for agent '${item.agent}' is not in enabledModels. ` +
+				`Allowed: ${enabled.join(", ")}.`
+			);
+		}
+	}
+	return undefined;
+}
 
 function normalizeRequests(params: {
 	agent?: string;
