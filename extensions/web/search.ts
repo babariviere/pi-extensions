@@ -3,6 +3,7 @@
  */
 
 import { defineTool } from "@earendil-works/pi-coding-agent";
+import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { kagiSearch, KagiAuthError, type KagiResult, KagiTokenMissingError } from "./search/kagi.ts";
 import { DEFAULT_SETTINGS, type WebSettings } from "./settings.ts";
@@ -36,6 +37,11 @@ export function createWebSearchTool(settings: WebSettings = DEFAULT_SETTINGS) {
 				}),
 			),
 		}),
+		renderCall(args, theme, context) {
+			const text = context.lastComponent instanceof Text ? context.lastComponent : new Text("", 0, 0);
+			text.setText(formatSearchCall(args, theme));
+			return text;
+		},
 		async execute(_toolCallId, params, signal) {
 			const limit = clamp(params.limit ?? settings.searchLimit, 1, settings.maxSearchLimit);
 			try {
@@ -54,4 +60,17 @@ export function createWebSearchTool(settings: WebSettings = DEFAULT_SETTINGS) {
 
 function clamp(value: number, min: number, max: number): number {
 	return Math.max(min, Math.min(max, Math.round(value)));
+}
+
+// biome-ignore lint/suspicious/noExplicitAny: theme type is not exported
+function formatSearchCall(args: { query?: string; limit?: number }, theme: any): string {
+	const query = typeof args?.query === "string" ? args.query : null;
+	const limit = args?.limit;
+	const invalidArg = theme.fg("error", "[invalid arg]");
+	let text =
+		theme.fg("toolTitle", theme.bold("web search")) +
+		" " +
+		(query === null ? invalidArg : theme.fg("accent", `/${query}/`));
+	if (limit !== undefined) text += theme.fg("toolOutput", ` limit ${limit}`);
+	return text;
 }

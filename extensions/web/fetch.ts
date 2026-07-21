@@ -20,6 +20,7 @@ import {
 	formatSize,
 	truncateHead,
 } from "@earendil-works/pi-coding-agent";
+import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { browserFetch } from "./fetch/browser.ts";
 import { defuddleFetch, DefuddleError, type DefuddleResult } from "./fetch/defuddle.ts";
@@ -82,6 +83,11 @@ export function createFetchContentTool(settings: WebSettings = DEFAULT_SETTINGS)
 				}),
 			),
 		}),
+		renderCall(args, theme, context) {
+			const text = context.lastComponent instanceof Text ? context.lastComponent : new Text("", 0, 0);
+			text.setText(formatFetchCall(args, theme));
+			return text;
+		},
 		async execute(_toolCallId, params, signal) {
 			const timeout = params.timeout ?? settings.fetchTimeout;
 			const url = params.url.trim();
@@ -100,6 +106,17 @@ export function createFetchContentTool(settings: WebSettings = DEFAULT_SETTINGS)
 			return await fetchViaDefuddle(url, timeout, settings, signal);
 		},
 	});
+}
+
+// biome-ignore lint/suspicious/noExplicitAny: theme type is not exported
+function formatFetchCall(args: { url?: string; timeout?: number }, theme: any): string {
+	const url = typeof args?.url === "string" ? args.url.trim() : null;
+	const invalidArg = theme.fg("error", "[invalid arg]");
+	return (
+		theme.fg("toolTitle", theme.bold("fetch content")) +
+		" " +
+		(url === null ? invalidArg : theme.fg("accent", url))
+	);
 }
 
 // --- defuddle path ----------------------------------------------------------
