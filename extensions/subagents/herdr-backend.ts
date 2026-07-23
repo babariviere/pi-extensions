@@ -40,42 +40,30 @@ import {
 	closeTab,
 	createTab,
 	currentWorkspaceId,
+	herdrStatusProbe,
 	paneLabel,
 	promptAgent,
 	readPane,
 	renamePane,
 	splitPane,
 	startAgent,
-	waitForAgentFinish,
 } from "./herdr.ts";
-import { buildChildArgs, formatTaskMessage } from "./pi-args.ts";
-import { resolveOutputOverride, runPaths } from "./paths.ts";
+import { waitForAgentFinish } from "./pane-lifecycle.ts";
+import { formatTaskMessage } from "./pi-args.ts";
 import { readDefaultProvider } from "./settings.ts";
 import {
-	ensureRunDir,
-	type OnStatus,
-	readLastAssistantText,
-	readOutputFile,
+	prepareChildRun,
+	resolveRunOutput,
+	type RunContext,
 	type RunOutcome,
 	type RunRequest,
 	type RunResult,
 	waitForRunCompletion,
-	writeSystemPrompt,
 } from "./run.ts";
 
 export const SUBAGENTS_TAB_LABEL = "subagents";
 
-export interface HerdrContext {
-	sessionId: string | undefined;
-	sessionFile: string | undefined;
-	runId: string;
-	cwd: string;
-	timeoutMs: number;
-	signal?: AbortSignal;
-	onStatus?: OnStatus;
-}
-
-export async function runInHerdr(reqs: RunRequest[], ctx: HerdrContext): Promise<RunResult[]> {
+export async function runInHerdr(reqs: RunRequest[], ctx: RunContext): Promise<RunResult[]> {
 	const workspaceId = currentWorkspaceId();
 	const tab = await createTab(SUBAGENTS_TAB_LABEL, workspaceId);
 	if (!tab || !tab.rootPaneId) {
@@ -182,28 +170,11 @@ interface SpawnedRun {
 	error?: string;
 }
 
-/** Write the per-run files and the launcher script; no herdr calls yet. */
-function prepareRun(req: RunRequest, ctx: HerdrContext, defaultProvider: string | undefined): PreparedRun {
-	const paths = runPaths(ctx.sessionFile, ctx.sessionId, ctx.runId, req.agent.config.name, req.index);
-	ensureRunDir(paths.dir);
-
-	const outputPath = req.output ? resolveOutputOverride(ctx.cwd, req.output) : paths.outputPath;
-
-	const hasPrompt = req.agent.systemPrompt.trim().length > 0;
-	if (hasPrompt) writeSystemPrompt(paths.promptPath, req.agent.systemPrompt);
-
+/** Write the per-run files and args; no herdr calls yet. */
+function prepareRun(req: RunRequest, ctx: RunContext, defaultProvider: string | undefined): PreparedRun {
 	// Flags only: the task is submitted after start via `agent prompt`.
-	const childArgs = buildChildArgs(req.agent, req.task, {
-		sessionFile: paths.sessionPath,
-		outputPath,
-		systemPromptFile: hasPrompt ? paths.promptPath : undefined,
-		defaultProvider,
-		modelOverride: req.overrides?.model,
-		thinkingOverride: req.overrides?.thinking,
-		includeTask: false,
-	});
-
-	return { req, outputPath, sessionPath: paths.sessionPath, childArgs };
+	const p = prepareChildRun(req, ctx, { defaultProvider, includeTask: false });
+	return { req, outputPath: p.outputPath, sessionPath: p.sessionPath, childArgs: p.childArgs };
 }
 
 /**
@@ -218,7 +189,7 @@ function agentName(index: number): string {
 }
 
 /** Rename the pane and start pi in it via `herdr agent start`. */
-async function launchRun(p: PreparedRun, ctx: HerdrContext): Promise<SpawnedRun> {
+async function launchRun(p: PreparedRun, ctx: RunContext): Promise<SpawnedRun> {
 	if (p.error || !p.paneId) {
 		ctx.onStatus?.(p.req.index, { state: "failed", paneId: p.paneId, outputPath: p.outputPath });
 		return { req: p.req, outputPath: p.outputPath, sessionPath: p.sessionPath, paneId: p.paneId, error: p.error ?? "no pane" };
@@ -255,7 +226,7 @@ async function launchRun(p: PreparedRun, ctx: HerdrContext): Promise<SpawnedRun>
 	};
 }
 
-async function settleRun(s: SpawnedRun, ctx: HerdrContext): Promise<RunResult> {
+async function settleRun(s: SpawnedRun, ctx: RunContext): Promise<RunResult> {
 	if (s.error) {
 		return failResult(s.req, s.error, s.paneId, s.outputPath);
 	}
@@ -268,7 +239,7 @@ async function settleRun(s: SpawnedRun, ctx: HerdrContext): Promise<RunResult> {
 	// AbortController tears down the lingering `herdr wait` once the run settles.
 	const paneId = s.paneId;
 	const ac = new AbortController();
-	const agentSignal = paneId ? waitForAgentFinish(paneId, ctx.timeoutMs, { signal: ac.signal }) : undefined;
+	const agentSignal = paneId ? waitForAgentFinish(herdrStatusProbe(paneId), ctx.timeoutMs, { signal: ac.signal }) : undefined;
 
 	let outcome: RunOutcome;
 	try {
@@ -277,29 +248,25 @@ async function settleRun(s: SpawnedRun, ctx: HerdrContext): Promise<RunResult> {
 		ac.abort();
 	}
 
-	let output = readOutputFile(s.outputPath);
-	if (output === undefined) {
-		// The agent finished without writing the output file. This commonly means
-		// it ended its turn with a plain assistant message instead of calling
-		// submit_result. Recover the result from the child session transcript
-		// (complete and on disk), then fall back to pane scrollback.
-		output = readLastAssistantText(s.sessionPath);
-		if (output === undefined && paneId) output = await readPane(paneId);
-	}
-
 	// Success when we have usable output and the agent actually finished its turn
-	// (`stable` = wrote the file; `finished` = went idle, result recovered above).
-	// A `gone`/`timeout` outcome stays failed even if scrollback yielded text.
-	const ok = output !== undefined && (outcome === "stable" || outcome === "finished");
-	report(ok);
+	// (`stable` = wrote the file; `finished` = went idle). A `gone`/`timeout`
+	// outcome stays failed even if the pane-scrollback fallback yielded text.
+	const resolved = await resolveRunOutput({
+		outputPath: s.outputPath,
+		sessionPath: s.sessionPath,
+		fallback: () => (paneId ? readPane(paneId) : undefined),
+		finishedCleanly: outcome === "stable" || outcome === "finished",
+		placeholder: "(no output produced before the pane finished or was terminated)",
+	});
+	report(resolved.ok);
 	return {
 		agent: s.req.agent.config.name,
 		scope: s.req.agent.scope,
-		ok,
-		output: output ?? "(no output produced before the pane finished or was terminated)",
+		ok: resolved.ok,
+		output: resolved.output,
 		outputPath: s.outputPath,
 		paneId: s.paneId,
-		error: ok ? undefined : outcomeError(outcome),
+		error: resolved.ok ? undefined : outcomeError(outcome),
 	};
 }
 

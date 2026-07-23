@@ -3,7 +3,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { readLastAssistantText, type RunOutcome, waitForRunCompletion } from "./run.ts";
+import { readLastAssistantText, resolveRunOutput, type RunOutcome, waitForRunCompletion } from "./run.ts";
 
 function tmpFile(): string {
 	return join(mkdtempSync(join(tmpdir(), "run-test-")), "out.md");
@@ -104,4 +104,72 @@ test("readLastAssistantText returns undefined for a missing or textless transcri
 	const path = tmpFile();
 	writeFileSync(path, sessionLine("user", [{ type: "text", text: "hi" }]));
 	assert.equal(readLastAssistantText(path), undefined);
+});
+
+test("resolveRunOutput prefers the submit_result file and marks ok when finished cleanly", async () => {
+	const path = tmpFile();
+	writeFileSync(path, "from file");
+	let fallbackCalls = 0;
+	const r = await resolveRunOutput({
+		outputPath: path,
+		sessionPath: tmpFile(),
+		fallback: () => {
+			fallbackCalls++;
+			return "unused";
+		},
+		finishedCleanly: true,
+	});
+	assert.deepEqual(r, { output: "from file", ok: true });
+	assert.equal(fallbackCalls, 0); // fallback skipped when the file wins
+});
+
+test("resolveRunOutput falls back to the transcript before the backend fallback", async () => {
+	const session = tmpFile();
+	writeFileSync(session, sessionLine("assistant", [{ type: "text", text: "from transcript" }]));
+	let fallbackCalls = 0;
+	const r = await resolveRunOutput({
+		outputPath: tmpFile(), // never created
+		sessionPath: session,
+		fallback: () => {
+			fallbackCalls++;
+			return "from fallback";
+		},
+		finishedCleanly: true,
+	});
+	assert.equal(r.output, "from transcript");
+	assert.equal(fallbackCalls, 0);
+});
+
+test("resolveRunOutput awaits the async fallback only when file and transcript miss", async () => {
+	const r = await resolveRunOutput({
+		outputPath: tmpFile(),
+		sessionPath: tmpFile(),
+		fallback: () => Promise.resolve("from pane"),
+		finishedCleanly: true,
+	});
+	assert.deepEqual(r, { output: "from pane", ok: true });
+});
+
+test("resolveRunOutput is not ok when the run did not finish cleanly, even with output", async () => {
+	const path = tmpFile();
+	writeFileSync(path, "got text but crashed");
+	const r = await resolveRunOutput({
+		outputPath: path,
+		sessionPath: tmpFile(),
+		fallback: () => undefined,
+		finishedCleanly: false,
+	});
+	assert.equal(r.ok, false);
+	assert.equal(r.output, "got text but crashed");
+});
+
+test("resolveRunOutput uses the placeholder and is not ok when no source yields text", async () => {
+	const r = await resolveRunOutput({
+		outputPath: tmpFile(),
+		sessionPath: tmpFile(),
+		fallback: () => undefined,
+		finishedCleanly: true,
+		placeholder: "(nothing)",
+	});
+	assert.deepEqual(r, { output: "(nothing)", ok: false });
 });

@@ -3,7 +3,8 @@
  */
 
 import { readFileSync, statSync, writeFileSync } from "node:fs";
-import { ensureDir } from "./paths.ts";
+import { buildChildArgs } from "./pi-args.ts";
+import { ensureDir, resolveOutputOverride, runPaths } from "./paths.ts";
 import { type DiscoveredAgent } from "./discovery.ts";
 
 export interface RunRequest {
@@ -45,6 +46,31 @@ export interface RunStatusUpdate {
  */
 export type OnStatus = (index: number, update: RunStatusUpdate) => void;
 
+/**
+ * Ambient inputs a backend needs to run a batch: the parent session it belongs
+ * to, a shared `runId`, the cwd, a per-run timeout, an abort signal, and the
+ * status callback. Both adapters take the same context, so the tool builds it
+ * once and hands it to whichever backend `selectBackend` returns.
+ */
+export interface RunContext {
+	sessionId: string | undefined;
+	sessionFile: string | undefined;
+	runId: string;
+	cwd: string;
+	timeoutMs: number;
+	signal?: AbortSignal;
+	onStatus?: OnStatus;
+}
+
+/**
+ * The run-backend seam: turn a batch of requests into results. Two adapters
+ * implement it (headless child processes, live herdr panes); `selectBackend`
+ * (see backend.ts) picks one by environment. Batch-shaped because the herdr
+ * adapter needs the whole batch at once to tile its pane grid; the headless
+ * adapter fans out with Promise.all internally.
+ */
+export type RunBackend = (reqs: RunRequest[], ctx: RunContext) => Promise<RunResult[]>;
+
 export interface RunResult {
 	agent: string;
 	scope: string;
@@ -65,6 +91,51 @@ export function writeSystemPrompt(promptPath: string, body: string): void {
 
 export function ensureRunDir(dir: string): void {
 	ensureDir(dir);
+}
+
+/** The child-run files and args, prepared identically for both backends. */
+export interface PreparedRun {
+	dir: string;
+	outputPath: string;
+	sessionPath: string;
+	promptPath: string;
+	hasPrompt: boolean;
+	childArgs: string[];
+}
+
+/**
+ * Prepare a single run's on-disk files and child `pi` args. This is the setup
+ * both backends share: resolve the run dir, honor a per-run `output` override,
+ * write the system prompt when present, and build the child args. The only
+ * per-backend knob is `includeTask`: the headless adapter inlines the task as
+ * the initial message, while the herdr adapter omits it here and submits it via
+ * `agent prompt` (which handles multi-line text `agent start` cannot encode).
+ */
+export function prepareChildRun(
+	req: RunRequest,
+	ctx: RunContext,
+	opts: { defaultProvider: string | undefined; includeTask: boolean },
+): PreparedRun {
+	const paths = runPaths(ctx.sessionFile, ctx.sessionId, ctx.runId, req.agent.config.name, req.index);
+	ensureRunDir(paths.dir);
+
+	const outputPath = req.output ? resolveOutputOverride(ctx.cwd, req.output) : paths.outputPath;
+
+	const hasPrompt = req.agent.systemPrompt.trim().length > 0;
+	if (hasPrompt) writeSystemPrompt(paths.promptPath, req.agent.systemPrompt);
+
+	const childArgs = buildChildArgs(req.agent, req.task, {
+		sessionFile: paths.sessionPath,
+		outputPath,
+		systemPromptFile: hasPrompt ? paths.promptPath : undefined,
+		defaultProvider: opts.defaultProvider,
+		modelOverride: req.overrides?.model,
+		thinkingOverride: req.overrides?.thinking,
+		reads: req.reads,
+		includeTask: opts.includeTask,
+	});
+
+	return { dir: paths.dir, outputPath, sessionPath: paths.sessionPath, promptPath: paths.promptPath, hasPrompt, childArgs };
 }
 
 interface Snapshot {
@@ -198,4 +269,34 @@ export function readLastAssistantText(sessionPath: string): string | undefined {
 		if (text.length > 0) last = text;
 	}
 	return last;
+}
+
+export interface ResolvedOutput {
+	output: string;
+	ok: boolean;
+}
+
+/**
+ * Resolve a run's final output and success, applying the three-tier rule both
+ * backends share: the `submit_result` file first, then the child session
+ * transcript (agents sometimes end with a plain message instead of calling
+ * submit_result), then a backend-specific `fallback` (headless: captured stdout;
+ * herdr: pane scrollback). The fallback is an async thunk so it runs only when
+ * the first two tiers miss, avoiding needless work.
+ *
+ * A run is `ok` when it produced usable output AND finished cleanly
+ * (`finishedCleanly`: headless exit 0; herdr a stable/finished outcome). When no
+ * source yields text, `output` is a placeholder and `ok` is false.
+ */
+export async function resolveRunOutput(opts: {
+	outputPath: string;
+	sessionPath: string;
+	fallback: () => Promise<string | undefined> | string | undefined;
+	finishedCleanly: boolean;
+	placeholder?: string;
+}): Promise<ResolvedOutput> {
+	let output = readOutputFile(opts.outputPath) ?? readLastAssistantText(opts.sessionPath);
+	if (output === undefined) output = (await opts.fallback()) || undefined;
+	const ok = output !== undefined && opts.finishedCleanly;
+	return { output: output ?? (opts.placeholder ?? "(no output produced)"), ok };
 }

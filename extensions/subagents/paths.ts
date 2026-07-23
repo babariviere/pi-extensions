@@ -15,7 +15,7 @@
 
 import { mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, isAbsolute, join } from "node:path";
+import { basename, dirname, isAbsolute, join } from "node:path";
 
 import { SUBMIT_RESULT_TOOL } from "./constants.ts";
 
@@ -84,6 +84,25 @@ export function runPaths(
  */
 export function resolveOutputOverride(cwd: string, override: string): string {
 	return isAbsolute(override) ? override : join(cwd, override);
+}
+
+/**
+ * Insert a `-<index>` suffix before an output override's file extension so
+ * parallel runs that share one override do not all write to the same file (and
+ * clobber each other). Applied only for batches with more than one run; a single
+ * run keeps its override verbatim, preserving stable destinations like
+ * `.pi/goal/plan.md`. Directory and absolute/relative shape are preserved:
+ *   `plan.md` -> `plan-0.md`, `.pi/goal/plan.md` -> `.pi/goal/plan-0.md`,
+ *   `/abs/out.md` -> `/abs/out-0.md`, `report` (no ext) -> `report-0`.
+ */
+export function indexOutputOverride(override: string, index: number): string {
+	const dir = dirname(override);
+	const base = basename(override);
+	const dot = base.lastIndexOf(".");
+	const stem = dot > 0 ? base.slice(0, dot) : base;
+	const ext = dot > 0 ? base.slice(dot) : "";
+	const indexed = `${stem}-${index}${ext}`;
+	return dir === "." ? indexed : join(dir, indexed);
 }
 
 export function ensureDir(dir: string): void {

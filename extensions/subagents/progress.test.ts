@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { type AgentProgress, applyStatus, formatElapsed, renderProgress, SPINNER_FRAMES, stateGlyph } from "./tool.ts";
+import { type AgentProgress, applyStatus, formatElapsed, renderProgress, SPINNER_FRAMES, stateGlyph } from "./progress.ts";
 
 test("formatElapsed formats sub-minute and minute durations", () => {
 	assert.equal(formatElapsed(-500), "0s");

@@ -9,6 +9,7 @@
  */
 
 import { execFile } from "node:child_process";
+import { type StatusProbe } from "./pane-lifecycle.ts";
 
 /** Resolve after `ms`, or immediately if `signal` is/gets aborted. */
 function delay(ms: number, signal?: AbortSignal): Promise<void> {
@@ -375,63 +376,15 @@ function parseLastJson(stdout: string | undefined): unknown {
 }
 
 /**
- * Wait for a subagent pane to finish its turn, using blocking status waits
- * instead of busy polling. pi's observed lifecycle is `unknown -> idle -> working
- * -> (idle | done)`: it emits a brief `idle` at startup before picking up the
- * task, and when finished a focused pane goes `idle` while a background pane goes
- * `done`. So we first wait for `working` (skipping the startup `idle`), then wait
- * for `idle` or `done`.
- *
- * Termination handling: `herdr agent wait` reports `agent_not_running` when its
- * target pane closes, but it can also report that transiently while pi is still
- * starting up (before it's detected as an agent). To tell those apart we cap
- * each wait at `chunkMs` and re-check pane existence between chunks via
- * `pane get`, so a truly closed pane resolves `gone` within ~chunkMs while a
- * starting pane keeps waiting and finishes still resolve instantly.
+ * Production `StatusProbe` (see pane-lifecycle.ts) bound to a herdr pane: the
+ * blocking wait maps to `herdr agent wait`, and the point probe to `pane get`.
+ * Keeps the lifecycle machine free of any herdr/pane-id knowledge.
  */
-export async function waitForAgentFinish(
-	paneId: string,
-	timeoutMs: number,
-	opts?: { signal?: AbortSignal; chunkMs?: number },
-): Promise<"finished" | "gone"> {
-	const signal = opts?.signal;
-	const chunkMs = opts?.chunkMs ?? 20000;
-	const deadline = Date.now() + timeoutMs;
-
-	// Phase 1: wait until the agent is actively working, so the startup `idle`
-	// isn't mistaken for completion. A very fast background agent may reach `done`
-	// before we see `working`; that counts as finished too.
-	while (Date.now() < deadline && !signal?.aborted) {
-		const remaining = deadline - Date.now();
-		const r = await waitAgentStatus(paneId, ["working", "done"], Math.min(chunkMs, remaining), signal);
-		if (r.kind === "gone") return "gone";
-		if (r.kind === "reached") {
-			if (r.status === "done") return "finished";
-			break; // working
-		}
-		// Chunk elapsed or agent not yet detected: re-check existence / fast-finish.
-		const state = await getPaneAgentState(paneId);
-		if (!state.exists) return "gone";
-		if (state.status === "idle" || state.status === "done") return "finished";
-		if (state.status === "blocked") break; // active but paused; wait for finish
-		// Otherwise still starting (unknown / not_running); keep waiting for `working`.
-	}
-
-	// Phase 2: wait for completion. Focused panes go `idle`, background panes go
-	// `done`; accept whichever comes first. Re-check existence each chunk so a
-	// pane the user terminated is noticed promptly instead of at the full timeout.
-	while (Date.now() < deadline && !signal?.aborted) {
-		const remaining = deadline - Date.now();
-		const r = await waitAgentStatus(paneId, ["idle", "done"], Math.min(chunkMs, remaining), signal);
-		if (r.kind === "reached") return "finished";
-		if (r.kind === "gone") return "gone";
-		// Chunk timeout or agent no longer detected: confirm the pane is still alive
-		// before waiting again. A gone pane resolves `gone`; an idle/done one finishes.
-		const state = await getPaneAgentState(paneId);
-		if (!state.exists) return "gone";
-		if (state.status === "done" || state.status === "idle") return "finished";
-	}
-	return "finished";
+export function herdrStatusProbe(paneId: string): StatusProbe {
+	return {
+		waitUntil: (statuses, timeoutMs, signal) => waitAgentStatus(paneId, statuses, timeoutMs, signal),
+		peek: () => getPaneAgentState(paneId),
+	};
 }
 
 /** Read recent pane output as a fallback when the output file is missing. */

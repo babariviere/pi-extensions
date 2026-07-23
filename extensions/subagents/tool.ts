@@ -6,20 +6,20 @@
  *   - { agent, task }                       single run
  *   - { tasks: [{ agent, task }, ...] }      parallel run (blocks until all finish)
  *
- * Backend selection is by environment: live herdr panes when in herdr,
- * otherwise headless `pi` child processes.
+ * Backend selection is delegated to `selectBackend` (live herdr panes when in
+ * herdr, otherwise headless `pi` child processes). This module owns only the
+ * tool schema, the live-indicator ticker, and its own result text; request
+ * validation lives in request.ts and rendering in progress.ts.
  */
 
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { selectBackend } from "./backend.ts";
 import { type DiscoveredAgent, discoverAgentsForCwd } from "./discovery.ts";
-import { runHeadless } from "./headless.ts";
-import { isInHerdr } from "./herdr.ts";
-import { runInHerdr } from "./herdr-backend.ts";
 import { newRunId } from "./paths.ts";
-import { qualifyModel, stripThinkingSuffix, THINKING_LEVELS } from "./pi-args.ts";
-import { type RunRequest, type RunResult, type RunState, type RunStatusUpdate } from "./run.ts";
-import { readDefaultProvider, readEnabledModels } from "./settings.ts";
+import { type AgentProgress, applyStatus, renderProgress } from "./progress.ts";
+import { buildRunRequests } from "./request.ts";
+import { type RunContext, type RunResult, type RunState, type RunStatusUpdate } from "./run.ts";
 
 export interface SessionRef {
 	sessionId: string | undefined;
@@ -35,97 +35,6 @@ function text(body: string): TextResult {
 
 const DEFAULT_RUN_TIMEOUT_MS = 30 * 60 * 1000;
 const PROGRESS_TICK_MS = 100;
-
-/** Per-agent live progress row for the in-progress indicator. */
-export interface AgentProgress {
-	name: string;
-	scope: string;
-	state: RunState;
-	startedAt: number;
-	/** Stamped when the row reaches a terminal state so its elapsed freezes. */
-	endedAt?: number;
-	paneId?: string;
-	outputPath?: string;
-}
-
-const STATE_LABEL: Record<RunState, string> = {
-	spawning: "spawning",
-	running: "running",
-	done: "done",
-	failed: "FAILED",
-};
-
-/** Braille spinner frames for active rows; advanced by the caller each tick. */
-export const SPINNER_FRAMES = ["\u280b", "\u2819", "\u2839", "\u2838", "\u283c", "\u2834", "\u2826", "\u2827", "\u2807", "\u280f"];
-const ANSI = { green: "\u001b[32m", red: "\u001b[31m", orange: "\u001b[38;5;208m", reset: "\u001b[0m" };
-
-/** Status glyph for a row: spinner while active, check/cross when terminal. */
-export function stateGlyph(state: RunState, frame: number): string {
-	if (state === "done") return "\u2713";
-	if (state === "failed") return "\u2717";
-	return SPINNER_FRAMES[((frame % SPINNER_FRAMES.length) + SPINNER_FRAMES.length) % SPINNER_FRAMES.length];
-}
-
-/** Format an elapsed duration compactly: "5s", "1m05s". */
-export function formatElapsed(ms: number): string {
-	const clamped = ms > 0 ? ms : 0;
-	const totalSec = Math.floor(clamped / 1000);
-	if (totalSec < 60) return `${totalSec}s`;
-	const min = Math.floor(totalSec / 60);
-	const sec = totalSec % 60;
-	return `${min}m${String(sec).padStart(2, "0")}s`;
-}
-
-/**
- * Pure renderer for the live indicator. `now` and `frame` are injected so callers
- * (and tests) control elapsed time and the spinner deterministically. Terminal
- * rows freeze their elapsed at `endedAt`. `color` opt-in wraps terminal glyphs in
- * ANSI (best-effort; ignored/stripped harmlessly when the view is plain text).
- */
-export function renderProgress(
-	model: AgentProgress[],
-	now: number,
-	opts: { frame?: number; color?: boolean } = {},
-): string {
-	const frame = opts.frame ?? 0;
-	const active = model.filter((m) => m.state === "spawning" || m.state === "running").length;
-	const noun = model.length === 1 ? "subagent" : "subagents";
-	const header = active > 0
-		? `Running ${model.length} ${noun} (${active} active):`
-		: `Subagents (${model.length}):`;
-	const lines = [header];
-	for (const m of model) {
-		const elapsed = formatElapsed((m.endedAt ?? now) - m.startedAt);
-		const parts = [`[${STATE_LABEL[m.state]}]`, elapsed];
-		if (m.paneId) parts.push(`pane ${m.paneId}`);
-		if (m.outputPath) parts.push(`output: ${m.outputPath}`);
-		lines.push(`- ${colorGlyph(stateGlyph(m.state, frame), m.state, opts.color)} ${m.name} ${parts.join(" \u00b7 ")}`);
-	}
-	return lines.join("\n");
-}
-
-function colorGlyph(glyph: string, state: RunState, color: boolean | undefined): string {
-	if (!color) return glyph;
-	if (state === "done") return `${ANSI.green}${glyph}${ANSI.reset}`;
-	if (state === "failed") return `${ANSI.red}${glyph}${ANSI.reset}`;
-	if (state === "spawning" || state === "running") return `${ANSI.orange}${glyph}${ANSI.reset}`;
-	return glyph;
-}
-
-/**
- * Apply a status update to the progress row at `index` (mutates in place). When
- * the row reaches a terminal state, stamp `endedAt` (once) so its elapsed stops.
- */
-export function applyStatus(model: AgentProgress[], index: number, update: RunStatusUpdate, now = Date.now()): void {
-	const row = model[index];
-	if (!row) return;
-	row.state = update.state;
-	if (update.paneId !== undefined) row.paneId = update.paneId;
-	if (update.outputPath !== undefined) row.outputPath = update.outputPath;
-	if ((update.state === "done" || update.state === "failed") && row.endedAt === undefined) {
-		row.endedAt = now;
-	}
-}
 
 const MODEL_DESC =
 	"Override the agent's model for this run (e.g. \"claude-sonnet-5\" or \"anthropic/claude-opus-4-8\"). " +
@@ -180,29 +89,9 @@ export function createSubagentTool(getSessionRef: () => SessionRef) {
 				return text(formatAgentList(agents));
 			}
 
-			const requested = normalizeRequests(params);
-			if ("error" in requested) return text(requested.error);
-
-			const overrideError = validateOverrides(requested.items, ref.cwd);
-			if (overrideError) return text(overrideError);
-
-			const resolved: RunRequest[] = [];
-			for (let i = 0; i < requested.items.length; i++) {
-				const item = requested.items[i];
-				const agent = agents.find((a) => a.config.name === item.agent);
-				if (!agent) {
-					return text(unknownAgentError(item.agent, agents));
-				}
-				const overrides = item.model || item.thinking ? { model: item.model, thinking: item.thinking } : undefined;
-				resolved.push({
-					agent,
-					task: item.task,
-					index: i,
-					overrides,
-					output: item.output ?? agent.config.output,
-					reads: item.reads ?? agent.config.defaultReads,
-				});
-			}
+			const built = buildRunRequests(params, agents, ref.cwd);
+			if ("error" in built) return text(built.error);
+			const resolved = built.requests;
 
 			const runId = newRunId();
 			const startedAt = Date.now();
@@ -225,7 +114,7 @@ export function createSubagentTool(getSessionRef: () => SessionRef) {
 			}, PROGRESS_TICK_MS);
 			ticker.unref?.();
 
-			const baseCtx = {
+			const baseCtx: RunContext = {
 				sessionId: ref.sessionId,
 				sessionFile: ref.sessionFile,
 				runId,
@@ -240,11 +129,7 @@ export function createSubagentTool(getSessionRef: () => SessionRef) {
 
 			let results: RunResult[];
 			try {
-				if (isInHerdr()) {
-					results = await runInHerdr(resolved, baseCtx);
-				} else {
-					results = await Promise.all(resolved.map((req) => runHeadless(req, baseCtx)));
-				}
+				results = await selectBackend()(resolved, baseCtx);
 			} finally {
 				live = false;
 				clearInterval(ticker);
@@ -258,74 +143,6 @@ export function createSubagentTool(getSessionRef: () => SessionRef) {
 	});
 }
 
-type NormalizedItem = { agent: string; task: string; model?: string; thinking?: string; output?: string; reads?: string[] };
-
-/** True when `model` (ignoring any thinking suffix / provider prefix) is in the allowlist. */
-function isModelEnabled(model: string, enabled: string[], provider: string | undefined): boolean {
-	const bare = stripThinkingSuffix(model);
-	const candidates = new Set([model, bare, qualifyModel(bare, provider)].filter((v): v is string => !!v));
-	return enabled.some((e) => candidates.has(e) || candidates.has(stripThinkingSuffix(e)));
-}
-
-/**
- * Validate per-run overrides before spawning. `thinking` must be a known level.
- * A `model` override is checked against the user's `enabledModels` allowlist so
- * a run cannot silently use an unavailable or pricey model. When no allowlist is
- * configured (empty), model overrides are unrestricted.
- */
-function validateOverrides(items: NormalizedItem[], cwd: string): string | undefined {
-	const enabled = readEnabledModels(cwd);
-	const provider = readDefaultProvider(cwd);
-	for (const item of items) {
-		if (item.thinking && !THINKING_LEVELS.includes(item.thinking)) {
-			return `Invalid thinking level '${item.thinking}' for agent '${item.agent}'. Allowed: ${THINKING_LEVELS.join(", ")}.`;
-		}
-		if (item.model && enabled.length > 0 && !isModelEnabled(item.model, enabled, provider)) {
-			return (
-				`Model override '${item.model}' for agent '${item.agent}' is not in enabledModels. ` +
-				`Allowed: ${enabled.join(", ")}.`
-			);
-		}
-	}
-	return undefined;
-}
-
-function normalizeRequests(params: {
-	agent?: string;
-	task?: string;
-	model?: string;
-	thinking?: string;
-	output?: string;
-	reads?: string[];
-	tasks?: NormalizedItem[];
-}): { items: NormalizedItem[] } | { error: string } {
-	const hasSingle = !!params.agent || !!params.task;
-	const hasParallel = Array.isArray(params.tasks) && params.tasks.length > 0;
-
-	if (hasSingle && hasParallel) {
-		return { error: "Provide either { agent, task } or { tasks: [...] }, not both." };
-	}
-	if (hasParallel) {
-		return { items: params.tasks! };
-	}
-	if (hasSingle) {
-		if (!params.agent || !params.task) {
-			return { error: "A single run needs both `agent` and `task`." };
-		}
-		return {
-			items: [{
-				agent: params.agent,
-				task: params.task,
-				model: params.model,
-				thinking: params.thinking,
-				output: params.output,
-				reads: params.reads,
-			}],
-		};
-	}
-	return { error: "Nothing to do. Use { action: \"list\" }, { agent, task }, or { tasks: [...] }." };
-}
-
 function formatAgentList(agents: DiscoveredAgent[]): string {
 	if (agents.length === 0) {
 		return "No custom agents found under ~/.pi/agent/agents or <cwd>/.pi/agents.";
@@ -336,11 +153,6 @@ function formatAgentList(agents: DiscoveredAgent[]): string {
 		lines.push(`- ${a.config.name} [${a.scope}]${desc}`);
 	}
 	return lines.join("\n");
-}
-
-function unknownAgentError(name: string, agents: DiscoveredAgent[]): string {
-	const names = agents.map((a) => a.config.name).join(", ") || "(none)";
-	return `Unknown agent '${name}'. Available: ${names}.`;
 }
 
 function formatResults(results: RunResult[], ref: SessionRef): string {
