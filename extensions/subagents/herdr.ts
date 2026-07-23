@@ -10,6 +10,33 @@
 
 import { execFile } from "node:child_process";
 
+/** Resolve after `ms`, or immediately if `signal` is/gets aborted. */
+function delay(ms: number, signal?: AbortSignal): Promise<void> {
+	return new Promise((resolve) => {
+		if (signal?.aborted) return resolve();
+		const timer = setTimeout(resolve, ms);
+		signal?.addEventListener(
+			"abort",
+			() => {
+				clearTimeout(timer);
+				resolve();
+			},
+			{ once: true },
+		);
+	});
+}
+
+/**
+ * True when a `herdr agent start` error means the target pane is not (yet) ready
+ * to host an agent: it still has a foreground process (an initializing shell, or
+ * a leftover/sibling agent). herdr reports this as `agent_pane_busy` / "not an
+ * available shell". Such a pane is expected to become ready shortly, so callers
+ * retry rather than failing the run outright.
+ */
+export function isPaneBusyError(error: string | undefined): boolean {
+	return /agent[_ ]?pane[_ ]?busy|not an available shell/i.test(error ?? "");
+}
+
 export function isInHerdr(): boolean {
 	return process.env.HERDR_ENV === "1" && !!process.env.HERDR_SOCKET_PATH;
 }
@@ -211,6 +238,14 @@ export async function renamePane(paneId: string, label: string): Promise<void> {
  * nothing running, or herdr reports `agent_pane_busy`. `name` must be a unique
  * live agent name; `childArgs` are passed to the agent verbatim after `--`.
  * Blocks until herdr detects the agent is interactive-ready (or the timeout).
+ *
+ * A freshly split pane can briefly still be running its shell startup (rc files
+ * etc.) when we fire `agent start`, and any leftover/sibling agent keeps the
+ * pane busy too. herdr rejects those immediately with `agent_pane_busy` instead
+ * of queuing, so we treat that as "pane not ready yet": poll `agent start` every
+ * `pollMs` until it takes, up to `readyTimeoutMs` (default 30s). On timeout we
+ * return an explicit error naming the pane and the last herdr error so the
+ * failure is obvious rather than a silently dropped run.
  */
 export async function startAgent(
 	name: string,
@@ -218,10 +253,28 @@ export async function startAgent(
 	paneId: string,
 	childArgs: string[],
 	timeoutMs = 60000,
+	opts?: { readyTimeoutMs?: number; pollMs?: number; signal?: AbortSignal },
 ): Promise<{ ok: boolean; error?: string }> {
 	const args = ["agent", "start", name, "--kind", kind, "--pane", paneId, "--timeout", String(timeoutMs), "--", ...childArgs];
-	const res = await runHerdr(args, timeoutMs + 5000);
-	return res.ok ? { ok: true } : { ok: false, error: res.error };
+	const readyTimeoutMs = opts?.readyTimeoutMs ?? 30000;
+	const pollMs = opts?.pollMs ?? 250;
+	const deadline = Date.now() + readyTimeoutMs;
+	let lastBusy: string | undefined;
+	for (;;) {
+		const res = await runHerdr(args, timeoutMs + 5000, opts?.signal);
+		if (res.ok) return { ok: true };
+		// Any non-busy error is fatal (bad name, unsupported kind, pane gone, ...).
+		if (!isPaneBusyError(res.error)) return { ok: false, error: res.error };
+		lastBusy = res.error;
+		const remaining = deadline - Date.now();
+		if (remaining <= 0 || opts?.signal?.aborted) {
+			return {
+				ok: false,
+				error: `pane ${paneId} did not become ready to start an agent within ${readyTimeoutMs}ms (last herdr error: ${lastBusy ?? "agent_pane_busy"})`,
+			};
+		}
+		await delay(Math.min(pollMs, remaining), opts?.signal);
+	}
 }
 
 /**

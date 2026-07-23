@@ -225,7 +225,11 @@ async function launchRun(p: PreparedRun, ctx: HerdrContext): Promise<SpawnedRun>
 	}
 
 	// Start pi before anything else touches the pane so it is still an idle shell.
-	const started = await startAgent(agentName(p.req.index), "pi", p.paneId, p.childArgs);
+	// A freshly split pane's shell can still be initializing (or briefly busy),
+	// so startAgent waits for the pane to become ready (up to 30s) and retries.
+	const started = await startAgent(agentName(p.req.index), "pi", p.paneId, p.childArgs, undefined, {
+		signal: ctx.signal,
+	});
 	if (!started.ok) {
 		ctx.onStatus?.(p.req.index, { state: "failed", paneId: p.paneId, outputPath: p.outputPath });
 		return { req: p.req, outputPath: p.outputPath, sessionPath: p.sessionPath, paneId: p.paneId, error: started.error };

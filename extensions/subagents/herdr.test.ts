@@ -3,7 +3,17 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { findAgentStatus, paneLabel, parseHerdrJson, parsePaneId, parseTab, parseTabs, runHerdr } from "./herdr.ts";
+import {
+	findAgentStatus,
+	isPaneBusyError,
+	paneLabel,
+	parseHerdrJson,
+	parsePaneId,
+	parseTab,
+	parseTabs,
+	runHerdr,
+	startAgent,
+} from "./herdr.ts";
 
 /** Install a fake `herdr` on PATH that runs `body` (a /bin/sh snippet). */
 function withFakeHerdr<T>(body: string, fn: () => Promise<T>): Promise<T> {
@@ -107,4 +117,50 @@ test("parsePaneId reads direct and nested pane ids", () => {
 	assert.equal(parsePaneId({ pane: { pane_id: "wA:p2" } }), "wA:p2");
 	assert.equal(parsePaneId({ agent: { paneId: "wA:p3" } }), "wA:p3");
 	assert.equal(parsePaneId({}), undefined);
+});
+
+test("isPaneBusyError matches herdr's pane-busy rejections only", () => {
+	assert.equal(isPaneBusyError("agent target pane wA:p1 is not an available shell"), true);
+	assert.equal(isPaneBusyError("agent_pane_busy"), true);
+	assert.equal(isPaneBusyError("agent pane busy"), true);
+	assert.equal(isPaneBusyError("unsupported interactive agent kind foo"), false);
+	assert.equal(isPaneBusyError("agent target pane wA:p1 not found"), false);
+	assert.equal(isPaneBusyError(undefined), false);
+});
+
+test("startAgent retries while the pane is busy, then succeeds", async () => {
+	const counter = join(mkdtempSync(join(tmpdir(), "start-agent-")), "n");
+	const body = [
+		`c=$(cat "${counter}" 2>/dev/null || echo 0)`,
+		`echo $((c + 1)) > "${counter}"`,
+		`if [ "$c" -lt 2 ]; then`,
+		`  echo '{"id":"x","error":{"message":"agent target pane wA:p1 is not an available shell"}}'`,
+		`else`,
+		`  echo '{"id":"x","result":{}}'`,
+		`fi`,
+	].join("\n");
+	const res = await withFakeHerdr(body, () =>
+		startAgent("sub-0-abc", "pi", "wA:p1", ["--flag"], 60000, { pollMs: 1, readyTimeoutMs: 5000 }),
+	);
+	assert.equal(res.ok, true);
+});
+
+test("startAgent times out with a clear error when the pane stays busy", async () => {
+	const body = `echo '{"id":"x","error":{"message":"agent target pane wA:p1 is not an available shell"}}'`;
+	const res = await withFakeHerdr(body, () =>
+		startAgent("sub-0-abc", "pi", "wA:p1", ["--flag"], 60000, { pollMs: 1, readyTimeoutMs: 30 }),
+	);
+	assert.equal(res.ok, false);
+	assert.match(res.error ?? "", /wA:p1 did not become ready/);
+	assert.match(res.error ?? "", /within 30ms/);
+	assert.match(res.error ?? "", /not an available shell/);
+});
+
+test("startAgent fails fast on a non-busy error without retrying", async () => {
+	const body = `echo '{"id":"x","error":{"message":"unsupported interactive agent kind foo"}}'`;
+	const res = await withFakeHerdr(body, () =>
+		startAgent("sub-0-abc", "foo", "wA:p1", ["--flag"], 60000, { pollMs: 1, readyTimeoutMs: 5000 }),
+	);
+	assert.equal(res.ok, false);
+	assert.match(res.error ?? "", /unsupported interactive agent kind/);
 });
