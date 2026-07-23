@@ -4,41 +4,51 @@
  *
  * Lifecycle: create a fresh tab per run, build an evenly-sized grid of panes
  * (reusing the tab's root pane as the first cell), launch one titled `pi` per
- * agent, and once every run has settled and its output has been read, close the
- * whole tab (removing all panes). Panes are live while running so the user can
- * watch and interact; they are torn down only after the batch completes.
+ * agent via `herdr agent start`, and once every run has settled and its output
+ * has been read, close the whole tab (removing all panes). Panes are live while
+ * running so the user can watch and interact; they are torn down only after the
+ * batch completes.
  *
  * Balance: `herdr agent start` cannot set a split ratio, so spawning N agents by
  * repeatedly splitting the focused pane squashed later panes (50/25/12.5...).
  * Stacking them all vertically also squashes each into a thin strip. Instead we
  * tile them into a grid (see computeGrid): split the root into even columns with
  * `right` splits, then split each column into even rows with `down` splits, so
- * every pane gets a usable rectangle. We then launch `pi` in each via a tiny
- * launcher script. Split panes inherit HERDR_* env, so pi still self-reports as
- * an agent.
+ * every pane gets a usable rectangle.
+ *
+ * Launch: each split pane lands at a fresh idle shell prompt, which is exactly
+ * what `herdr agent start` requires (it types the launch command into that
+ * shell and blocks until it detects pi is interactive-ready). We must start the
+ * agent before anything else runs in the pane, or herdr reports
+ * `agent_pane_busy`. The child's output path travels via the
+ * `--subagent-output-path` CLI flag (see pi-args), so no env injection or
+ * launcher script is needed.
+ *
+ * Task delivery: `agent start` types its args into a shell and rejects
+ * multi-line ones, so we start pi with flags only (all single-line) and then
+ * submit the (multi-line) task with `herdr agent prompt`, which uses bracketed
+ * paste to deliver it as one clean user message.
  *
  * Completion: each run races the output file becoming stable against a blocking
- * `herdr wait agent-status` (idle-after-working, or pane gone) rather than
- * polling, so we finalize promptly whether the agent wrote its file, finished
- * without writing, or was terminated by the user.
+ * `herdr agent wait` (idle-after-working, or pane gone) rather than polling, so
+ * we finalize promptly whether the agent wrote its file, finished without
+ * writing, or was terminated by the user.
  */
 
-import { writeFileSync } from "node:fs";
-
-import { OUTPUT_PATH_ENV } from "./constants.ts";
 import { computeGrid } from "./grid.ts";
 import {
 	closeTab,
 	createTab,
 	currentWorkspaceId,
 	paneLabel,
+	promptAgent,
 	readPane,
 	renamePane,
-	runInPane,
 	splitPane,
+	startAgent,
 	waitForAgentFinish,
 } from "./herdr.ts";
-import { buildChildArgs } from "./pi-args.ts";
+import { buildChildArgs, formatTaskMessage } from "./pi-args.ts";
 import { runPaths } from "./paths.ts";
 import { readDefaultProvider } from "./settings.ts";
 import {
@@ -159,7 +169,7 @@ interface PreparedRun {
 	req: RunRequest;
 	outputPath: string;
 	sessionPath: string;
-	launchPath: string;
+	childArgs: string[];
 	paneId?: string;
 	error?: string;
 }
@@ -180,36 +190,52 @@ function prepareRun(req: RunRequest, ctx: HerdrContext, defaultProvider: string 
 	const hasPrompt = req.agent.systemPrompt.trim().length > 0;
 	if (hasPrompt) writeSystemPrompt(paths.promptPath, req.agent.systemPrompt);
 
-	const args = buildChildArgs(req.agent, req.task, {
+	// Flags only: the task is submitted after start via `agent prompt`.
+	const childArgs = buildChildArgs(req.agent, req.task, {
 		sessionFile: paths.sessionPath,
+		outputPath: paths.outputPath,
 		systemPromptFile: hasPrompt ? paths.promptPath : undefined,
 		defaultProvider,
 		modelOverride: req.overrides?.model,
 		thinkingOverride: req.overrides?.thinking,
+		includeTask: false,
 	});
 
-	// A tiny POSIX launcher keeps all argument quoting inside /bin/sh, avoiding
-	// pane-shell (fish/zsh) quoting differences. It exports the output path so the
-	// child-side result tool knows where to write, then `exec`s pi as the pane
-	// process.
-	const script = `#!/bin/sh\nexport ${OUTPUT_PATH_ENV}=${shQuote(paths.outputPath)}\nexec pi ${args.map(shQuote).join(" ")}\n`;
-	writeFileSync(paths.launchPath, script, { mode: 0o700 });
-
-	return { req, outputPath: paths.outputPath, sessionPath: paths.sessionPath, launchPath: paths.launchPath };
+	return { req, outputPath: paths.outputPath, sessionPath: paths.sessionPath, childArgs };
 }
 
-/** Rename the pane and start pi in it via the launcher script. */
+/**
+ * Unique live agent name for `herdr agent start`. herdr requires a strict name:
+ * a leading lowercase letter, then only lowercase letters, digits, `-` or `_`,
+ * 1-32 chars. A short random suffix keeps names distinct across concurrent
+ * batches; names are freed when the occupant exits, so per-batch reuse is fine.
+ */
+function agentName(index: number): string {
+	const rand = Math.random().toString(36).slice(2, 8);
+	return `sub-${index}-${rand}`;
+}
+
+/** Rename the pane and start pi in it via `herdr agent start`. */
 async function launchRun(p: PreparedRun, ctx: HerdrContext): Promise<SpawnedRun> {
 	if (p.error || !p.paneId) {
 		ctx.onStatus?.(p.req.index, { state: "failed", paneId: p.paneId, outputPath: p.outputPath });
 		return { req: p.req, outputPath: p.outputPath, sessionPath: p.sessionPath, paneId: p.paneId, error: p.error ?? "no pane" };
 	}
 
+	// Start pi before anything else touches the pane so it is still an idle shell.
+	const started = await startAgent(agentName(p.req.index), "pi", p.paneId, p.childArgs);
+	if (!started.ok) {
+		ctx.onStatus?.(p.req.index, { state: "failed", paneId: p.paneId, outputPath: p.outputPath });
+		return { req: p.req, outputPath: p.outputPath, sessionPath: p.sessionPath, paneId: p.paneId, error: started.error };
+	}
+
+	// Label the pane with the task so a watcher can tell panes apart, then submit
+	// the task as a clean user message (bracketed paste handles its newlines).
 	await renamePane(p.paneId, paneLabel(p.req.agent.config.name, p.req.task));
-	const started = await runInPane(p.paneId, `sh ${shQuote(p.launchPath)}`);
+	const prompted = await promptAgent(p.paneId, formatTaskMessage(p.req.task));
 
 	ctx.onStatus?.(p.req.index, {
-		state: started.ok ? "running" : "failed",
+		state: prompted.ok ? "running" : "failed",
 		paneId: p.paneId,
 		outputPath: p.outputPath,
 	});
@@ -219,14 +245,8 @@ async function launchRun(p: PreparedRun, ctx: HerdrContext): Promise<SpawnedRun>
 		outputPath: p.outputPath,
 		sessionPath: p.sessionPath,
 		paneId: p.paneId,
-		error: started.ok ? undefined : started.error,
+		error: prompted.ok ? undefined : prompted.error,
 	};
-}
-
-/** POSIX single-quote a shell argument. Safe for /bin/sh in the launcher. */
-function shQuote(value: string): string {
-	if (value.length > 0 && /^[A-Za-z0-9_@%+=:,./-]+$/.test(value)) return value;
-	return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
 async function settleRun(s: SpawnedRun, ctx: HerdrContext): Promise<RunResult> {

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { type DiscoveredAgent } from "./discovery.ts";
 import { SUBMIT_RESULT_TOOL } from "./constants.ts";
+import { OUTPUT_PATH_FLAG } from "./constants.ts";
 import { buildChildArgs, extractThinkingSuffix, qualifyModel, resultToolPath, stripThinkingSuffix } from "./pi-args.ts";
 
 function agent(overrides: Partial<DiscoveredAgent["config"]> = {}, systemPrompt = "You are worker."): DiscoveredAgent {
@@ -41,8 +42,24 @@ test("buildChildArgs always sets session and instructs the agent to submit its r
 	const taskArg = args[args.length - 1];
 	assert.ok(taskArg.startsWith("Task: do the thing"));
 	assert.ok(taskArg.includes(SUBMIT_RESULT_TOOL));
-	// The output path must never leak to the agent; it travels via env instead.
+	// The output path must never leak into the agent-visible task text; it travels
+	// via the dedicated CLI flag instead.
 	assert.ok(!taskArg.includes(opts.outputPath));
+});
+
+test("buildChildArgs passes the output path via the --subagent-output-path flag", () => {
+	const args = buildChildArgs(agent(), "t", opts);
+	const idx = args.indexOf(`--${OUTPUT_PATH_FLAG}`);
+	assert.ok(idx !== -1);
+	assert.equal(args[idx + 1], opts.outputPath);
+});
+
+test("buildChildArgs omits the inline task when includeTask is false", () => {
+	const args = buildChildArgs(agent(), "do the thing", { ...opts, includeTask: false });
+	// The task is submitted separately (via `herdr agent prompt`), so no inline
+	// task arg is present; the output-path flag still is.
+	assert.ok(!args.some((a) => a.startsWith("Task:")));
+	assert.ok(args.includes(`--${OUTPUT_PATH_FLAG}`));
 });
 
 test("buildChildArgs loads the result-tool extension via -e", () => {

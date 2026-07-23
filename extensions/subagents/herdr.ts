@@ -205,9 +205,34 @@ export async function renamePane(paneId: string, label: string): Promise<void> {
 	await runHerdr(["pane", "rename", paneId, label]);
 }
 
-/** Run a shell command line in an existing pane (types it and presses Enter). */
-export async function runInPane(paneId: string, command: string): Promise<{ ok: boolean; error?: string }> {
-	const res = await runHerdr(["pane", "run", paneId, command]);
+/**
+ * Start a supported interactive agent in an existing (idle shell) pane via
+ * `herdr agent start`. The pane must be at its interactive shell prompt with
+ * nothing running, or herdr reports `agent_pane_busy`. `name` must be a unique
+ * live agent name; `childArgs` are passed to the agent verbatim after `--`.
+ * Blocks until herdr detects the agent is interactive-ready (or the timeout).
+ */
+export async function startAgent(
+	name: string,
+	kind: string,
+	paneId: string,
+	childArgs: string[],
+	timeoutMs = 60000,
+): Promise<{ ok: boolean; error?: string }> {
+	const args = ["agent", "start", name, "--kind", kind, "--pane", paneId, "--timeout", String(timeoutMs), "--", ...childArgs];
+	const res = await runHerdr(args, timeoutMs + 5000);
+	return res.ok ? { ok: true } : { ok: false, error: res.error };
+}
+
+/**
+ * Submit a prompt to a live agent via `herdr agent prompt`. Unlike `agent start`
+ * args, this uses bracketed paste, so multi-line text is delivered as one clean
+ * user message (no shell-encoding limits, no `@file` wrapper). `target` is a
+ * live agent name or the pane id hosting it. Returns immediately after
+ * submission; completion is awaited separately by the caller.
+ */
+export async function promptAgent(target: string, text: string): Promise<{ ok: boolean; error?: string }> {
+	const res = await runHerdr(["agent", "prompt", target, text]);
 	return res.ok ? { ok: true } : { ok: false, error: res.error };
 }
 
@@ -249,13 +274,17 @@ export type AgentStatus = "idle" | "working" | "blocked" | "done" | "unknown";
 export type AgentWaitResult =
 	| { kind: "reached"; status: string }
 	| { kind: "timeout" }
+	| { kind: "not_running" }
 	| { kind: "gone" };
 
 /**
- * Block (via `herdr wait agent-status`) until a pane reaches any of `statuses`.
- * herdr accepts repeated `--status` flags and resolves on the first match, so we
- * don't need to race multiple processes. Returns which status was reached, or
- * `timeout` (deadline hit, pane alive) / `gone` (pane removed or wait aborted).
+ * Block (via `herdr agent wait`) until a pane's agent reaches any of `statuses`.
+ * herdr 0.7.5 replaced the old top-level `wait agent-status` with `agent wait
+ * <target>`, where the target is a unique live agent name or the pane id hosting
+ * it, and repeated `--until` flags resolve on the first matching state. Returns
+ * which status was reached, `timeout` (deadline hit, pane alive), `not_running`
+ * (no agent currently detected in the pane, e.g. still starting up), or `gone`
+ * (wait aborted).
  */
 export async function waitAgentStatus(
 	paneId: string,
@@ -263,12 +292,17 @@ export async function waitAgentStatus(
 	timeoutMs: number,
 	signal?: AbortSignal,
 ): Promise<AgentWaitResult> {
-	const args = ["wait", "agent-status", paneId];
-	for (const s of statuses) args.push("--status", s);
+	const args = ["agent", "wait", paneId];
+	for (const s of statuses) args.push("--until", s);
 	args.push("--timeout", String(timeoutMs));
 	const res = await runHerdr(args, timeoutMs + 5000, signal);
 	if (res.ok) return { kind: "reached", status: findAgentStatus(parseLastJson(res.stdout)) ?? statuses[0] };
-	if (/tim(e|ed)\s*out|timeout/i.test(res.error ?? "")) return { kind: "timeout" };
+	const err = res.error ?? "";
+	if (/tim(e|ed)\s*out|timeout/i.test(err)) return { kind: "timeout" };
+	// `agent_not_running` means the pane has no detected agent yet (startup) or its
+	// agent exited. The pane itself may still be alive, so callers must re-check
+	// pane existence before declaring the run dead.
+	if (/agent[_ ]?not[_ ]?running|not[_ ]?found/i.test(err)) return { kind: "not_running" };
 	return { kind: "gone" };
 }
 
@@ -295,10 +329,12 @@ function parseLastJson(stdout: string | undefined): unknown {
  * `done`. So we first wait for `working` (skipping the startup `idle`), then wait
  * for `idle` or `done`.
  *
- * Termination handling: `herdr wait agent-status` does NOT error promptly when a
- * pane is closed mid-wait; it blocks until its own `--timeout`. So we cap each
- * wait at `chunkMs` and re-check pane existence between chunks, bounding
- * `gone`-detection latency to ~chunkMs while finishes still resolve instantly.
+ * Termination handling: `herdr agent wait` reports `agent_not_running` when its
+ * target pane closes, but it can also report that transiently while pi is still
+ * starting up (before it's detected as an agent). To tell those apart we cap
+ * each wait at `chunkMs` and re-check pane existence between chunks via
+ * `pane get`, so a truly closed pane resolves `gone` within ~chunkMs while a
+ * starting pane keeps waiting and finishes still resolve instantly.
  */
 export async function waitForAgentFinish(
 	paneId: string,
@@ -320,12 +356,12 @@ export async function waitForAgentFinish(
 			if (r.status === "done") return "finished";
 			break; // working
 		}
-		// Chunk elapsed without `working`: re-check existence / fast-finish.
+		// Chunk elapsed or agent not yet detected: re-check existence / fast-finish.
 		const state = await getPaneAgentState(paneId);
 		if (!state.exists) return "gone";
 		if (state.status === "idle" || state.status === "done") return "finished";
 		if (state.status === "blocked") break; // active but paused; wait for finish
-		// Otherwise still starting (unknown); keep waiting for `working`.
+		// Otherwise still starting (unknown / not_running); keep waiting for `working`.
 	}
 
 	// Phase 2: wait for completion. Focused panes go `idle`, background panes go
@@ -336,7 +372,8 @@ export async function waitForAgentFinish(
 		const r = await waitAgentStatus(paneId, ["idle", "done"], Math.min(chunkMs, remaining), signal);
 		if (r.kind === "reached") return "finished";
 		if (r.kind === "gone") return "gone";
-		// Chunk timeout: confirm the pane is still alive before waiting again.
+		// Chunk timeout or agent no longer detected: confirm the pane is still alive
+		// before waiting again. A gone pane resolves `gone`; an idle/done one finishes.
 		const state = await getPaneAgentState(paneId);
 		if (!state.exists) return "gone";
 		if (state.status === "done" || state.status === "idle") return "finished";

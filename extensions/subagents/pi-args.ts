@@ -22,7 +22,7 @@
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
-import { SUBMIT_RESULT_TOOL } from "./constants.ts";
+import { OUTPUT_PATH_FLAG, SUBMIT_RESULT_TOOL } from "./constants.ts";
 import { type DiscoveredAgent } from "./discovery.ts";
 import { injectOutputInstruction } from "./paths.ts";
 
@@ -65,6 +65,8 @@ export function qualifyModel(model: string | undefined, defaultProvider: string 
 
 export interface ChildInvocationOpts {
 	sessionFile: string;
+	/** Path the child's `submit_result` tool writes to, passed via a CLI flag. */
+	outputPath: string;
 	/** Path the system-prompt body was written to (caller writes it before spawn). */
 	systemPromptFile?: string;
 	/** Provider used to qualify a bare agent model (resolved from settings). */
@@ -73,6 +75,17 @@ export interface ChildInvocationOpts {
 	modelOverride?: string;
 	/** Per-run thinking override; takes precedence over the agent's frontmatter thinking. */
 	thinkingOverride?: string;
+	/**
+	 * When false, omit the inline task message; the caller submits the task
+	 * separately (e.g. via `herdr agent prompt`, which delivers it as a clean
+	 * user message rather than a shell arg). Defaults to true (headless spawn).
+	 */
+	includeTask?: boolean;
+}
+
+/** The task framing given to the child agent, with the result-submission rider. */
+export function formatTaskMessage(task: string): string {
+	return `Task: ${injectOutputInstruction(task)}`;
 }
 
 /**
@@ -106,8 +119,10 @@ export function buildChildArgs(agent: DiscoveredAgent, task: string, opts: Child
 	}
 
 	// Load the child-side result tool so the agent can hand its output back
-	// without needing write/bash access or knowing the output path.
+	// without needing write/bash access or knowing the output path. The path
+	// travels via a CLI flag the tool reads; the agent never sees it.
 	args.push("--extension", resultToolPath());
+	args.push(`--${OUTPUT_PATH_FLAG}`, opts.outputPath);
 
 	if (opts.systemPromptFile && agent.systemPrompt.trim().length > 0) {
 		const flag = agent.config.systemPromptMode === "append" ? "--append-system-prompt" : "--system-prompt";
@@ -122,8 +137,12 @@ export function buildChildArgs(agent: DiscoveredAgent, task: string, opts: Child
 		args.push("--no-context-files");
 	}
 
-	const finalTask = injectOutputInstruction(task);
-	args.push(`Task: ${finalTask}`);
+	// Deliver the task inline as the initial message (headless spawn: any chars
+	// are safe). The herdr backend omits it here and submits it via `agent prompt`
+	// instead, since `agent start` cannot encode multi-line shell args.
+	if (opts.includeTask !== false) {
+		args.push(formatTaskMessage(task));
+	}
 
 	return args;
 }
