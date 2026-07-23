@@ -5,7 +5,7 @@
 
 import { spawn } from "node:child_process";
 import { buildChildArgs } from "./pi-args.ts";
-import { runPaths } from "./paths.ts";
+import { resolveOutputOverride, runPaths } from "./paths.ts";
 import { readDefaultProvider } from "./settings.ts";
 import {
 	ensureRunDir,
@@ -31,16 +31,19 @@ export function runHeadless(req: RunRequest, ctx: HeadlessContext): Promise<RunR
 	const paths = runPaths(ctx.sessionFile, ctx.sessionId, ctx.runId, req.agent.config.name, req.index);
 	ensureRunDir(paths.dir);
 
+	const outputPath = req.output ? resolveOutputOverride(ctx.cwd, req.output) : paths.outputPath;
+
 	const hasPrompt = req.agent.systemPrompt.trim().length > 0;
 	if (hasPrompt) writeSystemPrompt(paths.promptPath, req.agent.systemPrompt);
 
 	const args = buildChildArgs(req.agent, req.task, {
 		sessionFile: paths.sessionPath,
-		outputPath: paths.outputPath,
+		outputPath,
 		systemPromptFile: hasPrompt ? paths.promptPath : undefined,
 		defaultProvider: readDefaultProvider(ctx.cwd),
 		modelOverride: req.overrides?.model,
 		thinkingOverride: req.overrides?.thinking,
+		reads: req.reads,
 	});
 
 	return new Promise<RunResult>((resolve) => {
@@ -49,7 +52,7 @@ export function runHeadless(req: RunRequest, ctx: HeadlessContext): Promise<RunR
 		let settled = false;
 
 		const child = spawn("pi", args, { cwd: ctx.cwd });
-		ctx.onStatus?.(req.index, { state: "running", outputPath: paths.outputPath });
+		ctx.onStatus?.(req.index, { state: "running", outputPath });
 
 		const finish = (result: RunResult) => {
 			if (settled) return;
@@ -58,14 +61,14 @@ export function runHeadless(req: RunRequest, ctx: HeadlessContext): Promise<RunR
 			ctx.signal?.removeEventListener("abort", onAbort);
 			ctx.onStatus?.(req.index, {
 				state: result.ok ? "done" : "failed",
-				outputPath: paths.outputPath,
+				outputPath,
 			});
 			resolve(result);
 		};
 
 		const timer = setTimeout(() => {
 			child.kill("SIGKILL");
-			finish(buildResult(req, paths.outputPath, paths.sessionPath, null, stdout, `timed out after ${ctx.timeoutMs}ms`));
+			finish(buildResult(req, outputPath, paths.sessionPath, null, stdout, `timed out after ${ctx.timeoutMs}ms`));
 		}, ctx.timeoutMs);
 
 		const onAbort = () => child.kill("SIGKILL");
@@ -78,11 +81,11 @@ export function runHeadless(req: RunRequest, ctx: HeadlessContext): Promise<RunR
 			stderr += d.toString("utf-8");
 		});
 		child.on("error", (err) => {
-			finish(buildResult(req, paths.outputPath, paths.sessionPath, null, stdout, err.message));
+			finish(buildResult(req, outputPath, paths.sessionPath, null, stdout, err.message));
 		});
 		child.on("close", (code) => {
 			const err = code === 0 ? undefined : (stderr.trim() || `pi exited with code ${code}`);
-			finish(buildResult(req, paths.outputPath, paths.sessionPath, code, stdout, err));
+			finish(buildResult(req, outputPath, paths.sessionPath, code, stdout, err));
 		});
 	});
 }

@@ -28,6 +28,7 @@ export interface AgentConfig {
 	inheritProjectContext?: boolean;
 	inheritSkills?: boolean;
 	output?: string;
+	defaultReads?: string[];
 }
 
 const FRONTMATTER_RE = /^---\s*\r?\n([\s\S]*?)\r?\n---\s*\r?\n?/;
@@ -127,5 +128,6 @@ export function toAgentConfig(data: Record<string, FrontmatterValue>, fallbackNa
 		inheritProjectContext: asBool(data.inheritProjectContext),
 		inheritSkills: asBool(data.inheritSkills),
 		output: asString(data.output)?.trim(),
+		defaultReads: asStringList(data.defaultReads),
 	};
 }

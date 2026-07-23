@@ -54,6 +54,20 @@ test("buildChildArgs passes the output path via the --subagent-output-path flag"
 	assert.equal(args[idx + 1], opts.outputPath);
 });
 
+test("buildChildArgs prepends a read-first instruction listing the context files", () => {
+	const args = buildChildArgs(agent(), "do the thing", { ...opts, reads: [".pi/goal/research.md", "src/x.ts"] });
+	const taskArg = args[args.length - 1];
+	assert.ok(taskArg.includes("Read these files first for context: `.pi/goal/research.md`, `src/x.ts`."));
+	// The original task still follows the read-first preface.
+	assert.ok(taskArg.includes("do the thing"));
+});
+
+test("buildChildArgs omits the read-first instruction when reads is empty", () => {
+	const args = buildChildArgs(agent(), "do the thing", { ...opts, reads: [] });
+	const taskArg = args[args.length - 1];
+	assert.ok(!taskArg.includes("Read these files first"));
+});
+
 test("buildChildArgs omits the inline task when includeTask is false", () => {
 	const args = buildChildArgs(agent(), "do the thing", { ...opts, includeTask: false });
 	// The task is submitted separately (via `herdr agent prompt`), so no inline

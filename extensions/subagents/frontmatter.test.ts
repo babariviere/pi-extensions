@@ -79,3 +79,11 @@ test("toAgentConfig handles single-item tools string", () => {
 	const cfg = toAgentConfig({ name: "x", tools: "read" }, "x");
 	assert.deepEqual(cfg.tools, ["read"]);
 });
+
+test("toAgentConfig parses output and defaultReads (list and single)", () => {
+	const cfg = toAgentConfig({ name: "planner", output: "plan.md", defaultReads: ["context.md", "plan.md"] }, "planner");
+	assert.equal(cfg.output, "plan.md");
+	assert.deepEqual(cfg.defaultReads, ["context.md", "plan.md"]);
+	const single = toAgentConfig({ name: "worker", defaultReads: "context.md" }, "worker");
+	assert.deepEqual(single.defaultReads, ["context.md"]);
+});

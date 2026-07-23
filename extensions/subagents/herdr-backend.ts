@@ -49,7 +49,7 @@ import {
 	waitForAgentFinish,
 } from "./herdr.ts";
 import { buildChildArgs, formatTaskMessage } from "./pi-args.ts";
-import { runPaths } from "./paths.ts";
+import { resolveOutputOverride, runPaths } from "./paths.ts";
 import { readDefaultProvider } from "./settings.ts";
 import {
 	ensureRunDir,
@@ -187,13 +187,15 @@ function prepareRun(req: RunRequest, ctx: HerdrContext, defaultProvider: string 
 	const paths = runPaths(ctx.sessionFile, ctx.sessionId, ctx.runId, req.agent.config.name, req.index);
 	ensureRunDir(paths.dir);
 
+	const outputPath = req.output ? resolveOutputOverride(ctx.cwd, req.output) : paths.outputPath;
+
 	const hasPrompt = req.agent.systemPrompt.trim().length > 0;
 	if (hasPrompt) writeSystemPrompt(paths.promptPath, req.agent.systemPrompt);
 
 	// Flags only: the task is submitted after start via `agent prompt`.
 	const childArgs = buildChildArgs(req.agent, req.task, {
 		sessionFile: paths.sessionPath,
-		outputPath: paths.outputPath,
+		outputPath,
 		systemPromptFile: hasPrompt ? paths.promptPath : undefined,
 		defaultProvider,
 		modelOverride: req.overrides?.model,
@@ -201,7 +203,7 @@ function prepareRun(req: RunRequest, ctx: HerdrContext, defaultProvider: string 
 		includeTask: false,
 	});
 
-	return { req, outputPath: paths.outputPath, sessionPath: paths.sessionPath, childArgs };
+	return { req, outputPath, sessionPath: paths.sessionPath, childArgs };
 }
 
 /**
@@ -232,7 +234,7 @@ async function launchRun(p: PreparedRun, ctx: HerdrContext): Promise<SpawnedRun>
 	// Label the pane with the task so a watcher can tell panes apart, then submit
 	// the task as a clean user message (bracketed paste handles its newlines).
 	await renamePane(p.paneId, paneLabel(p.req.agent.config.name, p.req.task));
-	const prompted = await promptAgent(p.paneId, formatTaskMessage(p.req.task));
+	const prompted = await promptAgent(p.paneId, formatTaskMessage(p.req.task, p.req.reads));
 
 	ctx.onStatus?.(p.req.index, {
 		state: prompted.ok ? "running" : "failed",

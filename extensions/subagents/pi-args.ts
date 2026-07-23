@@ -81,11 +81,20 @@ export interface ChildInvocationOpts {
 	 * user message rather than a shell arg). Defaults to true (headless spawn).
 	 */
 	includeTask?: boolean;
+	/** Files the child should read first for context; injected into the task. */
+	reads?: string[];
+}
+
+/** Prepend a read-first instruction listing the context files, if any. */
+function withReads(task: string, reads: string[] | undefined): string {
+	if (!reads || reads.length === 0) return task;
+	const list = reads.map((f) => `\`${f}\``).join(", ");
+	return `Read these files first for context: ${list}.\n\n${task}`;
 }
 
 /** The task framing given to the child agent, with the result-submission rider. */
-export function formatTaskMessage(task: string): string {
-	return `Task: ${injectOutputInstruction(task)}`;
+export function formatTaskMessage(task: string, reads?: string[]): string {
+	return `Task: ${injectOutputInstruction(withReads(task, reads))}`;
 }
 
 /**
@@ -141,7 +150,7 @@ export function buildChildArgs(agent: DiscoveredAgent, task: string, opts: Child
 	// are safe). The herdr backend omits it here and submits it via `agent prompt`
 	// instead, since `agent start` cannot encode multi-line shell args.
 	if (opts.includeTask !== false) {
-		args.push(formatTaskMessage(task));
+		args.push(formatTaskMessage(task, opts.reads));
 	}
 
 	return args;

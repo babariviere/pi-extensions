@@ -132,12 +132,21 @@ const MODEL_DESC =
 	"Use to diversify parallel runs and decorrelate errors (e.g. review on two model families). " +
 	"Must be one of the user's enabledModels when that allowlist is configured; unavailable/pricey models are rejected.";
 const THINKING_DESC = "Override the agent's thinking level for this run (off|minimal|low|medium|high|xhigh).";
+const OUTPUT_DESC =
+	"Persist this run's result at this path (relative to cwd or absolute) instead of the auto run-dir file. " +
+	"The harness routes the agent's submit_result here, so read-only agents still produce a stable artifact " +
+	"(e.g. \".pi/goal/plan.md\"). Do not tell the agent to write the file itself.";
+const READS_DESC =
+	"Files the agent should read first for context (relative to cwd or absolute). Injected as a read-first " +
+	"instruction; the agent still needs a `read` tool to open them.";
 
 const TaskItem = Type.Object({
 	agent: Type.String({ description: "Name of a discovered agent to run" }),
 	task: Type.String({ description: "The concrete task for that agent" }),
 	model: Type.Optional(Type.String({ description: MODEL_DESC })),
 	thinking: Type.Optional(Type.String({ description: THINKING_DESC })),
+	output: Type.Optional(Type.String({ description: OUTPUT_DESC })),
+	reads: Type.Optional(Type.Array(Type.String(), { description: READS_DESC })),
 });
 
 export function createSubagentTool(getSessionRef: () => SessionRef) {
@@ -148,7 +157,8 @@ export function createSubagentTool(getSessionRef: () => SessionRef) {
 			"Delegate work to a custom agent. Use { action: \"list\" } to see available agents, " +
 			"{ agent, task } to run one, or { tasks: [{ agent, task }, ...] } to run several in parallel " +
 			"(waits for all to finish). Each run may set an optional `model`/`thinking` to override the " +
-			"agent's frontmatter, so you can diversify parallel runs across model families. In herdr, each " +
+			"agent's frontmatter, `output` to persist the result at a stable path (e.g. \".pi/goal/plan.md\"), " +
+			"and `reads` to list context files the agent should read first. In herdr, each " +
 			"subagent runs in a live pane inside a dedicated 'subagents' tab so you can watch and interact; " +
 			"otherwise it runs headlessly.",
 		promptSnippet: "List or run custom subagents (headless, or live herdr panes)",
@@ -158,6 +168,8 @@ export function createSubagentTool(getSessionRef: () => SessionRef) {
 			task: Type.Optional(Type.String({ description: "Task for a single run" })),
 			model: Type.Optional(Type.String({ description: MODEL_DESC })),
 			thinking: Type.Optional(Type.String({ description: THINKING_DESC })),
+			output: Type.Optional(Type.String({ description: OUTPUT_DESC })),
+			reads: Type.Optional(Type.Array(Type.String(), { description: READS_DESC })),
 			tasks: Type.Optional(Type.Array(TaskItem, { description: "Multiple agent/task pairs to run in parallel" })),
 		}),
 		async execute(_toolCallId, params, signal, onUpdate, _ctx) {
@@ -182,7 +194,14 @@ export function createSubagentTool(getSessionRef: () => SessionRef) {
 					return text(unknownAgentError(item.agent, agents));
 				}
 				const overrides = item.model || item.thinking ? { model: item.model, thinking: item.thinking } : undefined;
-				resolved.push({ agent, task: item.task, index: i, overrides });
+				resolved.push({
+					agent,
+					task: item.task,
+					index: i,
+					overrides,
+					output: item.output ?? agent.config.output,
+					reads: item.reads ?? agent.config.defaultReads,
+				});
 			}
 
 			const runId = newRunId();
@@ -239,7 +258,7 @@ export function createSubagentTool(getSessionRef: () => SessionRef) {
 	});
 }
 
-type NormalizedItem = { agent: string; task: string; model?: string; thinking?: string };
+type NormalizedItem = { agent: string; task: string; model?: string; thinking?: string; output?: string; reads?: string[] };
 
 /** True when `model` (ignoring any thinking suffix / provider prefix) is in the allowlist. */
 function isModelEnabled(model: string, enabled: string[], provider: string | undefined): boolean {
@@ -276,6 +295,8 @@ function normalizeRequests(params: {
 	task?: string;
 	model?: string;
 	thinking?: string;
+	output?: string;
+	reads?: string[];
 	tasks?: NormalizedItem[];
 }): { items: NormalizedItem[] } | { error: string } {
 	const hasSingle = !!params.agent || !!params.task;
@@ -291,7 +312,16 @@ function normalizeRequests(params: {
 		if (!params.agent || !params.task) {
 			return { error: "A single run needs both `agent` and `task`." };
 		}
-		return { items: [{ agent: params.agent, task: params.task, model: params.model, thinking: params.thinking }] };
+		return {
+			items: [{
+				agent: params.agent,
+				task: params.task,
+				model: params.model,
+				thinking: params.thinking,
+				output: params.output,
+				reads: params.reads,
+			}],
+		};
 	}
 	return { error: "Nothing to do. Use { action: \"list\" }, { agent, task }, or { tasks: [...] }." };
 }

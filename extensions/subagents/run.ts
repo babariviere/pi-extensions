@@ -16,6 +16,18 @@ export interface RunRequest {
 	 * Undefined fields fall back to the agent config.
 	 */
 	overrides?: { model?: string; thinking?: string };
+	/**
+	 * Per-run output destination (relative to cwd or absolute). When set, the
+	 * child's `submit_result` writes here instead of the auto run-dir path, so
+	 * callers can persist artifacts at stable locations (e.g. `.pi/goal/plan.md`).
+	 */
+	output?: string;
+	/**
+	 * Files the child should read for context before starting. Injected into the
+	 * task message as a read-first instruction; the agent still needs a `read`
+	 * tool to open them.
+	 */
+	reads?: string[];
 }
 
 /** Live lifecycle state of a single run, surfaced to the in-progress indicator. */

@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, statSync, utimesSync } from "node:f
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
-import { cleanupOldRuns, runPaths, runRootDir, runsBaseDir } from "./paths.ts";
+import { cleanupOldRuns, resolveOutputOverride, runPaths, runRootDir, runsBaseDir } from "./paths.ts";
 
 function tmpRoot(): string {
 	return mkdtempSync(join(tmpdir(), "paths-test-"));
@@ -16,6 +16,11 @@ test("runsBaseDir anchors next to the session file when present", () => {
 
 test("runsBaseDir falls back to a temp dir with no session file", () => {
 	assert.equal(runsBaseDir(undefined), join(tmpdir(), "pi-subagents"));
+});
+
+test("resolveOutputOverride anchors a relative path to cwd and passes absolute through", () => {
+	assert.equal(resolveOutputOverride("/repo", ".pi/goal/plan.md"), join("/repo", ".pi/goal/plan.md"));
+	assert.equal(resolveOutputOverride("/repo", "/abs/plan.md"), "/abs/plan.md");
 });
 
 test("runPaths nests runId under the sanitized session id", () => {

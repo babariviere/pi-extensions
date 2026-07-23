@@ -15,7 +15,7 @@
 
 import { mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 
 import { SUBMIT_RESULT_TOOL } from "./constants.ts";
 
@@ -75,6 +75,15 @@ export function runPaths(
 		sessionPath: join(dir, `${stem}.session.jsonl`),
 		promptPath: join(dir, `${stem}.prompt.md`),
 	};
+}
+
+/**
+ * Resolve a per-run `output` override to an absolute path. Absolute overrides
+ * are used as-is; relative ones anchor to the parent's cwd so artifacts land
+ * where the caller expects (e.g. `.pi/goal/plan.md` under the repo root).
+ */
+export function resolveOutputOverride(cwd: string, override: string): string {
+	return isAbsolute(override) ? override : join(cwd, override);
 }
 
 export function ensureDir(dir: string): void {
