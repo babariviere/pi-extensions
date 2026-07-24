@@ -3,7 +3,15 @@ import { existsSync, mkdirSync, mkdtempSync, statSync, utimesSync } from "node:f
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
-import { cleanupOldRuns, indexOutputOverride, resolveOutputOverride, runPaths, runRootDir, runsBaseDir } from "./paths.ts";
+import {
+	cleanupOldRuns,
+	indexOutputOverride,
+	normalizeOutputOverride,
+	resolveOutputOverride,
+	runPaths,
+	runRootDir,
+	runsBaseDir,
+} from "./paths.ts";
 
 function tmpRoot(): string {
 	return mkdtempSync(join(tmpdir(), "paths-test-"));
@@ -21,6 +29,17 @@ test("runsBaseDir falls back to a temp dir with no session file", () => {
 test("resolveOutputOverride anchors a relative path to cwd and passes absolute through", () => {
 	assert.equal(resolveOutputOverride("/repo", ".pi/goal/plan.md"), join("/repo", ".pi/goal/plan.md"));
 	assert.equal(resolveOutputOverride("/repo", "/abs/plan.md"), "/abs/plan.md");
+});
+
+test("normalizeOutputOverride drops empty and boolean-ish literals", () => {
+	assert.equal(normalizeOutputOverride(undefined), undefined);
+	assert.equal(normalizeOutputOverride(""), undefined);
+	assert.equal(normalizeOutputOverride("  "), undefined);
+	assert.equal(normalizeOutputOverride("false"), undefined);
+	assert.equal(normalizeOutputOverride("FALSE"), undefined);
+	assert.equal(normalizeOutputOverride(" true "), undefined);
+	assert.equal(normalizeOutputOverride("plan.md"), "plan.md");
+	assert.equal(normalizeOutputOverride(" .pi/goal/plan.md "), ".pi/goal/plan.md");
 });
 
 test("indexOutputOverride inserts the index before the extension, preserving dir and shape", () => {

@@ -78,6 +78,21 @@ export function runPaths(
 }
 
 /**
+ * Normalize a raw `output` override to a real path or `undefined`. Empty
+ * strings and the boolean-ish literals `false`/`true` (case-insensitive) are
+ * treated as "no override" so a quoted frontmatter value (`output: "false"`) or
+ * a stray literal from a tool call falls back to the default per-run path
+ * instead of writing bogus `false`/`false-1` files.
+ */
+export function normalizeOutputOverride(override: string | undefined): string | undefined {
+	const trimmed = override?.trim();
+	if (!trimmed) return undefined;
+	const lower = trimmed.toLowerCase();
+	if (lower === "false" || lower === "true") return undefined;
+	return trimmed;
+}
+
+/**
  * Resolve a per-run `output` override to an absolute path. Absolute overrides
  * are used as-is; relative ones anchor to the parent's cwd so artifacts land
  * where the caller expects (e.g. `.pi/goal/plan.md` under the repo root).

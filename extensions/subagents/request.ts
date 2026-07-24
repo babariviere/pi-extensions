@@ -6,7 +6,7 @@
  */
 
 import { type DiscoveredAgent } from "./discovery.ts";
-import { indexOutputOverride } from "./paths.ts";
+import { indexOutputOverride, normalizeOutputOverride } from "./paths.ts";
 import { qualifyModel, stripThinkingSuffix, THINKING_LEVELS } from "./pi-args.ts";
 import { type RunRequest } from "./run.ts";
 import { readDefaultProvider, readEnabledModels } from "./settings.ts";
@@ -57,7 +57,7 @@ export function buildRunRequests(
 			task: item.task,
 			index: i,
 			overrides,
-			output: item.output ?? agent.config.output,
+			output: normalizeOutputOverride(item.output ?? agent.config.output),
 			reads: item.reads ?? agent.config.defaultReads,
 		});
 	}

@@ -87,3 +87,8 @@ test("toAgentConfig parses output and defaultReads (list and single)", () => {
 	const single = toAgentConfig({ name: "worker", defaultReads: "context.md" }, "worker");
 	assert.deepEqual(single.defaultReads, ["context.md"]);
 });
+
+test("toAgentConfig ignores boolean output (no bogus 'false' path)", () => {
+	assert.equal(toAgentConfig({ name: "a", output: false }, "a").output, undefined);
+	assert.equal(toAgentConfig({ name: "b", output: true }, "b").output, undefined);
+});

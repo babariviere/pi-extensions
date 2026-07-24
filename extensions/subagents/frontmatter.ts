@@ -92,6 +92,16 @@ function asString(value: FrontmatterValue | undefined): string | undefined {
 	return undefined;
 }
 
+/**
+ * Coerce an output-path field. Only string values are real path overrides;
+ * booleans (`output: false`/`true`) are not paths, so they fall back to the
+ * default per-run output path rather than producing bogus `false`/`true`
+ * filenames (and `false-1`, `false-2`, ... under parallel indexing).
+ */
+function asPathString(value: FrontmatterValue | undefined): string | undefined {
+	return typeof value === "string" ? value : undefined;
+}
+
 function asStringList(value: FrontmatterValue | undefined): string[] | undefined {
 	if (value === undefined) return undefined;
 	if (Array.isArray(value)) return value.length ? value : undefined;
@@ -127,7 +137,7 @@ export function toAgentConfig(data: Record<string, FrontmatterValue>, fallbackNa
 		systemPromptMode,
 		inheritProjectContext: asBool(data.inheritProjectContext),
 		inheritSkills: asBool(data.inheritSkills),
-		output: asString(data.output)?.trim(),
+		output: asPathString(data.output)?.trim(),
 		defaultReads: asStringList(data.defaultReads),
 	};
 }
