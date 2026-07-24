@@ -5,6 +5,7 @@
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
+import { renderFoldableResult } from "./render.ts";
 import { kagiSearch, KagiAuthError, type KagiResult, KagiTokenMissingError } from "./search/kagi.ts";
 import { DEFAULT_SETTINGS, type WebSettings } from "./settings.ts";
 
@@ -41,6 +42,9 @@ export function createWebSearchTool(settings: WebSettings = DEFAULT_SETTINGS) {
 			const text = context.lastComponent instanceof Text ? context.lastComponent : new Text("", 0, 0);
 			text.setText(formatSearchCall(args, theme));
 			return text;
+		},
+		renderResult(result, options, theme, context) {
+			return renderFoldableResult(result, options, theme, context);
 		},
 		async execute(_toolCallId, params, signal) {
 			const limit = clamp(params.limit ?? settings.searchLimit, 1, settings.maxSearchLimit);

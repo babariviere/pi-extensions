@@ -24,15 +24,28 @@ import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { browserFetch } from "./fetch/browser.ts";
 import { defuddleFetch, DefuddleError, type DefuddleResult } from "./fetch/defuddle.ts";
+import { renderFoldableResult } from "./render.ts";
 import { DEFAULT_SETTINGS, type WebSettings } from "./settings.ts";
 import { cloneCachePath, type GitHubRepoRef, isRawGitHubUrl, parseGitHubRepoUrl, readTextCapped } from "./utils.ts";
 
-type TextResult = { content: { type: "text"; text: string }[]; details: undefined };
+/** How the content was obtained. Human-only; never shown to the model. */
+type FetchSource = "defuddle" | "browser" | "raw" | "github";
+
+type FetchDetails = { source: FetchSource } | undefined;
+
+type TextResult = { content: { type: "text"; text: string }[]; details: FetchDetails };
+
+const SOURCE_LABELS: Record<FetchSource, string> = {
+	defuddle: "via defuddle",
+	browser: "via browser (headed Chrome)",
+	raw: "via raw fetch",
+	github: "via git clone",
+};
 
 // isError is not part of AgentToolResult and is ignored by the runtime for
 // defineTool tools; failure context is carried in the message text itself.
-function text(body: string, _isError = false): TextResult {
-	return { content: [{ type: "text", text: body }], details: undefined };
+function text(body: string, details: FetchDetails = undefined): TextResult {
+	return { content: [{ type: "text", text: body }], details };
 }
 
 /**
@@ -41,9 +54,9 @@ function text(body: string, _isError = false): TextResult {
  * full content is written to a temp file and its path is appended in a footer so
  * the model can read the rest with the read tool.
  */
-function cappedText(body: string): TextResult {
+function cappedText(body: string, details: FetchDetails = undefined): TextResult {
 	const result = truncateHead(body);
-	if (!result.truncated) return text(body);
+	if (!result.truncated) return text(body, details);
 
 	const id = randomBytes(8).toString("hex");
 	const fullOutputPath = join(tmpdir(), `pi-fetch-${id}.md`);
@@ -51,7 +64,7 @@ function cappedText(body: string): TextResult {
 		writeFileSync(fullOutputPath, body);
 	} catch {
 		// If we cannot persist the full content, still return the truncated view.
-		return text(result.content);
+		return text(result.content, details);
 	}
 
 	const footer =
@@ -60,7 +73,7 @@ function cappedText(body: string): TextResult {
 			: `[Showing first ${formatSize(result.outputBytes)} of ${formatSize(result.totalBytes)} (${formatSize(
 					result.maxBytes ?? DEFAULT_MAX_BYTES,
 				)} limit). Full content: ${fullOutputPath}]`;
-	return text(`${result.content}\n\n${footer}`);
+	return text(`${result.content}\n\n${footer}`, details);
 }
 
 export function createFetchContentTool(settings: WebSettings = DEFAULT_SETTINGS) {
@@ -88,6 +101,11 @@ export function createFetchContentTool(settings: WebSettings = DEFAULT_SETTINGS)
 			text.setText(formatFetchCall(args, theme));
 			return text;
 		},
+		renderResult(result, options, theme, context) {
+			const source = (result.details as FetchDetails)?.source;
+			const sourceLabel = source ? SOURCE_LABELS[source] : undefined;
+			return renderFoldableResult(result, options, theme, context, { sourceLabel });
+		},
 		async execute(_toolCallId, params, signal) {
 			const timeout = params.timeout ?? settings.fetchTimeout;
 			const url = params.url.trim();
@@ -95,7 +113,7 @@ export function createFetchContentTool(settings: WebSettings = DEFAULT_SETTINGS)
 			const repoRef = parseGitHubRepoUrl(url);
 			if (repoRef) {
 				const summary = await tryCloneAndSummarize(repoRef, settings, signal);
-				if (summary) return text(summary);
+				if (summary) return text(summary, { source: "github" });
 				// Private/unreachable repo: fall through to defuddle on the URL.
 			}
 
@@ -133,24 +151,24 @@ async function fetchViaDefuddle(
 		// JS-rendered shell): try the browser before giving up.
 		if (!result.markdown && settings.browserFallback) {
 			const viaBrowser = await escalateToBrowser(url, settings, signal);
-			if (viaBrowser?.markdown) return renderDefuddle(viaBrowser);
+			if (viaBrowser?.markdown) return renderDefuddle(viaBrowser, "browser");
 		}
-		return renderDefuddle(result);
+		return renderDefuddle(result, "defuddle");
 	} catch (err) {
 		// Direct fetch was blocked (e.g. Cloudflare 403): try the browser.
 		if (settings.browserFallback) {
 			const viaBrowser = await escalateToBrowser(url, settings, signal);
-			if (viaBrowser?.markdown) return renderDefuddle(viaBrowser);
+			if (viaBrowser?.markdown) return renderDefuddle(viaBrowser, "browser");
 		}
 		const message =
 			err instanceof DefuddleError
 				? err.message
 				: `fetch_content failed: ${err instanceof Error ? err.message : String(err)}`;
-		return text(message, true);
+		return text(message);
 	}
 }
 
-function renderDefuddle(result: DefuddleResult): TextResult {
+function renderDefuddle(result: DefuddleResult, source: FetchSource): TextResult {
 	const header: string[] = [];
 	if (result.title) header.push(`# ${result.title}`);
 	if (result.date) header.push(`*${result.date}*`);
@@ -160,11 +178,11 @@ function renderDefuddle(result: DefuddleResult): TextResult {
 		const note = result.contentType
 			? `No extractable content (content-type: ${result.contentType}).`
 			: "No extractable content.";
-		return text(meta ? `${meta}\n\n${note}` : note);
+		return text(meta ? `${meta}\n\n${note}` : note, { source });
 	}
 
 	const body = meta ? `${meta}\n\n${result.markdown}` : result.markdown;
-	return cappedText(body);
+	return cappedText(body, { source });
 }
 
 /** Attempt the browser fallback, swallowing failures so the caller can degrade. */
@@ -196,15 +214,15 @@ async function fetchRaw(url: string, timeout: number, signal?: AbortSignal): Pro
 			headers: { "User-Agent": "Mozilla/5.0 (compatible; pi-web-extension)" },
 			signal: controller.signal,
 		});
-		if (!res.ok) return text(`Failed to fetch raw content: HTTP ${res.status}`, true);
+		if (!res.ok) return text(`Failed to fetch raw content: HTTP ${res.status}`);
 		const contentType = res.headers.get("content-type") ?? "unknown";
 		if (/^image\/|application\/octet-stream|application\/pdf/i.test(contentType)) {
-			return text(`Binary content (content-type: ${contentType}); not rendered. URL: ${url}`);
+			return text(`Binary content (content-type: ${contentType}); not rendered. URL: ${url}`, { source: "raw" });
 		}
 		const body = await readTextCapped(res);
-		return cappedText(body);
+		return cappedText(body, { source: "raw" });
 	} catch (err) {
-		return text(`Failed to fetch raw content: ${err instanceof Error ? err.message : String(err)}`, true);
+		return text(`Failed to fetch raw content: ${err instanceof Error ? err.message : String(err)}`);
 	} finally {
 		clearTimeout(timer);
 		signal?.removeEventListener("abort", onAbort);
