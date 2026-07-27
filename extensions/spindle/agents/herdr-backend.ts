@@ -36,36 +36,27 @@
  */
 
 import { computeGrid } from "./grid.ts";
-import {
-	closeTab,
-	createTab,
-	currentWorkspaceId,
-	herdrStatusProbe,
-	paneLabel,
-	promptAgent,
-	readPane,
-	renamePane,
-	splitPane,
-	startAgent,
-} from "./herdr.ts";
+import { herdr } from "./herdr-client.ts";
+import { paneLabel } from "./herdr-parse.ts";
+import { currentWorkspaceId } from "./herdr-transport.ts";
 import { waitForAgentFinish } from "./pane-lifecycle.ts";
 import { formatTaskMessage } from "./pi-args.ts";
 import { readDefaultProvider } from "./settings.ts";
+import { resolveRunOutput } from "./output.ts";
+import { outcomeError, type RunOutcome, waitForRunCompletion } from "./herdr-completion.ts";
 import {
+	baseResult,
 	prepareChildRun,
-	resolveRunOutput,
 	type RunContext,
-	type RunOutcome,
 	type RunRequest,
 	type RunResult,
-	waitForRunCompletion,
 } from "./run.ts";
 
 export const SUBAGENTS_TAB_LABEL = "subagents";
 
 export async function runInHerdr(reqs: RunRequest[], ctx: RunContext): Promise<RunResult[]> {
 	const workspaceId = currentWorkspaceId();
-	const tab = await createTab(SUBAGENTS_TAB_LABEL, workspaceId);
+	const tab = await herdr.createTab(SUBAGENTS_TAB_LABEL, workspaceId);
 	if (!tab || !tab.rootPaneId) {
 		for (const req of reqs) ctx.onStatus?.(req.index, { state: "failed" });
 		return reqs.map((req) => failResult(req, "could not create the herdr 'subagents' tab"));
@@ -85,7 +76,7 @@ export async function runInHerdr(reqs: RunRequest[], ctx: RunContext): Promise<R
 	const results = await Promise.all(spawned.map((s) => settleRun(s, ctx)));
 
 	// All runs settled and their output has been read: tear down the tab.
-	await closeTab(tab.tabId);
+	await herdr.closeTab(tab.tabId);
 
 	return results;
 }
@@ -106,7 +97,7 @@ async function buildGrid(prepared: PreparedRun[], rootPaneId: string, cwd: strin
 	const columnPanes: string[] = [rootPaneId];
 	let rightRegion = rootPaneId;
 	for (let c = 1; c < cols; c++) {
-		const split = await splitPane(rightRegion, "right", 1 / (cols - c + 1), cwd);
+		const split = await herdr.splitPane(rightRegion, "right", 1 / (cols - c + 1), cwd);
 		if (!split.ok || !split.paneId) {
 			// Can't create this column: mark every run that would have landed in it.
 			const missing = split.error ?? "failed to split column";
@@ -130,7 +121,7 @@ async function buildGrid(prepared: PreparedRun[], rootPaneId: string, cwd: strin
 		if (idx < prepared.length) prepared[idx].paneId = columnPane; // first row reuses the column pane
 		idx++;
 		for (let r = 1; r < rows; r++) {
-			const split = await splitPane(bottomRegion, "down", 1 / (rows - r + 1), cwd);
+			const split = await herdr.splitPane(bottomRegion, "down", 1 / (rows - r + 1), cwd);
 			if (!split.ok || !split.paneId) {
 				if (idx < prepared.length) prepared[idx].error = split.error ?? "failed to split row";
 				idx++;
@@ -198,7 +189,7 @@ async function launchRun(p: PreparedRun, ctx: RunContext): Promise<SpawnedRun> {
 	// Start pi before anything else touches the pane so it is still an idle shell.
 	// A freshly split pane's shell can still be initializing (or briefly busy),
 	// so startAgent waits for the pane to become ready (up to 30s) and retries.
-	const started = await startAgent(agentName(p.req.index), "pi", p.paneId, p.childArgs, undefined, {
+	const started = await herdr.startAgent(agentName(p.req.index), "pi", p.paneId, p.childArgs, undefined, {
 		signal: ctx.signal,
 	});
 	if (!started.ok) {
@@ -208,8 +199,8 @@ async function launchRun(p: PreparedRun, ctx: RunContext): Promise<SpawnedRun> {
 
 	// Label the pane with the task so a watcher can tell panes apart, then submit
 	// the task as a clean user message (bracketed paste handles its newlines).
-	await renamePane(p.paneId, paneLabel(p.req.agent.config.name, p.req.task));
-	const prompted = await promptAgent(p.paneId, formatTaskMessage(p.req.task, p.req.reads));
+	await herdr.renamePane(p.paneId, paneLabel(p.req.agent.config.name, p.req.task));
+	const prompted = await herdr.promptAgent(p.paneId, formatTaskMessage(p.req.task, p.req.reads));
 
 	ctx.onStatus?.(p.req.index, {
 		state: prompted.ok ? "running" : "failed",
@@ -239,7 +230,7 @@ async function settleRun(s: SpawnedRun, ctx: RunContext): Promise<RunResult> {
 	// AbortController tears down the lingering `herdr wait` once the run settles.
 	const paneId = s.paneId;
 	const ac = new AbortController();
-	const agentSignal = paneId ? waitForAgentFinish(herdrStatusProbe(paneId), ctx.timeoutMs, { signal: ac.signal }) : undefined;
+	const agentSignal = paneId ? waitForAgentFinish(herdr.statusProbe(paneId), ctx.timeoutMs, { signal: ac.signal }) : undefined;
 
 	let outcome: RunOutcome;
 	try {
@@ -253,36 +244,17 @@ async function settleRun(s: SpawnedRun, ctx: RunContext): Promise<RunResult> {
 	// Success when we have usable output and the agent actually finished its turn
 	// (`stable` = transcript settled; `finished` = went idle). A `gone`/`timeout`
 	// outcome stays failed even if the pane-scrollback fallback yielded text.
-	const resolved = await resolveRunOutput({
-		outputPath: s.outputPath,
-		sessionPath: s.sessionPath,
-		fallback: () => (paneId ? readPane(paneId) : undefined),
+	const resolved = await resolveRunOutput(s.outputPath, s.sessionPath, {
+		fallback: () => (paneId ? herdr.readPane(paneId) : undefined),
 		finishedCleanly: outcome === "stable" || outcome === "finished",
 		placeholder: "(no output produced before the pane finished or was terminated)",
 	});
 	report(resolved.ok);
 	return {
-		agent: s.req.agent.config.name,
-		scope: s.req.agent.scope,
-		ok: resolved.ok,
-		output: resolved.output,
-		outputPath: s.outputPath,
+		...baseResult(s.req, s.outputPath, resolved, resolved.ok ? undefined : outcomeError(outcome)),
+		backend: "herdr",
 		paneId: s.paneId,
-		error: resolved.ok ? undefined : outcomeError(outcome),
 	};
-}
-
-function outcomeError(outcome: RunOutcome): string {
-	switch (outcome) {
-		case "gone":
-			return "the subagent pane was terminated before it produced a final message";
-		case "finished":
-			return "the subagent finished (went idle) without producing a final message";
-		case "timeout":
-			return "the subagent did not finish before timeout";
-		default:
-			return "the subagent produced no usable output";
-	}
 }
 
 function failResult(req: RunRequest, error: string, paneId?: string, outputPath = ""): RunResult {
@@ -292,6 +264,7 @@ function failResult(req: RunRequest, error: string, paneId?: string, outputPath 
 		ok: false,
 		output: `(failed to run in herdr: ${error})`,
 		outputPath,
+		backend: "herdr",
 		paneId,
 		error,
 	};

@@ -3,11 +3,11 @@
  * it can be unit-tested with a fake probe instead of a live herdr server.
  *
  * It depends only on a small `StatusProbe` port (a blocking `waitUntil` plus a
- * point `peek`), not on herdr or any pane id. herdr.ts supplies the production
- * adapter (`herdrStatusProbe`); tests supply a scripted fake.
+ * point `peek`), not on herdr or any pane id. `herdr-client.ts` supplies the
+ * production adapter (`HerdrClient.statusProbe`); tests supply a scripted fake.
  */
 
-import { type AgentStatus, type AgentWaitResult, type PaneAgentState } from "./herdr.ts";
+import { type AgentStatus, type AgentWaitResult, type PaneAgentState } from "./herdr-parse.ts";
 
 /**
  * Read-only view of a pane's agent status the lifecycle machine polls. The two

@@ -7,9 +7,10 @@
 
 import { spawn } from "node:child_process";
 import { readDefaultProvider } from "./settings.ts";
+import { resolveRunOutput } from "./output.ts";
 import {
+	baseResult,
 	prepareChildRun,
-	resolveRunOutput,
 	type RunContext,
 	type RunRequest,
 	type RunResult,
@@ -37,21 +38,15 @@ function runHeadless(req: RunRequest, ctx: RunContext, defaultProvider: string |
 			settled = true;
 			clearTimeout(timer);
 			ctx.signal?.removeEventListener("abort", onAbort);
-			const resolved = await resolveRunOutput({
-				outputPath,
-				sessionPath,
+			const resolved = await resolveRunOutput(outputPath, sessionPath, {
 				fallback: () => stdout.trim() || undefined,
 				finishedCleanly: exitCode === 0,
 			});
 			ctx.onStatus?.(req.index, { state: resolved.ok ? "done" : "failed", outputPath });
 			resolve({
-				agent: req.agent.config.name,
-				scope: req.agent.scope,
-				ok: resolved.ok,
-				output: resolved.output,
-				outputPath,
+				...baseResult(req, outputPath, resolved, error),
+				backend: "headless",
 				exitCode: exitCode ?? undefined,
-				error,
 			});
 		};
 

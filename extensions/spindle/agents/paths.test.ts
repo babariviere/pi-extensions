@@ -5,10 +5,7 @@ import { dirname, join } from "node:path";
 import { test } from "node:test";
 import {
 	cleanupOldRuns,
-	indexOutputOverride,
 	injectOutputInstruction,
-	normalizeOutputOverride,
-	resolveOutputOverride,
 	runPaths,
 	runRootDir,
 	runsBaseDir,
@@ -25,32 +22,6 @@ test("runsBaseDir anchors next to the session file when present", () => {
 
 test("runsBaseDir falls back to a temp dir with no session file", () => {
 	assert.equal(runsBaseDir(undefined), join(tmpdir(), "pi-subagents"));
-});
-
-test("resolveOutputOverride anchors a relative path to cwd and passes absolute through", () => {
-	assert.equal(resolveOutputOverride("/repo", ".pi/goal/plan.md"), join("/repo", ".pi/goal/plan.md"));
-	assert.equal(resolveOutputOverride("/repo", "/abs/plan.md"), "/abs/plan.md");
-});
-
-test("normalizeOutputOverride drops empty and boolean-ish literals", () => {
-	assert.equal(normalizeOutputOverride(undefined), undefined);
-	assert.equal(normalizeOutputOverride(""), undefined);
-	assert.equal(normalizeOutputOverride("  "), undefined);
-	assert.equal(normalizeOutputOverride("false"), undefined);
-	assert.equal(normalizeOutputOverride("FALSE"), undefined);
-	assert.equal(normalizeOutputOverride(" true "), undefined);
-	assert.equal(normalizeOutputOverride("plan.md"), "plan.md");
-	assert.equal(normalizeOutputOverride(" .pi/goal/plan.md "), ".pi/goal/plan.md");
-});
-
-test("indexOutputOverride inserts the index before the extension, preserving dir and shape", () => {
-	assert.equal(indexOutputOverride("plan.md", 0), "plan-0.md");
-	assert.equal(indexOutputOverride(".pi/goal/plan.md", 2), join(".pi/goal", "plan-2.md"));
-	assert.equal(indexOutputOverride("/abs/out.md", 1), join("/abs", "out-1.md"));
-	// no extension: suffix the whole basename
-	assert.equal(indexOutputOverride("report", 3), "report-3");
-	// a leading-dot basename is treated as having no extension (dotfile)
-	assert.equal(indexOutputOverride(".env", 0), ".env-0");
 });
 
 test("runPaths nests runId under the sanitized session id", () => {

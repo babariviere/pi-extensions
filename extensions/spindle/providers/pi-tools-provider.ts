@@ -12,11 +12,7 @@ import {
 import { runAbortable, throwIfAborted } from "../async-settlement.ts";
 import { CapturedToolCatalog } from "../capture/catalog.ts";
 import { PI_CORE_TOOL_NAMES, type PiCoreToolName } from "../core/pi-tools.ts";
-import {
-  isToolAllowed,
-  toolRestrictionError,
-  type SpindleToolAllowlist,
-} from "../core/tool-allowlist.ts";
+import { SpindleToolGate } from "../core/tool-allowlist.ts";
 import { expandSkillDirMarkersForRead } from "../core/skill-dir.ts";
 import type {
   SpindleActionDescriptor,
@@ -121,17 +117,17 @@ export class PiToolsProvider implements SpindleProvider {
   readonly #catalog: CapturedToolCatalog | undefined;
   readonly #capturedTools: CapturedToolsProvider | undefined;
   readonly #cwd: string;
-  /** Subagent `tools:` restriction; undefined for an unrestricted session. */
-  readonly #allowedTools: SpindleToolAllowlist | undefined;
+  /** Subagent `tools:` gate; an unrestricted gate for a normal session. */
+  readonly #gate: SpindleToolGate;
 
   constructor(
     cwd: string,
     catalog?: CapturedToolCatalog,
     capturedTools?: CapturedToolsProvider,
-    allowedTools?: SpindleToolAllowlist,
+    gate: SpindleToolGate = SpindleToolGate.of(undefined),
   ) {
     this.#cwd = cwd;
-    this.#allowedTools = allowedTools;
+    this.#gate = gate;
     this.#tools = {
       read: createReadToolDefinition(cwd),
       bash: createBashToolDefinition(cwd),
@@ -151,7 +147,7 @@ export class PiToolsProvider implements SpindleProvider {
   ): Promise<SpindleActionDescriptor[]> {
     const query = request.query?.toLowerCase();
     const descriptors = await Promise.all(
-      PI_CORE_TOOL_NAMES.filter((name) => this.#allowed(name)).map((name) =>
+      PI_CORE_TOOL_NAMES.filter((name) => this.#gate.allows(name)).map((name) =>
         this.describe(name, _context),
       ),
     );
@@ -170,7 +166,7 @@ export class PiToolsProvider implements SpindleProvider {
     // ActionRegistry.invoke() resolves through describe(), so an undefined here
     // would surface as "Unknown Spindle action" and read like a typo. Throw the
     // restriction error instead; list() already hides the tool.
-    this.#assertAllowed(actionName);
+    this.#gate.assert(this.name, actionName);
     const name = actionName as PiCoreToolName;
     const override = await this.#capturedTools?.describe(name, _context);
     if (override) return { ...override, namespace: "extension-override" };
@@ -178,19 +174,8 @@ export class PiToolsProvider implements SpindleProvider {
     return this.#descriptor(name, tool);
   }
 
-  /** False when a subagent's declared allowlist excludes this tool. */
-  #allowed(actionName: string): boolean {
-    return isToolAllowed(this.#allowedTools, actionName);
-  }
-
-  #assertAllowed(actionName: string): void {
-    if (this.#allowedTools && !this.#allowed(actionName)) {
-      throw toolRestrictionError(`pi.${actionName}`, this.#allowedTools);
-    }
-  }
-
   prepareArguments(actionName: string, args: Record<string, unknown>): Record<string, unknown> {
-    this.#assertAllowed(actionName);
+    this.#gate.assert(this.name, actionName);
     if (this.#catalog?.get(actionName)) {
       return this.#capturedTools!.prepareArguments(actionName, args);
     }
@@ -210,7 +195,7 @@ export class PiToolsProvider implements SpindleProvider {
     context: SpindleInvocationContext,
   ): Promise<unknown> {
     if (!(actionName in this.#tools)) throw new Error(`Unknown Pi tool: ${actionName}`);
-    this.#assertAllowed(actionName);
+    this.#gate.assert(this.name, actionName);
     const name = actionName as PiCoreToolName;
     // A captured extension override (e.g. an extension that registered a "read"
     // tool) already replays the full event lifecycle itself via

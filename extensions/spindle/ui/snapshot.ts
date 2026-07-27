@@ -9,7 +9,7 @@
 
 import type { SpindleActivityRun } from "../activity/types.ts";
 import type { SpindleState } from "../spindle-state.ts";
-import type { SpindleAgentRun } from "../providers/agents-provider.ts";
+import type { SpindleAgentRun } from "../providers/agent-run-monitor.ts";
 import {
   activeStatuses,
   orderAgentsByCreation,

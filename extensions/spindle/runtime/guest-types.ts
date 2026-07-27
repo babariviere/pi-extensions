@@ -13,7 +13,7 @@
  * (see `TYPE_CORRECTNESS_CODES`), so the rejection itself comes from the
  * providers at call time.
  */
-import type { SpindleToolAllowlist } from "../core/tool-allowlist.ts";
+import type { SpindleToolGate } from "../core/tool-allowlist.ts";
 
 export const GUEST_TYPE_DECLARATIONS = `
 type JsonPrimitive = string | number | boolean | null;
@@ -179,7 +179,7 @@ const PI_TOOLS_API_MEMBER = /^ {2}([A-Za-z][A-Za-z0-9_]*)\(/;
  * the type-checker describes only what a restricted subagent may call. When
  * nothing is left, the `pi` global goes too.
  */
-const restrictPiTools = (declarations: string, allowedTools: SpindleToolAllowlist): string => {
+const restrictPiTools = (declarations: string, gate: SpindleToolGate): string => {
   const lines = declarations.split("\n");
   const kept: string[] = [];
   let inPiTools = false;
@@ -197,7 +197,7 @@ const restrictPiTools = (declarations: string, allowedTools: SpindleToolAllowlis
     }
     const member = PI_TOOLS_API_MEMBER.exec(line);
     if (member) {
-      if (!allowedTools.has(member[1])) continue;
+      if (!gate.allows(member[1])) continue;
       members++;
     }
     kept.push(line);
@@ -208,7 +208,7 @@ const restrictPiTools = (declarations: string, allowedTools: SpindleToolAllowlis
 
 export const guestTypeDeclarations = (
   fullCodeMode: boolean,
-  allowedTools?: SpindleToolAllowlist,
+  gate?: SpindleToolGate,
 ): string => {
   if (!fullCodeMode) {
     return FULL_CODE_GLOBAL_DECLARATIONS.reduce(
@@ -216,7 +216,7 @@ export const guestTypeDeclarations = (
       GUEST_TYPE_DECLARATIONS,
     );
   }
-  return allowedTools
-    ? restrictPiTools(GUEST_TYPE_DECLARATIONS, allowedTools)
+  return gate?.restricted
+    ? restrictPiTools(GUEST_TYPE_DECLARATIONS, gate)
     : GUEST_TYPE_DECLARATIONS;
 };

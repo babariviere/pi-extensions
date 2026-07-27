@@ -6,7 +6,7 @@
  */
 
 import { type DiscoveredAgent } from "./discovery.ts";
-import { indexOutputOverride, normalizeOutputOverride } from "./paths.ts";
+import { planBatchOutputs } from "./output.ts";
 import { qualifyModel, stripThinkingSuffix, THINKING_LEVELS } from "./pi-args.ts";
 import { type RunRequest } from "./run.ts";
 import { readDefaultProvider, readEnabledModels } from "./settings.ts";
@@ -47,32 +47,31 @@ export function buildRunRequests(
 	if (overrideError) return { error: overrideError };
 
 	const requests: RunRequest[] = [];
+	const rawOutputs: (string | undefined)[] = [];
 	for (let i = 0; i < normalized.items.length; i++) {
 		const item = normalized.items[i];
 		const agent = agents.find((a) => a.config.name === item.agent);
 		if (!agent) return { error: unknownAgentError(item.agent, agents) };
 		const overrides = item.model || item.thinking ? { model: item.model, thinking: item.thinking } : undefined;
+		rawOutputs.push(item.output ?? agent.config.output);
 		requests.push({
 			agent,
 			task: item.task,
 			index: i,
 			overrides,
-			output: normalizeOutputOverride(item.output ?? agent.config.output),
 			reads: item.reads ?? agent.config.defaultReads,
 		});
 	}
 
-	// Parallel runs that share one `output` override (passed on several tasks, or
-	// inherited from one agent's frontmatter default) would otherwise all resolve
-	// to the same file and clobber each other, leaving every run reading back the
-	// last write. Give each output-bearing run a distinct `-<index>` suffix so the
-	// files stay separate. Single runs keep their override verbatim, preserving
-	// stable destinations like `.pi/goal/plan.md`.
-	if (requests.length > 1) {
-		for (const r of requests) {
-			if (r.output) r.output = indexOutputOverride(r.output, r.index);
-		}
-	}
+	// Resolve the batch's output destinations in one place (see `output.ts`):
+	// normalize each override, and give each output-bearing run of a parallel
+	// batch a distinct `-<index>` suffix so they do not all write to (and clobber)
+	// the same file.
+	const outputs = planBatchOutputs(rawOutputs);
+	requests.forEach((request, index) => {
+		const output = outputs[index];
+		if (output !== undefined) request.output = output;
+	});
 
 	return { requests };
 }

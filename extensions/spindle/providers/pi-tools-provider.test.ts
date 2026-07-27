@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { PI_CORE_TOOL_NAMES } from "../core/pi-tools.ts";
+import { SpindleToolGate } from "../core/tool-allowlist.ts";
 import { PiToolsProvider } from "./pi-tools-provider.ts";
 
 const context = {} as any;
@@ -12,7 +13,7 @@ const provider = (allowed?: string[]) =>
     process.cwd(),
     undefined,
     undefined,
-    allowed ? new Set(allowed) : undefined,
+    SpindleToolGate.of(allowed ? new Set(allowed) : undefined),
   );
 
 const names = async (allowed?: string[]): Promise<string[]> =>

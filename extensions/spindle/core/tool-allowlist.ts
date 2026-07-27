@@ -1,5 +1,5 @@
 /**
- * Sandbox-side tool allowlist.
+ * Sandbox-side tool allowlist and the gate that enforces it.
  *
  * A subagent's `tools:` frontmatter cannot be enforced with pi's `--tools`
  * filter any more: the child must keep `spindle_exec` (its only tool path in
@@ -10,13 +10,16 @@
  * the sandbox is type-checked against and rejecting them at the provider
  * boundary.
  *
- * The flag is *registered* by `agents/child-extension.ts` (loaded via
- * `--extension` only when the parent restricts tools). pi rejects the same flag
- * name registered by two extensions, so Spindle cannot also register it and
+ * `SpindleToolGate` is the one module that owns the allow decision: the two
+ * providers (`pi`, `extensions`), the execution service, and the guest schema
+ * shaping all consult a single gate rather than reimplementing the check. The
+ * flag is *registered* by `agents/child-extension.ts` (loaded via `--extension`
+ * only when the parent restricts tools). pi rejects the same flag name
+ * registered by two extensions, so Spindle cannot also register it and
  * `pi.getFlag` — which only resolves flags the *reading* extension registered —
  * is unavailable here. Spindle reads the raw argv instead.
  *
- * Scope: the allowlist gates the `pi.*` and `extensions.*` namespaces, both of
+ * Scope: the gate covers the `pi.*` and `extensions.*` namespaces, both of
  * which name concrete tools. `mcp.*`, `agents.*` and `workflow.*` are not
  * tools in that sense and stay available.
  */
@@ -70,18 +73,55 @@ export const readToolAllowlistArgument = (
   return value;
 };
 
-export const isToolAllowed = (
-  allowlist: SpindleToolAllowlist | undefined,
-  name: string,
-): boolean =>
-  allowlist === undefined || TRANSPORT_TOOL_NAMES.has(name) || allowlist.has(name);
+/**
+ * The tool gate: the single owner of "may this tool be called". An unrestricted
+ * gate (built from an absent allowlist) permits everything and never throws; a
+ * restricted gate permits only its members plus the always-allowed transport
+ * tool. Callers pass their own namespace to `assert` so the rejection names the
+ * sandbox call (`pi.bash`, `extensions.web_search`).
+ */
+export class SpindleToolGate {
+  readonly #allowlist: SpindleToolAllowlist | undefined;
 
-export const toolRestrictionError = (
-  name: string,
-  allowlist: SpindleToolAllowlist,
-): Error =>
-  new Error(
-    `Tool ${name} is not in this agent's tool allowlist (allowed: ${
-      [...allowlist].sort().join(", ") || "none"
-    })`,
-  );
+  private constructor(allowlist: SpindleToolAllowlist | undefined) {
+    this.#allowlist = allowlist;
+  }
+
+  /** Build from an explicit allowlist; `undefined` yields an unrestricted gate. */
+  static of(allowlist: SpindleToolAllowlist | undefined): SpindleToolGate {
+    return new SpindleToolGate(allowlist);
+  }
+
+  /** Build from the process arguments: read the flag, parse it, wrap it. */
+  static fromArgv(flag: string, argv?: readonly string[]): SpindleToolGate {
+    return new SpindleToolGate(parseToolAllowlist(readToolAllowlistArgument(flag, argv)));
+  }
+
+  /** True when a subagent's `tools:` list narrowed what may be called. */
+  get restricted(): boolean {
+    return this.#allowlist !== undefined;
+  }
+
+  /** Whether `name` may be called. Unrestricted gates and the transport tool always pass. */
+  allows(name: string): boolean {
+    return (
+      this.#allowlist === undefined ||
+      TRANSPORT_TOOL_NAMES.has(name) ||
+      this.#allowlist.has(name)
+    );
+  }
+
+  /**
+   * Throw when `name` is disallowed. `namespace` is the sandbox namespace the
+   * caller belongs to (`pi` / `extensions`), so the message names the call as
+   * the model wrote it. A no-op on an unrestricted gate.
+   */
+  assert(namespace: string, name: string): void {
+    if (this.#allowlist === undefined || this.allows(name)) return;
+    throw new Error(
+      `Tool ${namespace}.${name} is not in this agent's tool allowlist (allowed: ${
+        [...this.#allowlist].sort().join(", ") || "none"
+      })`,
+    );
+  }
+}

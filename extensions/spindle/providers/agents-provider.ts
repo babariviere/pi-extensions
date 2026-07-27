@@ -22,15 +22,15 @@
 import { selectBackend } from "../agents/backend.ts";
 import { discoverAgentsForCwd, getProjectAgentsDir, getUserAgentsDir } from "../agents/discovery.ts";
 import { newRunId } from "../agents/paths.ts";
-import { type AgentProgress, applyStatus, renderProgress } from "../agents/progress.ts";
 import { buildRunRequests, type NormalizedItem } from "../agents/request.ts";
-import type { RunContext, RunResult, RunState, RunStatusUpdate } from "../agents/run.ts";
+import type { RunContext, RunRequest, RunResult } from "../agents/run.ts";
 import type {
   SpindleActionDescriptor,
   SpindleInvocationContext,
   SpindleProvider,
   SpindleProviderListRequest,
 } from "../protocol.ts";
+import { RunProgressMonitor, SpindleAgentRunRegistry } from "./agent-run-monitor.ts";
 
 /** Parent session the child runs are attributed to. */
 export interface SessionRef {
@@ -40,67 +40,6 @@ export interface SessionRef {
 }
 
 export const DEFAULT_RUN_TIMEOUT_MS = 30 * 60 * 1000;
-export const PROGRESS_TICK_MS = 100;
-
-/** Widget-facing view of one in-flight or finished subagent run. */
-export interface SpindleAgentRun {
-  id: string;
-  name: string;
-  status: string;
-  startedAt: number;
-  updatedAt: number;
-  currentTool?: string;
-  error?: string;
-  runId?: string;
-}
-
-const STATUS_FROM_STATE: Record<RunState, string> = {
-  spawning: "queued",
-  running: "running",
-  done: "completed",
-  failed: "failed",
-};
-
-/**
- * Live registry of subagent runs, read by `ui/snapshot.ts` so the single
- * `aboveEditor` widget renders one spinner row per run through
- * `ui/widget.ts`'s existing `agentLines()`.
- */
-export class SpindleAgentRunRegistry {
-  readonly #runs = new Map<string, SpindleAgentRun>();
-  readonly #listeners = new Set<() => void>();
-
-  list(): SpindleAgentRun[] {
-    return [...this.#runs.values()];
-  }
-
-  upsert(run: SpindleAgentRun): void {
-    this.#runs.set(run.id, run);
-    this.#notify();
-  }
-
-  reset(): void {
-    this.#runs.clear();
-    this.#notify();
-  }
-
-  subscribe(listener: () => void): () => void {
-    this.#listeners.add(listener);
-    return () => {
-      this.#listeners.delete(listener);
-    };
-  }
-
-  #notify(): void {
-    for (const listener of this.#listeners) {
-      try {
-        listener();
-      } catch {
-        // Widget refresh must never break a run.
-      }
-    }
-  }
-}
 
 export interface SpindleAgentRuntimeConfig {
   timeoutMs: number;
@@ -194,8 +133,10 @@ const agentResult = (result: RunResult): SpindleAgentResult => ({
   ok: result.ok,
   output: result.output,
   outputPath: result.outputPath,
-  ...(result.exitCode !== undefined ? { exitCode: result.exitCode } : {}),
-  ...(result.paneId ? { paneId: result.paneId } : {}),
+  ...(result.backend === "headless" && result.exitCode !== undefined
+    ? { exitCode: result.exitCode }
+    : {}),
+  ...(result.backend === "herdr" && result.paneId ? { paneId: result.paneId } : {}),
   ...(result.error ? { error: result.error } : {}),
 });
 
@@ -253,18 +194,22 @@ export class SpindleAgentsProvider implements SpindleProvider {
     }
   }
 
-  async #run(
+  /**
+   * Resolve raw items to run requests: discover the agents (throwing when none
+   * exist), apply the runtime model/thinking defaults, then build and validate
+   * the requests. Pure of UI and spawning.
+   */
+  #resolveRequests(
     items: NormalizedItem[],
-    context: SpindleInvocationContext,
-  ): Promise<SpindleAgentResult[]> {
-    const ref = this.session();
+    ref: SessionRef,
+    runtimeConfig: SpindleAgentRuntimeConfig,
+  ): RunRequest[] {
     const discovered = discoverAgentsForCwd(ref.cwd);
     if (discovered.length === 0) {
       throw new Error(
         `No custom agents were found. Searched ${getUserAgentsDir()} and ${getProjectAgentsDir(ref.cwd)}.`,
       );
     }
-    const runtimeConfig = this.runtimeConfig();
     const withDefaults = items.map((item) => ({
       ...item,
       ...(item.model ?? runtimeConfig.defaultModel
@@ -276,58 +221,20 @@ export class SpindleAgentsProvider implements SpindleProvider {
     }));
     const built = buildRunRequests({ tasks: withDefaults }, discovered, ref.cwd);
     if ("error" in built) throw new Error(built.error);
-    const resolved = built.requests;
+    return built.requests;
+  }
+
+  async #run(
+    items: NormalizedItem[],
+    context: SpindleInvocationContext,
+  ): Promise<SpindleAgentResult[]> {
+    const ref = this.session();
+    const runtimeConfig = this.runtimeConfig();
+    const requests = this.#resolveRequests(items, ref, runtimeConfig);
 
     const runId = newRunId();
-    const startedAt = Date.now();
-    const progress: AgentProgress[] = resolved.map((request) => ({
-      name: request.agent.config.name,
-      scope: request.agent.scope,
-      state: "spawning" as RunState,
-      startedAt,
-    }));
-    const ids = resolved.map((request) => `${runId}-${request.index}`);
-    for (const [index, row] of progress.entries()) {
-      context.activity?.({
-        type: "entity",
-        id: ids[index] ?? `${runId}-${index}`,
-        kind: "agent",
-        name: row.name,
-      });
-    }
-
-    let live = true;
-    let frame = 0;
-    const publish = (): void => {
-      const now = Date.now();
-      for (const [index, row] of progress.entries()) {
-        this.registry.upsert({
-          id: ids[index] ?? `${runId}-${index}`,
-          name: row.name,
-          status: STATUS_FROM_STATE[row.state],
-          startedAt: row.startedAt,
-          updatedAt: row.endedAt ?? now,
-          // The activity run id is the outer spindle_exec tool call id, so the
-          // widget can associate these rows with the running program.
-          runId: context.parentToolCallId,
-          ...(row.state === "spawning" || row.state === "running"
-            ? { currentTool: row.state }
-            : {}),
-        });
-      }
-      if (!live) return;
-      // renderProgress stays the tested renderer; one line per tick keeps the
-      // spindle progress line compact instead of dumping an ANSI block.
-      const message = renderProgress(progress, now, { frame }).split("\n").join(" · ");
-      context.update(message);
-      context.activity?.({ type: "progress", message });
-    };
-    publish();
-    const ticker = setInterval(() => {
-      frame++;
-      publish();
-    }, PROGRESS_TICK_MS);
-    ticker.unref?.();
+    const monitor = new RunProgressMonitor({ registry: this.registry, context, runId }, requests);
+    monitor.start();
 
     const runContext: RunContext = {
       sessionId: ref.sessionId,
@@ -336,20 +243,14 @@ export class SpindleAgentsProvider implements SpindleProvider {
       cwd: ref.cwd,
       timeoutMs: runtimeConfig.timeoutMs || DEFAULT_RUN_TIMEOUT_MS,
       ...(context.signal ? { signal: context.signal } : {}),
-      onStatus: (index: number, update: RunStatusUpdate) => {
-        applyStatus(progress, index, update);
-        publish();
-      },
+      onStatus: monitor.onStatus,
     };
 
-    let results: RunResult[];
     try {
-      results = await selectBackend()(resolved, runContext);
+      const results = await selectBackend()(requests, runContext);
+      return results.map(agentResult);
     } finally {
-      live = false;
-      clearInterval(ticker);
+      monitor.stop();
     }
-    publish();
-    return results.map(agentResult);
   }
 }

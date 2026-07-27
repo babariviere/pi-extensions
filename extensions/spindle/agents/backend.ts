@@ -6,7 +6,7 @@
  */
 
 import { runHeadlessBatch } from "./headless.ts";
-import { isInHerdr } from "./herdr.ts";
+import { isInHerdr } from "./herdr-transport.ts";
 import { runInHerdr } from "./herdr-backend.ts";
 import { type RunBackend } from "./run.ts";
 

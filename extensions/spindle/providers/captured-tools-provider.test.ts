@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import type { CapturedToolCatalog, CapturedToolEntry } from "../capture/catalog.ts";
+import { SpindleToolGate } from "../core/tool-allowlist.ts";
 import { CapturedToolsProvider } from "./captured-tools-provider.ts";
 
 const context = {} as any;
@@ -30,7 +31,7 @@ const catalog = (...entries: CapturedToolEntry[]): CapturedToolCatalog =>
 const tools = catalog(entry("fetch_content"), entry("todo"), entry("web_search"));
 
 const provider = (allowed?: string[]) =>
-  new CapturedToolsProvider(tools, allowed ? new Set(allowed) : undefined);
+  new CapturedToolsProvider(tools, SpindleToolGate.of(allowed ? new Set(allowed) : undefined));
 
 const names = async (allowed?: string[]): Promise<string[]> =>
   (await provider(allowed).list(listRequest, context)).map((descriptor) => descriptor.name);

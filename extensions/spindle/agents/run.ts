@@ -2,9 +2,10 @@
  * Shared run types and output-file reading helpers used by both backends.
  */
 
-import { readFileSync, statSync, writeFileSync } from "node:fs";
+import { writeFileSync } from "node:fs";
 import { buildChildArgs } from "./pi-args.ts";
-import { ensureDir, resolveOutputOverride, runPaths } from "./paths.ts";
+import { outputPathFor, type ResolvedOutput } from "./output.ts";
+import { ensureDir, runPaths } from "./paths.ts";
 import { type DiscoveredAgent } from "./discovery.ts";
 
 export interface RunRequest {
@@ -72,17 +73,44 @@ export interface RunContext {
  */
 export type RunBackend = (reqs: RunRequest[], ctx: RunContext) => Promise<RunResult[]>;
 
-export interface RunResult {
+export interface RunResultBase {
 	agent: string;
 	scope: string;
 	ok: boolean;
 	output: string;
 	outputPath: string;
-	/** Populated for the headless backend; undefined for herdr panes. */
-	exitCode?: number;
-	/** Populated for herdr runs. */
-	paneId?: string;
 	error?: string;
+}
+
+/**
+ * A run's result. Backend-specific diagnostics live on the variant that
+ * produces them (headless has an `exitCode`; herdr has a `paneId`), so a
+ * consumer discriminates on `backend` rather than guessing which optional
+ * field a result carries.
+ */
+export type RunResult =
+	| (RunResultBase & { backend: "headless"; exitCode?: number })
+	| (RunResultBase & { backend: "herdr"; paneId?: string });
+
+/**
+ * The fields every result shares, assembled from a run's request and its
+ * resolved output. Each adapter spreads this, then adds its `backend` tag and
+ * backend-specific diagnostics.
+ */
+export function baseResult(
+	req: RunRequest,
+	outputPath: string,
+	resolved: ResolvedOutput,
+	error?: string,
+): RunResultBase {
+	return {
+		agent: req.agent.config.name,
+		scope: req.agent.scope,
+		ok: resolved.ok,
+		output: resolved.output,
+		outputPath,
+		...(error ? { error } : {}),
+	};
 }
 
 /** Write the agent's system-prompt body to disk so `pi` can load it. */
@@ -120,7 +148,7 @@ export function prepareChildRun(
 	const paths = runPaths(ctx.sessionFile, ctx.sessionId, ctx.runId, req.agent.config.name, req.index);
 	ensureRunDir(paths.dir);
 
-	const outputPath = req.output ? resolveOutputOverride(ctx.cwd, req.output) : paths.outputPath;
+	const outputPath = outputPathFor(ctx.cwd, paths.outputPath, req.output);
 
 	const hasPrompt = req.agent.systemPrompt.trim().length > 0;
 	if (hasPrompt) writeSystemPrompt(paths.promptPath, req.agent.systemPrompt);
@@ -138,181 +166,4 @@ export function prepareChildRun(
 	return { dir: paths.dir, outputPath, sessionPath: paths.sessionPath, promptPath: paths.promptPath, hasPrompt, childArgs };
 }
 
-interface Snapshot {
-	exists: boolean;
-	size: number;
-	mtimeMs: number;
-}
 
-function snapshot(path: string): Snapshot {
-	try {
-		const st = statSync(path);
-		return { exists: true, size: st.size, mtimeMs: st.mtimeMs };
-	} catch {
-		return { exists: false, size: 0, mtimeMs: 0 };
-	}
-}
-
-const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
-
-function isStable(a: Snapshot, b: Snapshot): boolean {
-	return a.exists && b.exists && a.size === b.size && a.mtimeMs === b.mtimeMs && b.size > 0;
-}
-
-/**
- * Why a run finished waiting:
- * - `stable`   the output file appeared and stopped changing (success path)
- * - `finished` the agent went idle/exited without producing a stable file
- * - `gone`     the pane vanished (e.g. the user terminated the subagent)
- * - `timeout`  none of the above happened before the deadline
- */
-export type RunOutcome = "stable" | "finished" | "gone" | "timeout";
-
-/**
- * Wait for a run to complete.
- *
- * With an `agentSignal` (the herdr backend passes a blocking "idle-after-working
- * or pane-gone" wait), the agent finishing its turn IS completion. File
- * stability is NOT used as a completion signal there: the file being watched is
- * the child transcript, which pauses mid-turn while the model generates, and a
- * pause must not be mistaken for done. Once the agent finishes we allow a short
- * grace for the transcript's final message to flush, preferring `stable` if it
- * settles within the window, else `finished`. A terminated pane is `gone`.
- *
- * Without an `agentSignal`, there is no external completion signal, so file
- * stability is the completion signal (`stable`), bounded by the timeout.
- */
-export async function waitForRunCompletion(
-	path: string,
-	opts: {
-		timeoutMs: number;
-		intervalMs?: number;
-		graceMs?: number;
-		agentSignal?: Promise<"finished" | "gone">;
-	},
-): Promise<RunOutcome> {
-	const interval = opts.intervalMs ?? 400;
-	const grace = opts.graceMs ?? 2500;
-	const deadline = Date.now() + opts.timeoutMs;
-	const hasAgentSignal = opts.agentSignal !== undefined;
-
-	let signal: "finished" | "gone" | undefined;
-	opts.agentSignal?.then((s) => {
-		signal = s;
-	}).catch(() => {});
-
-	let prev = snapshot(path);
-	while (Date.now() < deadline) {
-		await sleep(interval);
-		const cur = snapshot(path);
-
-		// No external signal: file stability is the only completion signal.
-		if (!hasAgentSignal) {
-			if (isStable(prev, cur)) return "stable";
-			prev = cur;
-			continue;
-		}
-
-		// With an agent signal, wait for the agent itself; ignore mid-turn
-		// transcript pauses. Once it fires, resolve the outcome.
-		if (signal === "gone") return "gone";
-		if (signal === "finished") {
-			// Grace: let the final message flush; prefer 'stable' if it settles.
-			const graceDeadline = Math.min(deadline, Date.now() + grace);
-			let gp = snapshot(path);
-			while (Date.now() < graceDeadline) {
-				await sleep(interval);
-				const gc = snapshot(path);
-				if (isStable(gp, gc)) return "stable";
-				gp = gc;
-			}
-			return "finished";
-		}
-	}
-	return "timeout";
-}
-
-/**
- * A run's result is its final assistant message, read from the child pi session
- * transcript. This is the primary (and only) result channel: agents reliably
- * end a turn with a final message, whereas a dedicated submit tool is easy to
- * forget and, in full code mode, is hidden behind the `extensions.*` namespace.
- * Returns the concatenated text of the last assistant message that had any text
- * (tool-only final turns fall back to the previous text turn), or undefined
- * when the transcript is unreadable or has no assistant text.
- */
-export function readLastAssistantText(sessionPath: string): string | undefined {
-	let raw: string;
-	try {
-		raw = readFileSync(sessionPath, "utf-8");
-	} catch {
-		return undefined;
-	}
-	let last: string | undefined;
-	for (const line of raw.split(/\r?\n/)) {
-		const trimmed = line.trim();
-		if (!trimmed.startsWith("{")) continue;
-		let obj: unknown;
-		try {
-			obj = JSON.parse(trimmed);
-		} catch {
-			continue;
-		}
-		const msg = (obj as { message?: { role?: unknown; content?: unknown } }).message;
-		if (!msg || msg.role !== "assistant" || !Array.isArray(msg.content)) continue;
-		const text = msg.content
-			.filter(
-				(c): c is { type: string; text: string } =>
-					!!c &&
-					typeof c === "object" &&
-					(c as { type?: unknown }).type === "text" &&
-					typeof (c as { text?: unknown }).text === "string",
-			)
-			.map((c) => c.text)
-			.join("")
-			.trim();
-		if (text.length > 0) last = text;
-	}
-	return last;
-}
-
-export interface ResolvedOutput {
-	output: string;
-	ok: boolean;
-}
-
-/** Persist the resolved result to disk, best-effort; never throws. */
-function persistResult(path: string, text: string): void {
-	try {
-		writeFileSync(path, text, { mode: 0o600 });
-	} catch {
-		// The persisted artifact is a convenience (inspection, `output:` override);
-		// the caller already has the text in-band, so a write failure is non-fatal.
-	}
-}
-
-/**
- * Resolve a run's final output and success. The result is the child's last
- * assistant message (see `readLastAssistantText`), falling back to a
- * backend-specific `fallback` (headless: captured stdout; herdr: pane
- * scrollback) only when the transcript yields nothing. The fallback is an async
- * thunk so it runs only when needed. Any resolved text is persisted to
- * `outputPath` (the run-dir artifact, or a caller `output:` override).
- *
- * A run is `ok` when it produced usable output AND finished cleanly
- * (`finishedCleanly`: headless exit 0; herdr a stable/finished outcome). When no
- * source yields text, `output` is a placeholder and `ok` is false.
- */
-export async function resolveRunOutput(opts: {
-	outputPath: string;
-	sessionPath: string;
-	fallback: () => Promise<string | undefined> | string | undefined;
-	finishedCleanly: boolean;
-	placeholder?: string;
-}): Promise<ResolvedOutput> {
-	let output = readLastAssistantText(opts.sessionPath);
-	if (output === undefined) output = (await opts.fallback()) || undefined;
-	if (output !== undefined) persistResult(opts.outputPath, output);
-	const ok = output !== undefined && opts.finishedCleanly;
-	return { output: output ?? (opts.placeholder ?? "(no output produced)"), ok };
-}

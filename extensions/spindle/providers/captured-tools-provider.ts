@@ -2,11 +2,7 @@ import path from "node:path";
 import { runAbortable, throwIfAborted } from "../async-settlement.ts";
 import type { AgentToolResult, SourceInfo } from "@earendil-works/pi-coding-agent";
 import { CapturedToolCatalog, type CapturedToolEntry } from "../capture/catalog.ts";
-import {
-  isToolAllowed,
-  toolRestrictionError,
-  type SpindleToolAllowlist,
-} from "../core/tool-allowlist.ts";
+import { SpindleToolGate } from "../core/tool-allowlist.ts";
 import type {
   SpindleActionDescriptor,
   SpindleInvocationContext,
@@ -96,20 +92,9 @@ export class CapturedToolsProvider implements SpindleProvider {
 
   constructor(
     readonly catalog: CapturedToolCatalog,
-    /** Subagent `tools:` restriction; undefined for an unrestricted session. */
-    readonly allowedTools?: SpindleToolAllowlist,
+    /** Subagent `tools:` gate; an unrestricted gate for a normal session. */
+    readonly gate: SpindleToolGate = SpindleToolGate.of(undefined),
   ) {}
-
-  /** False when a subagent's declared allowlist excludes this tool. */
-  #allowed(actionName: string): boolean {
-    return isToolAllowed(this.allowedTools, actionName);
-  }
-
-  #assertAllowed(actionName: string): void {
-    if (this.allowedTools && !this.#allowed(actionName)) {
-      throw toolRestrictionError(`extensions.${actionName}`, this.allowedTools);
-    }
-  }
 
   async list(
     request: SpindleProviderListRequest,
@@ -118,7 +103,7 @@ export class CapturedToolsProvider implements SpindleProvider {
     const query = request.query?.trim().toLowerCase();
     const descriptors = this.catalog
       .list()
-      .filter((entry) => this.#allowed(entry.name))
+      .filter((entry) => this.gate.allows(entry.name))
       .map(descriptorFrom);
     if (!query) return descriptors;
     return descriptors.filter((descriptor) =>
@@ -136,12 +121,12 @@ export class CapturedToolsProvider implements SpindleProvider {
     if (!entry) return undefined;
     // See PiToolsProvider.describe: a restricted tool must say so, not look like
     // an unknown one. list() already hides it.
-    this.#assertAllowed(actionName);
+    this.gate.assert(this.name, actionName);
     return descriptorFrom(entry);
   }
 
   prepareArguments(actionName: string, args: Record<string, unknown>): Record<string, unknown> {
-    this.#assertAllowed(actionName);
+    this.gate.assert(this.name, actionName);
     const prepare = this.catalog.require(actionName).wrappedTool.prepareArguments;
     if (!prepare) return args;
     const prepared = prepare(args);
@@ -156,7 +141,7 @@ export class CapturedToolsProvider implements SpindleProvider {
     args: Record<string, unknown>,
     context: SpindleInvocationContext,
   ): Promise<CapturedToolInvocationResult> {
-    this.#assertAllowed(actionName);
+    this.gate.assert(this.name, actionName);
     const entry = this.catalog.require(actionName);
     return this.#scheduler.run(entry.definition.executionMode, () =>
       runAbortable(context.signal, () => this.#invokeCaptured(entry, args, context)),

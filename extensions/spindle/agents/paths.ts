@@ -15,7 +15,7 @@
 
 import { mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, dirname, isAbsolute, join } from "node:path";
+import { dirname, join } from "node:path";
 
 /** Directory name holding all persisted subagent runs for a session dir. */
 const RUNS_DIR_NAME = "subagent-runs";
@@ -73,49 +73,6 @@ export function runPaths(
 		sessionPath: join(dir, `${stem}.session.jsonl`),
 		promptPath: join(dir, `${stem}.prompt.md`),
 	};
-}
-
-/**
- * Normalize a raw `output` override to a real path or `undefined`. Empty
- * strings and the boolean-ish literals `false`/`true` (case-insensitive) are
- * treated as "no override" so a quoted frontmatter value (`output: "false"`) or
- * a stray literal from a tool call falls back to the default per-run path
- * instead of writing bogus `false`/`false-1` files.
- */
-export function normalizeOutputOverride(override: string | undefined): string | undefined {
-	const trimmed = override?.trim();
-	if (!trimmed) return undefined;
-	const lower = trimmed.toLowerCase();
-	if (lower === "false" || lower === "true") return undefined;
-	return trimmed;
-}
-
-/**
- * Resolve a per-run `output` override to an absolute path. Absolute overrides
- * are used as-is; relative ones anchor to the parent's cwd so artifacts land
- * where the caller expects (e.g. `.pi/goal/plan.md` under the repo root).
- */
-export function resolveOutputOverride(cwd: string, override: string): string {
-	return isAbsolute(override) ? override : join(cwd, override);
-}
-
-/**
- * Insert a `-<index>` suffix before an output override's file extension so
- * parallel runs that share one override do not all write to the same file (and
- * clobber each other). Applied only for batches with more than one run; a single
- * run keeps its override verbatim, preserving stable destinations like
- * `.pi/goal/plan.md`. Directory and absolute/relative shape are preserved:
- *   `plan.md` -> `plan-0.md`, `.pi/goal/plan.md` -> `.pi/goal/plan-0.md`,
- *   `/abs/out.md` -> `/abs/out-0.md`, `report` (no ext) -> `report-0`.
- */
-export function indexOutputOverride(override: string, index: number): string {
-	const dir = dirname(override);
-	const base = basename(override);
-	const dot = base.lastIndexOf(".");
-	const stem = dot > 0 ? base.slice(0, dot) : base;
-	const ext = dot > 0 ? base.slice(dot) : "";
-	const indexed = `${stem}-${index}${ext}`;
-	return dir === "." ? indexed : join(dir, indexed);
 }
 
 export function ensureDir(dir: string): void {

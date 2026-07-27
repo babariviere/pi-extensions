@@ -197,7 +197,8 @@ fd -e ts . extensions/spindle -x perl -pi -e 's{(from\s+")(\.\.?/[^"]*)\.js(")}{
 | File | Purpose |
 |---|---|
 | `providers/mcp-bridge-provider.ts` | `mcp.*` → the `pi-mcp-adapter` `mcp` gateway tool. **Upstream has a file with the same provider name (`mcp`) that is deliberately not vendored.** |
-| `providers/agents-provider.ts` | `agents.*` → the absorbed subagents code, plus `SpindleAgentRunRegistry` (the widget's data source). **Upstream also ships `src/providers/agents-provider.ts`, fronting its own RLM/handoff agent runtime; that file is NOT vendored, and this file is unrelated to it.** |
+| `providers/agents-provider.ts` | `agents.*` → the absorbed subagents code. Its `#run` reduces to a pipeline (`#resolveRequests` → start monitor → invoke backend → format results). **Upstream also ships `src/providers/agents-provider.ts`, fronting its own RLM/handoff agent runtime; that file is NOT vendored, and this file is unrelated to it.** |
+| `providers/agent-run-monitor.ts` | The widget-facing projection: `SpindleAgentRunRegistry` (the widget's data source) and `RunProgressMonitor`, which turns backend status updates into registry rows + the one-line ticker behind a `start`/`onStatus`/`stop` interface. |
 | `ui/transcript-types.ts` | `SpindleLogLine`, copied from upstream `src/agents/types.ts`, so the transcript parser does not import a dropped subsystem. |
 | `agents/` | The absorbed `extensions/subagents` code (see below). |
 
@@ -218,13 +219,15 @@ Moved verbatim (no import edits needed — all relative imports were siblings):
 `backend.ts`, `constants.ts`, `discovery.ts`, `frontmatter.ts`, `grid.ts`,
 `headless.ts`, `herdr-backend.ts`, `herdr.ts`, `pane-lifecycle.ts`, `paths.ts`,
 `pi-args.ts`, `progress.ts`, `request.ts`, `child-extension.ts`, `run.ts`,
-`settings.ts`, plus all 11 `*.test.ts` files.
+`settings.ts`, plus all 11 `*.test.ts` files. (`herdr.ts` was later split into
+`herdr-parse.ts` / `herdr-transport.ts` / `herdr-client.ts` — see "herdr client"
+below.)
 
 Not moved: `index.ts` and `tool.ts` (they defined the standalone extension and
-tool). `SessionRef`, `DEFAULT_RUN_TIMEOUT_MS`, `PROGRESS_TICK_MS` and the
-ticker/`buildRunRequests` orchestration were salvaged into
-`providers/agents-provider.ts`; the throttled `cleanupOldRuns()` sweep into
-`index.ts`.
+tool). `SessionRef`, `DEFAULT_RUN_TIMEOUT_MS` and the `buildRunRequests`
+orchestration were salvaged into `providers/agents-provider.ts`; the ticker and
+`PROGRESS_TICK_MS` into `RunProgressMonitor` (`providers/agent-run-monitor.ts`);
+the throttled `cleanupOldRuns()` sweep into `index.ts`.
 
 `agents/pi-args.ts`'s `childExtensionPath()` resolves `child-extension.ts`
 relative to `import.meta.url`, so it keeps working after the move with no edit —
@@ -233,10 +236,33 @@ a `submit_result` tool; that tool was removed in favor of reading the child's
 final assistant message, and the file was trimmed to just registering the
 allowlist flag.)
 
+### herdr client
+
+`herdr.ts` was split into three modules by concern, with a transport seam:
+
+- `herdr-parse.ts` — pure CLI-JSON parsers (`parseHerdrJson`, `parseTabs`,
+  `parseTab`, `parsePaneId`, `findAgentStatus`, `isPaneBusyError`, `paneLabel`)
+  over the shared `lastJsonLine` scanner. No I/O; exported for unit testing.
+- `herdr-transport.ts` — the `HerdrTransport` seam and its one production
+  adapter `execFileTransport` (shells out to `herdr`), plus the env helpers
+  `isInHerdr` / `currentWorkspaceId`.
+- `herdr-client.ts` — `HerdrClient`, the typed method wrappers (arg building +
+  the `agent start` busy-retry + the herdr-0.7.5 `agent wait`), delegating
+  parsing to `herdr-parse.ts`. Exports a default `herdr` instance bound to
+  `execFileTransport`; `herdr-backend.ts` uses it, `pane-lifecycle.ts` gets its
+  probe from `HerdrClient.statusProbe`.
+
+The seam has two real adapters: `execFileTransport` in production, and an
+in-memory `HerdrTransport` in `herdr-client.test.ts` that replaces the old
+fake-`herdr`-on-`PATH` hack, so the retry loop and `agent wait` mapping are
+unit-tested directly.
+
 ### Rendering adaptation
 
 `progress.ts` is **unmodified** (so `progress.test.ts` still passes) but its ANSI
-block is no longer emitted as raw tool text. Instead `agents-provider.ts`:
+block is no longer emitted as raw tool text. Instead `RunProgressMonitor`
+(`providers/agent-run-monitor.ts`), which `agents-provider.ts` drives via
+`start`/`onStatus`/`stop`:
 
 - mirrors each `AgentProgress` row into `SpindleAgentRunRegistry` as a
   `SpindleUiAgent`-shaped record (`id`, `name`, `status`, `startedAt`,
@@ -246,7 +272,7 @@ block is no longer emitted as raw tool text. Instead `agents-provider.ts`:
   `context.update(...)` body, so `ui/spindle-render.ts`'s
   `singleCallProgressLine` / `renderNestedAgentToolLines` /
   `renderSpindleMulticallPartial` render the in-flight ticker;
-- returns a structured `SpindleAgentResult` so `ui/structured.ts`'s
+- (the provider) returns a structured `SpindleAgentResult` so `ui/structured.ts`'s
   `formatSpindleValue` formats it, instead of the old hand-rolled markdown.
 
 `SpindleAgentRun.runId` is set to `context.parentToolCallId`, which is also the
@@ -267,15 +293,22 @@ So the enforcement moved into the sandbox:
   `--extension` only when the parent restricts tools. pi rejects the same flag
   from two extensions, so Spindle does not also register it; it reads the value
   off argv (`getFlag` only resolves flags the reading extension registered).
-- `core/tool-allowlist.ts` parses it. Absent/blank means unrestricted.
-- `spindle-state.ts` threads the set into `PiToolsProvider`,
-  `CapturedToolsProvider` and `SpindleExecutionService`.
+- `core/tool-allowlist.ts` parses it and owns `SpindleToolGate`, the single
+  module that decides "may this tool be called". Absent/blank means an
+  unrestricted gate. `allows(name)` / `assert(namespace, name)` are the whole
+  enforcement surface; the transport carve-out and "undefined = unrestricted"
+  live inside the gate.
+- `spindle-state.ts` builds one `SpindleToolGate` (via `fromArgv`) and threads
+  that gate into `PiToolsProvider`, `CapturedToolsProvider` and
+  `SpindleExecutionService`.
 - `runtime/guest-types.ts` strips disallowed `pi.*` members from `PiToolsApi`
-  (and the `pi` global when nothing survives), so the declared schema matches
-  what may be called. That is schema shaping only: `type-checker.ts` filters out
+  (and the `pi` global when nothing survives) by consulting the gate's
+  `allows()`, so the declared schema matches what may be called. The string
+  surgery stays here (it owns the schema format; `core/` must not depend on
+  `runtime/`). That is schema shaping only: `type-checker.ts` filters out
   TS2339 (`TYPE_CORRECTNESS_CODES`), so the actual rejection comes from the
-  providers, which throw `toolRestrictionError` from `describe()` — undefined
-  there would surface as the misleading "Unknown Spindle action".
+  providers, which call `gate.assert(this.name, action)` from `describe()` —
+  undefined there would surface as the misleading "Unknown Spindle action".
 
 `spindle_exec` is always allowed: it is the child's only tool path in full code
 mode and is never callable from inside the sandbox, so gating it would be both
@@ -299,15 +332,26 @@ and docs aligned with these.)
   - **headless adapter** (`headless.ts`): spawns `pi` child processes, waits for
     exit.
   - **herdr adapter** (`herdr-backend.ts`): launches `pi` in live herdr panes,
-    waits for each pane to settle.
+    waits for each pane to settle. Its completion rule (`waitForRunCompletion`,
+    `RunOutcome`, `outcomeError`) lives in `herdr-completion.ts`, not the shared
+    `run.ts`, because only herdr needs it.
   `backend.ts` owns `selectBackend()`, which picks the adapter by environment.
+  `RunResult` is a discriminated union on `backend` (`"headless"` carries
+  `exitCode`, `"herdr"` carries `paneId`) so backend-specific diagnostics do not
+  leak as bare optionals into the shared type; `run.ts`'s `baseResult` builds the
+  shared fields both adapters populate.
 - **run context** (`RunContext`): the ambient inputs a backend needs for a batch
   (session id/file, runId, cwd, timeout, abort signal, status callback).
 - **output resolution**: the rule that decides a run's final output text and
   whether it succeeded, from the child session transcript (the agent's last
   assistant message), then a backend-specific fallback source. The parent
   persists the resolved text to the run-dir artifact (or a caller `output:`
-  override).
+  override). Lives in `agents/output.ts`, which owns the run output artifact
+  end to end: the `output` override lifecycle (`normalizeOutputOverride`,
+  `indexOutputOverride`/`planBatchOutputs`, `resolveOutputOverride`/`outputPathFor`)
+  and resolution (`readLastAssistantText`, `resolveRunOutput` taking a
+  `RunOutputSource`). `paths.ts` keeps only the run-dir layout and the sweep;
+  each adapter passes just its backend `fallback` + `finishedCleanly`.
 - **status probe**: the read-only view of a herdr pane's agent status that the
   pane-lifecycle machine polls to decide when a run has finished or its pane is
   gone.

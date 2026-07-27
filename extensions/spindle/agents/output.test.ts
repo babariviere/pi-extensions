@@ -3,83 +3,66 @@ import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { readLastAssistantText, resolveRunOutput, type RunOutcome, waitForRunCompletion } from "./run.ts";
+import {
+	indexOutputOverride,
+	normalizeOutputOverride,
+	outputPathFor,
+	planBatchOutputs,
+	readLastAssistantText,
+	resolveOutputOverride,
+	resolveRunOutput,
+} from "./output.ts";
 
 function tmpFile(): string {
-	return join(mkdtempSync(join(tmpdir(), "run-test-")), "out.md");
+	return join(mkdtempSync(join(tmpdir(), "output-test-")), "out.md");
 }
 
 function sessionLine(role: string, content: unknown): string {
 	return JSON.stringify({ type: "message", message: { role, content } });
 }
 
-test("waitForRunCompletion returns 'stable' once the output file stops changing", async () => {
-	const path = tmpFile();
-	writeFileSync(path, "final content");
-	const outcome = await waitForRunCompletion(path, { timeoutMs: 5000, intervalMs: 20 });
-	assert.equal(outcome, "stable");
+test("resolveOutputOverride anchors a relative path to cwd and passes absolute through", () => {
+	assert.equal(resolveOutputOverride("/repo", ".pi/goal/plan.md"), join("/repo", ".pi/goal/plan.md"));
+	assert.equal(resolveOutputOverride("/repo", "/abs/plan.md"), "/abs/plan.md");
 });
 
-test("waitForRunCompletion returns 'gone' when the agent signal reports a killed pane", async () => {
-	const path = tmpFile(); // never created
-	const outcome = await waitForRunCompletion(path, {
-		timeoutMs: 5000,
-		intervalMs: 20,
-		graceMs: 60,
-		agentSignal: Promise.resolve<"gone">("gone"),
-	});
-	assert.equal(outcome, "gone");
+test("normalizeOutputOverride drops empty and boolean-ish literals", () => {
+	assert.equal(normalizeOutputOverride(undefined), undefined);
+	assert.equal(normalizeOutputOverride(""), undefined);
+	assert.equal(normalizeOutputOverride("  "), undefined);
+	assert.equal(normalizeOutputOverride("false"), undefined);
+	assert.equal(normalizeOutputOverride("FALSE"), undefined);
+	assert.equal(normalizeOutputOverride(" true "), undefined);
+	assert.equal(normalizeOutputOverride("plan.md"), "plan.md");
+	assert.equal(normalizeOutputOverride(" .pi/goal/plan.md "), ".pi/goal/plan.md");
 });
 
-test("waitForRunCompletion returns 'finished' when the agent idles without writing", async () => {
-	const path = tmpFile(); // never created
-	const outcome = await waitForRunCompletion(path, {
-		timeoutMs: 5000,
-		intervalMs: 20,
-		graceMs: 60,
-		agentSignal: Promise.resolve<"finished">("finished"),
-	});
-	assert.equal(outcome, "finished");
+test("indexOutputOverride inserts the index before the extension, preserving dir and shape", () => {
+	assert.equal(indexOutputOverride("plan.md", 0), "plan-0.md");
+	assert.equal(indexOutputOverride(".pi/goal/plan.md", 2), join(".pi/goal", "plan-2.md"));
+	assert.equal(indexOutputOverride("/abs/out.md", 1), join("/abs", "out-1.md"));
+	assert.equal(indexOutputOverride("report", 3), "report-3");
+	assert.equal(indexOutputOverride(".env", 0), ".env-0");
 });
 
-test("waitForRunCompletion prefers 'stable' when a final write lands during the grace window", async () => {
-	const path = tmpFile();
-	// Signal 'finished' promptly, but write the file shortly after so the grace
-	// window observes a stable file and upgrades the outcome to 'stable'.
-	const agentSignal = new Promise<"finished">((resolve) => {
-		setTimeout(() => {
-			writeFileSync(path, "late but complete");
-			resolve("finished");
-		}, 80);
-	});
-	const outcome = await waitForRunCompletion(path, {
-		timeoutMs: 5000,
-		intervalMs: 20,
-		graceMs: 2000,
-		agentSignal,
-	});
-	assert.equal(outcome, "stable");
+test("planBatchOutputs normalizes every override and leaves a single run verbatim", () => {
+	assert.deepEqual(planBatchOutputs(["plan.md"]), ["plan.md"]);
+	assert.deepEqual(planBatchOutputs(["false"]), [undefined]);
+	assert.deepEqual(planBatchOutputs([undefined]), [undefined]);
 });
 
-test("waitForRunCompletion ignores a stable file while an agent signal is still pending", async () => {
-	// The herdr backend watches the child transcript, which pauses mid-turn. A
-	// pause (stable file) must not be mistaken for completion; only the agent
-	// signal (idle/gone) finishes the run.
-	const path = tmpFile();
-	writeFileSync(path, "looks stable but the agent is still working");
-	const neverIdle = new Promise<"finished">(() => {});
-	const outcome = await waitForRunCompletion(path, {
-		timeoutMs: 120,
-		intervalMs: 20,
-		agentSignal: neverIdle,
-	});
-	assert.equal(outcome, "timeout");
+test("planBatchOutputs index-suffixes a parallel batch, skipping runs with no override", () => {
+	assert.deepEqual(planBatchOutputs(["plan.md", "plan.md"]), ["plan-0.md", "plan-1.md"]);
+	assert.deepEqual(planBatchOutputs([".pi/goal/p.md", undefined, "false"]), [
+		join(".pi/goal", "p-0.md"),
+		undefined,
+		undefined,
+	]);
 });
 
-test("waitForRunCompletion times out when nothing ever happens", async () => {
-	const path = tmpFile();
-	const outcome: RunOutcome = await waitForRunCompletion(path, { timeoutMs: 120, intervalMs: 20 });
-	assert.equal(outcome, "timeout");
+test("outputPathFor resolves an override, else uses the run-dir default", () => {
+	assert.equal(outputPathFor("/repo", "/runs/a-0.md", "plan.md"), join("/repo", "plan.md"));
+	assert.equal(outputPathFor("/repo", "/runs/a-0.md", undefined), "/runs/a-0.md");
 });
 
 test("readLastAssistantText returns the last assistant message from the transcript", () => {
@@ -126,9 +109,7 @@ test("resolveRunOutput reads the transcript first and persists it to outputPath"
 	writeFileSync(session, sessionLine("assistant", [{ type: "text", text: "from transcript" }]));
 	const out = tmpFile();
 	let fallbackCalls = 0;
-	const r = await resolveRunOutput({
-		outputPath: out,
-		sessionPath: session,
+	const r = await resolveRunOutput(out, session, {
 		fallback: () => {
 			fallbackCalls++;
 			return "unused";
@@ -137,15 +118,12 @@ test("resolveRunOutput reads the transcript first and persists it to outputPath"
 	});
 	assert.deepEqual(r, { output: "from transcript", ok: true });
 	assert.equal(fallbackCalls, 0); // fallback skipped when the transcript wins
-	// The resolved result is persisted to the run-dir artifact for inspection.
 	assert.equal(readFileSync(out, "utf-8"), "from transcript");
 });
 
 test("resolveRunOutput awaits the async fallback only when the transcript misses", async () => {
 	const out = tmpFile();
-	const r = await resolveRunOutput({
-		outputPath: out,
-		sessionPath: tmpFile(), // never created
+	const r = await resolveRunOutput(out, tmpFile(), {
 		fallback: () => Promise.resolve("from pane"),
 		finishedCleanly: true,
 	});
@@ -156,9 +134,7 @@ test("resolveRunOutput awaits the async fallback only when the transcript misses
 test("resolveRunOutput is not ok when the run did not finish cleanly, even with output", async () => {
 	const session = tmpFile();
 	writeFileSync(session, sessionLine("assistant", [{ type: "text", text: "got text but crashed" }]));
-	const r = await resolveRunOutput({
-		outputPath: tmpFile(),
-		sessionPath: session,
+	const r = await resolveRunOutput(tmpFile(), session, {
 		fallback: () => undefined,
 		finishedCleanly: false,
 	});
@@ -167,9 +143,7 @@ test("resolveRunOutput is not ok when the run did not finish cleanly, even with 
 });
 
 test("resolveRunOutput uses the placeholder and is not ok when no source yields text", async () => {
-	const r = await resolveRunOutput({
-		outputPath: tmpFile(),
-		sessionPath: tmpFile(),
+	const r = await resolveRunOutput(tmpFile(), tmpFile(), {
 		fallback: () => undefined,
 		finishedCleanly: true,
 		placeholder: "(nothing)",

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { type AgentWaitResult, type PaneAgentState } from "./herdr.ts";
+import { type AgentWaitResult, type PaneAgentState } from "./herdr-parse.ts";
 import { type StatusProbe, waitForAgentFinish } from "./pane-lifecycle.ts";
 
 /**

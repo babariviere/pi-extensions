@@ -3,10 +3,9 @@ import { test } from "node:test";
 
 import { guestTypeDeclarations } from "../runtime/guest-types.ts";
 import {
-  isToolAllowed,
   parseToolAllowlist,
   readToolAllowlistArgument,
-  toolRestrictionError,
+  SpindleToolGate,
 } from "./tool-allowlist.ts";
 
 test("parseToolAllowlist treats an absent or blank flag as unrestricted", () => {
@@ -40,24 +39,37 @@ test("readToolAllowlistArgument accepts both --flag value and --flag=value", () 
   );
 });
 
-test("isToolAllowed defaults to allow when there is no allowlist", () => {
-  assert.equal(isToolAllowed(undefined, "bash"), true);
-  assert.equal(isToolAllowed(new Set(["read"]), "read"), true);
-  assert.equal(isToolAllowed(new Set(["read"]), "bash"), false);
+test("an unrestricted gate allows everything and never throws", () => {
+  const gate = SpindleToolGate.of(undefined);
+  assert.equal(gate.restricted, false);
+  assert.equal(gate.allows("bash"), true);
+  assert.doesNotThrow(() => gate.assert("pi", "bash"));
 });
 
-test("isToolAllowed always permits the transport tool", () => {
+test("a restricted gate allows only its members", () => {
+  const gate = SpindleToolGate.of(new Set(["read"]));
+  assert.equal(gate.restricted, true);
+  assert.equal(gate.allows("read"), true);
+  assert.equal(gate.allows("bash"), false);
+});
+
+test("a gate always permits the transport tool", () => {
   // spindle_exec is the child's only tool path in full code mode; it is never
-  // callable from inside the sandbox, so the allowlist must never gate it.
-  const allowlist = new Set(["read"]);
-  assert.equal(isToolAllowed(allowlist, "spindle_exec"), true);
-  assert.equal(isToolAllowed(new Set<string>(), "spindle_exec"), true);
+  // callable from inside the sandbox, so the gate must never reject it.
+  assert.equal(SpindleToolGate.of(new Set(["read"])).allows("spindle_exec"), true);
+  assert.equal(SpindleToolGate.of(new Set<string>()).allows("spindle_exec"), true);
 });
 
-test("toolRestrictionError names the tool and the allowed set", () => {
-  const message = toolRestrictionError("pi.bash", new Set(["read", "grep"])).message;
-  assert.match(message, /pi\.bash/);
-  assert.match(message, /grep, read/);
+test("assert names the namespaced tool and the allowed set", () => {
+  const gate = SpindleToolGate.of(new Set(["read", "grep"]));
+  assert.throws(
+    () => gate.assert("pi", "bash"),
+    (error: Error) => {
+      assert.match(error.message, /pi\.bash/);
+      assert.match(error.message, /grep, read/);
+      return true;
+    },
+  );
 });
 
 test("guestTypeDeclarations keeps every pi tool when unrestricted", () => {
@@ -68,7 +80,7 @@ test("guestTypeDeclarations keeps every pi tool when unrestricted", () => {
 });
 
 test("guestTypeDeclarations removes disallowed pi tools from PiToolsApi", () => {
-  const declarations = guestTypeDeclarations(true, new Set(["read", "grep"]));
+  const declarations = guestTypeDeclarations(true, SpindleToolGate.of(new Set(["read", "grep"])));
   assert.ok(declarations.includes("\n  read("));
   assert.ok(declarations.includes("\n  grep("));
   for (const name of ["bash", "edit", "write", "find", "ls"]) {
@@ -81,13 +93,13 @@ test("guestTypeDeclarations removes disallowed pi tools from PiToolsApi", () => 
 });
 
 test("guestTypeDeclarations drops the pi global when no core tool is allowed", () => {
-  const declarations = guestTypeDeclarations(true, new Set(["some_extension_tool"]));
+  const declarations = guestTypeDeclarations(true, SpindleToolGate.of(new Set(["some_extension_tool"])));
   assert.ok(!declarations.includes("declare const pi: PiToolsApi;"));
   assert.ok(declarations.includes("declare const extensions: SpindleExtensionsApi;"));
 });
 
 test("guestTypeDeclarations still drops pi and extensions outside full code mode", () => {
-  const declarations = guestTypeDeclarations(false, new Set(["read"]));
+  const declarations = guestTypeDeclarations(false, SpindleToolGate.of(new Set(["read"])));
   assert.ok(!declarations.includes("declare const pi: PiToolsApi;"));
   assert.ok(!declarations.includes("declare const extensions: SpindleExtensionsApi;"));
 });
