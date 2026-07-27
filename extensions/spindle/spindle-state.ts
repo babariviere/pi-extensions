@@ -17,7 +17,11 @@ import { CapturedToolCatalog } from "./capture/catalog.ts";
 import { loadSpindleConfig, type SpindleConfig } from "./config.ts";
 import { ActionRegistry } from "./core/action-registry.ts";
 import { SpindleToolResultProxy } from "./core/tool-result-proxy.ts";
-import { parseToolAllowlist, type SpindleToolAllowlist } from "./core/tool-allowlist.ts";
+import {
+  parseToolAllowlist,
+  readToolAllowlistArgument,
+  type SpindleToolAllowlist,
+} from "./core/tool-allowlist.ts";
 import { ALLOWED_TOOLS_FLAG } from "./agents/constants.ts";
 import { SpindleExecutionService } from "./execution-service.ts";
 import {
@@ -107,7 +111,7 @@ export class SpindleState {
     this.activity.reset();
     this.agentRuns.reset();
     this.#cwd = context.cwd;
-    this.#allowedTools = parseToolAllowlist(this.pi.getFlag(ALLOWED_TOOLS_FLAG));
+    this.#allowedTools = parseToolAllowlist(readToolAllowlistArgument(ALLOWED_TOOLS_FLAG));
     const projectTrusted = context.isProjectTrusted();
     this.#config = loadSpindleConfig({
       cwd: context.cwd,

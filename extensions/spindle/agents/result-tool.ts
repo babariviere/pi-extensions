@@ -64,9 +64,11 @@ export default function (pi: ExtensionAPI) {
 		type: "string",
 		description: "Path the submit_result tool writes the subagent's result to (set by the parent).",
 	});
-	// Declared here as well so a child that does not load Spindle still accepts
-	// the flag instead of failing startup with "Unknown option". Spindle reads it
-	// through its own registration (getFlag is scoped to the reading extension).
+	// Registered here and ONLY here: pi rejects the same flag name registered by
+	// two extensions, and this extension is loaded into every child, so the arg
+	// is accepted even when the child does not load Spindle. Spindle reads the
+	// value off argv (see core/tool-allowlist.ts) rather than via getFlag, which
+	// only resolves flags the reading extension registered.
 	pi.registerFlag(ALLOWED_TOOLS_FLAG, {
 		type: "string",
 		description: "Comma-separated tool allowlist applied inside Spindle's sandbox (set by the parent).",

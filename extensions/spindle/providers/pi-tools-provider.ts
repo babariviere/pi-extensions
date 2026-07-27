@@ -166,7 +166,11 @@ export class PiToolsProvider implements SpindleProvider {
     actionName: string,
     _context: SpindleInvocationContext,
   ): Promise<SpindleActionDescriptor | undefined> {
-    if (!(actionName in this.#tools) || !this.#allowed(actionName)) return undefined;
+    if (!(actionName in this.#tools)) return undefined;
+    // ActionRegistry.invoke() resolves through describe(), so an undefined here
+    // would surface as "Unknown Spindle action" and read like a typo. Throw the
+    // restriction error instead; list() already hides the tool.
+    this.#assertAllowed(actionName);
     const name = actionName as PiCoreToolName;
     const override = await this.#capturedTools?.describe(name, _context);
     if (override) return { ...override, namespace: "extension-override" };
@@ -180,7 +184,7 @@ export class PiToolsProvider implements SpindleProvider {
   }
 
   #assertAllowed(actionName: string): void {
-    if (this.#allowedTools && !this.#allowedTools.has(actionName)) {
+    if (this.#allowedTools && !this.#allowed(actionName)) {
       throw toolRestrictionError(`pi.${actionName}`, this.#allowedTools);
     }
   }

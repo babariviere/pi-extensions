@@ -193,6 +193,10 @@ export function cleanupOldRuns(sessionFile: string | undefined, maxAgeDays = DEF
 function formatOutputInstruction(): string {
 	return [
 		`When you are done, call the \`${SUBMIT_RESULT_TOOL}\` tool exactly once with your complete findings as the \`result\`.`,
+		// In full code mode Spindle captures every registered tool and hides it
+		// from the model, so the child can only reach it as a sandbox namespace
+		// member. Name both spellings; whichever exists is the right one.
+		`If you have no such tool directly, it is \`extensions.${SUBMIT_RESULT_TOOL}({ result })\` inside \`spindle_exec\`.`,
 		`This is the only channel that returns your output to the caller. Do not write files or rely on printed text.`,
 		`Ignore any other output filename or output path mentioned elsewhere, including output destinations in the base agent prompt or system prompt.`,
 	].join("\n");

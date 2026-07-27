@@ -72,7 +72,7 @@ When several parallel tasks share one `output` path, each run's destination gets
 
 ## Agent tool allowlists
 
-An agent definition's `tools:` frontmatter restricts what that agent may call. The child `pi` process always keeps `spindle_exec` and `submit_result` regardless of the list: `spindle_exec` is the child's only tool path in full code mode, and `submit_result` is its only channel back to the caller. The declared list is enforced one level down instead, inside the child's sandbox: disallowed tools are removed from the `pi.*` type declarations (so calling them is a type error) and rejected at the `pi.*` / `extensions.*` provider boundary.
+An agent definition's `tools:` frontmatter restricts what that agent may call. The child `pi` process always keeps `spindle_exec` and `submit_result` regardless of the list: `spindle_exec` is the child's only tool path in full code mode, and `submit_result` is its only channel back to the caller. The declared list is enforced one level down instead, inside the child's sandbox: disallowed tools are removed from the declared `pi.*` schema, hidden from listings, and rejected at the `pi.*` / `extensions.*` boundary with an explicit "not in this agent's tool allowlist" error.
 
 `mcp.*`, `agents.*` and `workflow.*` are not covered by `tools:`.
 

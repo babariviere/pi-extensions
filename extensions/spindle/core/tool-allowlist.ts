@@ -10,15 +10,25 @@
  * the sandbox is type-checked against and rejecting them at the provider
  * boundary.
  *
+ * The flag is *registered* by `agents/result-tool.ts` (loaded into every child
+ * via `--extension`, so the child accepts the arg even if Spindle itself is not
+ * loaded there). pi rejects the same flag name registered by two extensions, so
+ * Spindle cannot also register it and `pi.getFlag` — which only resolves flags
+ * the *reading* extension registered — is unavailable here. Spindle reads the
+ * raw argv instead.
+ *
  * Scope: the allowlist gates the `pi.*` and `extensions.*` namespaces, both of
  * which name concrete tools. `mcp.*`, `agents.*` and `workflow.*` are not
  * tools in that sense and stay available.
  */
 
 /**
- * Transport tools: present so the child can run and answer at all, never
- * callable from inside the sandbox, so they are meaningless as allowlist
- * entries and are dropped when parsing.
+ * Transport tools: present so the child can run and answer at all. In full code
+ * mode `submit_result` is captured like any other extension tool and is only
+ * reachable as `extensions.submit_result`, so the allowlist must never filter
+ * it out — a subagent that cannot submit has no channel back to the caller.
+ * They are dropped when parsing (declaring them is meaningless) and always
+ * allowed when checking.
  */
 const TRANSPORT_TOOL_NAMES: ReadonlySet<string> = new Set(["spindle_exec", "submit_result"]);
 
@@ -39,10 +49,35 @@ export const parseToolAllowlist = (raw: unknown): SpindleToolAllowlist | undefin
   );
 };
 
+/**
+ * Read the allowlist straight off the process arguments, accepting both
+ * `--flag value` and `--flag=value`. The last occurrence wins, matching how a
+ * CLI parser would treat a repeated flag.
+ */
+export const readToolAllowlistArgument = (
+  flag: string,
+  argv: readonly string[] = process.argv,
+): string | undefined => {
+  const long = `--${flag}`;
+  const assigned = `${long}=`;
+  let value: string | undefined;
+  for (let index = 0; index < argv.length; index++) {
+    const argument = argv[index];
+    if (argument === long) {
+      const next = argv[index + 1];
+      if (next !== undefined && !next.startsWith("--")) value = next;
+      continue;
+    }
+    if (argument.startsWith(assigned)) value = argument.slice(assigned.length);
+  }
+  return value;
+};
+
 export const isToolAllowed = (
   allowlist: SpindleToolAllowlist | undefined,
   name: string,
-): boolean => allowlist === undefined || allowlist.has(name);
+): boolean =>
+  allowlist === undefined || TRANSPORT_TOOL_NAMES.has(name) || allowlist.has(name);
 
 export const toolRestrictionError = (
   name: string,

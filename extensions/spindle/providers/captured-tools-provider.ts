@@ -106,7 +106,7 @@ export class CapturedToolsProvider implements SpindleProvider {
   }
 
   #assertAllowed(actionName: string): void {
-    if (this.allowedTools && !this.allowedTools.has(actionName)) {
+    if (this.allowedTools && !this.#allowed(actionName)) {
       throw toolRestrictionError(`extensions.${actionName}`, this.allowedTools);
     }
   }
@@ -132,9 +132,12 @@ export class CapturedToolsProvider implements SpindleProvider {
     actionName: string,
     _context: SpindleInvocationContext,
   ): Promise<SpindleActionDescriptor | undefined> {
-    if (!this.#allowed(actionName)) return undefined;
     const entry = this.catalog.get(actionName);
-    return entry ? descriptorFrom(entry) : undefined;
+    if (!entry) return undefined;
+    // See PiToolsProvider.describe: a restricted tool must say so, not look like
+    // an unknown one. list() already hides it.
+    this.#assertAllowed(actionName);
+    return descriptorFrom(entry);
   }
 
   prepareArguments(actionName: string, args: Record<string, unknown>): Record<string, unknown> {

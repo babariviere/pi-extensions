@@ -266,8 +266,15 @@ So the enforcement moved into the sandbox:
 - `spindle-state.ts` threads the set into `PiToolsProvider`,
   `CapturedToolsProvider` and `SpindleExecutionService`.
 - `runtime/guest-types.ts` strips disallowed `pi.*` members from `PiToolsApi`
-  (and the `pi` global when nothing survives), so a disallowed call is a type
-  error; the providers reject it at the boundary as a second line of defense.
+  (and the `pi` global when nothing survives), so the declared schema matches
+  what may be called. That is schema shaping only: `type-checker.ts` filters out
+  TS2339 (`TYPE_CORRECTNESS_CODES`), so the actual rejection comes from the
+  providers, which throw `toolRestrictionError` from `describe()` — undefined
+  there would surface as the misleading "Unknown Spindle action".
+
+`submit_result` and `spindle_exec` are always allowed: in full code mode
+`submit_result` is captured and only reachable as `extensions.submit_result`, so
+filtering it would leave a restricted subagent with no way to answer.
 
 Scope: the allowlist gates `pi.*` and `extensions.*` only. `mcp.*`, `agents.*`
 and `workflow.*` are not tools in that sense and stay available.

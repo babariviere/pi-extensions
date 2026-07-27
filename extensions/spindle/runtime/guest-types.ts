@@ -7,8 +7,11 @@
  * `compact`, `council`, `rlm`, `agent`, `budget`) is gone from both.
  *
  * A subagent's tool allowlist (see `core/tool-allowlist.ts`) is applied on top:
- * disallowed `pi.*` members are removed from `PiToolsApi` so the type-checker
- * rejects them before the sandbox ever runs.
+ * disallowed `pi.*` members are removed from `PiToolsApi` so the declared
+ * schema matches what the sandbox may actually call. Note this is schema
+ * shaping, not enforcement: `type-checker.ts` filters out TS2339 and friends
+ * (see `TYPE_CORRECTNESS_CODES`), so the rejection itself comes from the
+ * providers at call time.
  */
 import type { SpindleToolAllowlist } from "../core/tool-allowlist.ts";
 
@@ -172,9 +175,9 @@ const PI_TOOLS_API_HEADER = "interface PiToolsApi {";
 const PI_TOOLS_API_MEMBER = /^ {2}([A-Za-z][A-Za-z0-9_]*)\(/;
 
 /**
- * Drop the disallowed `pi.*` members from `PiToolsApi` so a restricted subagent
- * gets a type error at check time rather than a provider rejection at call
- * time. When nothing is left, the `pi` global goes too.
+ * Drop the disallowed `pi.*` members from `PiToolsApi` so the schema handed to
+ * the type-checker describes only what a restricted subagent may call. When
+ * nothing is left, the `pi` global goes too.
  */
 const restrictPiTools = (declarations: string, allowedTools: SpindleToolAllowlist): string => {
   const lines = declarations.split("\n");
