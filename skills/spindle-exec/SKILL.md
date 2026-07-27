@@ -57,7 +57,7 @@ There is no `workflow.agent()` and no token budget: use `agents.run(...)` direct
 
 ## Error recovery: read the error, fix the shape, retry
 
-The type checker runs before execution, so a shape mistake never executes. Read the line-numbered error and match the declared signature; do not guess. Common mistakes: calling a core tool bare (`grep(...)` → `pi.grep(...)`); 2 positional args on `read`/`bash`/`ls` (use an options object — positional is supported only for `grep`/`find`/`write`/`edit`); referencing a removed global (`memory`, `state`, `schema`, `tools`, `mesh`) — those fail with "Cannot find name".
+The type checker runs before execution, so a shape mistake never executes. Read the line-numbered error and match the declared signature; do not guess. Common mistakes: calling a core tool bare (`grep(...)` → `pi.grep(...)`); 2 positional args on `read`/`bash`/`ls` (use an options object — positional is supported only for `grep`/`find`/`write`/`edit`).
 
 ## Batching
 
