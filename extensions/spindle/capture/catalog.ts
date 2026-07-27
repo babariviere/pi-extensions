@@ -1,0 +1,81 @@
+import {
+  wrapRegisteredTool,
+  type ExtensionRunner,
+  type RegisteredTool,
+  type SourceInfo,
+  type ToolDefinition,
+} from "@earendil-works/pi-coding-agent";
+import type { SpindleToolCaptureConfig } from "../config.ts";
+import type { SpindleRisk } from "../protocol.ts";
+
+export interface CapturedToolEntry {
+  name: string;
+  definition: ToolDefinition<any, any, any>;
+  registeredTool: RegisteredTool;
+  sourceInfo: SourceInfo;
+  runner: ExtensionRunner;
+  wrappedTool: ReturnType<typeof wrapRegisteredTool>;
+  risk: SpindleRisk;
+}
+
+export class CapturedToolCatalog {
+  readonly #tools = new Map<string, CapturedToolEntry>();
+  // The ExtensionRunner observed during the last tool refresh. Stored even
+  // when capture is disabled so PiToolsProvider can replay the tool-execution
+  // lifecycle (tool_call/tool_result/tool_execution_*) for nested pi.* calls
+  // in full-code mode — without it, extensions that hook those events
+  // (pi-vision-handoff, auditors, etc.) would never fire for pi core tools.
+  #runner: ExtensionRunner | undefined;
+
+  get runner(): ExtensionRunner | undefined {
+    return this.#runner;
+  }
+
+  replace(
+    registeredTools: RegisteredTool[],
+    runner: ExtensionRunner,
+    config: SpindleToolCaptureConfig,
+    ownSourcePath: string,
+  ): void {
+    // Always remember the runner (see field comment) before the enabled gate.
+    this.#runner = runner;
+    this.#tools.clear();
+    if (!config.enabled) return;
+
+    for (const registeredTool of registeredTools) {
+      const { definition, sourceInfo } = registeredTool;
+      if (sourceInfo.path === ownSourcePath) continue;
+      this.#tools.set(definition.name, {
+        name: definition.name,
+        definition,
+        registeredTool,
+        sourceInfo,
+        runner,
+        wrappedTool: wrapRegisteredTool(registeredTool, runner),
+        risk: config.risks[definition.name] ?? config.defaultRisk,
+      });
+    }
+  }
+
+  clear(): void {
+    this.#tools.clear();
+  }
+
+  get(name: string): CapturedToolEntry | undefined {
+    return this.#tools.get(name);
+  }
+
+  require(name: string): CapturedToolEntry {
+    const tool = this.#tools.get(name);
+    if (!tool) throw new Error(`Unknown captured extension tool: ${name}`);
+    return tool;
+  }
+
+  list(): CapturedToolEntry[] {
+    return [...this.#tools.values()].sort((left, right) => left.name.localeCompare(right.name));
+  }
+
+  get size(): number {
+    return this.#tools.size;
+  }
+}

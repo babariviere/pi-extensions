@@ -1,0 +1,383 @@
+# spindle — vendored fork of pi-fabric
+
+`spindle` is a trimmed, vendored fork of **pi-fabric**. It exposes exactly one
+tool, `spindle_exec` (a code-mode QuickJS sandbox), and exactly one UI surface,
+a widget mounted with `placement: "aboveEditor"`.
+
+## Provenance
+
+| | |
+|---|---|
+| Upstream repo | `https://github.com/monotykamary/pi-fabric` |
+| Upstream license | MIT |
+| Pinned tag | `v0.28.2` |
+| Pinned commit | `2af532f17c6b778b667a61b72c0a5d5d611145ed` |
+| Vendored from | `<clone>/src/**` (the published npm package ships only `dist/`, so the fork must come from the git repo) |
+
+The fork was taken from a local clone at `/tmp/pf-probe` checked out at that
+tag. Nothing here is generated: every file below was copied and then edited by
+hand.
+
+## Sandbox surface
+
+Globals inside `spindle_exec`:
+
+- `pi.*` — Pi core tools (full code mode only), via `providers/pi-tools-provider.ts`
+- `extensions.*` — tools registered by sibling extensions, via `capture/` + `providers/captured-tools-provider.ts`
+- `mcp.*` — MCP tools through the `pi-mcp-adapter` `mcp` gateway tool, via `providers/mcp-bridge-provider.ts`
+- `agents.*` — custom markdown subagents, via `providers/agents-provider.ts` + `agents/`
+- `workflow.{parallel,pipeline,phase,item,event,log,configure}` plus the bare aliases `parallel` / `pipeline` / `phase` / `log`
+- `print`, `console`, `π` (named strings), `setTimeout` / `setInterval` / `clearTimeout` / `clearInterval`
+
+Deliberately absent: `tools`, `memory`, `state`, `schema`, `compact`, `mesh`,
+`council`, `rlm`, `agent()`, `budget`, `workflow.agent`, `workflow.budget`.
+
+## Vendored file manifest
+
+Upstream path → local path is `src/X` → `extensions/spindle/X` for everything in
+this list, **except** the four `fabric`-named files, which were renamed. See the
+rename mapping below; it must be applied to every upstream patch.
+
+### Top level
+`async-settlement.ts`, `config.ts`, `config-migrations.ts`, `execution-service.ts`,
+`spindle-exec-tool.ts`, `spindle-state.ts`, `host-compatibility.ts`, `index.ts`,
+`protocol.ts`, `util.ts`
+
+### `runtime/`
+`guest-types.ts`, `orchestration.ts`, `quickjs-runtime.ts`, `type-checker.ts`
+
+### `core/`
+`action-registry.ts`, `approval-controller.ts`, `auto-approval-classifier.ts`,
+`call-preview.ts`, `pi-tools.ts`, `skill-dir.ts`, `skill-prompt.ts`,
+`skill-references.ts`, `tool-ownership.ts`, `tool-result-proxy.ts`
+
+### `audit/`, `activity/`, `capture/`
+`audit/{index,details,projection,trace}.ts`, `activity/{store,types}.ts`,
+`capture/{catalog,interceptor}.ts`
+
+### `providers/`
+`pi-tools-provider.ts`, `captured-tools-provider.ts`, `write-preview.ts`
+
+### `ui/`
+`spindle-render.ts`, `core-tool-render.ts`, `spindle-code-parser.ts`, `highlight.ts`,
+`format.ts`, `preview-lines.ts`, `diff-background.ts`, `row-balance.ts`,
+`spinner.ts`, `structured.ts`, `code-preview.ts`, `code-preview-shell.ts`,
+`word-diff/` (whole directory), `widget.ts`, `types.ts`, `snapshot.ts`,
+`controller.ts`, `transcript.ts`, `transcript-parser.ts`, `transcript-sanitization.ts`
+
+## Rename mapping — upstream → local
+
+The fork is fully self-named: **no `fabric` token survives anywhere in local
+code or in local file names.** Every upstream patch must be translated through
+this table before it applies.
+
+### Paths
+
+| Upstream | Local |
+|---|---|
+| `src/fabric-exec-tool.ts` | `extensions/spindle/spindle-exec-tool.ts` |
+| `src/fabric-state.ts` | `extensions/spindle/spindle-state.ts` |
+| `src/ui/fabric-render.ts` | `extensions/spindle/ui/spindle-render.ts` |
+| `src/ui/fabric-code-parser.ts` | `extensions/spindle/ui/spindle-code-parser.ts` |
+| anything else | `src/X` → `extensions/spindle/X` |
+
+### Identifiers and strings
+
+| Upstream | Local |
+|---|---|
+| `Fabric*` (types, classes, interfaces) | `Spindle*` |
+| `FABRIC_*` (constants, env vars) | `SPINDLE_*` |
+| `fabric*` (variables, functions, fields, comments) | `spindle*` |
+| `fabric.$*` (host-call names) | `spindle.$*` |
+| `__fabric*` / `__pi_fabric_*` (guest globals) | `__spindle*` / `__pi_spindle_*` |
+| `fabric_exec` (tool name) | `spindle_exec` |
+| `"pi-fabric…"` event / symbol / kind literals | `"pi-spindle…"` |
+| `"pi-fabric"` widget id | `"spindle"` |
+| `fabric.json` config file | `spindle.json` |
+
+The `fabric.$*` → `spindle.$*` row spans a host/guest boundary that **no
+type-checker and no test covers**: the guest half lives inside the `GUEST_SETUP`
+string literal in `runtime/quickjs-runtime.ts`, the host half in the host-call
+`switch` in `execution-service.ts`. They must be renamed together; a mismatch
+fails only at runtime, silently. After any port, `rg 'fabric\.\$' extensions/spindle`
+must be empty and the two name sets must agree exactly.
+
+## Render parity set
+
+These files carry **no hand edits**. They differ from upstream `v0.28.2` by
+exactly two mechanical rewrites, and nothing else:
+
+1. the `.js` → `.ts` relative-import-specifier rewrite described below, and
+2. the `fabric` → `spindle` rename from the mapping table above (which also
+   renamed two of the files themselves).
+
+So they are **not byte-identical to upstream** — do not assume a clean `diff`.
+Still, do not edit them by hand: port upstream changes verbatim and re-apply
+both rewrites.
+
+`ui/spindle-render.ts`, `ui/core-tool-render.ts`, `ui/code-preview.ts`,
+`ui/code-preview-shell.ts`, `ui/highlight.ts`, `ui/format.ts`,
+`ui/preview-lines.ts`, `ui/spindle-code-parser.ts`, `ui/diff-background.ts`,
+`ui/row-balance.ts`, `ui/spinner.ts`, `ui/structured.ts`, `ui/word-diff/*`,
+`ui/widget.ts`, `ui/transcript-sanitization.ts`
+
+Also currently carrying no hand edits (same two mechanical rewrites only; not
+part of the guaranteed parity contract, but useful to know):
+`activity/{store,types}.ts`, `audit/{index,projection,trace}.ts`,
+`capture/{catalog,interceptor}.ts`, `core/{approval-controller,auto-approval-classifier,call-preview,pi-tools,skill-dir,tool-result-proxy}.ts`,
+`providers/{captured-tools-provider,write-preview}.ts`, `async-settlement.ts`,
+`config-migrations.ts`, `host-compatibility.ts`, `util.ts`,
+`runtime/type-checker.ts`.
+
+Because `ui/widget.ts` is in the parity set, the rewritten `ui/types.ts` must stay
+a strict structural superset of what it reads. That is why
+`SpindleDashboardSnapshot` still carries `widgetDismissedAt` and an `actors`
+field with a minimal local `SpindleUiActor`: spindle has no actor subsystem and
+always populates `actors: []`, but the field must exist so the parity renderer
+compiles untouched.
+
+## Global `.js` → `.ts` specifier rewrite
+
+Every **relative** import specifier in the vendored tree was rewritten from
+`./x.js` to `./x.ts`. The rest of this repo's `extensions/` uses `.ts`
+specifiers under `allowImportingTsExtensions`, and that is the resolution proven
+to work under Pi's loader here; `.js` → `.ts` resolution at runtime is
+unverified. Bare package specifiers are untouched.
+
+After porting any upstream diff, re-run the rewrite on the touched files:
+
+```sh
+fd -e ts . extensions/spindle -x perl -pi -e 's{(from\s+")(\.\.?/[^"]*)\.js(")}{$1$2.ts$3}g'
+```
+
+## Trim manifest — dropped upstream subsystems
+
+| Dropped | Reason |
+|---|---|
+| `src/actors/`, `src/mesh/`, `src/topology/`, `src/lifecycle/` | Actor/mesh/participant runtime; out of scope |
+| `src/agents/` (upstream's own RLM/handoff/transport agent runtime) | Replaced by the absorbed subagents code in local `agents/` (see the name-collision note below) |
+| `src/memory/`, `src/state/`, `src/schema/`, `src/compaction/` | Memory index, mesh state layer, schema enforcement, deterministic compaction; out of scope |
+| `src/prewalk/` | Handoff-at-boundary prewalk; out of scope |
+| `src/commands/` | Upstream's slash command and its dashboard entry point |
+| `src/storage/`, `src/worker/`, `src/worker.ts`, `src/main-agent.ts`, `src/log-tail.ts` | Only reachable from dropped subsystems |
+| `src/providers/mcp-provider.ts` | Upstream's own embeddable MCP client (the `createRuntime` package listed in upstream `package.json`); replaced by the pi-mcp-adapter bridge. **That package is deliberately not a dependency of this repo.** |
+| `src/providers/{agents,memory,mesh,state,schema,compact}-provider.ts` | Providers for dropped subsystems |
+| `src/runtime/node-process-runtime.ts`, `src/runtime/node-process-child-source.ts` | Unsafe trusted-code escape hatch; imports `src/agents/transports/` and needs `cross-spawn`. `executor.runtime` is therefore fixed at `"quickjs"`. |
+| `src/core/compact-controller.ts` | Imports `src/compaction/instructions.ts` |
+| `src/ui/dashboard.ts`, `dashboard-model.ts`, `dashboard-presentation.ts`, `dashboard-fabric-graph.ts`, `topology.ts`, `model-picker.ts`, `settings.ts`, `fabric-actor-delivery-selector.ts`, `fabric-actor-tool-selector.ts`, `fabric-host-event-selector.ts`, `fabric-model-selector.ts`, `fabric-thinking-selector.ts` | Dashboard and selector dialogs; spindle has exactly one widget and no overlays |
+| `src/ui/transcript-reader.ts` | Only reachable from the deleted dashboard, and its sole remaining import was the non-vendored `src/log-tail.ts`. Dropped instead of vendoring dead code; the `AgentTranscriptReader` re-export was removed from `ui/transcript.ts`. |
+| `src/thinking.ts` | Became unused after the config trim, and its thinking-level union (`…\|"max"`) disagrees with the thinking levels the absorbed subagents runner accepts. `config.ts` validates `agents.defaultThinking` against `agents/pi-args.ts`'s `THINKING_LEVELS` instead. |
+| upstream `skills/fabric-advisor`, `fabric-ambient`, `fabric-council`, `fabric-fusion`, `fabric-guide`, `fabric-rlm`, `fabric-schema`, `fabric-supervisor`, `fabric-swarm`, `fabric-workflow` | Skills for dropped features. Only `skills/fabric-exec` was vendored, as `<repo>/skills/spindle-exec`. |
+
+## Local modifications
+
+| File | Change |
+|---|---|
+| *(whole tree)* | Relative import specifiers rewritten `.js` → `.ts` |
+| `index.ts` | **Rewritten.** Dropped the actor host-event observers, upstream's slash command, prewalk handoff `message_end` boundary, compaction hook, ESC halt-the-world gate, `resources_discover` bundled-skills contribution, and all `publishHostLifecycle` / `dispatchHostEvent` / `noteMainActivity` wiring. Kept code-preview settings, the capture install, tool ownership/lifecycle, the `tool_result` + `context` skill-dir expansion, the `before_agent_start` guidance (rewritten for the surviving namespaces), and `session_start` / `session_shutdown`. Added the throttled `cleanupOldRuns()` sweep inherited from the deleted `extensions/subagents/index.ts`. |
+| `spindle-state.ts` | **Rewritten.** Now holds only config, `ActionRegistry`, the four providers, `SpindleExecutionService`, `SpindleActivityStore`, the subagent run registry, and the parent `SessionRef`. |
+| `execution-service.ts` | Trimmed: no Node-process runtime, no schema-enforce branches, no `agents.handoff` deferral, no `authorizer` plumbing. Removed the host-call cases `$providers`, `$catalog` (upstream has it twice), `$list`, `$search`, `$describe`, `$call`, `$models`. Kept `spindle.$progress`, `$configure`, `$phase`, `$item`, `$event`, `$spanStart`, `$spanEnd`, and the `default: invokeAction(...)`. `guardAgentCall` now guards `agents.run` / `agents.runAll`. Added a local `UsageWithReasoning` type because the installed `@earendil-works/pi-ai` `Usage` has no `reasoning` field. |
+| `spindle-exec-tool.ts` | Tool renamed to `spindle_exec`; `label` is `Spindle`. `description`, `promptSnippet` and the `code` parameter description rewritten for the surviving namespaces. `tokenBudget` parameter and the prewalk handoff block removed; `agentBudget` kept (maps to `maxAgentCalls`). `renderCall` / `renderResult` bodies are otherwise unchanged. Exported factory is `createSpindleExecTool`. |
+| `config.ts` | Trimmed: removed `mesh`, `memory`, `schema`, `compaction`, `retention`, `mcp` (upstream's own MCP client block) and `prewalk`. `executor.runtime` narrowed to the literal `"quickjs"`. `agents` repurposed to `{ maxPerExecution, timeoutMs, defaultModel?, defaultThinking? }`. `capture.keepVisible` default is `["spindle_exec"]`. **Config file renamed to `spindle.json`** (`<agentDir>/spindle.json`, `<cwd>/.pi/spindle.json`) so spindle never reads or writes pi-fabric's user config; the env override is `PI_SPINDLE_FULL_CODE_MODE`. Upstream's compaction-engine env side effect is gone. |
+| `config-migrations.ts` | Untouched. Its legacy `subagents` → `agents` migration is inert for a fresh `spindle.json`; it still provides the `configVersion` guard. |
+| `runtime/quickjs-runtime.ts` | `GUEST_SETUP` trimmed: removed `globalThis.{tools,mesh,memory,state,schema,compact,council,rlm,agent,budget}`, `__toolsBase`, `__createActor`, `__handoff`, `__handoffFacts`/`__successfulCalls`, `__workflowAgent`, `__budgetedRun`, `__recordAgentUsage`, `__workflowBudgetTotal`/`__workflowSpentTokens`, `workflow.agent`, `workflow.budget`. `globalThis.agents` reduced to `{ list, run, runAll }`. `globalThis.mcp` retargeted at `mcp.$list` / `$search` / `$describe` / `$call`, keeping the nested `mcp.<server>.<tool>` Proxy sugar. `SpindleSandboxOptions.tokenBudget` and the token-budget guest global removed. Setup eval filename is `spindle-setup.js`. |
+| `runtime/guest-types.ts` | Trimmed to match `GUEST_SETUP` exactly. Removed every interface for dropped subsystems. Upstream's agents API interface replaced with spindle's three-method contract plus `SpindleAgentDefinition` / `SpindleAgentRequest` / `SpindleAgentResult`. Upstream's MCP API interface replaced with the bridge surface plus the Proxy sugar index signature. `FULL_CODE_GLOBAL_DECLARATIONS` gating for `pi` / `extensions` kept verbatim. |
+| `runtime/orchestration.ts` | `BLOCKING_ORCHESTRATION_REFS` and the static-detection regex reduced to `agents.run` / `agents.runAll`. |
+| `core/tool-ownership.ts` | `SPINDLE_TOOL_NAME` is `"spindle_exec"`. Removed upstream's top-level tool authorizer and `#authorizeTopLevel` (schema-enforce-only), so `SpindleToolLifecycle` takes just `ownsSpindleTool` and `toolCall` is synchronous. |
+| `core/action-registry.ts`, `core/skill-prompt.ts`, `core/skill-references.ts`, `audit/details.ts`, `providers/pi-tools-provider.ts`, `ui/transcript-parser.ts` | Tool name is `spindle_exec` in comments and strings. In `ui/transcript-parser.ts` this is functional: it matches the running outer tool call by name. |
+| `protocol.ts` | Removed `SpindleInvocationContext.deferHandoff` (handoff is gone). |
+| `ui/types.ts` | **Rewritten** as a minimal local type module. See the parity note above. |
+| `ui/snapshot.ts` | **Rewritten** to build the reduced snapshot from `state.activity.runs()` plus the subagent run registry. |
+| `ui/controller.ts` | **Rewritten.** Kept `start` / `stop` / `#schedulePoll` / `#scheduleRefresh` / `#refresh` / `#renderWidget` and the single `ctx.ui.setWidget(..., { placement: "aboveEditor" })` call. Deleted `openDashboard`, `#pollMesh`, the mesh event buffer, the transcript sources and the dashboard TUI. `WIDGET_ID` is `"spindle"`. |
+| `ui/transcript.ts` | Removed the `AgentTranscriptReader` import and re-export (see the trim manifest). |
+| `ui/transcript-parser.ts` | `SpindleLogLine` now comes from the new local `ui/transcript-types.ts` instead of `../agents/types.ts`. |
+
+## New spindle files
+
+| File | Purpose |
+|---|---|
+| `providers/mcp-bridge-provider.ts` | `mcp.*` → the `pi-mcp-adapter` `mcp` gateway tool. **Upstream has a file with the same provider name (`mcp`) that is deliberately not vendored.** |
+| `providers/agents-provider.ts` | `agents.*` → the absorbed subagents code, plus `SpindleAgentRunRegistry` (the widget's data source). **Upstream also ships `src/providers/agents-provider.ts`, fronting its own RLM/handoff agent runtime; that file is NOT vendored, and this file is unrelated to it.** |
+| `ui/transcript-types.ts` | `SpindleLogLine`, copied from upstream `src/agents/types.ts`, so the transcript parser does not import a dropped subsystem. |
+| `agents/` | The absorbed `extensions/subagents` code (see below). |
+
+### Directory name collision warning
+
+`extensions/spindle/agents/` holds the **absorbed subagents extension**. It is
+**unrelated** to upstream pi-fabric's `src/agents/` (RLM / handoff / transports),
+which is dropped and must never be vendored into it. When reviewing an upstream
+diff, treat every `src/agents/**` change as out of scope for this directory.
+
+## Absorbed `extensions/subagents`
+
+The standalone `subagents` extension (and its `subagent` tool) was deleted; its
+implementation now lives in `extensions/spindle/agents/` and is reachable only
+through the `agents.*` sandbox namespace.
+
+Moved verbatim (no import edits needed — all relative imports were siblings):
+`backend.ts`, `constants.ts`, `discovery.ts`, `frontmatter.ts`, `grid.ts`,
+`headless.ts`, `herdr-backend.ts`, `herdr.ts`, `pane-lifecycle.ts`, `paths.ts`,
+`pi-args.ts`, `progress.ts`, `request.ts`, `result-tool.ts`, `run.ts`,
+`settings.ts`, plus all 11 `*.test.ts` files.
+
+Not moved: `index.ts` and `tool.ts` (they defined the standalone extension and
+tool). `SessionRef`, `DEFAULT_RUN_TIMEOUT_MS`, `PROGRESS_TICK_MS` and the
+ticker/`buildRunRequests` orchestration were salvaged into
+`providers/agents-provider.ts`; the throttled `cleanupOldRuns()` sweep into
+`index.ts`.
+
+`agents/pi-args.ts`'s `resultToolPath()` resolves `result-tool.ts` relative to
+`import.meta.url`, so it keeps working after the move with no edit —
+`agents/pi-args.test.ts` asserts this.
+
+### Rendering adaptation
+
+`progress.ts` is **unmodified** (so `progress.test.ts` still passes) but its ANSI
+block is no longer emitted as raw tool text. Instead `agents-provider.ts`:
+
+- mirrors each `AgentProgress` row into `SpindleAgentRunRegistry` as a
+  `SpindleUiAgent`-shaped record (`id`, `name`, `status`, `startedAt`,
+  `updatedAt`, `currentTool`, `error`, `runId`), which `ui/snapshot.ts` feeds to
+  `ui/widget.ts`'s existing `agentLines()`;
+- calls `renderProgress(...)` once per tick, flattened to a single line, as the
+  `context.update(...)` body, so `ui/spindle-render.ts`'s
+  `singleCallProgressLine` / `renderNestedAgentToolLines` /
+  `renderSpindleMulticallPartial` render the in-flight ticker;
+- returns a structured `SpindleAgentResult` so `ui/structured.ts`'s
+  `formatSpindleValue` formats it, instead of the old hand-rolled markdown.
+
+`SpindleAgentRun.runId` is set to `context.parentToolCallId`, which is also the
+`SpindleActivityRun.id`, so the widget can associate rows with the running program.
+
+### subagents domain vocabulary
+
+(Merged from the deleted `extensions/subagents/CONTEXT.md`. Keep names in code
+and docs aligned with these.)
+
+- **run**: one custom-agent invocation (one child `pi` process). Modelled by
+  `RunRequest` in, `RunResult` out.
+- **batch**: the set of runs launched together by a single `agents.run` /
+  `agents.runAll` call. Runs in a batch share one `runId` and one `RunContext`.
+- **run backend**: the seam that turns a batch of `RunRequest`s into
+  `RunResult`s. One interface (`RunBackend`), two **adapters**:
+  - **headless adapter** (`headless.ts`): spawns `pi` child processes, waits for
+    exit.
+  - **herdr adapter** (`herdr-backend.ts`): launches `pi` in live herdr panes,
+    waits for each pane to settle.
+  `backend.ts` owns `selectBackend()`, which picks the adapter by environment.
+- **run context** (`RunContext`): the ambient inputs a backend needs for a batch
+  (session id/file, runId, cwd, timeout, abort signal, status callback).
+- **output resolution**: the rule that decides a run's final output text and
+  whether it succeeded, from the submit_result file, then the child session
+  transcript, then a backend-specific fallback source.
+- **status probe**: the read-only view of a herdr pane's agent status that the
+  pane-lifecycle machine polls to decide when a run has finished or its pane is
+  gone.
+
+## MCP bridge contract
+
+`providers/mcp-bridge-provider.ts` resolves the `mcp` registered tool lazily
+through `CapturedToolCatalog.get("mcp")` and invokes `entry.wrappedTool.execute`
+with `ctx.signal` and `ctx.nestedToolCallId`.
+
+| Spindle action | Sandbox call | pi-mcp-adapter gateway params |
+|---|---|---|
+| `mcp.$call` | `mcp.call(server, tool, args)` / `mcp.<server>.<tool>(args)` | `{ tool, args, server? }` |
+| `mcp.$list` | `mcp.list({ server? })` | `{}` or `{ server }` |
+| `mcp.$search` | `mcp.search({ query, server?, regex?, includeSchemas? })` | `{ search, server?, regex?, includeSchemas? }` |
+| `mcp.$describe` | `mcp.describe({ tool })` | `{ describe }` |
+
+Two invariants:
+
+1. **Fail at use, never at startup.** The constructor does not touch the
+   catalog. A missing `pi-mcp-adapter` surfaces as an actionable error thrown
+   inside the sandbox on the first call, so a session always starts and a
+   program that never touches `mcp.*` is unaffected.
+2. **No pre-fetch.** `pi-mcp-adapter` connects servers lazily. `list()` and
+   `describe()` return four static descriptors and never call the gateway;
+   eagerly enumerating tools would force every configured server to connect and
+   could trigger interactive OAuth flows.
+
+Results are normalized to `{ text, content, structuredContent }` using a copy of
+the deleted `src/providers/mcp-provider.ts`'s `normalizeMcpResult` semantics; a
+gateway error is rethrown with the gateway's text. `AgentToolResult` carries no
+`isError`, so failure detection relies on the gateway throwing (with a
+defensive check on `details.isError`).
+
+## Dependencies added to the repo
+
+`@jitl/quickjs-singlefile-mjs-release-sync`, `quickjs-emscripten-core`, `shiki`,
+`diff`, `yaml`, `typescript` (`^6.0.3`, matching upstream) as `dependencies`;
+`@types/node` as a devDependency. `typebox` was already a peerDependency.
+**Upstream's embeddable MCP client package and `cross-spawn` are deliberately absent.**
+
+The QuickJS WASM variant (`@jitl/quickjs-singlefile-mjs-release-sync` loaded via
+`newQuickJSWASMModuleFromVariant`) was validated to instantiate and evaluate in
+this repo under `node --import tsx` with ESM + `.ts` specifiers before any
+vendoring was done. No wasmfile fallback substitution was needed.
+
+## Maintenance recipe — pulling upstream changes
+
+1. Update the clone and check out the newer tag:
+
+   ```sh
+   cd /tmp/pf-probe && jj git fetch && jj new <newer-tag>
+   ```
+
+2. Get the upstream diff for the **parity set** (upstream paths, so
+   `fabric`-named files are named as upstream names them):
+
+   ```sh
+   jj diff --from v0.28.2 --to <newer-tag> -- \
+     src/ui/fabric-render.ts src/ui/core-tool-render.ts src/ui/code-preview.ts \
+     src/ui/code-preview-shell.ts src/ui/highlight.ts src/ui/format.ts \
+     src/ui/preview-lines.ts src/ui/fabric-code-parser.ts src/ui/diff-background.ts \
+     src/ui/row-balance.ts src/ui/spinner.ts src/ui/structured.ts \
+     src/ui/transcript-sanitization.ts src/ui/widget.ts src/ui/word-diff/
+   ```
+
+   **The patch will not apply as-is.** Because the fork is renamed, porting is no
+   longer a verbatim copy: translate the patch through the rename mapping first
+   (both the path rows and the identifier rows), then re-run the specifier
+   rewrite on the touched files. Concretely, per file:
+
+   ```sh
+   jj diff --from v0.28.2 --to <newer-tag> -- src/<upstream path>
+   # then, on the ported local file:
+   perl -pi -e 's/FABRIC/SPINDLE/g; s/Fabric/Spindle/g; s/fabric/spindle/g' \
+     extensions/spindle/<local path>
+   perl -pi -e 's{(from\s+")(\.\.?/[^"]*)\.js(")}{$1$2.ts$3}g' \
+     extensions/spindle/<local path>
+   ```
+
+   The blanket `fabric` → `spindle` substitution is only safe inside
+   `extensions/spindle/**`; never run it over `CONTEXT.md`, whose provenance
+   references (upstream project name, repo URL, tag, SHA, upstream paths and
+   upstream identifier names) must stay literally correct.
+
+3. Review everything else and ignore changes under a dropped directory by
+   design:
+
+   ```sh
+   jj diff --from v0.28.2 --to <newer-tag> --stat -- src/
+   ```
+
+4. For the rewritten/trimmed files — local `index.ts`, `spindle-state.ts`,
+   `execution-service.ts`, `spindle-exec-tool.ts`, `config.ts`,
+   `runtime/quickjs-runtime.ts`, `runtime/guest-types.ts`,
+   `runtime/orchestration.ts`, `core/tool-ownership.ts`, `protocol.ts`,
+   `ui/{types,snapshot,controller,transcript}.ts` — read the upstream diff
+   (upstream paths per the mapping) and port by hand, applying the identifier
+   mapping as you go. `guest-types.ts` and `quickjs-runtime.ts`'s `GUEST_SETUP`
+   must stay in lockstep or every program fails type-check.
+
+5. Bump the pinned tag and SHA in the table at the top of this file.
+
+6. Verify: `npm run typecheck` and `npm test` must both exit 0, plus the rename
+   invariants:
+
+   ```sh
+   fd fabric extensions/spindle skills          # must be empty
+   rg -i fabric extensions/spindle skills -g '!CONTEXT.md'   # must be empty
+   rg 'fabric\.\$' extensions/spindle           # must be empty
+   ```
