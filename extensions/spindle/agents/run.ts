@@ -169,14 +169,18 @@ function isStable(a: Snapshot, b: Snapshot): boolean {
 export type RunOutcome = "stable" | "finished" | "gone" | "timeout";
 
 /**
- * Wait for a run to complete by racing two signals: the output file becoming
- * stable (polled cheaply via fs.stat), and an optional `agentSignal` promise
- * that resolves when the agent finishes (`finished`) or its pane is terminated
- * (`gone`). The agentSignal is expected to come from a blocking herdr wait, so
- * no process polling happens here.
+ * Wait for a run to complete.
  *
- * The file check is the success path. When the agent signal fires we still allow
- * a short grace window for a final write to land, preferring `stable` if it does.
+ * With an `agentSignal` (the herdr backend passes a blocking "idle-after-working
+ * or pane-gone" wait), the agent finishing its turn IS completion. File
+ * stability is NOT used as a completion signal there: the file being watched is
+ * the child transcript, which pauses mid-turn while the model generates, and a
+ * pause must not be mistaken for done. Once the agent finishes we allow a short
+ * grace for the transcript's final message to flush, preferring `stable` if it
+ * settles within the window, else `finished`. A terminated pane is `gone`.
+ *
+ * Without an `agentSignal`, there is no external completion signal, so file
+ * stability is the completion signal (`stable`), bounded by the timeout.
  */
 export async function waitForRunCompletion(
 	path: string,
@@ -190,6 +194,7 @@ export async function waitForRunCompletion(
 	const interval = opts.intervalMs ?? 400;
 	const grace = opts.graceMs ?? 2500;
 	const deadline = Date.now() + opts.timeoutMs;
+	const hasAgentSignal = opts.agentSignal !== undefined;
 
 	let signal: "finished" | "gone" | undefined;
 	opts.agentSignal?.then((s) => {
@@ -200,11 +205,19 @@ export async function waitForRunCompletion(
 	while (Date.now() < deadline) {
 		await sleep(interval);
 		const cur = snapshot(path);
-		if (isStable(prev, cur)) return "stable";
-		prev = cur;
 
-		if (signal) {
-			// Grace: give a final write a chance to land before finalizing.
+		// No external signal: file stability is the only completion signal.
+		if (!hasAgentSignal) {
+			if (isStable(prev, cur)) return "stable";
+			prev = cur;
+			continue;
+		}
+
+		// With an agent signal, wait for the agent itself; ignore mid-turn
+		// transcript pauses. Once it fires, resolve the outcome.
+		if (signal === "gone") return "gone";
+		if (signal === "finished") {
+			// Grace: let the final message flush; prefer 'stable' if it settles.
 			const graceDeadline = Math.min(deadline, Date.now() + grace);
 			let gp = snapshot(path);
 			while (Date.now() < graceDeadline) {
@@ -213,7 +226,7 @@ export async function waitForRunCompletion(
 				if (isStable(gp, gc)) return "stable";
 				gp = gc;
 			}
-			return signal;
+			return "finished";
 		}
 	}
 	return "timeout";

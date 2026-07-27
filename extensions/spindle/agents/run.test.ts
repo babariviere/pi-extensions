@@ -61,6 +61,21 @@ test("waitForRunCompletion prefers 'stable' when a final write lands during the 
 	assert.equal(outcome, "stable");
 });
 
+test("waitForRunCompletion ignores a stable file while an agent signal is still pending", async () => {
+	// The herdr backend watches the child transcript, which pauses mid-turn. A
+	// pause (stable file) must not be mistaken for completion; only the agent
+	// signal (idle/gone) finishes the run.
+	const path = tmpFile();
+	writeFileSync(path, "looks stable but the agent is still working");
+	const neverIdle = new Promise<"finished">(() => {});
+	const outcome = await waitForRunCompletion(path, {
+		timeoutMs: 120,
+		intervalMs: 20,
+		agentSignal: neverIdle,
+	});
+	assert.equal(outcome, "timeout");
+});
+
 test("waitForRunCompletion times out when nothing ever happens", async () => {
 	const path = tmpFile();
 	const outcome: RunOutcome = await waitForRunCompletion(path, { timeoutMs: 120, intervalMs: 20 });
