@@ -29,7 +29,7 @@
   "dependencies": {
     "@jitl/quickjs-singlefile-mjs-release-sync": "^0.32.0",
     "defuddle": "^0.19.1",
-    "diff": "^8.0.4",
+    "diff": "^9.0.0",
     "linkedom": "^0.18.13",
     "parse5": "^8.0.0",
     "quickjs-emscripten-core": "^0.32.0",
