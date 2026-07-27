@@ -336,7 +336,7 @@ export function maskKnownSecrets(text: string): string {
 // URL secret masking
 // ---------------------------------------------------------------------------
 
-/** Matches `://user:password@` — replaces only the password. */
+/** Matches `://user:****@` — replaces only the password. */
 const URL_USERINFO_RE = /(:\/\/[^:@\s/]*):([^@\s/]+)@/g;
 
 /**
@@ -525,4 +525,28 @@ export function scrubText(text: string, secrets: SecretEntry[]): string {
 	result = maskEnvAssignments(result);
 
 	return result;
+}
+
+/**
+ * Scrub a tool_result content array, returning undefined when nothing changed.
+ *
+ * Returning a patch for an untouched result is not free: downstream consumers
+ * treat any patch as a rewrite. Spindle's nested-call proxy, for one, rebuilds
+ * its value from the content text, which turns a structured `agents.run` result
+ * into a JSON string. Mapping over the parts always yields a fresh array, so
+ * identity cannot be the change signal; compare the text instead.
+ */
+export function scrubContent<T extends { type: string; text?: string }>(
+	content: readonly T[],
+	secrets: SecretEntry[],
+): T[] | undefined {
+	let changed = false;
+	const scrubbed = content.map((part) => {
+		if (part.type !== "text" || typeof part.text !== "string") return part;
+		const text = scrubText(part.text, secrets);
+		if (text === part.text) return part;
+		changed = true;
+		return { ...part, text };
+	});
+	return changed ? scrubbed : undefined;
 }

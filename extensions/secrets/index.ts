@@ -23,7 +23,7 @@ import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { createLocalBashOperations, isToolCallEventType } from "@earendil-works/pi-coding-agent";
-import { scrubText, type SecretEntry } from "./secret-mask";
+import { scrubContent, type SecretEntry } from "./secret-mask";
 
 /**
  * Resolve the shell pi is configured to use, so ! commands match the agent
@@ -121,20 +121,10 @@ export default function (pi: ExtensionAPI) {
 
 		// event.content is the SDK's content-part union; keep it untyped here so the
 		// returned shape still matches the tool_result handler's expected type.
-		let changed = false;
-		const scrubbed = event.content.map((c: any) => {
-			if (c.type !== "text") return c;
-			const text = scrubText(c.text, secrets);
-			if (text === c.text) return c;
-			changed = true;
-			return { ...c, text };
-		});
-
-		// Returning a patch for an untouched result is not free: downstream
-		// consumers treat any patch as a rewrite. Spindle's nested-call proxy, for
-		// one, then rebuilds its value from the content text and loses the
-		// structured result. Stay silent when nothing was scrubbed.
-		return changed ? { content: scrubbed } : undefined;
+		// scrubContent returns undefined when nothing changed, so an untouched
+		// result is left alone rather than patched needlessly.
+		const scrubbed = scrubContent(event.content as any[], secrets);
+		return scrubbed ? { content: scrubbed } : undefined;
 	});
 
 	// Inject secrets into user ! commands too

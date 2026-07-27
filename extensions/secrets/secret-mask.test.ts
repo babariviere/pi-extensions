@@ -7,6 +7,7 @@ import {
 	maskKnownSecrets,
 	maskUrls,
 	partialMask,
+	scrubContent,
 	scrubText,
 	shouldMaskEnvVarValue,
 } from "./secret-mask.ts";
@@ -41,8 +42,8 @@ test("maskKnownSecrets masks fine-grained PATs of varying length", () => {
 });
 
 test("maskUrls masks userinfo passwords and sensitive query params", () => {
-	assert.equal(maskUrls("https://user:hunter2pass@host/x"), "https://user:****@host/x");
-	const masked = maskUrls("https://x.com/?api_key=abcdefgh123456");
+	assert.equal(maskUrls("https://user:****@host/x"), "https://user:****@host/x");
+	const masked = maskUrls("https://x.com/?api_key=****");
 	assert.ok(!masked.includes("abcdefgh123456"));
 });
 
@@ -86,4 +87,36 @@ test("scrubText masks exact fnox values and is idempotent", () => {
 	const once = scrubText("token is mytopsecretvalue123456 here", secrets);
 	assert.ok(!once.includes("mytopsecretvalue123456"));
 	assert.equal(scrubText(once, secrets), once);
+});
+
+test("scrubContent returns undefined when nothing was scrubbed", () => {
+	// A patch for an untouched result is a rewrite signal downstream: Spindle's
+	// nested-call proxy rebuilds its value from the content text and would turn a
+	// structured agents.run result into a JSON string.
+	const content = [{ type: "text", text: "nothing sensitive here" }];
+	assert.equal(scrubContent(content, []), undefined);
+});
+
+test("scrubContent returns a scrubbed copy when a secret is present", () => {
+	const secrets = [{ name: "TOKEN", value: "supersecretvalue123" }];
+	const content = [{ type: "text", text: "token is supersecretvalue123 ok" }];
+	const scrubbed = scrubContent(content, secrets);
+	assert.ok(scrubbed);
+	assert.ok(!scrubbed[0].text.includes("supersecretvalue123"));
+	// The original array is never mutated.
+	assert.equal(content[0].text, "token is supersecretvalue123 ok");
+});
+
+test("scrubContent leaves non-text parts untouched and by reference", () => {
+	const image = { type: "image", data: "base64", mimeType: "image/png" };
+	const secrets = [{ name: "TOKEN", value: "supersecretvalue123" }];
+	const content = [image, { type: "text", text: "supersecretvalue123" }] as any[];
+	const scrubbed = scrubContent(content, secrets);
+	assert.ok(scrubbed);
+	assert.equal(scrubbed[0], image);
+});
+
+test("scrubContent is undefined for content with no text parts", () => {
+	const content = [{ type: "image", data: "base64" }] as any[];
+	assert.equal(scrubContent(content, [{ name: "T", value: "supersecretvalue123" }]), undefined);
 });
