@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { type DiscoveredAgent } from "./discovery.ts";
-import { SPINDLE_EXEC_TOOL, SUBMIT_RESULT_TOOL } from "./constants.ts";
-import { ALLOWED_TOOLS_FLAG, OUTPUT_PATH_FLAG } from "./constants.ts";
-import { buildChildArgs, extractThinkingSuffix, qualifyModel, resultToolPath, stripThinkingSuffix } from "./pi-args.ts";
+import { SPINDLE_EXEC_TOOL } from "./constants.ts";
+import { ALLOWED_TOOLS_FLAG } from "./constants.ts";
+import { buildChildArgs, childExtensionPath, extractThinkingSuffix, qualifyModel, stripThinkingSuffix } from "./pi-args.ts";
 
 function agent(overrides: Partial<DiscoveredAgent["config"]> = {}, systemPrompt = "You are worker."): DiscoveredAgent {
 	return {
@@ -16,7 +16,6 @@ function agent(overrides: Partial<DiscoveredAgent["config"]> = {}, systemPrompt 
 
 const opts = {
 	sessionFile: "/tmp/run/worker-0.session.jsonl",
-	outputPath: "/tmp/run/worker-0.md",
 	systemPromptFile: "/tmp/run/worker-0.prompt.md",
 };
 
@@ -36,22 +35,12 @@ test("extractThinkingSuffix returns the level only for a valid trailing suffix",
 	assert.equal(extractThinkingSuffix("model:bogus"), undefined);
 });
 
-test("buildChildArgs always sets session and instructs the agent to submit its result", () => {
+test("buildChildArgs always sets session and instructs the agent to answer in its final message", () => {
 	const args = buildChildArgs(agent(), "do the thing", opts);
 	assert.deepEqual(args.slice(0, 2), ["--session", opts.sessionFile]);
 	const taskArg = args[args.length - 1];
 	assert.ok(taskArg.startsWith("Task: do the thing"));
-	assert.ok(taskArg.includes(SUBMIT_RESULT_TOOL));
-	// The output path must never leak into the agent-visible task text; it travels
-	// via the dedicated CLI flag instead.
-	assert.ok(!taskArg.includes(opts.outputPath));
-});
-
-test("buildChildArgs passes the output path via the --subagent-output-path flag", () => {
-	const args = buildChildArgs(agent(), "t", opts);
-	const idx = args.indexOf(`--${OUTPUT_PATH_FLAG}`);
-	assert.ok(idx !== -1);
-	assert.equal(args[idx + 1], opts.outputPath);
+	assert.ok(taskArg.includes("final message"));
 });
 
 test("buildChildArgs prepends a read-first instruction listing the context files", () => {
@@ -71,37 +60,42 @@ test("buildChildArgs omits the read-first instruction when reads is empty", () =
 test("buildChildArgs omits the inline task when includeTask is false", () => {
 	const args = buildChildArgs(agent(), "do the thing", { ...opts, includeTask: false });
 	// The task is submitted separately (via `herdr agent prompt`), so no inline
-	// task arg is present; the output-path flag still is.
+	// task arg is present; the session flag still is.
 	assert.ok(!args.some((a) => a.startsWith("Task:")));
-	assert.ok(args.includes(`--${OUTPUT_PATH_FLAG}`));
+	assert.ok(args.includes("--session"));
 });
 
-test("buildChildArgs loads the result-tool extension via -e", () => {
+test("buildChildArgs loads no injected extension when the agent declares no allowlist", () => {
 	const args = buildChildArgs(agent(), "t", opts);
+	assert.ok(!args.includes("--extension"));
+});
+
+test("buildChildArgs loads the child extension only when an allowlist is present", () => {
+	const args = buildChildArgs(agent({ tools: ["read"] }), "t", opts);
 	const idx = args.indexOf("--extension");
 	assert.ok(idx !== -1);
-	assert.equal(args[idx + 1], resultToolPath());
-	assert.ok(resultToolPath().endsWith("result-tool.ts"));
+	assert.equal(args[idx + 1], childExtensionPath());
+	assert.ok(childExtensionPath().endsWith("child-extension.ts"));
 });
 
-test("buildChildArgs appends the transport tools to a declared tools allowlist", () => {
+test("buildChildArgs appends spindle_exec to a declared tools allowlist", () => {
 	const args = buildChildArgs(agent({ tools: ["read", "grep"] }), "t", opts);
 	const toolsIdx = args.indexOf("--tools");
-	assert.equal(args[toolsIdx + 1], `read,grep,${SUBMIT_RESULT_TOOL},${SPINDLE_EXEC_TOOL}`);
+	assert.equal(args[toolsIdx + 1], `read,grep,${SPINDLE_EXEC_TOOL}`);
 });
 
-test("buildChildArgs does not duplicate transport tools already allowlisted", () => {
-	const args = buildChildArgs(agent({ tools: ["read", SUBMIT_RESULT_TOOL, SPINDLE_EXEC_TOOL] }), "t", opts);
+test("buildChildArgs does not duplicate spindle_exec when already allowlisted", () => {
+	const args = buildChildArgs(agent({ tools: ["read", SPINDLE_EXEC_TOOL] }), "t", opts);
 	const toolsIdx = args.indexOf("--tools");
-	assert.equal(args[toolsIdx + 1], `read,${SUBMIT_RESULT_TOOL},${SPINDLE_EXEC_TOOL}`);
+	assert.equal(args[toolsIdx + 1], `read,${SPINDLE_EXEC_TOOL}`);
 });
 
 test("buildChildArgs forwards the declared allowlist as the spindle restriction flag", () => {
 	const args = buildChildArgs(agent({ tools: ["read", "grep"] }), "t", opts);
 	const flagIdx = args.indexOf(`--${ALLOWED_TOOLS_FLAG}`);
 	assert.ok(flagIdx !== -1);
-	// The flag carries the DECLARED list only: the transport tools are added to
-	// --tools so the child can run, not to what the sandbox may call.
+	// The flag carries the DECLARED list only: spindle_exec is added to --tools so
+	// the child can run, not to what the sandbox may call.
 	assert.equal(args[flagIdx + 1], "read,grep");
 });
 
@@ -160,7 +154,7 @@ test("buildChildArgs adds model and tools list without a thinking suffix", () =>
 	const thinkingIdx = args.indexOf("--thinking");
 	assert.equal(args[thinkingIdx + 1], "low");
 	const toolsIdx = args.indexOf("--tools");
-	assert.equal(args[toolsIdx + 1], `read,bash,${SUBMIT_RESULT_TOOL},${SPINDLE_EXEC_TOOL}`);
+	assert.equal(args[toolsIdx + 1], `read,bash,${SPINDLE_EXEC_TOOL}`);
 });
 
 test("buildChildArgs modelOverride takes precedence over the agent's frontmatter model", () => {

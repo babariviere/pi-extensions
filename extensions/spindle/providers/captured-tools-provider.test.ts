@@ -27,7 +27,7 @@ const catalog = (...entries: CapturedToolEntry[]): CapturedToolCatalog =>
     },
   }) as unknown as CapturedToolCatalog;
 
-const tools = catalog(entry("submit_result"), entry("todo"), entry("web_search"));
+const tools = catalog(entry("fetch_content"), entry("todo"), entry("web_search"));
 
 const provider = (allowed?: string[]) =>
   new CapturedToolsProvider(tools, allowed ? new Set(allowed) : undefined);
@@ -36,22 +36,12 @@ const names = async (allowed?: string[]): Promise<string[]> =>
   (await provider(allowed).list(listRequest, context)).map((descriptor) => descriptor.name);
 
 test("an unrestricted provider lists every captured tool", async () => {
-  assert.deepEqual((await names()).sort(), ["submit_result", "todo", "web_search"]);
+  assert.deepEqual((await names()).sort(), ["fetch_content", "todo", "web_search"]);
 });
 
 test("list hides captured tools the allowlist excludes", async () => {
-  // submit_result survives: it is transport, not a capability.
-  assert.deepEqual((await names(["todo"])).sort(), ["submit_result", "todo"]);
-});
-
-test("submit_result stays reachable under any allowlist", async () => {
-  // In full code mode it is captured and hidden, so extensions.submit_result is
-  // a restricted subagent's only channel back to the caller.
-  for (const allowed of [["read"], []]) {
-    const restricted = provider(allowed);
-    assert.equal((await restricted.describe("submit_result", context))?.name, "submit_result");
-    assert.deepEqual(await names(allowed), ["submit_result"]);
-  }
+  assert.deepEqual(await names(["todo"]), ["todo"]);
+  assert.deepEqual(await names([]), []);
 });
 
 test("describe throws the restriction error for a disallowed captured tool", async () => {

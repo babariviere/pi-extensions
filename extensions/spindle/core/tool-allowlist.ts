@@ -10,12 +10,11 @@
  * the sandbox is type-checked against and rejecting them at the provider
  * boundary.
  *
- * The flag is *registered* by `agents/result-tool.ts` (loaded into every child
- * via `--extension`, so the child accepts the arg even if Spindle itself is not
- * loaded there). pi rejects the same flag name registered by two extensions, so
- * Spindle cannot also register it and `pi.getFlag` — which only resolves flags
- * the *reading* extension registered — is unavailable here. Spindle reads the
- * raw argv instead.
+ * The flag is *registered* by `agents/child-extension.ts` (loaded via
+ * `--extension` only when the parent restricts tools). pi rejects the same flag
+ * name registered by two extensions, so Spindle cannot also register it and
+ * `pi.getFlag` — which only resolves flags the *reading* extension registered —
+ * is unavailable here. Spindle reads the raw argv instead.
  *
  * Scope: the allowlist gates the `pi.*` and `extensions.*` namespaces, both of
  * which name concrete tools. `mcp.*`, `agents.*` and `workflow.*` are not
@@ -23,14 +22,12 @@
  */
 
 /**
- * Transport tools: present so the child can run and answer at all. In full code
- * mode `submit_result` is captured like any other extension tool and is only
- * reachable as `extensions.submit_result`, so the allowlist must never filter
- * it out — a subagent that cannot submit has no channel back to the caller.
- * They are dropped when parsing (declaring them is meaningless) and always
- * allowed when checking.
+ * Transport tools: `spindle_exec` is the child's only tool path in full code
+ * mode, so it is kept in the child's `--tools` regardless of the allowlist. It
+ * is never callable from inside the sandbox, so declaring it in an allowlist is
+ * meaningless; drop it when parsing and always allow it when checking.
  */
-const TRANSPORT_TOOL_NAMES: ReadonlySet<string> = new Set(["spindle_exec", "submit_result"]);
+const TRANSPORT_TOOL_NAMES: ReadonlySet<string> = new Set(["spindle_exec"]);
 
 /** Undefined means unrestricted; an empty set means nothing is callable. */
 export type SpindleToolAllowlist = ReadonlySet<string>;

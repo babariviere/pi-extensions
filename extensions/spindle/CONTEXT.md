@@ -217,7 +217,7 @@ through the `agents.*` sandbox namespace.
 Moved verbatim (no import edits needed — all relative imports were siblings):
 `backend.ts`, `constants.ts`, `discovery.ts`, `frontmatter.ts`, `grid.ts`,
 `headless.ts`, `herdr-backend.ts`, `herdr.ts`, `pane-lifecycle.ts`, `paths.ts`,
-`pi-args.ts`, `progress.ts`, `request.ts`, `result-tool.ts`, `run.ts`,
+`pi-args.ts`, `progress.ts`, `request.ts`, `child-extension.ts`, `run.ts`,
 `settings.ts`, plus all 11 `*.test.ts` files.
 
 Not moved: `index.ts` and `tool.ts` (they defined the standalone extension and
@@ -226,9 +226,12 @@ ticker/`buildRunRequests` orchestration were salvaged into
 `providers/agents-provider.ts`; the throttled `cleanupOldRuns()` sweep into
 `index.ts`.
 
-`agents/pi-args.ts`'s `resultToolPath()` resolves `result-tool.ts` relative to
-`import.meta.url`, so it keeps working after the move with no edit —
-`agents/pi-args.test.ts` asserts this.
+`agents/pi-args.ts`'s `childExtensionPath()` resolves `child-extension.ts`
+relative to `import.meta.url`, so it keeps working after the move with no edit —
+`agents/pi-args.test.ts` asserts this. (Formerly `result-tool.ts`, which hosted
+a `submit_result` tool; that tool was removed in favor of reading the child's
+final assistant message, and the file was trimmed to just registering the
+allowlist flag.)
 
 ### Rendering adaptation
 
@@ -256,12 +259,14 @@ own `--tools` filter: the child must keep `spindle_exec` (its only tool path in
 full code mode), and keeping it would re-expose every core tool through `pi.*`.
 So the enforcement moved into the sandbox:
 
-- `agents/pi-args.ts` appends `submit_result` **and** `spindle_exec` to
-  `--tools`, and forwards the declared list via `--${ALLOWED_TOOLS_FLAG}`
-  (`--spindle-allowed-tools`, declared in `agents/constants.ts`).
-- The flag is registered by both `index.ts` (Spindle reads it; `getFlag` only
-  resolves flags the reading extension registered) and `agents/result-tool.ts`
-  (so a child without Spindle still parses it instead of failing startup).
+- `agents/pi-args.ts` appends `spindle_exec` to `--tools` (the child's only
+  tool path in full code mode) and forwards the declared list via
+  `--${ALLOWED_TOOLS_FLAG}` (`--spindle-allowed-tools`, declared in
+  `agents/constants.ts`).
+- The flag is registered by `agents/child-extension.ts`, loaded via
+  `--extension` only when the parent restricts tools. pi rejects the same flag
+  from two extensions, so Spindle does not also register it; it reads the value
+  off argv (`getFlag` only resolves flags the reading extension registered).
 - `core/tool-allowlist.ts` parses it. Absent/blank means unrestricted.
 - `spindle-state.ts` threads the set into `PiToolsProvider`,
   `CapturedToolsProvider` and `SpindleExecutionService`.
@@ -272,9 +277,10 @@ So the enforcement moved into the sandbox:
   providers, which throw `toolRestrictionError` from `describe()` — undefined
   there would surface as the misleading "Unknown Spindle action".
 
-`submit_result` and `spindle_exec` are always allowed: in full code mode
-`submit_result` is captured and only reachable as `extensions.submit_result`, so
-filtering it would leave a restricted subagent with no way to answer.
+`spindle_exec` is always allowed: it is the child's only tool path in full code
+mode and is never callable from inside the sandbox, so gating it would be both
+pointless and fatal. A restricted subagent still answers through its final
+assistant message, not a tool, so no result-channel tool needs a carve-out.
 
 Scope: the allowlist gates `pi.*` and `extensions.*` only. `mcp.*`, `agents.*`
 and `workflow.*` are not tools in that sense and stay available.
@@ -298,8 +304,10 @@ and docs aligned with these.)
 - **run context** (`RunContext`): the ambient inputs a backend needs for a batch
   (session id/file, runId, cwd, timeout, abort signal, status callback).
 - **output resolution**: the rule that decides a run's final output text and
-  whether it succeeded, from the submit_result file, then the child session
-  transcript, then a backend-specific fallback source.
+  whether it succeeded, from the child session transcript (the agent's last
+  assistant message), then a backend-specific fallback source. The parent
+  persists the resolved text to the run-dir artifact (or a caller `output:`
+  override).
 - **status probe**: the read-only view of a herdr pane's agent status that the
   pane-lifecycle machine polls to decide when a run has finished or its pane is
   gone.

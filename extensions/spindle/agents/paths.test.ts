@@ -118,13 +118,12 @@ test("cleanupOldRuns is throttled by a recent marker", () => {
 	assert.ok(statSync(join(base, ".last-cleanup")).isFile());
 });
 
-test("injectOutputInstruction names both submit_result spellings", () => {
+test("injectOutputInstruction tells the agent its final message is the result", () => {
 	const instruction = injectOutputInstruction("do the thing");
 	assert.ok(instruction.startsWith("do the thing"));
-	assert.ok(instruction.includes("`submit_result`"));
-	// In full code mode Spindle captures every registered tool and hides it from
-	// the model, so the child can only reach it through the sandbox namespace.
-	// Agents that were told only the bare name gave up and answered in prose.
-	assert.ok(instruction.includes("extensions.submit_result({ result })"));
-	assert.ok(instruction.includes("spindle_exec"));
+	assert.ok(instruction.includes("final message"));
+	// The result travels as the final assistant message, not via a tool or file,
+	// so the rider must not resurrect a submit_result instruction.
+	assert.ok(!instruction.includes("submit_result"));
+	assert.ok(instruction.includes("returned to the caller"));
 });

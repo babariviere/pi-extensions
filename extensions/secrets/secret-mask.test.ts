@@ -90,9 +90,8 @@ test("scrubText masks exact fnox values and is idempotent", () => {
 });
 
 test("scrubContent returns undefined when nothing was scrubbed", () => {
-	// A patch for an untouched result is a rewrite signal downstream: Spindle's
-	// nested-call proxy rebuilds its value from the content text and would turn a
-	// structured agents.run result into a JSON string.
+	// The no-op-returns-undefined contract (see scrubContent's docstring) is what
+	// keeps an untouched result from being needlessly patched downstream.
 	const content = [{ type: "text", text: "nothing sensitive here" }];
 	assert.equal(scrubContent(content, []), undefined);
 });

@@ -16,13 +16,13 @@ test("parseToolAllowlist treats an absent or blank flag as unrestricted", () => 
   assert.equal(parseToolAllowlist(true), undefined);
 });
 
-test("parseToolAllowlist splits, trims and drops the transport tools", () => {
-  const allowlist = parseToolAllowlist(" read , grep ,spindle_exec,submit_result, ");
+test("parseToolAllowlist splits, trims and drops the transport tool", () => {
+  const allowlist = parseToolAllowlist(" read , grep ,spindle_exec, ");
   assert.deepEqual([...allowlist!].sort(), ["grep", "read"]);
 });
 
-test("parseToolAllowlist yields an empty set when only transport tools are declared", () => {
-  const allowlist = parseToolAllowlist("submit_result");
+test("parseToolAllowlist yields an empty set when only the transport tool is declared", () => {
+  const allowlist = parseToolAllowlist("spindle_exec");
   assert.deepEqual([...allowlist!], []);
 });
 
@@ -46,13 +46,12 @@ test("isToolAllowed defaults to allow when there is no allowlist", () => {
   assert.equal(isToolAllowed(new Set(["read"]), "bash"), false);
 });
 
-test("isToolAllowed always permits the transport tools", () => {
-  // submit_result is captured into extensions.* in full code mode; filtering it
-  // out would leave a restricted subagent with no way to answer.
+test("isToolAllowed always permits the transport tool", () => {
+  // spindle_exec is the child's only tool path in full code mode; it is never
+  // callable from inside the sandbox, so the allowlist must never gate it.
   const allowlist = new Set(["read"]);
-  assert.equal(isToolAllowed(allowlist, "submit_result"), true);
   assert.equal(isToolAllowed(allowlist, "spindle_exec"), true);
-  assert.equal(isToolAllowed(new Set<string>(), "submit_result"), true);
+  assert.equal(isToolAllowed(new Set<string>(), "spindle_exec"), true);
 });
 
 test("toolRestrictionError names the tool and the allowed set", () => {

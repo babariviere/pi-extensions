@@ -19,8 +19,9 @@ export interface RunRequest {
 	overrides?: { model?: string; thinking?: string };
 	/**
 	 * Per-run output destination (relative to cwd or absolute). When set, the
-	 * child's `submit_result` writes here instead of the auto run-dir path, so
-	 * callers can persist artifacts at stable locations (e.g. `.pi/goal/plan.md`).
+	 * parent persists the resolved result here instead of at the auto run-dir
+	 * path, so callers can save artifacts at stable locations (e.g.
+	 * `.pi/goal/plan.md`).
 	 */
 	output?: string;
 	/**
@@ -126,7 +127,6 @@ export function prepareChildRun(
 
 	const childArgs = buildChildArgs(req.agent, req.task, {
 		sessionFile: paths.sessionPath,
-		outputPath,
 		systemPromptFile: hasPrompt ? paths.promptPath : undefined,
 		defaultProvider: opts.defaultProvider,
 		modelOverride: req.overrides?.model,
@@ -219,21 +219,13 @@ export async function waitForRunCompletion(
 	return "timeout";
 }
 
-export function readOutputFile(path: string): string | undefined {
-	try {
-		const text = readFileSync(path, "utf-8");
-		return text.length > 0 ? text : undefined;
-	} catch {
-		return undefined;
-	}
-}
-
 /**
- * Recover a run's result from the child pi session transcript when the output
- * file is missing. Agents sometimes end their turn with a plain assistant
- * message instead of calling the submit_result tool (reviewers are especially
- * prone to this), which leaves a complete answer on disk but no output file.
- * Returns the concatenated text of the last assistant message, or undefined
+ * A run's result is its final assistant message, read from the child pi session
+ * transcript. This is the primary (and only) result channel: agents reliably
+ * end a turn with a final message, whereas a dedicated submit tool is easy to
+ * forget and, in full code mode, is hidden behind the `extensions.*` namespace.
+ * Returns the concatenated text of the last assistant message that had any text
+ * (tool-only final turns fall back to the previous text turn), or undefined
  * when the transcript is unreadable or has no assistant text.
  */
 export function readLastAssistantText(sessionPath: string): string | undefined {
@@ -276,13 +268,23 @@ export interface ResolvedOutput {
 	ok: boolean;
 }
 
+/** Persist the resolved result to disk, best-effort; never throws. */
+function persistResult(path: string, text: string): void {
+	try {
+		writeFileSync(path, text, { mode: 0o600 });
+	} catch {
+		// The persisted artifact is a convenience (inspection, `output:` override);
+		// the caller already has the text in-band, so a write failure is non-fatal.
+	}
+}
+
 /**
- * Resolve a run's final output and success, applying the three-tier rule both
- * backends share: the `submit_result` file first, then the child session
- * transcript (agents sometimes end with a plain message instead of calling
- * submit_result), then a backend-specific `fallback` (headless: captured stdout;
- * herdr: pane scrollback). The fallback is an async thunk so it runs only when
- * the first two tiers miss, avoiding needless work.
+ * Resolve a run's final output and success. The result is the child's last
+ * assistant message (see `readLastAssistantText`), falling back to a
+ * backend-specific `fallback` (headless: captured stdout; herdr: pane
+ * scrollback) only when the transcript yields nothing. The fallback is an async
+ * thunk so it runs only when needed. Any resolved text is persisted to
+ * `outputPath` (the run-dir artifact, or a caller `output:` override).
  *
  * A run is `ok` when it produced usable output AND finished cleanly
  * (`finishedCleanly`: headless exit 0; herdr a stable/finished outcome). When no
@@ -295,8 +297,9 @@ export async function resolveRunOutput(opts: {
 	finishedCleanly: boolean;
 	placeholder?: string;
 }): Promise<ResolvedOutput> {
-	let output = readOutputFile(opts.outputPath) ?? readLastAssistantText(opts.sessionPath);
+	let output = readLastAssistantText(opts.sessionPath);
 	if (output === undefined) output = (await opts.fallback()) || undefined;
+	if (output !== undefined) persistResult(opts.outputPath, output);
 	const ok = output !== undefined && opts.finishedCleanly;
 	return { output: output ?? (opts.placeholder ?? "(no output produced)"), ok };
 }

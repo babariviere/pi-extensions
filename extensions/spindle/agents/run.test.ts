@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -67,7 +67,7 @@ test("waitForRunCompletion times out when nothing ever happens", async () => {
 	assert.equal(outcome, "timeout");
 });
 
-test("readLastAssistantText recovers the last assistant message when submit_result was skipped", () => {
+test("readLastAssistantText returns the last assistant message from the transcript", () => {
 	const path = tmpFile();
 	writeFileSync(
 		path,
@@ -106,56 +106,44 @@ test("readLastAssistantText returns undefined for a missing or textless transcri
 	assert.equal(readLastAssistantText(path), undefined);
 });
 
-test("resolveRunOutput prefers the submit_result file and marks ok when finished cleanly", async () => {
-	const path = tmpFile();
-	writeFileSync(path, "from file");
+test("resolveRunOutput reads the transcript first and persists it to outputPath", async () => {
+	const session = tmpFile();
+	writeFileSync(session, sessionLine("assistant", [{ type: "text", text: "from transcript" }]));
+	const out = tmpFile();
 	let fallbackCalls = 0;
 	const r = await resolveRunOutput({
-		outputPath: path,
-		sessionPath: tmpFile(),
+		outputPath: out,
+		sessionPath: session,
 		fallback: () => {
 			fallbackCalls++;
 			return "unused";
 		},
 		finishedCleanly: true,
 	});
-	assert.deepEqual(r, { output: "from file", ok: true });
-	assert.equal(fallbackCalls, 0); // fallback skipped when the file wins
+	assert.deepEqual(r, { output: "from transcript", ok: true });
+	assert.equal(fallbackCalls, 0); // fallback skipped when the transcript wins
+	// The resolved result is persisted to the run-dir artifact for inspection.
+	assert.equal(readFileSync(out, "utf-8"), "from transcript");
 });
 
-test("resolveRunOutput falls back to the transcript before the backend fallback", async () => {
-	const session = tmpFile();
-	writeFileSync(session, sessionLine("assistant", [{ type: "text", text: "from transcript" }]));
-	let fallbackCalls = 0;
+test("resolveRunOutput awaits the async fallback only when the transcript misses", async () => {
+	const out = tmpFile();
 	const r = await resolveRunOutput({
-		outputPath: tmpFile(), // never created
-		sessionPath: session,
-		fallback: () => {
-			fallbackCalls++;
-			return "from fallback";
-		},
-		finishedCleanly: true,
-	});
-	assert.equal(r.output, "from transcript");
-	assert.equal(fallbackCalls, 0);
-});
-
-test("resolveRunOutput awaits the async fallback only when file and transcript miss", async () => {
-	const r = await resolveRunOutput({
-		outputPath: tmpFile(),
-		sessionPath: tmpFile(),
+		outputPath: out,
+		sessionPath: tmpFile(), // never created
 		fallback: () => Promise.resolve("from pane"),
 		finishedCleanly: true,
 	});
 	assert.deepEqual(r, { output: "from pane", ok: true });
+	assert.equal(readFileSync(out, "utf-8"), "from pane");
 });
 
 test("resolveRunOutput is not ok when the run did not finish cleanly, even with output", async () => {
-	const path = tmpFile();
-	writeFileSync(path, "got text but crashed");
+	const session = tmpFile();
+	writeFileSync(session, sessionLine("assistant", [{ type: "text", text: "got text but crashed" }]));
 	const r = await resolveRunOutput({
-		outputPath: path,
-		sessionPath: tmpFile(),
+		outputPath: tmpFile(),
+		sessionPath: session,
 		fallback: () => undefined,
 		finishedCleanly: false,
 	});

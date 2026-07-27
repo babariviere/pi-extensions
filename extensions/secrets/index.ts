@@ -119,10 +119,8 @@ export default function (pi: ExtensionAPI) {
 	pi.on("tool_result", async (event) => {
 		const secrets = await getSecrets();
 
-		// event.content is the SDK's content-part union; keep it untyped here so the
-		// returned shape still matches the tool_result handler's expected type.
-		// scrubContent returns undefined when nothing changed, so an untouched
-		// result is left alone rather than patched needlessly.
+		// scrubContent returns undefined when nothing changed (see its docstring for
+		// why an untouched patch is harmful); cast keeps the SDK content-part union.
 		const scrubbed = scrubContent(event.content as any[], secrets);
 		return scrubbed ? { content: scrubbed } : undefined;
 	});

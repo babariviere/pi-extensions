@@ -29,7 +29,7 @@ Runs one agent to completion and resolves to a single result. Blocks until the c
 | `task` | yes | The concrete task for that agent |
 | `model` | no | Override the agent's frontmatter model for this run. Must be in the user's `enabledModels` allowlist when one is configured. |
 | `thinking` | no | Override the reasoning effort: `off` \| `minimal` \| `low` \| `medium` \| `high` \| `xhigh` |
-| `output` | no | Persist this run's submitted result at this path (relative to cwd, or absolute) instead of the auto run-dir file. The harness routes the child's `submit_result` here — do not also tell the agent to write the file itself. |
+| `output` | no | **String** path (relative to cwd, or absolute) to persist the result at, instead of the auto run-dir file. There is no `output: false`: omit the field for the default path (a literal `"false"`/`"true"` is treated as omitted). |
 | `reads` | no | Files the agent should read first for context. Injected as a read-first instruction; the agent still needs a `read` tool. |
 
 Resolves to `SpindleAgentResult`:
@@ -38,7 +38,7 @@ Resolves to `SpindleAgentResult`:
 {
   agent: string;       // agent name
   ok: boolean;         // produced usable output AND finished cleanly
-  output: string;      // submitted result, else last assistant text, else backend fallback
+  output: string;      // the agent's final assistant message, else backend fallback
   outputPath: string;  // where the result was persisted
   exitCode?: number;   // headless backend only
   paneId?: string;     // herdr backend only
@@ -72,7 +72,7 @@ When several parallel tasks share one `output` path, each run's destination gets
 
 ## Agent tool allowlists
 
-An agent definition's `tools:` frontmatter restricts what that agent may call. The child `pi` process always keeps `spindle_exec` and `submit_result` regardless of the list: `spindle_exec` is the child's only tool path in full code mode, and `submit_result` is its only channel back to the caller. The declared list is enforced one level down instead, inside the child's sandbox: disallowed tools are removed from the declared `pi.*` schema, hidden from listings, and rejected at the `pi.*` / `extensions.*` boundary with an explicit "not in this agent's tool allowlist" error.
+An agent definition's `tools:` frontmatter restricts what that agent may call. The child `pi` process always keeps `spindle_exec` regardless of the list, because it is the child's only tool path in full code mode. The declared list is enforced one level down instead, inside the child's sandbox: disallowed tools are removed from the declared `pi.*` schema, hidden from listings, and rejected at the `pi.*` / `extensions.*` boundary with an explicit "not in this agent's tool allowlist" error.
 
 `mcp.*`, `agents.*` and `workflow.*` are not covered by `tools:`.
 

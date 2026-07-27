@@ -1,6 +1,6 @@
 /**
  * herdr backend: spawn each subagent as a `pi` instance in its own pane inside a
- * fresh "subagents" tab, then wait for each run's output file to settle.
+ * fresh "subagents" tab, then wait for each run's transcript to settle.
  *
  * Lifecycle: create a fresh tab per run, build an evenly-sized grid of panes
  * (reusing the tab's root pane as the first cell), launch one titled `pi` per
@@ -20,19 +20,19 @@
  * what `herdr agent start` requires (it types the launch command into that
  * shell and blocks until it detects pi is interactive-ready). We must start the
  * agent before anything else runs in the pane, or herdr reports
- * `agent_pane_busy`. The child's output path travels via the
- * `--subagent-output-path` CLI flag (see pi-args), so no env injection or
- * launcher script is needed.
+ * `agent_pane_busy`. The child needs no output-path plumbing: its result is its
+ * final assistant message, read from the transcript the parent already named
+ * via `--session` (see run.ts `resolveRunOutput`).
  *
  * Task delivery: `agent start` types its args into a shell and rejects
  * multi-line ones, so we start pi with flags only (all single-line) and then
  * submit the (multi-line) task with `herdr agent prompt`, which uses bracketed
  * paste to deliver it as one clean user message.
  *
- * Completion: each run races the output file becoming stable against a blocking
+ * Completion: each run races the transcript becoming stable against a blocking
  * `herdr agent wait` (idle-after-working, or pane gone) rather than polling, so
- * we finalize promptly whether the agent wrote its file, finished without
- * writing, or was terminated by the user.
+ * we finalize promptly whether the agent finished its turn or was terminated by
+ * the user.
  */
 
 import { computeGrid } from "./grid.ts";
@@ -243,13 +243,15 @@ async function settleRun(s: SpawnedRun, ctx: RunContext): Promise<RunResult> {
 
 	let outcome: RunOutcome;
 	try {
-		outcome = await waitForRunCompletion(s.outputPath, { timeoutMs: ctx.timeoutMs, agentSignal });
+		// The child writes its transcript live at sessionPath; waiting for it to
+		// stop growing (or for the agent to go idle) tells us the turn is done.
+		outcome = await waitForRunCompletion(s.sessionPath, { timeoutMs: ctx.timeoutMs, agentSignal });
 	} finally {
 		ac.abort();
 	}
 
 	// Success when we have usable output and the agent actually finished its turn
-	// (`stable` = wrote the file; `finished` = went idle). A `gone`/`timeout`
+	// (`stable` = transcript settled; `finished` = went idle). A `gone`/`timeout`
 	// outcome stays failed even if the pane-scrollback fallback yielded text.
 	const resolved = await resolveRunOutput({
 		outputPath: s.outputPath,
@@ -273,13 +275,13 @@ async function settleRun(s: SpawnedRun, ctx: RunContext): Promise<RunResult> {
 function outcomeError(outcome: RunOutcome): string {
 	switch (outcome) {
 		case "gone":
-			return "the subagent pane was terminated before it wrote its output file";
+			return "the subagent pane was terminated before it produced a final message";
 		case "finished":
-			return "the subagent finished (went idle) without writing its output file";
+			return "the subagent finished (went idle) without producing a final message";
 		case "timeout":
-			return "output file did not appear before timeout";
+			return "the subagent did not finish before timeout";
 		default:
-			return "the output file was incomplete";
+			return "the subagent produced no usable output";
 	}
 }
 

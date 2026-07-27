@@ -22,13 +22,17 @@
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
-import { ALLOWED_TOOLS_FLAG, OUTPUT_PATH_FLAG, SPINDLE_EXEC_TOOL, SUBMIT_RESULT_TOOL } from "./constants.ts";
+import { ALLOWED_TOOLS_FLAG, SPINDLE_EXEC_TOOL } from "./constants.ts";
 import { type DiscoveredAgent } from "./discovery.ts";
 import { injectOutputInstruction } from "./paths.ts";
 
-/** Absolute path to the child-side result-tool extension, next to this file. */
-export function resultToolPath(): string {
-	return join(dirname(fileURLToPath(import.meta.url)), "result-tool.ts");
+/**
+ * Absolute path to the child-side extension, next to this file. It only
+ * registers the allowlist flag, so the parent loads it only when restricting
+ * the agent's tools (see buildChildArgs).
+ */
+export function childExtensionPath(): string {
+	return join(dirname(fileURLToPath(import.meta.url)), "child-extension.ts");
 }
 
 export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"];
@@ -65,8 +69,6 @@ export function qualifyModel(model: string | undefined, defaultProvider: string 
 
 export interface ChildInvocationOpts {
 	sessionFile: string;
-	/** Path the child's `submit_result` tool writes to, passed via a CLI flag. */
-	outputPath: string;
 	/** Path the system-prompt body was written to (caller writes it before spawn). */
 	systemPromptFile?: string;
 	/** Provider used to qualify a bare agent model (resolved from settings). */
@@ -92,14 +94,14 @@ function withReads(task: string, reads: string[] | undefined): string {
 	return `Read these files first for context: ${list}.\n\n${task}`;
 }
 
-/** The task framing given to the child agent, with the result-submission rider. */
+/** The task framing given to the child agent, with the final-message rider. */
 export function formatTaskMessage(task: string, reads?: string[]): string {
 	return `Task: ${injectOutputInstruction(withReads(task, reads))}`;
 }
 
 /**
  * Produce the ordered `pi` args (excluding the `pi` binary itself). The final
- * element is the `Task: ...` prompt carrying the injected output instruction.
+ * element is the `Task: ...` prompt carrying the final-message instruction.
  */
 export function buildChildArgs(agent: DiscoveredAgent, task: string, opts: ChildInvocationOpts): string[] {
 	const args: string[] = ["--session", opts.sessionFile];
@@ -117,31 +119,23 @@ export function buildChildArgs(agent: DiscoveredAgent, task: string, opts: Child
 	if (model) args.push("--model", model);
 	if (thinking && thinking !== "off") args.push("--thinking", thinking);
 
-	// When the agent declares a tool allowlist, append the transport tools so
-	// pi's `--tools` filter (which also gates custom/extension tools) doesn't
-	// drop them. `submit_result` is the only channel back to the caller, and
-	// `spindle_exec` is the child's ONLY tool path when it runs Spindle in full
-	// code mode (Spindle strips the pi core tools from the active set), so an
-	// allowlist that omits it leaves the agent unable to do anything at all.
-	// The declared allowlist is still enforced, one level down: it travels via
+	// When the agent declares a tool allowlist, keep `spindle_exec` in pi's
+	// `--tools` filter regardless: it is the child's ONLY tool path when it runs
+	// Spindle in full code mode (Spindle strips the pi core tools from the active
+	// set), so an allowlist that omits it leaves the agent unable to do anything.
+	// The declared allowlist is still enforced one level down: it travels via
 	// `--${ALLOWED_TOOLS_FLAG}` and the child's Spindle removes the disallowed
-	// tools from the `pi.*` / `extensions.*` schema inside the sandbox.
-	// With no allowlist all tools are enabled, so nothing to add.
+	// tools from the `pi.*` / `extensions.*` schema inside the sandbox. The child
+	// extension is loaded here only to register that flag; a child with no
+	// allowlist needs no injected extension at all. With no allowlist all tools
+	// are enabled, so nothing to add.
 	if (agent.config.tools && agent.config.tools.length > 0) {
 		const declared = agent.config.tools;
-		const tools = [...declared];
-		for (const transport of [SUBMIT_RESULT_TOOL, SPINDLE_EXEC_TOOL]) {
-			if (!tools.includes(transport)) tools.push(transport);
-		}
+		const tools = declared.includes(SPINDLE_EXEC_TOOL) ? [...declared] : [...declared, SPINDLE_EXEC_TOOL];
 		args.push("--tools", tools.join(","));
+		args.push("--extension", childExtensionPath());
 		args.push(`--${ALLOWED_TOOLS_FLAG}`, declared.join(","));
 	}
-
-	// Load the child-side result tool so the agent can hand its output back
-	// without needing write/bash access or knowing the output path. The path
-	// travels via a CLI flag the tool reads; the agent never sees it.
-	args.push("--extension", resultToolPath());
-	args.push(`--${OUTPUT_PATH_FLAG}`, opts.outputPath);
 
 	if (opts.systemPromptFile && agent.systemPrompt.trim().length > 0) {
 		const flag = agent.config.systemPromptMode === "append" ? "--append-system-prompt" : "--system-prompt";
