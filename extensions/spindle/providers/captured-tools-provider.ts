@@ -2,6 +2,11 @@ import path from "node:path";
 import { runAbortable, throwIfAborted } from "../async-settlement.ts";
 import type { AgentToolResult, SourceInfo } from "@earendil-works/pi-coding-agent";
 import { CapturedToolCatalog, type CapturedToolEntry } from "../capture/catalog.ts";
+import {
+  isToolAllowed,
+  toolRestrictionError,
+  type SpindleToolAllowlist,
+} from "../core/tool-allowlist.ts";
 import type {
   SpindleActionDescriptor,
   SpindleInvocationContext,
@@ -89,14 +94,32 @@ export class CapturedToolsProvider implements SpindleProvider {
 
   readonly #scheduler = new CapturedToolScheduler();
 
-  constructor(readonly catalog: CapturedToolCatalog) {}
+  constructor(
+    readonly catalog: CapturedToolCatalog,
+    /** Subagent `tools:` restriction; undefined for an unrestricted session. */
+    readonly allowedTools?: SpindleToolAllowlist,
+  ) {}
+
+  /** False when a subagent's declared allowlist excludes this tool. */
+  #allowed(actionName: string): boolean {
+    return isToolAllowed(this.allowedTools, actionName);
+  }
+
+  #assertAllowed(actionName: string): void {
+    if (this.allowedTools && !this.allowedTools.has(actionName)) {
+      throw toolRestrictionError(`extensions.${actionName}`, this.allowedTools);
+    }
+  }
 
   async list(
     request: SpindleProviderListRequest,
     _context: SpindleInvocationContext,
   ): Promise<SpindleActionDescriptor[]> {
     const query = request.query?.trim().toLowerCase();
-    const descriptors = this.catalog.list().map(descriptorFrom);
+    const descriptors = this.catalog
+      .list()
+      .filter((entry) => this.#allowed(entry.name))
+      .map(descriptorFrom);
     if (!query) return descriptors;
     return descriptors.filter((descriptor) =>
       `${descriptor.name} ${descriptor.description} ${descriptor.namespace ?? ""}`
@@ -109,11 +132,13 @@ export class CapturedToolsProvider implements SpindleProvider {
     actionName: string,
     _context: SpindleInvocationContext,
   ): Promise<SpindleActionDescriptor | undefined> {
+    if (!this.#allowed(actionName)) return undefined;
     const entry = this.catalog.get(actionName);
     return entry ? descriptorFrom(entry) : undefined;
   }
 
   prepareArguments(actionName: string, args: Record<string, unknown>): Record<string, unknown> {
+    this.#assertAllowed(actionName);
     const prepare = this.catalog.require(actionName).wrappedTool.prepareArguments;
     if (!prepare) return args;
     const prepared = prepare(args);
@@ -128,6 +153,7 @@ export class CapturedToolsProvider implements SpindleProvider {
     args: Record<string, unknown>,
     context: SpindleInvocationContext,
   ): Promise<CapturedToolInvocationResult> {
+    this.#assertAllowed(actionName);
     const entry = this.catalog.require(actionName);
     return this.#scheduler.run(entry.definition.executionMode, () =>
       runAbortable(context.signal, () => this.#invokeCaptured(entry, args, context)),

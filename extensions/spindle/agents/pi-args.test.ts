@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { type DiscoveredAgent } from "./discovery.ts";
-import { SUBMIT_RESULT_TOOL } from "./constants.ts";
-import { OUTPUT_PATH_FLAG } from "./constants.ts";
+import { SPINDLE_EXEC_TOOL, SUBMIT_RESULT_TOOL } from "./constants.ts";
+import { ALLOWED_TOOLS_FLAG, OUTPUT_PATH_FLAG } from "./constants.ts";
 import { buildChildArgs, extractThinkingSuffix, qualifyModel, resultToolPath, stripThinkingSuffix } from "./pi-args.ts";
 
 function agent(overrides: Partial<DiscoveredAgent["config"]> = {}, systemPrompt = "You are worker."): DiscoveredAgent {
@@ -84,21 +84,31 @@ test("buildChildArgs loads the result-tool extension via -e", () => {
 	assert.ok(resultToolPath().endsWith("result-tool.ts"));
 });
 
-test("buildChildArgs appends the result tool to a declared tools allowlist", () => {
+test("buildChildArgs appends the transport tools to a declared tools allowlist", () => {
 	const args = buildChildArgs(agent({ tools: ["read", "grep"] }), "t", opts);
 	const toolsIdx = args.indexOf("--tools");
-	assert.equal(args[toolsIdx + 1], `read,grep,${SUBMIT_RESULT_TOOL}`);
+	assert.equal(args[toolsIdx + 1], `read,grep,${SUBMIT_RESULT_TOOL},${SPINDLE_EXEC_TOOL}`);
 });
 
-test("buildChildArgs does not duplicate the result tool if already allowlisted", () => {
-	const args = buildChildArgs(agent({ tools: ["read", SUBMIT_RESULT_TOOL] }), "t", opts);
+test("buildChildArgs does not duplicate transport tools already allowlisted", () => {
+	const args = buildChildArgs(agent({ tools: ["read", SUBMIT_RESULT_TOOL, SPINDLE_EXEC_TOOL] }), "t", opts);
 	const toolsIdx = args.indexOf("--tools");
-	assert.equal(args[toolsIdx + 1], `read,${SUBMIT_RESULT_TOOL}`);
+	assert.equal(args[toolsIdx + 1], `read,${SUBMIT_RESULT_TOOL},${SPINDLE_EXEC_TOOL}`);
 });
 
-test("buildChildArgs omits --tools when the agent declares no allowlist", () => {
+test("buildChildArgs forwards the declared allowlist as the spindle restriction flag", () => {
+	const args = buildChildArgs(agent({ tools: ["read", "grep"] }), "t", opts);
+	const flagIdx = args.indexOf(`--${ALLOWED_TOOLS_FLAG}`);
+	assert.ok(flagIdx !== -1);
+	// The flag carries the DECLARED list only: the transport tools are added to
+	// --tools so the child can run, not to what the sandbox may call.
+	assert.equal(args[flagIdx + 1], "read,grep");
+});
+
+test("buildChildArgs omits --tools and the restriction flag when the agent declares no allowlist", () => {
 	const args = buildChildArgs(agent({}), "t", opts);
 	assert.ok(!args.includes("--tools"));
+	assert.ok(!args.includes(`--${ALLOWED_TOOLS_FLAG}`));
 });
 
 test("qualifyModel prefixes a bare model with the default provider only when needed", () => {
@@ -150,7 +160,7 @@ test("buildChildArgs adds model and tools list without a thinking suffix", () =>
 	const thinkingIdx = args.indexOf("--thinking");
 	assert.equal(args[thinkingIdx + 1], "low");
 	const toolsIdx = args.indexOf("--tools");
-	assert.equal(args[toolsIdx + 1], `read,bash,${SUBMIT_RESULT_TOOL}`);
+	assert.equal(args[toolsIdx + 1], `read,bash,${SUBMIT_RESULT_TOOL},${SPINDLE_EXEC_TOOL}`);
 });
 
 test("buildChildArgs modelOverride takes precedence over the agent's frontmatter model", () => {

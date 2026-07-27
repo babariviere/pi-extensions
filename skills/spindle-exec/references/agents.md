@@ -70,6 +70,12 @@ return await agents.runAll({
 
 When several parallel tasks share one `output` path, each run's destination gets a distinct `-<index>` suffix so they do not clobber each other. A single run keeps its `output` verbatim, so stable destinations like `.pi/goal/plan.md` still work.
 
+## Agent tool allowlists
+
+An agent definition's `tools:` frontmatter restricts what that agent may call. The child `pi` process always keeps `spindle_exec` and `submit_result` regardless of the list: `spindle_exec` is the child's only tool path in full code mode, and `submit_result` is its only channel back to the caller. The declared list is enforced one level down instead, inside the child's sandbox: disallowed tools are removed from the `pi.*` type declarations (so calling them is a type error) and rejected at the `pi.*` / `extensions.*` provider boundary.
+
+`mcp.*`, `agents.*` and `workflow.*` are not covered by `tools:`.
+
 ## Execution backend and progress
 
 The backend is chosen by environment, not by the caller: live panes in a dedicated `subagents` tab when running inside herdr, otherwise headless `pi` child processes. Either way each run surfaces as a spinner row in the Spindle widget above the prompt and as a nested call line in the `spindle_exec` tool result — do not build your own polling loop.

@@ -17,6 +17,8 @@ import { CapturedToolCatalog } from "./capture/catalog.ts";
 import { loadSpindleConfig, type SpindleConfig } from "./config.ts";
 import { ActionRegistry } from "./core/action-registry.ts";
 import { SpindleToolResultProxy } from "./core/tool-result-proxy.ts";
+import { parseToolAllowlist, type SpindleToolAllowlist } from "./core/tool-allowlist.ts";
+import { ALLOWED_TOOLS_FLAG } from "./agents/constants.ts";
 import { SpindleExecutionService } from "./execution-service.ts";
 import {
   SpindleAgentRunRegistry,
@@ -39,6 +41,12 @@ export class SpindleState {
   #config: SpindleConfig | undefined;
   #execution: SpindleExecutionService | undefined;
   #cwd: string | undefined;
+  /**
+   * Tool allowlist for this session, from the parent's `--${ALLOWED_TOOLS_FLAG}`
+   * flag. Set only when this pi process is a Spindle subagent whose definition
+   * declared `tools:`; undefined (unrestricted) for a normal session.
+   */
+  #allowedTools: SpindleToolAllowlist | undefined;
   readonly #externalProviders = new Map<string, SpindleProvider>();
   readonly activity = new SpindleActivityStore();
   readonly agentRuns = new SpindleAgentRunRegistry();
@@ -70,6 +78,10 @@ export class SpindleState {
     return this.#cwd;
   }
 
+  get allowedTools(): SpindleToolAllowlist | undefined {
+    return this.#allowedTools;
+  }
+
   /** The parent session the child agent runs are attributed to. */
   get sessionRef(): SessionRef {
     return this.#sessionRef;
@@ -95,6 +107,7 @@ export class SpindleState {
     this.activity.reset();
     this.agentRuns.reset();
     this.#cwd = context.cwd;
+    this.#allowedTools = parseToolAllowlist(this.pi.getFlag(ALLOWED_TOOLS_FLAG));
     const projectTrusted = context.isProjectTrusted();
     this.#config = loadSpindleConfig({
       cwd: context.cwd,
@@ -117,11 +130,16 @@ export class SpindleState {
     );
     const capturedToolsProvider =
       this.#config.fullCodeMode && this.#config.capture.enabled
-        ? new CapturedToolsProvider(this.capturedTools)
+        ? new CapturedToolsProvider(this.capturedTools, this.#allowedTools)
         : undefined;
     if (this.#config.fullCodeMode) {
       this.#registry.register(
-        new PiToolsProvider(context.cwd, this.capturedTools, capturedToolsProvider),
+        new PiToolsProvider(
+          context.cwd,
+          this.capturedTools,
+          capturedToolsProvider,
+          this.#allowedTools,
+        ),
       );
     }
     if (capturedToolsProvider) this.#registry.register(capturedToolsProvider);
@@ -144,7 +162,13 @@ export class SpindleState {
     for (const provider of this.#externalProviders.values()) {
       this.#registry.register(provider);
     }
-    this.#execution = new SpindleExecutionService(this.#registry, this.#config, this.activity);
+    this.#execution = new SpindleExecutionService(
+      this.#registry,
+      this.#config,
+      this.activity,
+      undefined,
+      this.#allowedTools,
+    );
     const discovery: SpindleProviderDiscovery = {
       version: 1,
       register: (provider, options) => this.registerExternal(provider, options),
@@ -186,6 +210,7 @@ export class SpindleState {
     this.#config = undefined;
     this.#execution = undefined;
     this.#cwd = undefined;
+    this.#allowedTools = undefined;
     this.activity.reset();
     this.agentRuns.reset();
     this.#widgetDismissedAt = 0;

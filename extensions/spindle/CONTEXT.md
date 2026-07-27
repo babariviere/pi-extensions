@@ -249,6 +249,29 @@ block is no longer emitted as raw tool text. Instead `agents-provider.ts`:
 `SpindleAgentRun.runId` is set to `context.parentToolCallId`, which is also the
 `SpindleActivityRun.id`, so the widget can associate rows with the running program.
 
+### Subagent tool allowlists
+
+An agent definition's `tools:` frontmatter can no longer be enforced with pi's
+own `--tools` filter: the child must keep `spindle_exec` (its only tool path in
+full code mode), and keeping it would re-expose every core tool through `pi.*`.
+So the enforcement moved into the sandbox:
+
+- `agents/pi-args.ts` appends `submit_result` **and** `spindle_exec` to
+  `--tools`, and forwards the declared list via `--${ALLOWED_TOOLS_FLAG}`
+  (`--spindle-allowed-tools`, declared in `agents/constants.ts`).
+- The flag is registered by both `index.ts` (Spindle reads it; `getFlag` only
+  resolves flags the reading extension registered) and `agents/result-tool.ts`
+  (so a child without Spindle still parses it instead of failing startup).
+- `core/tool-allowlist.ts` parses it. Absent/blank means unrestricted.
+- `spindle-state.ts` threads the set into `PiToolsProvider`,
+  `CapturedToolsProvider` and `SpindleExecutionService`.
+- `runtime/guest-types.ts` strips disallowed `pi.*` members from `PiToolsApi`
+  (and the `pi` global when nothing survives), so a disallowed call is a type
+  error; the providers reject it at the boundary as a second line of defense.
+
+Scope: the allowlist gates `pi.*` and `extensions.*` only. `mcp.*`, `agents.*`
+and `workflow.*` are not tools in that sense and stay available.
+
 ### subagents domain vocabulary
 
 (Merged from the deleted `extensions/subagents/CONTEXT.md`. Keep names in code

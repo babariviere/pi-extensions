@@ -22,7 +22,7 @@
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
-import { OUTPUT_PATH_FLAG, SUBMIT_RESULT_TOOL } from "./constants.ts";
+import { ALLOWED_TOOLS_FLAG, OUTPUT_PATH_FLAG, SPINDLE_EXEC_TOOL, SUBMIT_RESULT_TOOL } from "./constants.ts";
 import { type DiscoveredAgent } from "./discovery.ts";
 import { injectOutputInstruction } from "./paths.ts";
 
@@ -117,14 +117,24 @@ export function buildChildArgs(agent: DiscoveredAgent, task: string, opts: Child
 	if (model) args.push("--model", model);
 	if (thinking && thinking !== "off") args.push("--thinking", thinking);
 
-	// When the agent declares a tool allowlist, append the result tool so pi's
-	// `--tools` filter (which also gates custom/extension tools) doesn't drop it.
+	// When the agent declares a tool allowlist, append the transport tools so
+	// pi's `--tools` filter (which also gates custom/extension tools) doesn't
+	// drop them. `submit_result` is the only channel back to the caller, and
+	// `spindle_exec` is the child's ONLY tool path when it runs Spindle in full
+	// code mode (Spindle strips the pi core tools from the active set), so an
+	// allowlist that omits it leaves the agent unable to do anything at all.
+	// The declared allowlist is still enforced, one level down: it travels via
+	// `--${ALLOWED_TOOLS_FLAG}` and the child's Spindle removes the disallowed
+	// tools from the `pi.*` / `extensions.*` schema inside the sandbox.
 	// With no allowlist all tools are enabled, so nothing to add.
 	if (agent.config.tools && agent.config.tools.length > 0) {
-		const tools = agent.config.tools.includes(SUBMIT_RESULT_TOOL)
-			? agent.config.tools
-			: [...agent.config.tools, SUBMIT_RESULT_TOOL];
+		const declared = agent.config.tools;
+		const tools = [...declared];
+		for (const transport of [SUBMIT_RESULT_TOOL, SPINDLE_EXEC_TOOL]) {
+			if (!tools.includes(transport)) tools.push(transport);
+		}
 		args.push("--tools", tools.join(","));
+		args.push(`--${ALLOWED_TOOLS_FLAG}`, declared.join(","));
 	}
 
 	// Load the child-side result tool so the agent can hand its output back

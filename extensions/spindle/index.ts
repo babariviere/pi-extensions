@@ -14,6 +14,7 @@ import {
   type SpindleToolShellDecorator,
   withCodePreviewShell,
 } from "./ui/code-preview-shell.ts";
+import { ALLOWED_TOOLS_FLAG } from "./agents/constants.ts";
 import { cleanupOldRuns } from "./agents/paths.ts";
 import { CapturedToolCatalog } from "./capture/catalog.ts";
 import { installRegisteredToolCapture } from "./capture/interceptor.ts";
@@ -71,6 +72,16 @@ const registrationFrom = (value: unknown): SpindleProviderRegistration | undefin
 };
 
 export default async function spindle(pi: ExtensionAPI): Promise<void> {
+  // Spawned subagents inherit `spindle_exec` (their only tool path in full code
+  // mode); their declared `tools:` allowlist arrives here instead and is applied
+  // to the sandbox namespaces. `getFlag` only resolves flags the *reading*
+  // extension registered, so Spindle registers it even though the child-side
+  // result tool registers it too (for children that do not load Spindle).
+  pi.registerFlag(ALLOWED_TOOLS_FLAG, {
+    type: "string",
+    description:
+      "Comma-separated tool allowlist applied to Spindle's pi.* / extensions.* namespaces (set by the parent for subagent runs).",
+  });
   const codePreviewSettings = await loadCodePreviewSettings();
   const decorateShell: SpindleToolShellDecorator = withCodePreviewShell;
   let compatibilityWarningShown = false;

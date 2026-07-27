@@ -5,7 +5,13 @@
  * against, so they must match `GUEST_SETUP` in `quickjs-runtime.ts` exactly.
  * Every dropped global (`tools`, `mesh`, `memory`, `state`, `schema`,
  * `compact`, `council`, `rlm`, `agent`, `budget`) is gone from both.
+ *
+ * A subagent's tool allowlist (see `core/tool-allowlist.ts`) is applied on top:
+ * disallowed `pi.*` members are removed from `PiToolsApi` so the type-checker
+ * rejects them before the sandbox ever runs.
  */
+import type { SpindleToolAllowlist } from "../core/tool-allowlist.ts";
+
 export const GUEST_TYPE_DECLARATIONS = `
 type JsonPrimitive = string | number | boolean | null;
 type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
@@ -162,10 +168,52 @@ const FULL_CODE_GLOBAL_DECLARATIONS = [
   "declare const extensions: SpindleExtensionsApi;\n",
 ];
 
-export const guestTypeDeclarations = (fullCodeMode: boolean): string =>
-  fullCodeMode
-    ? GUEST_TYPE_DECLARATIONS
-    : FULL_CODE_GLOBAL_DECLARATIONS.reduce(
-        (declarations, declaration) => declarations.replace(declaration, ""),
-        GUEST_TYPE_DECLARATIONS,
-      );
+const PI_TOOLS_API_HEADER = "interface PiToolsApi {";
+const PI_TOOLS_API_MEMBER = /^ {2}([A-Za-z][A-Za-z0-9_]*)\(/;
+
+/**
+ * Drop the disallowed `pi.*` members from `PiToolsApi` so a restricted subagent
+ * gets a type error at check time rather than a provider rejection at call
+ * time. When nothing is left, the `pi` global goes too.
+ */
+const restrictPiTools = (declarations: string, allowedTools: SpindleToolAllowlist): string => {
+  const lines = declarations.split("\n");
+  const kept: string[] = [];
+  let inPiTools = false;
+  let members = 0;
+  for (const line of lines) {
+    if (!inPiTools) {
+      inPiTools = line.startsWith(PI_TOOLS_API_HEADER);
+      kept.push(line);
+      continue;
+    }
+    if (line === "}") {
+      inPiTools = false;
+      kept.push(line);
+      continue;
+    }
+    const member = PI_TOOLS_API_MEMBER.exec(line);
+    if (member) {
+      if (!allowedTools.has(member[1])) continue;
+      members++;
+    }
+    kept.push(line);
+  }
+  const restricted = kept.join("\n");
+  return members > 0 ? restricted : restricted.replace("declare const pi: PiToolsApi;\n", "");
+};
+
+export const guestTypeDeclarations = (
+  fullCodeMode: boolean,
+  allowedTools?: SpindleToolAllowlist,
+): string => {
+  if (!fullCodeMode) {
+    return FULL_CODE_GLOBAL_DECLARATIONS.reduce(
+      (declarations, declaration) => declarations.replace(declaration, ""),
+      GUEST_TYPE_DECLARATIONS,
+    );
+  }
+  return allowedTools
+    ? restrictPiTools(GUEST_TYPE_DECLARATIONS, allowedTools)
+    : GUEST_TYPE_DECLARATIONS;
+};

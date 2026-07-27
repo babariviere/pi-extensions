@@ -15,7 +15,7 @@ import { dirname } from "node:path";
 import { defineTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 
-import { OUTPUT_PATH_FLAG, SUBMIT_RESULT_TOOL } from "./constants.ts";
+import { ALLOWED_TOOLS_FLAG, OUTPUT_PATH_FLAG, SUBMIT_RESULT_TOOL } from "./constants.ts";
 
 function text(body: string) {
 	return { content: [{ type: "text" as const, text: body }], details: undefined };
@@ -63,6 +63,13 @@ export default function (pi: ExtensionAPI) {
 	pi.registerFlag(OUTPUT_PATH_FLAG, {
 		type: "string",
 		description: "Path the submit_result tool writes the subagent's result to (set by the parent).",
+	});
+	// Declared here as well so a child that does not load Spindle still accepts
+	// the flag instead of failing startup with "Unknown option". Spindle reads it
+	// through its own registration (getFlag is scoped to the reading extension).
+	pi.registerFlag(ALLOWED_TOOLS_FLAG, {
+		type: "string",
+		description: "Comma-separated tool allowlist applied inside Spindle's sandbox (set by the parent).",
 	});
 	flagReader = () => {
 		const value = pi.getFlag(OUTPUT_PATH_FLAG);

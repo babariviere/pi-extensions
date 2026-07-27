@@ -12,6 +12,11 @@ import {
 import { runAbortable, throwIfAborted } from "../async-settlement.ts";
 import { CapturedToolCatalog } from "../capture/catalog.ts";
 import { PI_CORE_TOOL_NAMES, type PiCoreToolName } from "../core/pi-tools.ts";
+import {
+  isToolAllowed,
+  toolRestrictionError,
+  type SpindleToolAllowlist,
+} from "../core/tool-allowlist.ts";
 import { expandSkillDirMarkersForRead } from "../core/skill-dir.ts";
 import type {
   SpindleActionDescriptor,
@@ -116,13 +121,17 @@ export class PiToolsProvider implements SpindleProvider {
   readonly #catalog: CapturedToolCatalog | undefined;
   readonly #capturedTools: CapturedToolsProvider | undefined;
   readonly #cwd: string;
+  /** Subagent `tools:` restriction; undefined for an unrestricted session. */
+  readonly #allowedTools: SpindleToolAllowlist | undefined;
 
   constructor(
     cwd: string,
     catalog?: CapturedToolCatalog,
     capturedTools?: CapturedToolsProvider,
+    allowedTools?: SpindleToolAllowlist,
   ) {
     this.#cwd = cwd;
+    this.#allowedTools = allowedTools;
     this.#tools = {
       read: createReadToolDefinition(cwd),
       bash: createBashToolDefinition(cwd),
@@ -142,7 +151,9 @@ export class PiToolsProvider implements SpindleProvider {
   ): Promise<SpindleActionDescriptor[]> {
     const query = request.query?.toLowerCase();
     const descriptors = await Promise.all(
-      PI_CORE_TOOL_NAMES.map((name) => this.describe(name, _context)),
+      PI_CORE_TOOL_NAMES.filter((name) => this.#allowed(name)).map((name) =>
+        this.describe(name, _context),
+      ),
     );
     return descriptors
       .filter((descriptor): descriptor is SpindleActionDescriptor => descriptor !== undefined)
@@ -155,7 +166,7 @@ export class PiToolsProvider implements SpindleProvider {
     actionName: string,
     _context: SpindleInvocationContext,
   ): Promise<SpindleActionDescriptor | undefined> {
-    if (!(actionName in this.#tools)) return undefined;
+    if (!(actionName in this.#tools) || !this.#allowed(actionName)) return undefined;
     const name = actionName as PiCoreToolName;
     const override = await this.#capturedTools?.describe(name, _context);
     if (override) return { ...override, namespace: "extension-override" };
@@ -163,7 +174,19 @@ export class PiToolsProvider implements SpindleProvider {
     return this.#descriptor(name, tool);
   }
 
+  /** False when a subagent's declared allowlist excludes this tool. */
+  #allowed(actionName: string): boolean {
+    return isToolAllowed(this.#allowedTools, actionName);
+  }
+
+  #assertAllowed(actionName: string): void {
+    if (this.#allowedTools && !this.#allowedTools.has(actionName)) {
+      throw toolRestrictionError(`pi.${actionName}`, this.#allowedTools);
+    }
+  }
+
   prepareArguments(actionName: string, args: Record<string, unknown>): Record<string, unknown> {
+    this.#assertAllowed(actionName);
     if (this.#catalog?.get(actionName)) {
       return this.#capturedTools!.prepareArguments(actionName, args);
     }
@@ -183,6 +206,7 @@ export class PiToolsProvider implements SpindleProvider {
     context: SpindleInvocationContext,
   ): Promise<unknown> {
     if (!(actionName in this.#tools)) throw new Error(`Unknown Pi tool: ${actionName}`);
+    this.#assertAllowed(actionName);
     const name = actionName as PiCoreToolName;
     // A captured extension override (e.g. an extension that registered a "read"
     // tool) already replays the full event lifecycle itself via

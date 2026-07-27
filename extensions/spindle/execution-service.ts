@@ -30,6 +30,7 @@ import {
   type SpindleAutoApprovalAudit,
 } from "./core/approval-controller.ts";
 import { SpindleAutoApprovalClassifier } from "./core/auto-approval-classifier.ts";
+import type { SpindleToolAllowlist } from "./core/tool-allowlist.ts";
 import {
   codeUsesOrchestration,
   isBlockingOrchestrationRef,
@@ -140,6 +141,8 @@ export class SpindleExecutionService {
     readonly config: SpindleConfig,
     readonly activity?: SpindleActivityStore,
     readonly autoApprovalClassifier = new SpindleAutoApprovalClassifier(),
+    /** Subagent `tools:` restriction; undefined for an unrestricted session. */
+    readonly allowedTools?: SpindleToolAllowlist,
   ) {}
 
   async execute(options: SpindleExecutionOptions): Promise<SpindleExecutionResult> {
@@ -150,7 +153,7 @@ export class SpindleExecutionService {
     const effectiveFullCodeMode = this.config.fullCodeMode;
     const checked = dependencies.typeCheckSpindleCode(
       options.code,
-      dependencies.guestTypeDeclarations(effectiveFullCodeMode),
+      dependencies.guestTypeDeclarations(effectiveFullCodeMode, this.allowedTools),
     );
     if (checked.errors.length > 0) {
       this.activity?.finish(options.parentToolCallId, false, "Type checking failed");
