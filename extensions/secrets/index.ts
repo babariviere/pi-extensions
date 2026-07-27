@@ -121,11 +121,20 @@ export default function (pi: ExtensionAPI) {
 
 		// event.content is the SDK's content-part union; keep it untyped here so the
 		// returned shape still matches the tool_result handler's expected type.
-		const scrubbed = event.content.map((c: any) =>
-			c.type === "text" ? { ...c, text: scrubText(c.text, secrets) } : c,
-		);
+		let changed = false;
+		const scrubbed = event.content.map((c: any) => {
+			if (c.type !== "text") return c;
+			const text = scrubText(c.text, secrets);
+			if (text === c.text) return c;
+			changed = true;
+			return { ...c, text };
+		});
 
-		return { content: scrubbed };
+		// Returning a patch for an untouched result is not free: downstream
+		// consumers treat any patch as a rewrite. Spindle's nested-call proxy, for
+		// one, then rebuilds its value from the content text and loses the
+		// structured result. Stay silent when nothing was scrubbed.
+		return changed ? { content: scrubbed } : undefined;
 	});
 
 	// Inject secrets into user ! commands too

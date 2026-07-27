@@ -41,9 +41,23 @@ const textForValue = (value: unknown): string => {
   }
 };
 
-const valueFromContent = (content: ToolContent): unknown => {
-  if (content.every((part) => part.type === "text")) return textFromContent(content);
-  return { content };
+/**
+ * Rebuild the sandbox value from patched content.
+ *
+ * The synthetic content Spindle emits is `JSON.stringify(value)`, so a middleware
+ * that rewrites text (secret scrubbing, redaction) hands back that same JSON.
+ * Parse it back when the original value was structured, or the sandbox would
+ * receive a JSON *string* where `agents.run` and friends document an object.
+ */
+const valueFromContent = (content: ToolContent, original: unknown): unknown => {
+  if (!content.every((part) => part.type === "text")) return { content };
+  const text = textFromContent(content);
+  if (typeof original !== "object" || original === null) return text;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text;
+  }
 };
 
 export class SpindleToolResultProxy implements SpindleNestedToolResultProxy {
@@ -86,7 +100,16 @@ export class SpindleToolResultProxy implements SpindleNestedToolResultProxy {
     ) {
       return patchedDetails.result;
     }
-    if (patchedContent !== content) return valueFromContent(patchedContent);
+    // Identity is not a change signal: middleware commonly maps over the parts
+    // and returns a fresh array even when every part is byte-identical (a
+    // no-op scrubber does exactly that). Compare the text, so an untouched
+    // result keeps its original structured value.
+    if (patchedContent !== content) {
+      const patchedText = textFromContent(patchedContent);
+      if (patchedText !== textForValue(request.value)) {
+        return valueFromContent(patchedContent, request.value);
+      }
+    }
     return request.value;
   }
 }
