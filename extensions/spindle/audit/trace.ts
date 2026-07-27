@@ -27,7 +27,6 @@ export type SpindleExecutionFailureStageV1 =
   | "resolve"
   | "prepare"
   | "validate"
-  | "approve"
   | "invoke"
   | "guard";
 
@@ -627,7 +626,7 @@ const hasOnlyKeys = (value: Record<string, unknown>, keys: readonly string[]): b
   Object.keys(value).every((key) => keys.includes(key));
 
 const outcomes = new Set<SpindleExecutionOutcomeV1>(["succeeded", "failed", "aborted", "timed_out"]);
-const stages = new Set<SpindleExecutionFailureStageV1>(["resolve", "prepare", "validate", "approve", "invoke", "guard"]);
+const stages = new Set<SpindleExecutionFailureStageV1>(["resolve", "prepare", "validate", "invoke", "guard"]);
 
 const isJsonValue = (value: unknown, ancestors = new Set<object>(), depth = 0): value is SpindleTraceJsonValue => {
   if (value === null || typeof value === "string" || typeof value === "boolean") return true;

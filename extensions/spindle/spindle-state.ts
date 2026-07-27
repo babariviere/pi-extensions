@@ -163,7 +163,6 @@ export class SpindleState {
       this.#registry,
       this.#config,
       this.activity,
-      undefined,
       this.#gate,
     );
     const discovery: SpindleProviderDiscovery = {

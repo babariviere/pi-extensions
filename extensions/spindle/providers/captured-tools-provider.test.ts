@@ -13,7 +13,6 @@ const entry = (name: string): CapturedToolEntry =>
     name,
     definition: { name, description: `${name} tool`, parameters: { type: "object" } },
     sourceInfo: { path: `/ext/${name}.ts`, source: "cli", scope: "user", origin: "top-level" },
-    risk: "execute",
   }) as unknown as CapturedToolEntry;
 
 /** Only list/get/require are exercised by the provider. */

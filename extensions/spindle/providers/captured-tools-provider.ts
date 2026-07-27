@@ -39,7 +39,6 @@ const descriptorFrom = (entry: CapturedToolEntry): SpindleActionDescriptor => ({
   name: entry.name,
   description: `${entry.definition.description} (captured from ${sourceLabel(entry.sourceInfo)})`,
   inputSchema: entry.definition.parameters as Record<string, unknown>,
-  risk: entry.risk,
   namespace: `extension:${sourceLabel(entry.sourceInfo)}`,
 });
 

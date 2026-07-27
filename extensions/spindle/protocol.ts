@@ -35,7 +35,6 @@ export const readSpindleToolResultProxyDetailsV1 = (
   return record as unknown as SpindleToolResultProxyDetailsV1;
 };
 
-export type SpindleRisk = "read" | "write" | "execute" | "network" | "agent";
 export type SpindleActivityEntityKind =
   | "agent"
   | "actor"
@@ -62,7 +61,6 @@ export interface SpindleActionDescriptor {
   description: string;
   inputSchema: Record<string, unknown>;
   outputSchema?: Record<string, unknown>;
-  risk: SpindleRisk;
   namespace?: string;
 }
 
@@ -73,7 +71,6 @@ export interface SpindleCapabilityActionHead {
   name: string;
   description: string;
   descriptorHash: string;
-  risk: SpindleRisk;
   namespace?: string;
 }
 

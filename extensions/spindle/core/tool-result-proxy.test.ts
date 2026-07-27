@@ -11,7 +11,6 @@ const action = (provider: string): ResolvedSpindleAction =>
     ref: `${provider}.run`,
     description: "",
     inputSchema: {},
-    risk: "agent",
   }) as unknown as ResolvedSpindleAction;
 
 const proxyWith = (

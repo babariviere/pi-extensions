@@ -24,12 +24,6 @@ import {
   type SpindleCallAudit,
   type SpindleRegistryActivityEvent,
 } from "./core/action-registry.ts";
-import {
-  ApprovalController,
-  SpindleSessionApprovals,
-  type SpindleAutoApprovalAudit,
-} from "./core/approval-controller.ts";
-import { SpindleAutoApprovalClassifier } from "./core/auto-approval-classifier.ts";
 import type { SpindleToolGate } from "./core/tool-allowlist.ts";
 import {
   codeUsesOrchestration,
@@ -76,32 +70,6 @@ const executionOutcomeFromTermination = (
   }
 };
 
-// The installed pi-ai `Usage` has no `reasoning` field (upstream builds
-// against a newer pi-ai that does). Model it locally so the passthrough is
-// preserved without widening the host types.
-type UsageWithReasoning = Usage & { reasoning?: number };
-
-const aggregateUsage = (usages: UsageWithReasoning[]): UsageWithReasoning => ({
-  input: usages.reduce((total, usage) => total + usage.input, 0),
-  output: usages.reduce((total, usage) => total + usage.output, 0),
-  cacheRead: usages.reduce((total, usage) => total + usage.cacheRead, 0),
-  cacheWrite: usages.reduce((total, usage) => total + usage.cacheWrite, 0),
-  ...(usages.some((usage) => usage.cacheWrite1h !== undefined)
-    ? { cacheWrite1h: usages.reduce((total, usage) => total + (usage.cacheWrite1h ?? 0), 0) }
-    : {}),
-  ...(usages.some((usage) => usage.reasoning !== undefined)
-    ? { reasoning: usages.reduce((total, usage) => total + (usage.reasoning ?? 0), 0) }
-    : {}),
-  totalTokens: usages.reduce((total, usage) => total + usage.totalTokens, 0),
-  cost: {
-    input: usages.reduce((total, usage) => total + usage.cost.input, 0),
-    output: usages.reduce((total, usage) => total + usage.cost.output, 0),
-    cacheRead: usages.reduce((total, usage) => total + usage.cost.cacheRead, 0),
-    cacheWrite: usages.reduce((total, usage) => total + usage.cost.cacheWrite, 0),
-    total: usages.reduce((total, usage) => total + usage.cost.total, 0),
-  },
-});
-
 export interface SpindleExecutionResult {
   success: boolean;
   value: unknown;
@@ -134,13 +102,11 @@ export interface SpindleExecutionOptions {
 
 export class SpindleExecutionService {
   #runtime: QuickJsRuntime | undefined;
-  readonly #sessionApprovals = new SpindleSessionApprovals();
 
   constructor(
     readonly registry: ActionRegistry,
     readonly config: SpindleConfig,
     readonly activity?: SpindleActivityStore,
-    readonly autoApprovalClassifier = new SpindleAutoApprovalClassifier(),
     /** Subagent `tools:` gate; an unrestricted gate for a normal session. */
     readonly toolGate?: SpindleToolGate,
   ) {}
@@ -169,25 +135,6 @@ export class SpindleExecutionService {
       };
     }
 
-    const classifierUsages: Usage[] = [];
-    const recordAutoDecision = (
-      audit: SpindleAutoApprovalAudit,
-      decision?: { usage: Usage },
-    ): void => {
-      const operation = traceRecorder.issueCall("spindle.approval.auto", {
-        action: audit.action,
-        risk: audit.risk,
-      });
-      operation.succeed(audit);
-      if (decision) classifierUsages.push(decision.usage);
-    };
-    const approval = new ApprovalController(
-      this.config.approvals,
-      options.context,
-      this.#sessionApprovals,
-      this.autoApprovalClassifier,
-      recordAutoDecision,
-    );
     const audits: SpindleCallAudit[] = [];
     const phases: string[] = [];
     const workflowSpans = new Map<
@@ -350,9 +297,6 @@ export class SpindleExecutionService {
       }
       return this.registry.invoke(ref, args, {
         ...callContext,
-        approve: async (action, preparedArgs) => {
-          await approval.approve(action, preparedArgs);
-        },
         audits,
         maxResultChars: this.config.executor.maxNestedResultChars,
         traceOperation,
@@ -496,9 +440,6 @@ export class SpindleExecutionService {
       trace: traceRecorder.seal(runOutcome, phases, sandboxResult.error),
       elapsedMs: performance.now() - startedAt,
       ...(sandboxResult.error ? { error: sandboxResult.error } : {}),
-      ...(classifierUsages.length > 0
-        ? { usage: aggregateUsage(classifierUsages) }
-        : {}),
     };
   }
 }

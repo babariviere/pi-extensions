@@ -6,7 +6,6 @@ import {
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import type { SpindleToolCaptureConfig } from "../config.ts";
-import type { SpindleRisk } from "../protocol.ts";
 
 export interface CapturedToolEntry {
   name: string;
@@ -15,7 +14,6 @@ export interface CapturedToolEntry {
   sourceInfo: SourceInfo;
   runner: ExtensionRunner;
   wrappedTool: ReturnType<typeof wrapRegisteredTool>;
-  risk: SpindleRisk;
 }
 
 export class CapturedToolCatalog {
@@ -52,7 +50,6 @@ export class CapturedToolCatalog {
         sourceInfo,
         runner,
         wrappedTool: wrapRegisteredTool(registeredTool, runner),
-        risk: config.risks[definition.name] ?? config.defaultRisk,
       });
     }
   }

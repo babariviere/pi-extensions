@@ -47,7 +47,6 @@ const descriptors: SpindleActionDescriptor[] = [
       required: ["tool"],
       additionalProperties: false,
     },
-    risk: "network",
     namespace: "management",
   },
   {
@@ -59,7 +58,6 @@ const descriptors: SpindleActionDescriptor[] = [
       properties: { server: { type: "string" } },
       additionalProperties: false,
     },
-    risk: "read",
     namespace: "management",
   },
   {
@@ -76,7 +74,6 @@ const descriptors: SpindleActionDescriptor[] = [
       required: ["query"],
       additionalProperties: false,
     },
-    risk: "read",
     namespace: "management",
   },
   {
@@ -88,7 +85,6 @@ const descriptors: SpindleActionDescriptor[] = [
       required: ["tool"],
       additionalProperties: false,
     },
-    risk: "read",
     namespace: "management",
   },
 ];

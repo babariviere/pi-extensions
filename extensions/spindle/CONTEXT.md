@@ -47,9 +47,8 @@ rename mapping below; it must be applied to every upstream patch.
 `guest-types.ts`, `orchestration.ts`, `quickjs-runtime.ts`, `type-checker.ts`
 
 ### `core/`
-`action-registry.ts`, `approval-controller.ts`, `auto-approval-classifier.ts`,
-`call-preview.ts`, `pi-tools.ts`, `skill-dir.ts`, `skill-prompt.ts`,
-`skill-references.ts`, `tool-ownership.ts`, `tool-result-proxy.ts`
+`action-registry.ts`, `call-preview.ts`, `pi-tools.ts`, `skill-dir.ts`,
+`skill-prompt.ts`, `skill-references.ts`, `tool-ownership.ts`, `tool-result-proxy.ts`
 
 ### `audit/`, `activity/`, `capture/`
 `audit/{index,details,projection,trace}.ts`, `activity/{store,types}.ts`,
@@ -123,9 +122,9 @@ both rewrites.
 
 Also currently carrying no hand edits (same two mechanical rewrites only; not
 part of the guaranteed parity contract, but useful to know):
-`activity/{store,types}.ts`, `audit/{index,projection,trace}.ts`,
-`capture/{catalog,interceptor}.ts`, `core/{approval-controller,auto-approval-classifier,call-preview,pi-tools,skill-dir,tool-result-proxy}.ts`,
-`providers/{captured-tools-provider,write-preview}.ts`, `async-settlement.ts`,
+`activity/{store,types}.ts`, `audit/index.ts`,
+`core/{call-preview,pi-tools,skill-dir,tool-result-proxy}.ts`,
+`providers/write-preview.ts`, `async-settlement.ts`,
 `config-migrations.ts`, `host-compatibility.ts`, `util.ts`,
 `runtime/type-checker.ts`.
 
@@ -191,6 +190,31 @@ fd -e ts . extensions/spindle -x perl -pi -e 's{(from\s+")(\.\.?/[^"]*)\.js(")}{
 | `ui/controller.ts` | **Rewritten.** Kept `start` / `stop` / `#schedulePoll` / `#scheduleRefresh` / `#refresh` / `#renderWidget` and the single `ctx.ui.setWidget(..., { placement: "aboveEditor" })` call. Deleted `openDashboard`, `#pollMesh`, the mesh event buffer, the transcript sources and the dashboard TUI. `WIDGET_ID` is `"spindle"`. |
 | `ui/transcript.ts` | Removed the `AgentTranscriptReader` import and re-export (see the trim manifest). |
 | `ui/transcript-parser.ts` | `SpindleLogLine` now comes from the new local `ui/transcript-types.ts` instead of `../agents/types.ts`. |
+
+## Removed: approvals & risk subsystem
+
+The upstream approval gate and its LLM auto-approval classifier were removed
+wholesale (all risk classes defaulted to `allow` here, so the gate never gated
+anything). Deleted `core/approval-controller.ts` and
+`core/auto-approval-classifier.ts`. Dropped the `SpindleRisk` type and the
+`risk` field from `SpindleActionDescriptor` / `SpindleCapabilityActionHead`
+(`protocol.ts`); the `approvals` config block plus `capture.defaultRisk` /
+`capture.risks` and their parsing (`config.ts`); `approve` from
+`SpindleRegistryInvocationContext`, the `"approve"` invoke stage, and `risk`
+from the capability catalog (`core/action-registry.ts`); the
+`ApprovalController` wiring, the auto-decision usage aggregation, and the
+classifier constructor param (`execution-service.ts`, plus the now-dead
+`undefined` arg in `spindle-state.ts`); the per-descriptor `risk` on every
+provider (`pi` / `mcp` / `agents` / captured) and on `CapturedToolEntry`
+(`capture/catalog.ts`, `capture/interceptor.ts`); and the
+`spindle.approval.auto` projection cases (`audit/projection.ts`).
+
+The subagent `tools:` allowlist (`core/tool-allowlist.ts`, `SpindleToolGate`)
+is a separate system and is untouched. The `"approve"` member was also removed
+from `audit/trace.ts`'s `SpindleExecutionFailureStageV1` union and its `stages`
+validator Set. This is a deliberate divergence from upstream pi-fabric: porting
+future upstream changes to any of the files above now requires dropping the
+risk/approval hunks by hand.
 
 ## New spindle files
 

@@ -67,14 +67,12 @@ const descriptors: SpindleActionDescriptor[] = [
     description:
       "List custom agent definitions discovered under ~/.pi/agent/agents and <cwd>/.pi/agents",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
-    risk: "read",
   },
   {
     name: "run",
     description:
       "Run one discovered agent on a task and wait for its result. Optional per-run model/thinking overrides, an `output` path for the agent's submitted result, and `reads` for read-first context files.",
     inputSchema: taskItemSchema,
-    risk: "agent",
   },
   {
     name: "runAll",
@@ -86,7 +84,6 @@ const descriptors: SpindleActionDescriptor[] = [
       required: ["tasks"],
       additionalProperties: false,
     },
-    risk: "agent",
   },
 ];
 

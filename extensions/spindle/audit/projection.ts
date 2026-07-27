@@ -170,11 +170,6 @@ export const projectSpindleAuditArgs = (
     case "spindle.discovery.models":
     case "spindle.workflow.progress":
       return emptyProjection(args);
-    case "spindle.approval.auto":
-      return projected(args, (output) => {
-        copyIdentifier(output, args, "action");
-        copyIdentifier(output, args, "risk");
-      });
     case "spindle.discovery.catalog":
       return projected(args, (output) => {
         copyIdentifier(output, args, "provider");
@@ -281,15 +276,6 @@ export const projectSpindleAuditResult = (
     return undefined;
   }
   const record = result as Record<string, unknown>;
-  if (ref === "spindle.approval.auto") {
-    return projected(record, (output) => {
-      copyIdentifier(output, record, "action");
-      copyIdentifier(output, record, "risk");
-      copyIdentifier(output, record, "decision");
-      copyIdentifier(output, record, "model");
-      copyNumber(output, record, "at");
-    });
-  }
   if (ref !== "pi.write") return undefined;
   const details =
     typeof record.details === "object" && record.details !== null && !Array.isArray(record.details)

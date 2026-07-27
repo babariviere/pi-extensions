@@ -20,9 +20,6 @@ import {
   CURRENT_SPINDLE_CONFIG_VERSION,
   migrateSpindleConfigDocument,
 } from "./config-migrations.ts";
-import type { SpindleRisk } from "./protocol.ts";
-
-type SpindleApprovalMode = "allow" | "ask" | "auto" | "deny";
 export type SpindleUiWidgetMode = "auto" | "always" | "hidden";
 export type SpindleResultFormat = "auto" | "yaml" | "json" | "text";
 /** QuickJS is the only vendored runtime; the Node-process escape hatch is dropped. */
@@ -40,15 +37,6 @@ interface SpindleExecutorConfig {
   resultFormat: SpindleResultFormat;
 }
 
-export interface SpindleApprovalConfig {
-  read: SpindleApprovalMode;
-  write: SpindleApprovalMode;
-  execute: SpindleApprovalMode;
-  network: SpindleApprovalMode;
-  agent: SpindleApprovalMode;
-  model?: string;
-}
-
 /** Bounds and defaults for `agents.run` / `agents.runAll`. */
 export interface SpindleAgentConfig {
   maxPerExecution: number;
@@ -61,8 +49,6 @@ export interface SpindleToolCaptureConfig {
   enabled: boolean;
   hideFromModel: boolean;
   keepVisible: string[];
-  defaultRisk: SpindleRisk;
-  risks: Record<string, SpindleRisk>;
 }
 
 interface SpindleUiConfig {
@@ -77,7 +63,6 @@ interface SpindleUiConfig {
 export interface SpindleConfig {
   fullCodeMode: boolean;
   executor: SpindleExecutorConfig;
-  approvals: SpindleApprovalConfig;
   agents: SpindleAgentConfig;
   capture: SpindleToolCaptureConfig;
   ui: SpindleUiConfig;
@@ -105,13 +90,6 @@ export const DEFAULT_SPINDLE_CONFIG: SpindleConfig = {
     maxNestedResultChars: 2_000_000,
     resultFormat: "auto",
   },
-  approvals: {
-    read: "allow",
-    write: "allow",
-    execute: "allow",
-    network: "allow",
-    agent: "allow",
-  },
   agents: {
     maxPerExecution: 100,
     timeoutMs: DEFAULT_AGENT_TIMEOUT_MS,
@@ -120,16 +98,6 @@ export const DEFAULT_SPINDLE_CONFIG: SpindleConfig = {
     enabled: true,
     hideFromModel: true,
     keepVisible: ["spindle_exec"],
-    defaultRisk: "execute",
-    risks: {
-      read: "read",
-      grep: "read",
-      find: "read",
-      ls: "read",
-      edit: "write",
-      write: "write",
-      bash: "execute",
-    },
   },
   ui: {
     enabled: true,
@@ -187,11 +155,6 @@ const mergeObjects = (
   return merged;
 };
 
-const approvalMode = (value: unknown, fallback: SpindleApprovalMode): SpindleApprovalMode =>
-  value === "allow" || value === "ask" || value === "auto" || value === "deny"
-    ? value
-    : fallback;
-
 const booleanValue = (value: unknown, fallback: boolean): boolean =>
   typeof value === "boolean" ? value : fallback;
 
@@ -224,22 +187,11 @@ const resultFormatValue = (
     ? value
     : fallback;
 
-const riskValue = (value: unknown, fallback: SpindleRisk): SpindleRisk =>
-  value === "read" ||
-  value === "write" ||
-  value === "execute" ||
-  value === "network" ||
-  value === "agent"
-    ? value
-    : fallback;
-
 export const normalizeSpindleConfig = (input: Record<string, unknown>): SpindleConfig => {
   const executor = objectValue(input.executor);
-  const approvals = objectValue(input.approvals);
   const agents = objectValue(input.agents);
   const capture = objectValue(input.capture);
   const ui = objectValue(input.ui);
-  const approvalModel = stringValue(approvals.model);
   const agentModel = stringValue(agents.defaultModel);
   const agentThinking = thinkingValue(agents.defaultThinking);
   const configuredVisible = Array.isArray(capture.keepVisible)
@@ -247,15 +199,6 @@ export const normalizeSpindleConfig = (input: Record<string, unknown>): SpindleC
         (name): name is string => typeof name === "string" && Boolean(name.trim()),
       )
     : DEFAULT_SPINDLE_CONFIG.capture.keepVisible;
-  const configuredRisks = {
-    ...DEFAULT_SPINDLE_CONFIG.capture.risks,
-    ...objectValue(capture.risks),
-  };
-  const risks = Object.fromEntries(
-    Object.entries(configuredRisks)
-      .filter(([name]) => Boolean(name.trim()))
-      .map(([name, risk]) => [name, riskValue(risk, DEFAULT_SPINDLE_CONFIG.capture.defaultRisk)]),
-  );
 
   return {
     fullCodeMode: booleanValue(input.fullCodeMode, DEFAULT_SPINDLE_CONFIG.fullCodeMode),
@@ -290,14 +233,6 @@ export const normalizeSpindleConfig = (input: Record<string, unknown>): SpindleC
         DEFAULT_SPINDLE_CONFIG.executor.resultFormat,
       ),
     },
-    approvals: {
-      read: approvalMode(approvals.read, DEFAULT_SPINDLE_CONFIG.approvals.read),
-      write: approvalMode(approvals.write, DEFAULT_SPINDLE_CONFIG.approvals.write),
-      execute: approvalMode(approvals.execute, DEFAULT_SPINDLE_CONFIG.approvals.execute),
-      network: approvalMode(approvals.network, DEFAULT_SPINDLE_CONFIG.approvals.network),
-      agent: approvalMode(approvals.agent, DEFAULT_SPINDLE_CONFIG.approvals.agent),
-      ...(approvalModel ? { model: approvalModel } : {}),
-    },
     agents: {
       maxPerExecution: boundedInteger(
         agents.maxPerExecution,
@@ -321,8 +256,6 @@ export const normalizeSpindleConfig = (input: Record<string, unknown>): SpindleC
         DEFAULT_SPINDLE_CONFIG.capture.hideFromModel,
       ),
       keepVisible: [...new Set(configuredVisible)],
-      defaultRisk: riskValue(capture.defaultRisk, DEFAULT_SPINDLE_CONFIG.capture.defaultRisk),
-      risks,
     },
     ui: {
       enabled: booleanValue(ui.enabled, DEFAULT_SPINDLE_CONFIG.ui.enabled),
@@ -352,14 +285,12 @@ export const effectiveToolCaptureConfig = (
         keepVisible: config.capture.keepVisible.filter(
           (name) => !PI_CORE_TOOL_NAME_SET.has(name),
         ),
-        risks: { ...config.capture.risks },
       }
     : {
         ...config.capture,
         enabled: false,
         hideFromModel: false,
         keepVisible: [...config.capture.keepVisible],
-        risks: { ...config.capture.risks },
       };
 
 interface SpindleConfigFilePlan {

@@ -40,8 +40,6 @@ const clonePolicy = (config: SpindleToolCaptureConfig): SpindleToolCaptureConfig
   enabled: config.enabled,
   hideFromModel: config.hideFromModel,
   keepVisible: [...config.keepVisible],
-  defaultRisk: config.defaultRisk,
-  risks: { ...config.risks },
 });
 
 type ExtensionRunnerConstructor = {

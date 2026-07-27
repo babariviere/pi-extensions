@@ -69,10 +69,6 @@ export type SpindleRegistryActivityEvent =
 
 export interface SpindleRegistryInvocationContext extends SpindleInvocationContext {
   authorize?(action: ResolvedSpindleAction): Promise<void>;
-  approve(
-    action: ResolvedSpindleAction,
-    args: Record<string, unknown>,
-  ): Promise<void>;
   audits: SpindleCallAudit[];
   maxResultChars: number;
   trace?: SpindleExecutionTraceRecorder;
@@ -327,10 +323,8 @@ export class ActionRegistry {
             description: action.description,
             inputSchema: action.inputSchema,
             outputSchema: action.outputSchema,
-            risk: action.risk,
             namespace: action.namespace,
           }),
-          risk: action.risk,
           ...(action.namespace === undefined ? {} : { namespace: action.namespace }),
         }));
       return {
@@ -439,7 +433,7 @@ export class ActionRegistry {
     context: SpindleRegistryInvocationContext,
   ): Promise<unknown> {
     const traceOperation = context.traceOperation ?? context.trace?.issueCall(ref, args);
-    let failureStage: "resolve" | "guard" | "prepare" | "validate" | "approve" | "invoke" = "resolve";
+    let failureStage: "resolve" | "guard" | "prepare" | "validate" | "invoke" = "resolve";
     let audit: SpindleCallAudit | undefined;
     let invocationActive = false;
     try {
@@ -470,9 +464,6 @@ export class ActionRegistry {
       failureStage = "validate";
       const invalid = validationMessage(action.inputSchema, preparedArgs);
       if (invalid) throw new Error(`Invalid arguments for ${ref}: ${invalid}`);
-
-      failureStage = "approve";
-      await runAbortable(context.signal, () => context.approve(action, preparedArgs));
 
       failureStage = "invoke";
       const nestedToolCallId = `${NESTED_TOOL_CALL_ID_PREFIX}${randomUUID()}`;

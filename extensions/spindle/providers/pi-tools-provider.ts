@@ -20,7 +20,6 @@ import type {
   SpindleMediaBlock,
   SpindleProvider,
   SpindleProviderListRequest,
-  SpindleRisk,
 } from "../protocol.ts";
 import { countContentLines } from "../ui/preview-lines.ts";
 import { CapturedToolsProvider } from "./captured-tools-provider.ts";
@@ -31,17 +30,8 @@ import {
 
 const MAX_RENDERER_ARGUMENT_CHARS = 200_000;
 
-const readTools = new Set<PiCoreToolName>(["read", "grep", "find", "ls"]);
-const writeTools = new Set<PiCoreToolName>(["edit", "write"]);
-
 // The content array every pi core tool returns: text and/or image blocks.
 type ToolContent = AgentToolResult<unknown>["content"];
-
-const riskForTool = (name: PiCoreToolName): SpindleRisk => {
-  if (readTools.has(name)) return "read";
-  if (writeTools.has(name)) return "write";
-  return "execute";
-};
 
 const textContent = (content: ToolContent): string =>
   content
@@ -485,7 +475,6 @@ export class PiToolsProvider implements SpindleProvider {
       name,
       description: tool.description,
       inputSchema: tool.parameters as unknown as Record<string, unknown>,
-      risk: riskForTool(name),
       namespace: "builtin",
     };
   }
