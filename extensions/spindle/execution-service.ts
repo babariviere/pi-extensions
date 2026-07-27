@@ -311,6 +311,99 @@ export class SpindleExecutionService {
         async (ref, args, runtimeSignal) => {
           const callContext = { ...baseContext, signal: runtimeSignal };
           switch (ref) {
+            case "spindle.$providers":
+              return traceAttempt(
+                "spindle.discovery.providers",
+                args,
+                runtimeSignal,
+                () =>
+                  this.registry
+                    .providers()
+                    .filter(
+                      (provider) => effectiveFullCodeMode || !fullCodeProvider(provider.name),
+                    ),
+              );
+            case "spindle.$catalog":
+              return traceAttempt(
+                "spindle.discovery.catalog",
+                args,
+                runtimeSignal,
+                async (setStage) => {
+                  const provider = typeof args.provider === "string" ? args.provider : undefined;
+                  setStage("guard");
+                  if (provider) guardFullCodeRef(`${provider}.*`);
+                  setStage(provider && !this.registry.has(provider) ? "resolve" : "invoke");
+                  return this.registry.catalog(callContext, {
+                    ...(provider ? { provider } : {}),
+                    ...(typeof args.limit === "number" ? { limit: args.limit } : {}),
+                    includeProvider: (name) => effectiveFullCodeMode || !fullCodeProvider(name),
+                  });
+                },
+              );
+            case "spindle.$list":
+              return traceAttempt(
+                "spindle.discovery.list",
+                args,
+                runtimeSignal,
+                async (setStage) => {
+                  setStage("guard");
+                  if (typeof args.provider === "string") guardFullCodeRef(`${args.provider}.*`);
+                  setStage(
+                    typeof args.provider === "string" && !this.registry.has(args.provider)
+                      ? "resolve"
+                      : "invoke",
+                  );
+                  const actions = await this.registry.list(
+                    {
+                      ...(typeof args.provider === "string" ? { provider: args.provider } : {}),
+                      ...(typeof args.namespace === "string" ? { namespace: args.namespace } : {}),
+                      ...(typeof args.query === "string" ? { query: args.query } : {}),
+                      ...(typeof args.limit === "number" ? { limit: args.limit } : {}),
+                    },
+                    callContext,
+                  );
+                  return actions.filter(
+                    (action) => effectiveFullCodeMode || !fullCodeProvider(action.provider),
+                  );
+                },
+              );
+            case "spindle.$search":
+              return traceAttempt(
+                "spindle.discovery.search",
+                args,
+                runtimeSignal,
+                async () => {
+                  const actions = await this.registry.search(
+                    String(args.query ?? ""),
+                    callContext,
+                    typeof args.limit === "number" ? args.limit : undefined,
+                  );
+                  return actions.filter(
+                    (action) => effectiveFullCodeMode || !fullCodeProvider(action.provider),
+                  );
+                },
+              );
+            case "spindle.$describe":
+              return traceAttempt(
+                "spindle.discovery.describe",
+                args,
+                runtimeSignal,
+                async (setStage) => {
+                  const targetRef = String(args.ref ?? "");
+                  setStage("guard");
+                  guardFullCodeRef(targetRef);
+                  setStage("resolve");
+                  return this.registry.describe(targetRef, callContext);
+                },
+              );
+            case "spindle.$call": {
+              const callArgs =
+                typeof args.args === "object" && args.args !== null && !Array.isArray(args.args)
+                  ? (args.args as Record<string, unknown>)
+                  : {};
+              const targetRef = String(args.ref ?? "");
+              return invokeAction(targetRef, callArgs, callContext);
+            }
             case "spindle.$progress":
               return traceAttempt(
                 "spindle.workflow.progress",

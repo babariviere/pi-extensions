@@ -201,6 +201,34 @@ const __providerProxy = (provider) => new Proxy({}, {
   },
 });
 globalThis.extensions = __providerProxy("extensions");
+// tools is discovery + generic calls only. The proxy keeps the six discovery
+// methods and turns a core-tool name (read/bash/edit/...) into an actionable
+// error pointing at pi.<name>, so a model that writes tools.read(...) learns
+// the fix in one turn instead of looping on "tools.read is not a function".
+const __toolsBase = {
+  providers: () => __call("spindle.$providers", {}),
+  catalog: (args = {}) => __call("spindle.$catalog", args),
+  list: (args = {}) => __call("spindle.$list", args),
+  search: (args) => __call("spindle.$search", args),
+  describe: (args) => __call("spindle.$describe", args),
+  call: (args) => __call("spindle.$call", args),
+};
+globalThis.tools = new Proxy(__toolsBase, {
+  get(target, property) {
+    if (property === "then" || typeof property === "symbol") return undefined;
+    const name = String(property);
+    if (__piToolNames.indexOf(name) >= 0) {
+      return () => {
+        throw new Error(
+          "tools." + name + " is not available on the discovery API. tools is discovery + generic calls only (providers/catalog/list/search/describe/call). For the Pi core tool, call pi." + name + "(args), e.g. pi." + name + "({ ... })."
+        );
+      };
+    }
+    return target[property];
+  },
+  set() { return true; },
+  deleteProperty() { return true; },
+});
 globalThis.agents = Object.freeze({
   list: () => __call("agents.list", {}),
   run: (args) => __call("agents.run", args),

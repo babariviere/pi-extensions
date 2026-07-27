@@ -30,6 +30,54 @@ interface SpindleCapturedTool {
   (args?: Record<string, unknown>): Promise<SpindleCapturedToolResult>;
 }
 type SpindleExtensionsApi = Record<string, SpindleCapturedTool>;
+interface SpindleAction {
+  ref: string;
+  provider: string;
+  name: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+  outputSchema?: Record<string, unknown>;
+  namespace?: string;
+}
+interface SpindleCapabilityActionHead {
+  key: string;
+  parentKey: string;
+  ref: string;
+  name: string;
+  description: string;
+  descriptorHash: string;
+  namespace?: string;
+}
+interface SpindleCapabilityProviderHead {
+  key: string;
+  parentKey: string;
+  name: string;
+  description: string;
+  descriptorHash: string;
+  actions: SpindleCapabilityActionHead[];
+}
+interface SpindleCapabilityCatalog {
+  kind: "pi-spindle.capability-catalog";
+  version: 1;
+  root: { key: "capability:spindle"; name: "Spindle capabilities"; description: string; descriptorHash: string };
+  providers: SpindleCapabilityProviderHead[];
+  totalActions: number;
+  indexedActions: number;
+  complete: boolean;
+  reasons: string[];
+}
+// tools is discovery + generic dispatch across every provider (pi, extensions,
+// mcp, agents). It owns no tools: use it to enumerate/describe actions or call
+// a ref computed at runtime. Direct named calls stay on their own namespace
+// (extensions.<tool>(), pi.<tool>(), mcp.<server>.<tool>()).
+interface SpindleToolsApi {
+  providers(): Promise<Array<{ name: string; description: string }>>;
+  catalog(args?: { provider?: string; limit?: number }): Promise<SpindleCapabilityCatalog>;
+  list(args?: { provider?: string; namespace?: string; query?: string; limit?: number }): Promise<SpindleAction[]>;
+  search(args: { query: string; limit?: number }): Promise<SpindleAction[]>;
+  describe(args: { ref: string }): Promise<SpindleAction>;
+  call(args: { ref: string; args?: Record<string, unknown> }): Promise<unknown>;
+}
 // String-primary tools (read/bash/grep/find/ls) accept a bare string; the
 // runtime proxy coerces it to { <primaryField>: string }. Lets the model write
 // the natural form (pi.bash("ls")) instead of pi.bash({ command: "ls" }).
@@ -142,6 +190,7 @@ interface SpindleWorkflowApi {
 }
 declare const pi: PiToolsApi;
 declare const extensions: SpindleExtensionsApi;
+declare const tools: SpindleToolsApi;
 declare const agents: SpindleAgentsApi;
 declare const mcp: SpindleMcpApi;
 declare const workflow: SpindleWorkflowApi;
@@ -169,6 +218,7 @@ declare function clearInterval(handle: number): void;
 const FULL_CODE_GLOBAL_DECLARATIONS = [
   "declare const pi: PiToolsApi;\n",
   "declare const extensions: SpindleExtensionsApi;\n",
+  "declare const tools: SpindleToolsApi;\n",
 ];
 
 const PI_TOOLS_API_HEADER = "interface PiToolsApi {";

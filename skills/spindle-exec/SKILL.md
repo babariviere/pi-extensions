@@ -37,6 +37,19 @@ When a program needs a string containing literal `${...}` (shell snippets, tool 
 
 `extensions.<tool>(args)` resolves to `{content:Array<{type,text?,...}>,text:string,details?,isError:boolean,terminate?,source:{path,source,scope,origin,baseDir?}}`. Read `.text` for the output. In full code mode these tools are hidden from the model's direct tool list, so `extensions.*` is the only way to reach them.
 
+## `tools` — cross-provider discovery + generic dispatch (full code mode only)
+
+`tools` owns no tools; it enumerates and invokes actions across every provider (pi, extensions, mcp, agents). Use it to discover names/schemas at runtime, then call them on their own namespace.
+
+- `tools.providers()` → `[{name, description}]` for every registered provider.
+- `tools.list({provider?, namespace?, query?, limit?})` → `SpindleAction[]` (`ref, provider, name, description, inputSchema, namespace?`). No args lists everything, including captured `extensions.*` tools that are hidden from the direct tool list.
+- `tools.catalog({provider?, limit?})` → provider/action head tree (navigation metadata).
+- `tools.search({query, limit?})` → ranked `SpindleAction[]`.
+- `tools.describe({ref})` → one action's full descriptor; read `inputSchema` before calling.
+- `tools.call({ref, args?})` → invoke a ref computed at runtime (same path as `extensions.<tool>()`/`pi.<tool>()`). Prefer direct property calls for statically known tools.
+
+Refs are namespaced (`extensions.<tool>`, `pi.grep`, `mcp.<server>.<tool>`). Calling a core-tool name on `tools` (e.g. `tools.read(...)`) throws with a hint to use `pi.read(...)`.
+
 ## `mcp` — MCP tools through pi-mcp-adapter
 
 Spindle does not embed an MCP client; `mcp.*` forwards to the `mcp` gateway tool registered by the sibling `pi-mcp-adapter` extension, so `~/.pi/agent/mcp.json`, stored credentials, and per-server/per-tool disable rules all apply unchanged. See `<skill-dir>/references/mcp.md`.
