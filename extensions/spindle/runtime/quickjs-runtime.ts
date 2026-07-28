@@ -260,7 +260,13 @@ globalThis.mcp = new Proxy({}, {
             : { server: serverName, tool, args: args ?? {} },
         );
     }
-    return new Proxy({}, {
+    // Calling the server proxy itself (mcp.<server>()) lists that server's
+    // tools, matching the natural "inspect a server" guess; property access
+    // stays sugar for mcp.call({ server, tool, args }).
+    return new Proxy(function () {}, {
+      apply() {
+        return __call("mcp.$list", { server: String(server) });
+      },
       get(_serverTarget, tool) {
         if (tool === "then") return undefined;
         return (args = {}) =>

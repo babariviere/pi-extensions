@@ -140,6 +140,8 @@ interface SpindleMcpTool {
   (args?: Record<string, unknown>): Promise<SpindleMcpResult | unknown>;
 }
 interface SpindleMcpServer {
+  // mcp.<server>() lists the server's tools; mcp.<server>.<tool>(args) calls one.
+  (): Promise<unknown>;
   [tool: string]: SpindleMcpTool;
 }
 // Servers connect lazily inside pi-mcp-adapter: nothing here pre-fetches a

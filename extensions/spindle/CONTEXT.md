@@ -389,7 +389,7 @@ with `ctx.signal` and `ctx.nestedToolCallId`.
 | Spindle action | Sandbox call | pi-mcp-adapter gateway params |
 |---|---|---|
 | `mcp.$call` | `mcp.call(server, tool, args)` / `mcp.<server>.<tool>(args)` | `{ tool, args, server? }` |
-| `mcp.$list` | `mcp.list(server)` / `mcp.list({ server? })` | `{}` or `{ server }` |
+| `mcp.$list` | `mcp.list(server)` / `mcp.list({ server? })` / `mcp.<server>()` | `{}` or `{ server }` |
 | `mcp.$search` | `mcp.search({ query, server?, regex?, includeSchemas? })` | `{ search, server?, regex?, includeSchemas? }` |
 | `mcp.$describe` | `mcp.describe({ tool })` | `{ describe }` |
 | `mcp.$connect` | `mcp.connect(server)` | `{ connect: server }` |
