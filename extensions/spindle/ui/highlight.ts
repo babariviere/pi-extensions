@@ -169,8 +169,33 @@ export function languageFromPath(filePath: string | undefined): string | undefin
   return byExt && byExt in bundledLanguages ? byExt : undefined;
 }
 
-/** Configure highlighting without loading Shiki until the first code preview needs it. */
-export function configureHighlighting(theme: string, syntaxEnabled = true): void {
+/**
+ * Shiki theme applied when the active Pi theme has no matching bundled shiki
+ * theme. Seeded from the code-preview `shikiTheme` setting.
+ */
+let fallbackTheme = "dark-plus";
+
+/**
+ * Resolve a shiki theme id from a Pi theme name (e.g. `rose-pine-moon`,
+ * `catppuccin-frappe`). Falls back to the configured shiki theme when the Pi
+ * theme has no bundled shiki equivalent. Built-in Pi themes like `dark`/`light`
+ * are not bundled shiki ids, so they fall through to the configured theme
+ * rather than being forced onto a specific shiki theme.
+ */
+export function resolveShikiTheme(piThemeName: string | undefined): string {
+  if (piThemeName) {
+    const normalized = piThemeName.toLowerCase();
+    if (THEME_TYPE.has(normalized)) return normalized;
+  }
+  return fallbackTheme;
+}
+
+/** True when the active shiki theme is a light theme (drives diff emphasis colors). */
+export function activeShikiThemeIsLight(): boolean {
+  return THEME_TYPE.get(currentTheme) === "light";
+}
+
+const setActiveTheme = (theme: string, syntaxEnabled: boolean): void => {
   currentTheme = theme;
   enabled = syntaxEnabled;
   if (!enabled) {
@@ -187,7 +212,37 @@ export function configureHighlighting(theme: string, syntaxEnabled = true): void
     renderCacheChars = 0;
     return;
   }
-  if (highlighter || initializingTheme) void initHighlighting(theme, syntaxEnabled);
+  if (highlighter || initializingTheme) {
+    // Drop the stale highlighter synchronously so the next highlightCode takes
+    // the not-ready path and registers an invalidate. Without this, a live
+    // theme switch would call codeToTokensBase for a theme the existing
+    // highlighter has not loaded, fall back to plain text, and never schedule
+    // a re-render once the new theme finishes loading.
+    highlighter?.dispose();
+    highlighter = undefined;
+    highlighterGeneration++;
+    loadedLanguages.clear();
+    pendingLanguages.clear();
+    void initHighlighting(theme, syntaxEnabled);
+  }
+};
+
+/** Configure highlighting without loading Shiki until the first code preview needs it. */
+export function configureHighlighting(theme: string, syntaxEnabled = true): void {
+  fallbackTheme = theme;
+  setActiveTheme(theme, syntaxEnabled);
+}
+
+/**
+ * Follow the active Pi theme: map its name to a shiki theme and re-highlight if
+ * it changed. No-op when syntax highlighting is disabled or the mapping is
+ * already active.
+ */
+export function applyPiTheme(piThemeName: string | undefined): void {
+  if (!enabled) return;
+  const resolved = resolveShikiTheme(piThemeName);
+  if (resolved === currentTheme) return;
+  setActiveTheme(resolved, enabled);
 }
 
 /** Initialize (or reinitialize) the shared shiki highlighter. Fire-and-forget safe. */

@@ -4,9 +4,9 @@ import { basename, extname, isAbsolute, relative } from "node:path";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { CodePreviewSettings } from "./code-preview.ts";
 import { diffLines } from "diff";
-import { bundledLanguages, bundledThemesInfo } from "shiki";
+import { bundledLanguages } from "shiki";
 import type { SpindleRenderAudit } from "./spindle-render.ts";
-import { highlightCode, languageFromPath } from "./highlight.ts";
+import { activeShikiThemeIsLight, highlightCode, languageFromPath } from "./highlight.ts";
 import { markDiffLine } from "./diff-background.ts";
 import { countContentLines, selectPreviewTextLines } from "./preview-lines.ts";
 import {
@@ -54,10 +54,6 @@ export const isCoreToolAudit = (audit: SpindleRenderAudit): boolean =>
   audit.tool !== undefined &&
   CORE_TOOLS.has(audit.tool) &&
   (audit.provider === "pi" || audit.ref === `pi.${audit.tool}`);
-const LIGHT_THEMES = new Set(
-  bundledThemesInfo.filter((theme) => theme.type === "light").map((theme) => theme.id),
-);
-
 const positiveEnvInteger = (name: string, fallback: number): number => {
   const parsed = Number.parseInt(process.env[name] ?? "", 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
@@ -607,7 +603,7 @@ const renderDiff = (
     }
   }
   const emphasis = wordEmphasisFor(parsed, options.settings.wordEmphasis);
-  const emphasisColors = LIGHT_THEMES.has(options.settings.shikiTheme)
+  const emphasisColors = activeShikiThemeIsLight()
     ? { add: "\x1b[48;2;194;209;194m", remove: "\x1b[48;2;216;182;182m" }
     : { add: "\x1b[48;2;64;132;82m", remove: "\x1b[48;2;148;62;70m" };
   const lines = shown.map((raw, index) => {

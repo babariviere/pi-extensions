@@ -7,6 +7,7 @@ import {
   visibleWidth,
   type Component,
 } from "@earendil-works/pi-tui";
+import { applyPiTheme } from "./highlight.ts";
 
 type ToolCallBackgroundMode = "on" | "border" | "off";
 type AnyTool = ToolDefinition<any, any, any>;
@@ -288,6 +289,7 @@ export const withCodePreviewShell: SpindleToolShellDecorator = (tool, options = 
     ...tool,
     renderShell: mode === "on" ? "default" : "self",
     renderCall(args, theme, rawContext) {
+      applyPiTheme(theme.name);
       if (!rawContext) {
         return originalRenderCall
           ? originalRenderCall.call(tool, args, theme, rawContext)
@@ -341,6 +343,7 @@ export const withCodePreviewShell: SpindleToolShellDecorator = (tool, options = 
       return shell;
     },
     renderResult(result, resultOptions, theme, rawContext) {
+      applyPiTheme(theme.name);
       const context = rawContext as unknown as PreviewRenderContext;
       const optionsRecord = resultOptions as { isPartial: boolean };
       const label = updateTiming(context, timingEnabled);
