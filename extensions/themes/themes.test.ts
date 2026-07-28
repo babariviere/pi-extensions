@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
 
 const testDir = dirname(fileURLToPath(import.meta.url));
-const repoRoot = join(testDir, "..");
+const repoRoot = join(testDir, "..", "..");
 const themesDir = join(repoRoot, "themes");
 const schemaPath = join(
   repoRoot,
