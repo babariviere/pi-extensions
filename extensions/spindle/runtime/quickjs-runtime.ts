@@ -239,7 +239,12 @@ globalThis.agents = Object.freeze({
 globalThis.mcp = new Proxy({}, {
   get(_target, server) {
     if (server === "then") return undefined;
-    if (server === "list") return (args = {}) => __call("mcp.$list", args);
+    if (server === "list") {
+      return (args = {}) => __call("mcp.$list", typeof args === "string" ? { server: args } : args);
+    }
+    if (server === "connect") {
+      return (args) => __call("mcp.$connect", typeof args === "string" ? { server: args } : args);
+    }
     if (server === "search") {
       return (args) => __call("mcp.$search", typeof args === "string" ? { query: args } : args);
     }

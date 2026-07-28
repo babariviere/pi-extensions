@@ -87,6 +87,18 @@ const descriptors: SpindleActionDescriptor[] = [
     },
     namespace: "management",
   },
+  {
+    name: "$connect",
+    description:
+      "Connect (lazy) a configured MCP server and refresh its tool metadata; matches the pi-mcp-adapter mcp({ connect }) hint",
+    inputSchema: {
+      type: "object",
+      properties: { server: { type: "string" } },
+      required: ["server"],
+      additionalProperties: false,
+    },
+    namespace: "management",
+  },
 ];
 
 const textFromContent = (content: unknown): string => {
@@ -183,6 +195,8 @@ export class McpBridgeProvider implements SpindleProvider {
       }
       case "$describe":
         return this.#gatewayCall({ describe: String(args.tool ?? "") }, context);
+      case "$connect":
+        return this.#gatewayCall({ connect: String(args.server ?? "") }, context);
       default:
         throw new Error(`Unknown mcp action: mcp.${actionName}`);
     }

@@ -147,7 +147,9 @@ interface SpindleMcpServer {
 type SpindleMcpApi = Record<string, SpindleMcpServer> & {
   call(server: string, tool: string, args?: Record<string, unknown>): Promise<SpindleMcpResult | unknown>;
   call(args: { server?: string; tool: string; args?: Record<string, unknown> }): Promise<SpindleMcpResult | unknown>;
+  list(server: string): Promise<unknown>;
   list(args?: { server?: string }): Promise<unknown>;
+  connect(server: string): Promise<unknown>;
   search(args: string | { query: string; server?: string; regex?: boolean; includeSchemas?: boolean }): Promise<unknown>;
   describe(args: string | { tool: string }): Promise<unknown>;
 };
