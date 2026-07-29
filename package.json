@@ -42,6 +42,7 @@
     "yaml": "^2.9.0"
   },
   "devDependencies": {
+    "@typescript/native-preview": "latest",
     "@types/node": "^26.0.0",
     "@types/ws": "^8.18.1",
     "tsx": "^4.19.2"
@@ -54,6 +55,6 @@
   },
   "scripts": {
     "test": "node --import tsx --test 'extensions/**/*.test.ts'",
-    "typecheck": "tsc -p tsconfig.json"
+    "typecheck": "tsgo -p tsconfig.json"
   }
 }
