@@ -1103,6 +1103,44 @@ function listTodosSync(todosDir: string): TodoFrontMatter[] {
 	return sortTodos(todos);
 }
 
+const TODO_WIDGET_KEY = "todo-current";
+
+function findCurrentTodo(todosDir: string, sessionId: string | undefined): TodoFrontMatter | null {
+	if (!sessionId) return null;
+	const mine = listTodosSync(todosDir).filter(
+		(todo) => todo.assigned_to_session === sessionId && !isTodoClosed(getTodoStatus(todo)),
+	);
+	return mine[0] ?? null;
+}
+
+/**
+ * Show which todo the current session has claimed as a widget above the editor.
+ * Cleared when the session has no open assigned todo. Called from every mutation
+ * path (claim/release/status/delete/update) and on session_start.
+ */
+function refreshCurrentTodoWidget(ctx: ExtensionContext): void {
+	if (!ctx.hasUI) return;
+	const todosDir = getTodosDir(ctx.cwd);
+	const current = findCurrentTodo(todosDir, ctx.sessionManager.getSessionId());
+	if (!current) {
+		ctx.ui.setWidget(TODO_WIDGET_KEY, undefined);
+		return;
+	}
+	ctx.ui.setWidget(
+		TODO_WIDGET_KEY,
+		(_tui: TUI, theme: Theme) =>
+			new Text(
+				theme.fg("accent", "▶ working ") +
+					theme.fg("accent", formatTodoId(current.id)) +
+					" " +
+					theme.fg("text", getTodoTitle(current)),
+				0,
+				0,
+			),
+		{ placement: "aboveEditor" },
+	);
+}
+
 function getTodoTitle(todo: TodoFrontMatter): string {
 	return todo.title || "(untitled)";
 }
@@ -1323,6 +1361,7 @@ async function updateTodoStatus(
 		return { error: result.error };
 	}
 
+	refreshCurrentTodoWidget(ctx);
 	return result;
 }
 
@@ -1365,6 +1404,7 @@ async function claimTodoAssignment(
 		return { error: result.error };
 	}
 
+	refreshCurrentTodoWidget(ctx);
 	return result;
 }
 
@@ -1405,6 +1445,7 @@ async function releaseTodoAssignment(
 		return { error: result.error };
 	}
 
+	refreshCurrentTodoWidget(ctx);
 	return result;
 }
 
@@ -1434,6 +1475,7 @@ async function deleteTodo(
 		return { error: result.error };
 	}
 
+	refreshCurrentTodoWidget(ctx);
 	return result;
 }
 
@@ -1443,6 +1485,26 @@ export default function todosExtension(pi: ExtensionAPI) {
 		await ensureTodosDir(todosDir);
 		const settings = await readTodoSettings(todosDir);
 		await garbageCollectTodos(todosDir, settings);
+		refreshCurrentTodoWidget(ctx);
+	});
+
+	// Nudge the agent toward the todo tool ONLY when open todos already exist in
+	// this repo. This reinforces the workflow during real task work without
+	// nagging on unrelated turns.
+	pi.on("before_agent_start", (event, ctx) => {
+		const todosDir = getTodosDir(ctx.cwd);
+		const open = listTodosSync(todosDir).filter((todo) => !isTodoClosed(getTodoStatus(todo)));
+		if (open.length === 0) return;
+		const sessionId = ctx.sessionManager.getSessionId();
+		const mine = open.filter((todo) => todo.assigned_to_session === sessionId);
+		const plural = open.length === 1 ? "" : "s";
+		const guidance = [
+			"",
+			"## Todo tracking",
+			`There ${open.length === 1 ? "is" : "are"} ${open.length} open todo${plural} in ${TODO_DIR_NAME} for this repo${mine.length ? `, ${mine.length} assigned to this session` : ""}.`,
+			"Use the `todo` tool to track multi-step or multi-session work: `claim` a todo before working it, `append` progress or blockers, and `close` it when done. Prefer the todo tool over ad-hoc plan/scratch files for durable task state.",
+		].join("\n");
+		return { systemPrompt: event.systemPrompt + "\n" + guidance };
 	});
 
 	const todosDirLabel = getTodosDirLabel(process.cwd());
@@ -1596,6 +1658,7 @@ export default function todosExtension(pi: ExtensionAPI) {
 					}
 
 					const updatedTodo = result as TodoRecord;
+					refreshCurrentTodoWidget(ctx);
 					return {
 						content: [{ type: "text", text: serializeTodoForAgent(updatedTodo) }],
 						details: { action: "update", todo: updatedTodo },
