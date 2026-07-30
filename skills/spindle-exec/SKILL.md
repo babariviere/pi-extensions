@@ -33,6 +33,20 @@ Aliases (normalized to canonical before the host validates args): `cmd`/`shell`/
 
 When a program needs a string containing literal `${...}` (shell snippets, tool arguments, or grep patterns), do not use a TypeScript template literal: TypeScript will interpolate it. Use a plain quoted string or pass the content through the `strings` parameter and read it from `π.key`.
 
+### Writing multi-line content — always use `strings`/`π`
+
+Any multi-line file content (`pi.write` bodies, `edit` newText/oldText, shell heredocs) MUST be passed through the `strings` parameter and referenced as `π.key`. Do NOT inline it as a JS string literal inside `code`.
+
+Inlining nests the content through three escape layers (file → JS `"..."` → JSON `code` field). At that depth the model reliably emits literal `\n`/`\t` (backslash-n as two characters) instead of real newlines, silently corrupting the written file. Content in `strings` crosses only one JSON boundary and is never wrapped in a JS string literal, so it survives intact.
+
+```ts
+// strings: { body: "line1\nline2\n..." }   ← real newlines live in the JSON string value
+await pi.write({ path: "/x.ts", content: π.body });
+await pi.edit({ path: "/y.ts", oldText: π.oldChunk, newText: π.newChunk });
+```
+
+Single-line strings and short inline literals are fine as-is; the rule is specifically for multi-line payloads.
+
 ## `extensions` — tools registered by sibling extensions (full code mode only)
 
 `extensions.<tool>(args)` resolves to `{content:Array<{type,text?,...}>,text:string,details?,isError:boolean,terminate?,source:{path,source,scope,origin,baseDir?}}`. Read `.text` for the output. In full code mode these tools are hidden from the model's direct tool list, so `extensions.*` is the only way to reach them.
