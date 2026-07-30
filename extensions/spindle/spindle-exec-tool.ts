@@ -92,6 +92,7 @@ export const createSpindleExecTool = (
     promptSnippet: "Pi core tools, extension tools, MCP, and custom subagents",
     promptGuidelines: [
       "Batch independent operations in one `spindle_exec` program (`Promise.all` for parallel, sequential `await` for ordered), not one call per tool; keep dependent/conditional steps sequential. Return only the compact final value; intermediate results stay in the sandbox.",
+      "Multi-line file content (writes, edits, heredocs) MUST go through the `strings` parameter and be read as `π.key` — never inline it as a JS string literal in `code`. Inlining forces the content through three escape layers (file → JS string → JSON) and the model reliably emits literal `\\n` there, corrupting the file. Example: pass `strings: { body: \"...\" }` then `await pi.write({ path, content: π.body })`.",
     ],
     // The model-facing schema is intentionally flat: one large `code` string
     // plus scalar/optional params. Do not add nested arrays-of-objects with
