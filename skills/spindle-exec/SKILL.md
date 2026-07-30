@@ -3,7 +3,7 @@ name: spindle-exec
 description: >-
   Reference for `spindle_exec` TypeScript programs: Pi core tool signatures,
   extension/MCP/subagent namespaces, workflow helpers, named strings, return
-  shapes, and error recovery. Load before the first Spindle call or after an
+  shapes, and error recovery. Load before the first `spindle_exec` call or after an
   argument-shape error.
 ---
 
