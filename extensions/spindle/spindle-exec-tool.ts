@@ -91,7 +91,7 @@ export const createSpindleExecTool = (
       "Execute type-checked TypeScript in an isolated QuickJS sandbox to drive Pi core tools (`pi.*`), tools registered by sibling extensions (`extensions.*`), MCP tools through pi-mcp-adapter (`mcp.*`), and custom markdown subagents (`agents.*`). In full code mode this is the exclusive model tool path.",
     promptSnippet: "Pi core tools, extension tools, MCP, and custom subagents",
     promptGuidelines: [
-      "Batch independent operations in one `spindle_exec` program (`Promise.all` for parallel, sequential `await` for ordered), not one call per tool; keep dependent/conditional steps sequential. Return only the compact final value; intermediate results stay in the sandbox.",
+      "Batch independent operations in one `spindle_exec` program, not one call per tool; keep dependent/conditional steps sequential. Use `Promise.all` for a few independent calls; reach for `workflow.parallel(items, fn, N)` when fanning out over many items (cap concurrency with N), and `workflow.pipeline(items, ...stages)` for repeated read->transform->write stages. Return only the compact final value; intermediate results stay in the sandbox.",
       "Multi-line file content (writes, edits, heredocs) MUST go through the `strings` parameter and be read as `π.key` — never inline it as a JS string literal in `code`. Inlining forces the content through three escape layers (file → JS string → JSON) and the model reliably emits literal `\\n` there, corrupting the file. Example: pass `strings: { body: \"...\" }` then `await pi.write({ path, content: π.body })`.",
     ],
     // The model-facing schema is intentionally flat: one large `code` string
