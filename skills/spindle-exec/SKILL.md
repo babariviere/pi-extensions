@@ -33,19 +33,21 @@ Aliases (normalized to canonical before the host validates args): `cmd`/`shell`/
 
 When a program needs a string containing literal `${...}` (shell snippets, tool arguments, or grep patterns), do not use a TypeScript template literal: TypeScript will interpolate it. Use a plain quoted string or pass the content through the `strings` parameter and read it from `π.key`.
 
-### Writing multi-line content — always use `strings`/`π`
+### Awkward payloads — always use `strings`/`π`
 
-Any multi-line file content (`pi.write` bodies, `edit` newText/oldText, shell heredocs) MUST be passed through the `strings` parameter and referenced as `π.key`. Do NOT inline it as a JS string literal inside `code`.
+MUST pass through `strings` and read as `π.key`, never inline in `code`: multi-line file content (writes, edits, heredocs), JSON blobs, long prose (agent prompts, task text), and strings with literal `${...}`.
 
-Inlining nests the content through three escape layers (file → JS `"..."` → JSON `code` field). At that depth the model reliably emits literal `\n`/`\t` (backslash-n as two characters) instead of real newlines, silently corrupting the written file. Content in `strings` crosses only one JSON boundary and is never wrapped in a JS string literal, so it survives intact.
+Inlining multi-line content nests it through three escape layers (file → JS `"..."` → JSON `code`); at that depth the model emits literal `\n`/`\t` instead of newlines, silently corrupting the file. Template literals also interpolate `${...}` you meant to keep literal. `strings` values cross only one JSON boundary and survive intact.
 
 ```ts
-// strings: { body: "line1\nline2\n..." }   ← real newlines live in the JSON string value
+// strings: { body: "line1\nline2", panel: '[{"model":"..."}]', task: "analyze ..." }
 await pi.write({ path: "/x.ts", content: π.body });
 await pi.edit({ path: "/y.ts", oldText: π.oldChunk, newText: π.newChunk });
+const panel = JSON.parse(π.panel) as Array<{ model: string }>;
+const prompt = `Objective:\n\n${π.task}`;
 ```
 
-Single-line strings and short inline literals are fine as-is; the rule is specifically for multi-line payloads.
+Short single-line literals with no `${...}` are fine inline.
 
 ## `extensions` — tools registered by sibling extensions (full code mode only)
 

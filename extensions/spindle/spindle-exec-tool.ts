@@ -92,7 +92,7 @@ export const createSpindleExecTool = (
     promptSnippet: "Pi core tools, extension tools, MCP, and custom subagents",
     promptGuidelines: [
       "Batch independent operations in one `spindle_exec` program, not one call per tool; keep dependent/conditional steps sequential. Use `Promise.all` for a few independent calls; reach for `workflow.parallel(items, fn, N)` when fanning out over many items (cap concurrency with N), and `workflow.pipeline(items, ...stages)` for repeated read->transform->write stages. Return only the compact final value; intermediate results stay in the sandbox.",
-      "Multi-line file content (writes, edits, heredocs) MUST go through the `strings` parameter and be read as `π.key` — never inline it as a JS string literal in `code`. Inlining forces the content through three escape layers (file → JS string → JSON) and the model reliably emits literal `\\n` there, corrupting the file. Example: pass `strings: { body: \"...\" }` then `await pi.write({ path, content: π.body })`.",
+      "Awkward payloads MUST go through `strings` and be read as `π.key`, never inlined in `code`: multi-line file content, JSON blobs, long prose, and strings with literal `${...}`. Inlining multi-line content nests it through three escape layers and the model emits literal `\\n`, corrupting the file; template literals also interpolate `${...}`. E.g. `strings: { body }` then `pi.write({ path, content: π.body })`; JSON-encode data and `JSON.parse(π.key)`.",
     ],
     // The model-facing schema is intentionally flat: one large `code` string
     // plus scalar/optional params. Do not add nested arrays-of-objects with
@@ -110,7 +110,7 @@ export const createSpindleExecTool = (
       strings: Type.Optional(
         Type.Record(Type.String(), Type.String(), {
           description:
-            "Named strings exposed as π.key, useful for content that is awkward to quote",
+            "Named strings exposed as π.key. Use for any awkward payload: multi-line file content, JSON blobs, long prose, and strings with literal ${...}. JSON-encode structured data and JSON.parse(π.key) in the sandbox.",
         }),
       ),
       resultFormat: Type.Optional(Type.Union(RESULT_FORMATS.map((value) => Type.Literal(value)))),
