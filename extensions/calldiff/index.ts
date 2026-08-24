@@ -29,6 +29,8 @@
  *     of a change.
  *   - Added subtrees, which are added all the way down by construction, render
  *     two levels then summarise the rest.
+ *   - The panel groups entrypoints by their definition file, and keeps a second,
+ *     unfolded rendering of every entrypoint that ctrl+o swaps in.
  *
  * Requirements:
  *   - calldiff, resolved in this order: the copy bundled with this package
@@ -51,6 +53,7 @@ import { Type } from "typebox";
 import type { DiffNode, DiffStatus } from "calldiff";
 
 const ENTRY_TYPE = "calldiff";
+/** Entrypoints rendered in the collapsed panel; ctrl+o reveals the rest. */
 const PANEL_TREE_LIMIT = 3;
 const PANEL_TIMEOUT_MS = 20_000;
 const TOOL_TIMEOUT_MS = 30_000;
@@ -90,13 +93,29 @@ interface CalldiffResult {
 	[key: string]: unknown;
 }
 
+/** One entrypoint in the panel, with both renderings precomputed. */
+export interface PanelEntry {
+	entry: string;
+	/** Definition site of the entrypoint; the panel groups on it. */
+	file?: string;
+	line?: number;
+	/** Collapsed body: unchanged siblings folded, added subtrees capped. */
+	compact: string;
+	/** Expanded body (ctrl+o): every sibling, every level. */
+	full: string;
+	added: number;
+	removed: number;
+}
+
 /** Data persisted for the TUI-only panel entry. */
 interface PanelData {
 	from: string;
 	to: string;
-	shown: { entry: string; ascii: string }[];
-	hidden: number;
+	entries?: PanelEntry[];
 	ms: number;
+	/** Shape recorded by sessions from before grouping landed. */
+	shown?: { entry: string; ascii: string }[];
+	hidden?: number;
 }
 
 interface RunOk {
@@ -395,6 +414,11 @@ export interface ShapeOpts {
 	defined: Set<string> | null;
 	/** Collapse unchanged siblings. Only meaningful for mode=diff. */
 	collapse: boolean;
+	/**
+	 * Levels rendered under an added/removed node before the rest is summarised.
+	 * Null renders the whole subtree; undefined uses ADDED_DEPTH_CAP.
+	 */
+	depthCap?: number | null;
 }
 
 function shapeChildren(
@@ -456,7 +480,8 @@ function shapeNode(node: CalldiffNode, addedDepth: number, opts: ShapeOpts, chan
 	// Everything under an added node is added too, which is how a one-line edit
 	// turns into a twenty-line subtree. Render a few levels, then summarise.
 	const depth = status === "same" ? 0 : addedDepth + 1;
-	if (depth > ADDED_DEPTH_CAP) {
+	const cap = opts.depthCap === undefined ? ADDED_DEPTH_CAP : opts.depthCap;
+	if (cap !== null && depth > cap) {
 		const hidden = countDescendants(children);
 		return { label, status, children: hidden > 0 ? [ghost(`… +${hidden} more`, status)] : [] };
 	}
@@ -506,19 +531,40 @@ function hasAsciiChange(ascii: string): boolean {
  * Turns a calldiff payload into one shaped ascii block per entrypoint. Shaping
  * happens on the structured `tree`; the CLI's own ascii is only a fallback.
  */
+/** Real (non-ghost) added/removed nodes, used for the per-file counters. */
+function countStatuses(node: ShapedNode, acc: { added: number; removed: number }): void {
+	if (!node.ghost) {
+		if (node.status === "added") acc.added++;
+		else if (node.status === "removed") acc.removed++;
+	}
+	for (const child of node.children) countStatuses(child, acc);
+}
+
+function asciiCounts(ascii: string): { added: number; removed: number } {
+	const acc = { added: 0, removed: 0 };
+	for (const line of ascii.split("\n")) {
+		if (line.startsWith("+")) acc.added++;
+		else if (line.startsWith("-")) acc.removed++;
+	}
+	return acc;
+}
+
 async function shapeEntries(
 	pi: ExtensionAPI,
 	cwd: string,
 	data: CalldiffResult,
 	signal: AbortSignal | undefined,
 	requireChange: boolean,
-): Promise<{ entry: string; ascii: string }[]> {
+): Promise<PanelEntry[]> {
 	const trees = Array.isArray(data.trees) ? data.trees : [];
 	const roots = trees
 		.map((tree) => ({
 			entry: typeof tree.entry === "string" ? tree.entry : "(unknown)",
 			node: tree.tree,
 			ascii: typeof tree.ascii === "string" ? tree.ascii.trimEnd() : "",
+			// Root nodes carry their definition site, which is what the panel groups on.
+			file: typeof tree.tree?.file === "string" ? tree.tree.file : undefined,
+			line: typeof tree.tree?.line === "number" ? tree.tree.line : undefined,
 		}))
 		.filter((item) => item.node || item.ascii);
 
@@ -526,26 +572,71 @@ async function shapeEntries(
 	const candidates = new Set<string>();
 	for (const item of roots) if (item.node) collectCandidates([item.node], candidates);
 	const defined = candidates.size > 0 ? await verifyDefined(pi, cwd, [...candidates], signal) : new Set<string>();
-	const opts: ShapeOpts = { defined, collapse: requireChange };
+	const compactOpts: ShapeOpts = { defined, collapse: requireChange };
+	/** What ctrl+o reveals: nothing folded, nothing capped. */
+	const fullOpts: ShapeOpts = { defined, collapse: false, depthCap: null };
 
-	const out: { entry: string; ascii: string }[] = [];
+	const out: PanelEntry[] = [];
 	for (const item of roots) {
 		if (!item.node) {
-			if (!requireChange || hasAsciiChange(item.ascii)) out.push({ entry: item.entry, ascii: item.ascii });
+			if (!requireChange || hasAsciiChange(item.ascii)) {
+				out.push({
+					entry: item.entry,
+					file: item.file,
+					line: item.line,
+					compact: item.ascii,
+					full: item.ascii,
+					...asciiCounts(item.ascii),
+				});
+			}
 			continue;
 		}
-		const shaped = shapeTree(item.node, opts);
-		if (requireChange && !shapedHasChange(shaped)) continue;
-		out.push({ entry: item.entry, ascii: renderShaped(shaped) });
+		const compact = shapeTree(item.node, compactOpts);
+		if (requireChange && !shapedHasChange(compact)) continue;
+		const full = compactOpts.collapse ? shapeTree(item.node, fullOpts) : compact;
+		const counts = { added: 0, removed: 0 };
+		countStatuses(full, counts);
+		out.push({
+			entry: item.entry,
+			file: item.file,
+			line: item.line,
+			compact: renderShaped(compact),
+			full: renderShaped(full),
+			...counts,
+		});
 	}
 	return out;
+}
+
+export interface FileGroup {
+	file: string;
+	entries: PanelEntry[];
+	added: number;
+	removed: number;
+}
+
+/** Group entrypoints by definition file, preserving calldiff's ordering. */
+export function groupByFile(entries: PanelEntry[]): FileGroup[] {
+	const groups = new Map<string, FileGroup>();
+	for (const entry of entries) {
+		const file = entry.file && entry.file.length > 0 ? entry.file : "(unknown file)";
+		let group = groups.get(file);
+		if (!group) {
+			group = { file, entries: [], added: 0, removed: 0 };
+			groups.set(file, group);
+		}
+		group.entries.push(entry);
+		group.added += entry.added;
+		group.removed += entry.removed;
+	}
+	return [...groups.values()];
 }
 
 /**
  * Compact text for the LLM. The nested `tree` objects duplicate everything the
  * ascii already says at several times the token cost, so only ascii is kept.
  */
-function formatForAgent(data: CalldiffResult, entries: { entry: string; ascii: string }[]): string {
+function formatForAgent(data: CalldiffResult, entries: PanelEntry[], variant: "compact" | "full" = "compact"): string {
 	const mode = data.mode ?? "diff";
 	const header =
 		mode === "diff" ? `calldiff ${mode} ${data.from ?? "HEAD"} -> ${data.to ?? "working tree"}` : `calldiff ${mode}`;
@@ -561,22 +652,26 @@ function formatForAgent(data: CalldiffResult, entries: { entry: string; ascii: s
 			: `${header}\n\nNo call tree produced for the requested entrypoint.`;
 	}
 
-	const body = entries.map((e) => `## ${e.entry}\n${e.ascii}`).join("\n\n");
+	// Grouped by file so the agent sees where each entrypoint lives, not just its name.
+	const body = groupByFile(entries)
+		.map((group) => {
+			const trees = group.entries
+				.map((entry) => `### ${entry.entry}${entry.line ? `:${entry.line}` : ""}\n${entry[variant]}`)
+				.join("\n\n");
+			return `## ${group.file}\n${trees}`;
+		})
+		.join("\n\n");
 	return clip(`${header}\n\n${body}`, TOOL_CHAR_BUDGET);
 }
 
-function toPanelData(
-	data: CalldiffResult,
-	entries: { entry: string; ascii: string }[],
-	ms: number,
-): PanelData | null {
+function toPanelData(data: CalldiffResult, entries: PanelEntry[], ms: number): PanelData | null {
 	if (entries.length === 0) return null;
-	const shown = entries.slice(0, Math.max(PANEL_TREE_LIMIT, 1));
+	// Every entrypoint is persisted; what to show is decided at render time so
+	// ctrl+o can reveal the ones the collapsed view left out.
 	return {
 		from: data.from ?? "HEAD",
 		to: data.to ?? "working tree",
-		shown,
-		hidden: entries.length - shown.length,
+		entries,
 		ms,
 	};
 }
@@ -618,21 +713,88 @@ function colorize(theme: Theme, ascii: string): string {
 		.join("\n");
 }
 
+/** Entries for a panel, tolerating the pre-grouping persisted shape. */
+function panelEntries(data: PanelData): PanelEntry[] {
+	if (Array.isArray(data.entries)) return data.entries;
+	return (data.shown ?? []).map((entry) => ({
+		entry: entry.entry,
+		compact: entry.ascii,
+		full: entry.ascii,
+		...asciiCounts(entry.ascii),
+	}));
+}
+
+/** First line (the entrypoint itself) and the rest of the tree. */
+function splitTree(ascii: string): { root: string; body: string } {
+	const lines = ascii.split("\n");
+	return { root: lines[0] ?? "", body: lines.slice(1).join("\n") };
+}
+
+/** Indent under the file header without moving the +/- gutter. */
+function indentTree(ascii: string): string {
+	return ascii
+		.split("\n")
+		.map((line) => `${line.slice(0, 2)}    ${line.slice(2)}`)
+		.join("\n");
+}
+
+function stats(theme: Theme, added: number, removed: number): string {
+	const parts: string[] = [];
+	if (added > 0) parts.push(theme.fg("success", `+${added}`));
+	if (removed > 0) parts.push(theme.fg("error", `-${removed}`));
+	return parts.length > 0 ? ` ${parts.join(" ")}` : "";
+}
+
+/**
+ * Collapsed: file headers plus the first few entrypoints, each folded. Expanded
+ * (ctrl+o): every entrypoint, every sibling, every level.
+ */
 function renderPanel(theme: Theme, data: PanelData, expanded: boolean): string {
+	const entries = panelEntries(data);
+	const groups = groupByFile(entries);
 	const head =
 		theme.fg("toolTitle", theme.bold("calldiff ")) +
 		theme.fg("muted", `${data.from} → ${data.to}`) +
-		theme.fg("dim", ` (${data.ms}ms)`);
+		theme.fg(
+			"dim",
+			` · ${entries.length} entrypoint${entries.length === 1 ? "" : "s"} in ${groups.length} file${groups.length === 1 ? "" : "s"} · ${data.ms}ms`,
+		);
 
-	const blocks = data.shown.map(
-		(entry) => `${theme.fg("accent", entry.entry)}\n${colorize(theme, entry.ascii)}`,
-	);
+	const blocks: string[] = [];
+	let shown = 0;
+	let hidden = 0;
+	for (const group of groups) {
+		const room = expanded ? group.entries.length : Math.max(0, Math.max(PANEL_TREE_LIMIT, 1) - shown);
+		const visible = group.entries.slice(0, room);
+		hidden += group.entries.length - visible.length;
+		if (visible.length === 0) continue;
+		shown += visible.length;
+
+		const lines = [
+			theme.fg("toolTitle", theme.bold(group.file)) + stats(theme, group.added, group.removed),
+		];
+		for (const entry of visible) {
+			const { root, body } = splitTree(expanded ? entry.full : entry.compact);
+			const marker = root.slice(0, 1);
+			const label = root.slice(2) || entry.entry;
+			const color = marker === "+" ? "success" : marker === "-" ? "error" : "accent";
+			lines.push(
+				`${marker === "+" || marker === "-" ? marker : " "}  ${theme.fg(color, label)}` +
+					(entry.line ? theme.fg("dim", `:${entry.line}`) : ""),
+			);
+			if (body) lines.push(colorize(theme, indentTree(body)));
+		}
+		blocks.push(lines.join("\n"));
+	}
+
 	let body = blocks.join("\n\n");
 	if (!expanded) body = clip(body, PANEL_CHAR_BUDGET);
 
 	const parts = [head, body];
-	if (data.hidden > 0) {
-		parts.push(theme.fg("dim", `+ ${data.hidden} more changed entrypoint(s)`));
+	if (hidden > 0) {
+		parts.push(theme.fg("dim", `… ${hidden} more changed entrypoint(s) · ctrl+o to expand`));
+	} else if (!expanded && entries.some((entry) => entry.compact !== entry.full)) {
+		parts.push(theme.fg("dim", "ctrl+o to expand"));
 	}
 	return parts.join("\n");
 }
@@ -682,7 +844,7 @@ export default function calldiffExtension(pi: ExtensionAPI): void {
 
 	pi.registerEntryRenderer(ENTRY_TYPE, (entry, { expanded }, theme) => {
 		const data = entry.data as PanelData | undefined;
-		if (!data?.shown?.length) return new Text("", 0, 0);
+		if (!data || panelEntries(data).length === 0) return new Text("", 0, 0);
 		return new Text(renderPanel(theme, data, expanded), 1, 0);
 	});
 
@@ -838,9 +1000,10 @@ export default function calldiffExtension(pi: ExtensionAPI): void {
 
 			const entries = await shapeEntries(pi, ctx.cwd, result.data, signal, mode === "diff");
 			const text = formatForAgent(result.data, entries);
+			const fullText = formatForAgent(result.data, entries, "full");
 			return {
 				content: [{ type: "text", text }],
-				details: { mode, argv, ms: result.ms, text },
+				details: { mode, argv, ms: result.ms, text, fullText },
 			};
 		},
 
@@ -854,9 +1017,9 @@ export default function calldiffExtension(pi: ExtensionAPI): void {
 		},
 
 		renderResult(result, { expanded }, theme) {
-			const details = result.details as { text?: string; error?: string } | undefined;
+			const details = result.details as { text?: string; fullText?: string; error?: string } | undefined;
 			if (details?.error) return new Text(theme.fg("error", `Error: ${details.error}`), 0, 0);
-			const text = details?.text ?? "";
+			const text = (expanded ? (details?.fullText ?? details?.text) : details?.text) ?? "";
 			const rendered = colorize(theme, text);
 			if (expanded) return new Text(rendered, 0, 0);
 			const lines = rendered.split("\n");

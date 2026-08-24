@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { type CalldiffNode, renderShaped, shapeTree } from "./index.ts";
+import { type CalldiffNode, groupByFile, type PanelEntry, renderShaped, shapeTree } from "./index.ts";
 
 type Status = "same" | "added" | "removed";
 
@@ -125,5 +125,71 @@ test("mode=tree keeps the full shape, only stripping noise", () => {
 	assert.equal(
 		render(tree, ["root", "helper"], false),
 		["  root()", "  \u2514\u2500 helper()"].join("\n"),
+	);
+});
+
+test("depthCap null renders the whole added subtree", () => {
+	const tree = call("root()", "same", [
+		call("a()", "added", [
+			call("b()", "added", [call("c()", "added", [call("d()", "added", [call("e()", "added")])])]),
+		]),
+	]);
+	const defined = new Set(["root", "a", "b", "c", "d", "e"]);
+
+	assert.equal(
+		renderShaped(shapeTree(tree, { defined, collapse: false, depthCap: null })),
+		[
+			"  root()",
+			"+ \u2514\u2500 a()",
+			"+    \u2514\u2500 b()",
+			"+       \u2514\u2500 c()",
+			"+          \u2514\u2500 d()",
+			"+             \u2514\u2500 e()",
+		].join("\n"),
+	);
+});
+
+test("the expanded shaping keeps every unchanged sibling", () => {
+	const kids = [0, 1, 2, 3, 4, 5].map((i) => (i === 4 ? call(`fn${i}()`, "added") : call(`fn${i}()`)));
+	const defined = new Set(kids.map((_, i) => `fn${i}`).concat("root"));
+
+	assert.equal(
+		renderShaped(shapeTree(call("root()", "same", kids), { defined, collapse: false, depthCap: null })),
+		[
+			"  root()",
+			"  \u251c\u2500 fn0()",
+			"  \u251c\u2500 fn1()",
+			"  \u251c\u2500 fn2()",
+			"  \u251c\u2500 fn3()",
+			"+ \u251c\u2500 fn4()",
+			"  \u2514\u2500 fn5()",
+		].join("\n"),
+	);
+});
+
+test("groups entrypoints by definition file and sums their counts", () => {
+	const entry = (name: string, file: string | undefined, added: number, removed: number): PanelEntry => ({
+		entry: name,
+		file,
+		compact: name,
+		full: name,
+		added,
+		removed,
+	});
+
+	const groups = groupByFile([
+		entry("a", "src/one.ts", 1, 0),
+		entry("b", "src/two.ts", 0, 2),
+		entry("c", "src/one.ts", 3, 1),
+		entry("d", undefined, 1, 1),
+	]);
+
+	assert.deepEqual(
+		groups.map((group) => [group.file, group.entries.map((e) => e.entry), group.added, group.removed]),
+		[
+			["src/one.ts", ["a", "c"], 4, 1],
+			["src/two.ts", ["b"], 0, 2],
+			["(unknown file)", ["d"], 1, 1],
+		],
 	);
 });
