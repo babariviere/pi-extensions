@@ -1,18 +1,22 @@
 # taptap
 
-Requires a double tap on <kbd>Esc</kbd> before pi cancels anything.
+Requires a double tap on <kbd>Esc</kbd> before pi cancels a running agent turn.
 
 A single <kbd>Esc</kbd> aborts the current run immediately, which is easy to
-trigger by accident. `taptap` swallows the first tap, shows an `esc again to
-cancel` hint in the footer, and only cancels when a second tap lands within
-600ms.
+trigger by accident. While the agent is streaming, `taptap` swallows the first
+tap, shows an `esc again to cancel` hint in the footer, and only cancels when a
+second tap lands within 600ms.
+
+While the agent is idle there is nothing to abort, so <kbd>Esc</kbd> is passed
+straight through. pi's own double-<kbd>Esc</kbd> history picker (the tree/fork
+selector on an empty editor) therefore still opens on two taps instead of four.
 
 ## How it works
 
 pi dispatches <kbd>Esc</kbd> in `CustomEditor.handleInput` by looking up
 `app.interrupt` and calling the public `onEscape` field. `taptap` subclasses
-`CustomEditor`, intercepts <kbd>Esc</kbd> before that lookup, and forwards to
-`this.onEscape?.()` on the second tap.
+`CustomEditor`, intercepts <kbd>Esc</kbd> before that lookup when
+`ctx.isIdle()` is false, and forwards to `this.onEscape?.()` on the second tap.
 
 Because it calls pi's own handler rather than reimplementing it, every native
 <kbd>Esc</kbd> behaviour still works:

@@ -1,17 +1,21 @@
 /**
  * taptap
  *
- * Requires a double tap on Escape before pi cancels anything.
+ * Requires a double tap on Escape before pi cancels a running agent turn.
  *
  * A single Escape is easy to hit by accident and immediately aborts the run.
- * This extension intercepts Escape in the editor, shows a footer hint on the
- * first tap, and only forwards to pi's own handler when a second tap lands
- * inside the window.
+ * This extension intercepts Escape in the editor while the agent is busy, shows
+ * a footer hint on the first tap, and only forwards to pi's own handler when a
+ * second tap lands inside the window.
+ *
+ * While the agent is idle there is nothing to abort, so Escape is passed
+ * straight through. That keeps pi's own double-Escape flow (the tree/fork
+ * history picker on an empty editor) reachable with two taps instead of four.
  *
  * Forwarding goes through `CustomEditor.onEscape`, which is the exact handler
  * pi installs for `app.interrupt`. That keeps every native behaviour intact:
- * restoring queued messages, aborting a running bash, leaving bash mode, the
- * `doubleEscapeAction` tree/fork picker, and the agent abort itself.
+ * restoring queued messages, aborting a running bash, leaving bash mode, and
+ * the agent abort itself.
  *
  * Escape is left alone while the autocomplete popup is open, so it still
  * cancels completion on the first tap.
@@ -48,13 +52,13 @@ class DoubleEscapeEditor extends CustomEditor {
 		theme: EditorTheme,
 		private readonly keys: KeybindingsManager,
 		private readonly hint: Hint,
+		private readonly isIdle: () => boolean,
 	) {
 		super(tui, theme, keys);
 	}
 
 	override handleInput(data: string): void {
-		// Escape also closes the autocomplete popup; leave that on a single tap.
-		if (!this.keys.matches(data, "app.interrupt") || this.isShowingAutocomplete()) {
+		if (!this.shouldGuard(data)) {
 			this.disarm();
 			super.handleInput(data);
 			return;
@@ -68,6 +72,19 @@ class DoubleEscapeEditor extends CustomEditor {
 
 		this.disarm();
 		this.forwardToPi(data);
+	}
+
+	/**
+	 * Whether this key press should be swallowed until a second tap.
+	 *
+	 * Only Escape while the agent is streaming. Escape also closes the
+	 * autocomplete popup, and while idle it drives pi's own double-Escape
+	 * history picker, so both cases go through untouched.
+	 */
+	private shouldGuard(data: string): boolean {
+		if (!this.keys.matches(data, "app.interrupt")) return false;
+		if (this.isShowingAutocomplete()) return false;
+		return !this.isIdle();
 	}
 
 	/**
@@ -109,8 +126,10 @@ export default function taptap(pi: ExtensionAPI): void {
 		if (ctx.mode !== "tui") return;
 
 		const hint = makeHint(ctx);
+		const isIdle = () => ctx.isIdle();
 		ctx.ui.setEditorComponent(
-			(tui, theme, keybindings) => new DoubleEscapeEditor(tui, theme, keybindings, hint),
+			(tui, theme, keybindings) =>
+				new DoubleEscapeEditor(tui, theme, keybindings, hint, isIdle),
 		);
 	});
 }
