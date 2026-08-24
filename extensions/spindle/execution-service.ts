@@ -27,7 +27,9 @@ import {
 import type { SpindleToolGate } from "./core/tool-allowlist.ts";
 import {
   codeUsesOrchestration,
+  isBlockingHostTimeoutRef,
   isBlockingOrchestrationRef,
+  requestedBlockingTimeoutMs,
 } from "./runtime/orchestration.ts";
 import type {
   QuickJsRuntime,
@@ -54,6 +56,10 @@ const loadRuntimeDependencies = () =>
     typeCheckSpindleCode: checker.typeCheckSpindleCode,
     guestTypeDeclarations: guest.guestTypeDeclarations,
   }));
+
+// Slack added on top of a blocking host call's own timeout so the call fails
+// with its own error before the sandbox deadline expires.
+const BLOCKING_HOST_CALL_SLACK_MS = 5_000;
 
 const executionOutcomeFromTermination = (
   reason: SpindleSandboxTerminationReason,
@@ -245,19 +251,31 @@ export class SpindleExecutionService {
       ref: string,
       args: Record<string, unknown>,
     ): number | undefined => {
-      const targetRef = ref;
-      if (!isBlockingOrchestrationRef(targetRef)) return undefined;
-      const targetArgs = args;
-      const requestedTimeoutMs =
-        targetRef === "agents.run" &&
-        typeof targetArgs.timeoutMs === "number" &&
-        Number.isFinite(targetArgs.timeoutMs)
-          ? Math.max(
-              MIN_AGENT_TIMEOUT_MS,
-              Math.min(Math.floor(targetArgs.timeoutMs), MAX_AGENT_TIMEOUT_MS),
-            )
-          : 0;
-      return Math.max(orchestrationTimeoutMs, requestedTimeoutMs);
+      const requested = requestedBlockingTimeoutMs(ref, args);
+      if (isBlockingOrchestrationRef(ref)) {
+        const requestedTimeoutMs =
+          requested > 0
+            ? Math.max(
+                MIN_AGENT_TIMEOUT_MS,
+                Math.min(Math.floor(requested), MAX_AGENT_TIMEOUT_MS),
+              )
+            : 0;
+        return Math.max(orchestrationTimeoutMs, requestedTimeoutMs);
+      }
+      // A blocking host call with an explicit timeout (pi.bash) owns its own
+      // deadline: extend the sandbox past it, plus slack, so the call reports
+      // its own timeout instead of the executor killing the whole program.
+      if (isBlockingHostTimeoutRef(ref) && requested > 0) {
+        const requestedTimeoutMs = Math.min(
+          Math.floor(requested),
+          MAX_AGENT_TIMEOUT_MS,
+        );
+        return Math.max(
+          this.config.executor.timeoutMs,
+          requestedTimeoutMs + BLOCKING_HOST_CALL_SLACK_MS,
+        );
+      }
+      return undefined;
     };
     const traceAttempt = async <T>(
       ref: string,
