@@ -20,6 +20,16 @@
  *   /calldiff on|off     Toggle the automatic panel (default on, persisted).
  *   /calldiff status     Show current setting and resolved binary.
  *
+ * Output shaping (the CLI's own ascii is deliberately not used):
+ *   - if/switch scaffolding is dropped and its children reparented.
+ *   - Calls into stdlib / dependencies are dropped, verified with a single
+ *     ripgrep for definitions across the whole candidate set, cached per turn.
+ *     When verification is unavailable nothing is dropped.
+ *   - Unchanged siblings collapse to "… N unchanged", keeping two on each side
+ *     of a change.
+ *   - Added subtrees, which are added all the way down by construction, render
+ *     two levels then summarise the rest.
+ *
  * Requirements:
  *   - `calldiff` on PATH (preferred) or npx fallback (`npx -y calldiff@latest`).
  *   - A git repo. jj works only when the repo is colocated (`.git` present),
@@ -48,9 +58,23 @@ const PANEL_CHAR_BUDGET = 20_000;
 
 type Mode = "diff" | "tree" | "reach";
 
+/** One node of the structured call tree emitted by `--format json`. */
+export interface CalldiffNode {
+	key?: string;
+	label?: string;
+	/** diff mode only; tree/reach nodes have no status. */
+	status?: "same" | "added" | "removed";
+	/** "call" for real calls, "branch" for if/switch scaffolding. */
+	kind?: string;
+	file?: string;
+	line?: number;
+	children?: CalldiffNode[];
+}
+
 interface CalldiffTree {
 	entry?: string;
 	ascii?: string;
+	tree?: CalldiffNode;
 	[key: string]: unknown;
 }
 
@@ -183,21 +207,33 @@ async function runCalldiff(
 // result shaping
 // ---------------------------------------------------------------------------
 
-/** A tree is only interesting when its ascii actually carries +/- markers. */
-function hasChange(ascii: string): boolean {
-	return ascii.split("\n").some((line) => line.startsWith("+") || line.startsWith("-"));
+/** Unchanged siblings kept on each side of a change, git-diff style context. */
+const CONTEXT_SIBLINGS = 2;
+/** Levels rendered under an added/removed node before the rest is summarised. */
+const ADDED_DEPTH_CAP = 2;
+/** Budget for the single definition-verification ripgrep. */
+const VERIFY_TIMEOUT_MS = 2_000;
+/** Above this many candidates the alternation regex stops paying off. */
+const VERIFY_MAX_SYMBOLS = 100;
+
+type NodeStatus = "same" | "added" | "removed";
+
+/** Node after shaping: branches stripped, externals dropped, subtrees capped. */
+export interface ShapedNode {
+	label: string;
+	status: NodeStatus;
+	children: ShapedNode[];
+	/** A summary line ("… 3 unchanged") rather than a real call. */
+	ghost?: boolean;
 }
 
-function treeEntries(data: CalldiffResult, requireChange: boolean): { entry: string; ascii: string }[] {
-	const trees = Array.isArray(data.trees) ? data.trees : [];
-	const out: { entry: string; ascii: string }[] = [];
-	for (const tree of trees) {
-		const ascii = typeof tree.ascii === "string" ? tree.ascii.trimEnd() : "";
-		if (!ascii) continue;
-		if (requireChange && !hasChange(ascii)) continue;
-		out.push({ entry: typeof tree.entry === "string" ? tree.entry : "(unknown)", ascii });
-	}
-	return out;
+function nodeStatus(node: CalldiffNode): NodeStatus {
+	return node.status === "added" || node.status === "removed" ? node.status : "same";
+}
+
+/** Summary line. Inherits the parent status so an added subtree stays visually one block. */
+function ghost(label: string, status: NodeStatus = "same"): ShapedNode {
+	return { label, status, children: [], ghost: true };
 }
 
 function clip(text: string, budget: number): string {
@@ -205,11 +241,270 @@ function clip(text: string, budget: number): string {
 	return `${text.slice(0, budget)}\n… truncated (${text.length - budget} more chars)`;
 }
 
+// -- shaping ----------------------------------------------------------------
+
+/**
+ * `kind: "branch"` nodes are if/switch scaffolding, not calls. Drop them and
+ * reparent their children so a real call nested in a branch survives.
+ */
+function stripBranches(nodes: CalldiffNode[]): CalldiffNode[] {
+	const out: CalldiffNode[] = [];
+	for (const node of nodes) {
+		const children = stripBranches(node.children ?? []);
+		if (node.kind === "branch") out.push(...children);
+		else out.push({ ...node, children });
+	}
+	return out;
+}
+
+/** Last dotted segment: `sb.WriteString` -> `WriteString`, `fmt.Println` -> `Println`. */
+function symbolName(node: CalldiffNode): string {
+	const key = node.key ?? node.label ?? "";
+	const parts = key.split(".");
+	return parts[parts.length - 1] ?? key;
+}
+
+function escapeRe(value: string): string {
+	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Childless nodes are either repo leaf functions or calls into stdlib / deps
+ * whose bodies calldiff cannot see. Only those need verification.
+ */
+function collectCandidates(nodes: CalldiffNode[], into: Set<string>): void {
+	for (const node of nodes) {
+		const children = node.children ?? [];
+		if (children.length === 0) {
+			const name = symbolName(node);
+			if (/^[A-Za-z_]\w*$/.test(name)) into.add(name);
+		} else collectCandidates(children, into);
+	}
+}
+
+/** `symbol -> defined in this repo`, valid until the working copy changes. */
+const definitionCache = new Map<string, boolean>();
+
+function resetDefinitionCache(): void {
+	definitionCache.clear();
+}
+
+function definitionPatterns(names: string[]): string[] {
+	const alt = names.map(escapeRe).join("|");
+	const mods = "(?:export|public|private|protected|static|async|open|override)\\s+";
+	return [
+		// Go / TS / Python / Rust declarations, including Go method receivers.
+		`^\\s*(?:${mods})*(?:func|function|def|fn)\\s+(?:\\([^)]*\\)\\s*)?(?:${alt})\\b`,
+		// `const Name = () => …` and friends.
+		`^\\s*(?:export\\s+)?(?:const|let|var)\\s+(?:${alt})\\s*[:=]`,
+		// Class / object members: `Name(args) {`.
+		`^\\s*(?:${mods})*(?:${alt})\\s*\\(`,
+	];
+}
+
+/**
+ * Which of `names` have a definition in the repo, resolved with one ripgrep for
+ * the whole candidate set. Biased toward false positives: an unsure symbol is
+ * kept, never hidden. Returns null when verification is unavailable (no rg,
+ * timeout, too many candidates) so callers keep every leaf instead of guessing.
+ */
+async function verifyDefined(
+	pi: ExtensionAPI,
+	cwd: string,
+	names: string[],
+	signal: AbortSignal | undefined,
+): Promise<Set<string> | null> {
+	const unknown = names.filter((name) => !definitionCache.has(name));
+	if (unknown.length > VERIFY_MAX_SYMBOLS) return null;
+	if (unknown.length > 0) {
+		const args = ["--no-messages", "--no-filename", "--no-line-number", "-o"];
+		for (const pattern of definitionPatterns(unknown)) args.push("-e", pattern);
+		let stdout = "";
+		try {
+			const res = await pi.exec("rg", args, { cwd, signal, timeout: VERIFY_TIMEOUT_MS });
+			if (res.killed) return null;
+			// rg exits 1 when nothing matched, which is a valid "none defined".
+			if (res.code !== 0 && res.code !== 1) return null;
+			stdout = res.stdout;
+		} catch {
+			return null;
+		}
+		for (const name of unknown) {
+			definitionCache.set(name, new RegExp(`\\b${escapeRe(name)}\\b`).test(stdout));
+		}
+	}
+	const defined = new Set<string>();
+	for (const name of names) if (definitionCache.get(name)) defined.add(name);
+	return defined;
+}
+
+function hasChangeIn(node: CalldiffNode): boolean {
+	if (nodeStatus(node) !== "same") return true;
+	return (node.children ?? []).some(hasChangeIn);
+}
+
+function countDescendants(nodes: CalldiffNode[]): number {
+	let total = 0;
+	for (const node of nodes) total += 1 + countDescendants(node.children ?? []);
+	return total;
+}
+
+export interface ShapeOpts {
+	/** Null means "could not verify", in which case no leaf is dropped. */
+	defined: Set<string> | null;
+	/** Collapse unchanged siblings. Only meaningful for mode=diff. */
+	collapse: boolean;
+}
+
+function shapeChildren(
+	nodes: CalldiffNode[],
+	addedDepth: number,
+	opts: ShapeOpts,
+	parentStatus: NodeStatus,
+): ShapedNode[] {
+	// 1. Drop calls into stdlib / dependencies. A verified-external leaf is kept
+	//    only when it is the change itself and the parent does not already say so.
+	const kept = nodes.filter((node) => {
+		if ((node.children ?? []).length > 0) return true;
+		if (!opts.defined || opts.defined.has(symbolName(node))) return true;
+		return nodeStatus(node) !== "same" && parentStatus === "same";
+	});
+
+	// 2. Keep changed siblings plus CONTEXT_SIBLINGS unchanged ones either side.
+	const changed = kept.map(hasChangeIn);
+	const keepIdx = new Set<number>();
+	if (!opts.collapse || !changed.some(Boolean)) {
+		kept.forEach((_, i) => keepIdx.add(i));
+	} else {
+		changed.forEach((flag, i) => {
+			if (!flag) return;
+			const lo = Math.max(0, i - CONTEXT_SIBLINGS);
+			const hi = Math.min(kept.length - 1, i + CONTEXT_SIBLINGS);
+			for (let j = lo; j <= hi; j++) keepIdx.add(j);
+		});
+	}
+
+	const out: ShapedNode[] = [];
+	let run = 0;
+	const flush = () => {
+		if (run > 0) out.push(ghost(`… ${run} unchanged`));
+		run = 0;
+	};
+	for (let i = 0; i < kept.length; i++) {
+		const node = kept[i];
+		if (!node) continue;
+		if (!keepIdx.has(i)) {
+			run++;
+			continue;
+		}
+		flush();
+		out.push(shapeNode(node, addedDepth, opts, changed[i] ?? false));
+	}
+	flush();
+	return out;
+}
+
+function shapeNode(node: CalldiffNode, addedDepth: number, opts: ShapeOpts, changed: boolean): ShapedNode {
+	const status = nodeStatus(node);
+	const children = node.children ?? [];
+	const label = node.label ?? node.key ?? "(unknown)";
+
+	// An unchanged node kept only for context carries no signal below it.
+	if (opts.collapse && !changed) return { label, status, children: [] };
+
+	// Everything under an added node is added too, which is how a one-line edit
+	// turns into a twenty-line subtree. Render a few levels, then summarise.
+	const depth = status === "same" ? 0 : addedDepth + 1;
+	if (depth > ADDED_DEPTH_CAP) {
+		const hidden = countDescendants(children);
+		return { label, status, children: hidden > 0 ? [ghost(`… +${hidden} more`, status)] : [] };
+	}
+
+	return { label, status, children: shapeChildren(children, depth, opts, status) };
+}
+
+export function shapeTree(root: CalldiffNode, opts: ShapeOpts): ShapedNode {
+	const stripped = stripBranches([root])[0] ?? root;
+	return shapeNode(stripped, 0, opts, hasChangeIn(stripped));
+}
+
+// -- rendering --------------------------------------------------------------
+
+function markerFor(status: NodeStatus): string {
+	if (status === "added") return "+";
+	if (status === "removed") return "-";
+	return " ";
+}
+
+export function renderShaped(root: ShapedNode): string {
+	const lines = [`${markerFor(root.status)} ${root.label}`];
+	const walk = (nodes: ShapedNode[], prefix: string): void => {
+		nodes.forEach((node, i) => {
+			const last = i === nodes.length - 1;
+			lines.push(`${markerFor(node.status)} ${prefix}${last ? "└─ " : "├─ "}${node.label}`);
+			if (node.children.length > 0) walk(node.children, `${prefix}${last ? "   " : "│  "}`);
+		});
+	};
+	walk(root.children, "");
+	return lines.join("\n");
+}
+
+export function shapedHasChange(node: ShapedNode): boolean {
+	if (node.status !== "same") return true;
+	return node.children.some(shapedHasChange);
+}
+
+/** Fallback for payloads that carry only the CLI's pre-rendered ascii. */
+function hasAsciiChange(ascii: string): boolean {
+	return ascii.split("\n").some((line) => line.startsWith("+") || line.startsWith("-"));
+}
+
+// -- entry points -----------------------------------------------------------
+
+/**
+ * Turns a calldiff payload into one shaped ascii block per entrypoint. Shaping
+ * happens on the structured `tree`; the CLI's own ascii is only a fallback.
+ */
+async function shapeEntries(
+	pi: ExtensionAPI,
+	cwd: string,
+	data: CalldiffResult,
+	signal: AbortSignal | undefined,
+	requireChange: boolean,
+): Promise<{ entry: string; ascii: string }[]> {
+	const trees = Array.isArray(data.trees) ? data.trees : [];
+	const roots = trees
+		.map((tree) => ({
+			entry: typeof tree.entry === "string" ? tree.entry : "(unknown)",
+			node: tree.tree,
+			ascii: typeof tree.ascii === "string" ? tree.ascii.trimEnd() : "",
+		}))
+		.filter((item) => item.node || item.ascii);
+
+	// One ripgrep for every candidate across every tree, not one per node.
+	const candidates = new Set<string>();
+	for (const item of roots) if (item.node) collectCandidates([item.node], candidates);
+	const defined = candidates.size > 0 ? await verifyDefined(pi, cwd, [...candidates], signal) : new Set<string>();
+	const opts: ShapeOpts = { defined, collapse: requireChange };
+
+	const out: { entry: string; ascii: string }[] = [];
+	for (const item of roots) {
+		if (!item.node) {
+			if (!requireChange || hasAsciiChange(item.ascii)) out.push({ entry: item.entry, ascii: item.ascii });
+			continue;
+		}
+		const shaped = shapeTree(item.node, opts);
+		if (requireChange && !shapedHasChange(shaped)) continue;
+		out.push({ entry: item.entry, ascii: renderShaped(shaped) });
+	}
+	return out;
+}
+
 /**
  * Compact text for the LLM. The nested `tree` objects duplicate everything the
  * ascii already says at several times the token cost, so only ascii is kept.
  */
-function formatForAgent(data: CalldiffResult): string {
+function formatForAgent(data: CalldiffResult, entries: { entry: string; ascii: string }[]): string {
 	const mode = data.mode ?? "diff";
 	const header =
 		mode === "diff" ? `calldiff ${mode} ${data.from ?? "HEAD"} -> ${data.to ?? "working tree"}` : `calldiff ${mode}`;
@@ -219,7 +514,6 @@ function formatForAgent(data: CalldiffResult): string {
 		return clip(`${header}\n\n${JSON.stringify(data.paths, null, 1)}`, TOOL_CHAR_BUDGET);
 	}
 
-	const entries = treeEntries(data, mode === "diff");
 	if (entries.length === 0) {
 		return mode === "diff"
 			? `${header}\n\nNo call-flow change detected. Do not retry with different arguments; the edits did not alter the call graph.`
@@ -230,8 +524,11 @@ function formatForAgent(data: CalldiffResult): string {
 	return clip(`${header}\n\n${body}`, TOOL_CHAR_BUDGET);
 }
 
-function toPanelData(data: CalldiffResult, ms: number): PanelData | null {
-	const entries = treeEntries(data, true);
+function toPanelData(
+	data: CalldiffResult,
+	entries: { entry: string; ascii: string }[],
+	ms: number,
+): PanelData | null {
 	if (entries.length === 0) return null;
 	const shown = entries.slice(0, Math.max(PANEL_TREE_LIMIT, 1));
 	return {
@@ -334,7 +631,8 @@ export default function calldiffExtension(pi: ExtensionAPI): void {
 	async function showPanel(cwd: string, argv: string[], signal: AbortSignal | undefined): Promise<PanelData | null> {
 		const result = await run(cwd, argv, signal, PANEL_TIMEOUT_MS);
 		if (!result.ok) return null;
-		const panel = toPanelData(result.data, result.ms);
+		const entries = await shapeEntries(pi, cwd, result.data, signal, true);
+		const panel = toPanelData(result.data, entries, result.ms);
 		if (panel) pi.appendEntry(ENTRY_TYPE, panel);
 		return panel;
 	}
@@ -349,6 +647,8 @@ export default function calldiffExtension(pi: ExtensionAPI): void {
 
 	pi.on("agent_start", async (_event, ctx) => {
 		turnCache = null;
+		// Definitions can move between turns; the cache is only valid within one.
+		resetDefinitionCache();
 		baseline = await fingerprint(pi, ctx.cwd);
 	});
 
@@ -411,7 +711,8 @@ export default function calldiffExtension(pi: ExtensionAPI): void {
 				ctx.ui.notify(`calldiff: ${result.error}`, "error");
 				return;
 			}
-			const panel = toPanelData(result.data, result.ms);
+			const entries = await shapeEntries(pi, ctx.cwd, result.data, ctx.signal, true);
+			const panel = toPanelData(result.data, entries, result.ms);
 			if (!panel) {
 				ctx.ui.notify("calldiff: no call-flow change", "info");
 				return;
@@ -494,7 +795,8 @@ export default function calldiffExtension(pi: ExtensionAPI): void {
 				};
 			}
 
-			const text = formatForAgent(result.data);
+			const entries = await shapeEntries(pi, ctx.cwd, result.data, signal, mode === "diff");
+			const text = formatForAgent(result.data, entries);
 			return {
 				content: [{ type: "text", text }],
 				details: { mode, argv, ms: result.ms, text },
