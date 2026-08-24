@@ -31,12 +31,16 @@
  *     two levels then summarise the rest.
  *
  * Requirements:
- *   - `calldiff` on PATH (preferred) or npx fallback (`npx -y calldiff@latest`).
+ *   - calldiff, resolved in this order: the copy bundled with this package
+ *     (pinned by our lockfile, no network), then PATH, then a version-pinned
+ *     npx fallback. It stays a per-call subprocess: tree-sitter is a native
+ *     addon, so a crash must not be able to take pi down with it.
  *   - A git repo. jj works only when the repo is colocated (`.git` present),
  *     because calldiff reads refs via `git show`.
  */
 
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
@@ -44,6 +48,7 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
+import type { DiffNode, DiffStatus } from "calldiff";
 
 const ENTRY_TYPE = "calldiff";
 const PANEL_TREE_LIMIT = 3;
@@ -51,6 +56,8 @@ const PANEL_TIMEOUT_MS = 20_000;
 const TOOL_TIMEOUT_MS = 30_000;
 const TOOL_CHAR_BUDGET = 8_000;
 const PANEL_CHAR_BUDGET = 20_000;
+/** Pinned so the npx fallback cannot pull a newer, differently-shaped CLI. */
+const CALLDIFF_FALLBACK_VERSION = "0.5.0";
 
 // ---------------------------------------------------------------------------
 // types
@@ -58,18 +65,14 @@ const PANEL_CHAR_BUDGET = 20_000;
 
 type Mode = "diff" | "tree" | "reach";
 
-/** One node of the structured call tree emitted by `--format json`. */
-export interface CalldiffNode {
-	key?: string;
-	label?: string;
-	/** diff mode only; tree/reach nodes have no status. */
-	status?: "same" | "added" | "removed";
-	/** "call" for real calls, "branch" for if/switch scaffolding. */
-	kind?: string;
-	file?: string;
-	line?: number;
+/**
+ * Shaping runs over `diff` nodes, which carry `status`, and over `tree` nodes,
+ * which do not, on JSON we did not construct. Hence every field optional. The
+ * field names and types come from the package so they cannot drift silently.
+ */
+export type CalldiffNode = Partial<Omit<DiffNode, "children">> & {
 	children?: CalldiffNode[];
-}
+};
 
 interface CalldiffTree {
 	entry?: string;
@@ -152,8 +155,42 @@ interface Bin {
 
 let binCache: Bin | null = null;
 
+/**
+ * Resolve the CLI shipped with this package. Preferred over PATH and npx: the
+ * version is pinned by our lockfile, so calldiff cannot change its JSON shape
+ * under us between two runs, and there is no network hit on first use.
+ */
+function bundledBin(): Bin | null {
+	try {
+		// calldiff's `exports` map only defines "." under the `import` condition, so
+		// neither `require.resolve("calldiff")` nor the `calldiff/package.json`
+		// subpath resolves. ESM resolution is the only one that works here.
+		const entry = fileURLToPath(import.meta.resolve("calldiff"));
+		const cli = join(dirname(entry), "cli.js");
+		if (!existsSync(cli)) return null;
+		let version = "unknown";
+		try {
+			const manifest = join(dirname(entry), "..", "package.json");
+			version = (JSON.parse(readFileSync(manifest, "utf8")) as { version?: string }).version ?? version;
+		} catch {
+			// Label only; a missing manifest is not worth failing over.
+		}
+		return { cmd: process.execPath, args: [cli], label: `calldiff ${version} (bundled)` };
+	} catch {
+		// Optional dependency: a failed native build leaves it unresolvable.
+		return null;
+	}
+}
+
 async function resolveBin(pi: ExtensionAPI): Promise<Bin> {
 	if (binCache) return binCache;
+
+	const bundled = bundledBin();
+	if (bundled) {
+		binCache = bundled;
+		return binCache;
+	}
+
 	let found = "";
 	try {
 		const which = await pi.exec("sh", ["-lc", "command -v calldiff"], { timeout: 5_000 });
@@ -163,7 +200,11 @@ async function resolveBin(pi: ExtensionAPI): Promise<Bin> {
 	}
 	binCache = found
 		? { cmd: found, args: [], label: found }
-		: { cmd: "npx", args: ["-y", "calldiff@latest"], label: "npx calldiff@latest (not installed locally)" };
+		: {
+				cmd: "npx",
+				args: ["-y", `calldiff@${CALLDIFF_FALLBACK_VERSION}`],
+				label: `npx calldiff@${CALLDIFF_FALLBACK_VERSION} (not installed locally)`,
+			};
 	return binCache;
 }
 
@@ -216,7 +257,7 @@ const VERIFY_TIMEOUT_MS = 2_000;
 /** Above this many candidates the alternation regex stops paying off. */
 const VERIFY_MAX_SYMBOLS = 100;
 
-type NodeStatus = "same" | "added" | "removed";
+type NodeStatus = DiffStatus;
 
 /** Node after shaping: branches stripped, externals dropped, subtrees capped. */
 export interface ShapedNode {

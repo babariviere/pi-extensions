@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { type CalldiffNode, renderShaped, shapeTree } from "./calldiff.ts";
+import { type CalldiffNode, renderShaped, shapeTree } from "./index.ts";
 
 type Status = "same" | "added" | "removed";
 
