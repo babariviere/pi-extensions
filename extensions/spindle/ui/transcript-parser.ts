@@ -23,6 +23,8 @@ export class TranscriptAccumulator {
   readonly #anonymousTools = new Map<string, SpindleTranscriptEntry[]>();
   readonly #activeTools: SpindleTranscriptEntry[] = [];
   #assistant: SpindleTranscriptEntry | undefined;
+  /** Live assistant text per content index, assembled from streaming deltas. */
+  readonly #streamText = new Map<number, string>();
   #retry: SpindleTranscriptEntry | undefined;
   #compaction: SpindleTranscriptEntry | undefined;
   #sequence = 0;
@@ -56,9 +58,65 @@ export class TranscriptAccumulator {
   }
 
   #finishAssistant(status: "completed" | "failed"): void {
+    this.#streamText.clear();
     if (!this.#assistant) return;
     this.#assistant.status = status;
     this.#assistant = undefined;
+  }
+
+  /** Create or update the in-flight assistant entry with `text`. */
+  #renderAssistantText(id: string, text: string, trim = true): void {
+    const safe = clip(text, MAX_TRANSCRIPT_MESSAGE_CHARS, trim);
+    if (!safe) return;
+    if (!this.#assistant) {
+      this.#assistant = {
+        id,
+        kind: "assistant",
+        label: "Agent",
+        text: safe,
+        status: "running",
+      };
+      this.entries.push(this.#assistant);
+    } else {
+      this.#assistant.text = safe;
+      if (!this.entries.includes(this.#assistant)) this.entries.push(this.#assistant);
+    }
+  }
+
+  /**
+   * Assemble live assistant text from a delta-only `message_update`. pi 0.84.0
+   * removed the cumulative `message` field (and `assistantMessageEvent.partial`)
+   * from those events, so the text has to be accumulated per `contentIndex` from
+   * `text_delta` deltas, with `text_end` supplying the authoritative block.
+   * Non-text deltas (thinking, tool-call arguments) are ignored here; tool calls
+   * still arrive through the tool lifecycle events.
+   */
+  #appendAssistantDelta(id: string, raw: unknown): void {
+    const delta = recordOf(raw);
+    if (!delta) return;
+    const index = typeof delta.contentIndex === "number" ? delta.contentIndex : 0;
+    if (delta.type === "text_start") {
+      this.#streamText.set(index, "");
+      return;
+    }
+    if (delta.type === "text_delta") {
+      if (typeof delta.delta !== "string" || !delta.delta) return;
+      this.#streamText.set(index, `${this.#streamText.get(index) ?? ""}${delta.delta}`);
+    } else if (delta.type === "text_end") {
+      if (typeof delta.content !== "string") return;
+      this.#streamText.set(index, delta.content);
+    } else {
+      return;
+    }
+    const text = terminalSafe(
+      [...this.#streamText.entries()]
+        .sort((a, b) => a[0] - b[0])
+        .map(([, value]) => value)
+        .join(""),
+      false,
+    );
+    if (!text.trim()) return;
+    this.#renderAssistantText(id, text, false);
   }
 
   #pushMessage(
@@ -339,7 +397,10 @@ export class TranscriptAccumulator {
     if (event.type === "message_start") this.#finishAssistant("completed");
     if (event.type === "message_start" || event.type === "message_update") {
       const message = recordOf(event.message);
-      if (!message) return;
+      if (!message) {
+        if (event.type === "message_update") this.#appendAssistantDelta(id, event.assistantMessageEvent);
+        return;
+      }
       if (message.role === "user") {
         if (event.type === "message_start") this.#pushMessage("user", id, contentText(message.content));
         return;
@@ -347,19 +408,7 @@ export class TranscriptAccumulator {
       if (message.role !== "assistant") return;
       const text = terminalSafe(contentText(message.content));
       if (!text) return;
-      if (!this.#assistant) {
-        this.#assistant = {
-          id,
-          kind: "assistant",
-          label: "Agent",
-          text: clip(text, MAX_TRANSCRIPT_MESSAGE_CHARS),
-          status: "running",
-        };
-        this.entries.push(this.#assistant);
-      } else {
-        this.#assistant.text = clip(text, MAX_TRANSCRIPT_MESSAGE_CHARS);
-        if (!this.entries.includes(this.#assistant)) this.entries.push(this.#assistant);
-      }
+      this.#renderAssistantText(id, text);
       return;
     }
 
