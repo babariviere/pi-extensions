@@ -46,6 +46,8 @@ interface Hint {
 class DoubleEscapeEditor extends CustomEditor {
 	private readonly tracker = new TapTracker(TAP_WINDOW_MS);
 	private timer: ReturnType<typeof setTimeout> | undefined;
+	/** Whether the footer hint is currently shown. */
+	private hinted = false;
 
 	constructor(
 		tui: TUI,
@@ -65,6 +67,7 @@ class DoubleEscapeEditor extends CustomEditor {
 		}
 
 		if (this.tracker.tap(Date.now()) === "arm") {
+			this.hinted = true;
 			this.hint.show();
 			this.timer = setTimeout(() => this.disarm(), TAP_WINDOW_MS);
 			return;
@@ -103,13 +106,21 @@ class DoubleEscapeEditor extends CustomEditor {
 		super.handleInput(data);
 	}
 
+	/**
+	 * Drop the armed tap and the footer hint.
+	 *
+	 * The hint is tracked separately from `tracker.armed`: a firing tap already
+	 * clears the tracker, so keying off it would leave the hint on screen after
+	 * a completed double tap.
+	 */
 	private disarm(): void {
 		if (this.timer) {
 			clearTimeout(this.timer);
 			this.timer = undefined;
 		}
-		if (!this.tracker.armed) return;
 		this.tracker.reset();
+		if (!this.hinted) return;
+		this.hinted = false;
 		this.hint.clear();
 	}
 }
