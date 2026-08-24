@@ -16,6 +16,80 @@ export interface SecretEntry {
 	value: string;
 }
 
+/**
+ * Grammar of a secret reference, defined here so this module and secret-ref.ts
+ * share one definition:
+ *
+ *   group 1: backslash when escaped (`<\secret:...>` is inert)
+ *   group 2: label (lowercase slug) or NAME (authoring form)
+ *   group 3: id, present on minted refs only
+ *
+ * Kept as a source string because a global regex carries a lastIndex and must
+ * not be shared between a `test` call and a `replace` loop.
+ */
+export const REF_PATTERN = String.raw`<(\\?)secret:([A-Za-z][A-Za-z0-9_-]*)(?::([0-9a-f]{8,32}))?>`;
+
+const REF_TEST_RE = new RegExp(REF_PATTERN);
+
+/** Fresh global matcher. Callers that iterate need their own lastIndex. */
+export function refMatcher(): RegExp {
+	return new RegExp(REF_PATTERN, "g");
+}
+
+/** True when `text` contains a reference anywhere, escaped or not. */
+export function containsRef(text: string): boolean {
+	return REF_TEST_RE.test(text);
+}
+
+/**
+ * Mints a reversible reference for a secret value, and answers whether an id is
+ * one this session minted (see secret-ref.ts).
+ *
+ * Injected rather than imported so this module stays free of node:crypto. With
+ * no codec every layer falls back to the older lossy partial masking.
+ */
+export interface RefCodec {
+	mint(value: string, label: string, name?: string): string;
+	hasId(id: string): boolean;
+}
+
+/** Shortest value worth referencing. Below this a match is more likely noise. */
+const MIN_REF_VALUE_LENGTH = 8;
+
+/**
+ * Neutralize reference-shaped text that was already in the input.
+ *
+ * A file can legitimately contain `<secret:NAME>`, as a template for another
+ * tool or because someone typed it. Escaping it on the way out means writing it
+ * back reproduces the literal text instead of planting a real credential.
+ *
+ * Minted refs always carry an id this session knows, so they are left alone and
+ * scrubbing stays idempotent.
+ */
+function escapeInboundRefs(text: string, refs: RefCodec): string {
+	if (!containsRef(text)) return text;
+	return text.replace(refMatcher(), (raw: string, escape: string, label: string, id: string | undefined) => {
+		if (escape) return raw;
+		if (id && refs.hasId(id)) return raw;
+		return `<\\secret:${label}${id ? `:${id}` : ""}>`;
+	});
+}
+
+/**
+ * Normalize any label into the `[a-z][a-z0-9-]*` shape a ref uses. Applied
+ * uniformly to fnox names and pattern labels, so a ref never reveals which of
+ * the two it came from.
+ */
+export function slugLabel(input: string): string {
+	const slug = input
+		.toLowerCase()
+		.replace(/[^a-z0-9]+/g, "-")
+		.replace(/-{2,}/g, "-")
+		.replace(/^-+|-+$/g, "");
+	const named = /^[a-z]/.test(slug) ? slug : slug ? `secret-${slug}` : "secret";
+	return named.slice(0, 40).replace(/-+$/, "");
+}
+
 interface SecretPattern {
 	label: string;
 	re: RegExp;
@@ -308,12 +382,15 @@ export const SECRET_PATTERNS: SecretPattern[] = [
  * a partial mask. Patterns are applied in the order declared above
  * (most specific first).
  */
-export function maskKnownSecrets(text: string): string {
+export function maskKnownSecrets(text: string, refs?: RefCodec): string {
 	let result = text;
 	for (const p of SECRET_PATTERNS) {
 		if (p.label === "pem-full-block") {
-			// Whole block replaced by a fixed marker — no partial reveal.
-			result = result.replace(p.re, "[REDACTED: PEM PRIVATE KEY]");
+			// A PEM block is a value like any other: with refs it stays restorable, so
+			// editing a file that holds a private key no longer destroys the key.
+			result = result.replace(p.re, (match: string) =>
+				refs ? refs.mint(match, "pem-private-key") : "[REDACTED: PEM PRIVATE KEY]",
+			);
 		} else if (p.group != null) {
 			// Keyword-gated: mask only the captured secret value, keep the surrounding keyword.
 			result = result.replace(p.re, (match: string, ...args: any[]) => {
@@ -321,11 +398,12 @@ export function maskKnownSecrets(text: string): string {
 				if (!group1) return match;
 				// The captured group is always at the end of the match for these patterns.
 				const gStart = match.length - group1.length;
-				return match.slice(0, gStart) + partialMask(group1, p.showStart, p.showEnd);
+				const replacement = refs ? refs.mint(group1, p.label) : partialMask(group1, p.showStart, p.showEnd);
+				return match.slice(0, gStart) + replacement;
 			});
 		} else {
 			result = result.replace(p.re, (match: string) =>
-				partialMask(match, p.showStart, p.showEnd),
+				refs ? refs.mint(match, p.label) : partialMask(match, p.showStart, p.showEnd),
 			);
 		}
 	}
@@ -345,17 +423,29 @@ const URL_USERINFO_RE = /(:\/\/[^:@\s/]*):([^@\s/]+)@/g;
  * Deliberately excludes bare `key` to avoid masking ?sort_key=name.
  */
 const URL_QUERY_STRICT_RE =
-	/([?&](?:token|api_key|apikey|access_token|sig|signature|auth|client_secret|app_secret|password|secret|pwd)=)[A-Za-z0-9%+/=_.-]{8,}/gi;
+	/([?&])(token|api_key|apikey|access_token|sig|signature|auth|client_secret|app_secret|password|secret|pwd)=([A-Za-z0-9%+/=_.-]{8,})/gi;
 
 /**
  * Mask secrets embedded in URLs:
  *   (a) userinfo credentials (`user:pass@host`)
  *   (b) sensitive query-parameter values
  */
-export function maskUrls(text: string): string {
+export function maskUrls(text: string, refs?: RefCodec): string {
 	let result = text;
-	result = result.replace(URL_USERINFO_RE, "$1:****@");
-	result = result.replace(URL_QUERY_STRICT_RE, "$1****");
+	result = result.replace(URL_USERINFO_RE, (match, prefix: string, password: string) => {
+		// A value that merely contains a ref must not be wrapped in a second one:
+		// hydration would then return the inner ref instead of the secret.
+		if (containsRef(password)) return match;
+		const usable = refs && password.length >= MIN_REF_VALUE_LENGTH;
+		const replacement = usable ? refs.mint(password, "url-password") : "****";
+		return `${prefix}:${replacement}@`;
+	});
+	result = result.replace(URL_QUERY_STRICT_RE, (match, sep: string, param: string, value: string) => {
+		if (containsRef(value)) return match;
+		const usable = refs && value.length >= MIN_REF_VALUE_LENGTH;
+		const replacement = usable ? refs.mint(value, `url-${param}`) : "****";
+		return `${sep}${param}=${replacement}`;
+	});
 	return result;
 }
 
@@ -416,14 +506,22 @@ const ENV_ASSIGN_RE =
  * When the variable name is sensitive and the value is long enough,
  * replace the value with a partial mask.
  */
-export function maskEnvAssignments(text: string): string {
+export function maskEnvAssignments(text: string, refs?: RefCodec): string {
 	return text.replace(ENV_ASSIGN_RE, (match: string, ...args: any[]) => {
 		const prefix: string = args[0];
 		const name: string = args[1];
 		const quote: string = args[2];
 		const value: string = args[3];
 		if (!shouldMaskEnvVarValue(name, value)) return match;
-		return prefix + name + "=" + quote + partialMask(value, 4, 2) + quote;
+		// A value that merely contains a ref (`AUTH=Bearer <secret:...>`) must not be
+		// wrapped in a second one, or hydration returns the inner ref and the secret
+		// is lost with nothing reported.
+		if (containsRef(value)) return match;
+		// The name is only a hint here: an assignment in an arbitrary file is not
+		// proof that the value is backed by an env var of that name, so the entry
+		// stays unnamed and its ref cannot be used in bash.
+		const replacement = refs ? refs.mint(value, name) : partialMask(value, 4, 2);
+		return prefix + name + "=" + quote + replacement + quote;
 	});
 }
 
@@ -494,6 +592,7 @@ export function maskFnoxSecret(value: string, name: string): string {
 	return `[${name}: ${partialMask(value, showStart, 2)}]`;
 }
 
+
 // ---------------------------------------------------------------------------
 // Orchestrator
 // ---------------------------------------------------------------------------
@@ -505,25 +604,93 @@ export function maskFnoxSecret(value: string, name: string): string {
  *   3. URL-embedded secrets (userinfo + sensitive query params)
  *   4. Env-var assignments with sensitive names
  */
-export function scrubText(text: string, secrets: SecretEntry[]): string {
-	let result = text;
+export function scrubText(text: string, secrets: SecretEntry[], refs?: RefCodec): string {
+	// 0. Neutralize reference-shaped text that was already there, before any
+	// minting, so an on-disk placeholder never expands into a real credential.
+	let result = refs ? escapeInboundRefs(text, refs) : text;
 
 	// 1. Exact fnox secret values
 	const sorted = [...secrets].sort((a, b) => b.value.length - a.value.length);
 	for (const secret of sorted) {
-		if (secret.value.length < 8) continue;
-		result = result.replaceAll(secret.value, maskFnoxSecret(secret.value, secret.name));
+		if (secret.value.length < MIN_REF_VALUE_LENGTH) continue;
+		const replacement = refs
+			? refs.mint(secret.value, secret.name, secret.name)
+			: maskFnoxSecret(secret.value, secret.name);
+		result = result.replaceAll(secret.value, replacement);
 	}
 
 	// 2. Known provider pattern masking
-	result = maskKnownSecrets(result);
+	result = maskKnownSecrets(result, refs);
 
 	// 3. URL-embedded secret masking
-	result = maskUrls(result);
+	result = maskUrls(result, refs);
 
 	// 4. Env-var assignment masking
-	result = maskEnvAssignments(result);
+	result = maskEnvAssignments(result, refs);
 
+	return result;
+}
+
+/**
+ * Scrub strings nested inside plain objects and arrays.
+ *
+ * Tool result `details` are persisted to the session file, so a secret that only
+ * appears there still lands on disk unmasked unless it is scrubbed too.
+ * Non-plain objects are returned untouched: rebuilding them would drop their
+ * prototype, and they are not what carries tool text.
+ *
+ * Returns the input by reference when nothing changed. Callers use that identity
+ * to decide whether to patch a tool result at all, and patching an untouched
+ * result is not free (see scrubContent).
+ */
+export function scrubDeep<T>(input: T, secrets: SecretEntry[], refs?: RefCodec): T {
+	return scrubDeepInternal(input, secrets, refs, new Map()) as T;
+}
+
+/**
+ * The memo doubles as the cycle guard and as shared-subtree caching. A plain
+ * visited-set would return the *unscrubbed* original for the second reference to
+ * a shared object, which quietly leaks the secret into the session file.
+ *
+ * A true cycle still resolves to the original object for the back edge, because
+ * its scrubbed form does not exist yet. Tool details are trees in practice.
+ */
+function scrubDeepInternal(
+	input: unknown,
+	secrets: SecretEntry[],
+	refs: RefCodec | undefined,
+	memo: Map<object, unknown>,
+): unknown {
+	if (typeof input === "string") return scrubText(input, secrets, refs);
+	if (input === null || typeof input !== "object") return input;
+	if (memo.has(input)) return memo.get(input);
+
+	if (Array.isArray(input)) {
+		memo.set(input, input);
+		let changed = false;
+		const out = input.map((item) => {
+			const next = scrubDeepInternal(item, secrets, refs, memo);
+			if (next !== item) changed = true;
+			return next;
+		});
+		const result = changed ? out : input;
+		memo.set(input, result);
+		return result;
+	}
+
+	const proto = Object.getPrototypeOf(input);
+	if (proto !== Object.prototype && proto !== null) return input;
+
+	memo.set(input, input);
+	let changed = false;
+	const out: Record<string, unknown> = {};
+	for (const [key, value] of Object.entries(input)) {
+		const next = scrubDeepInternal(value, secrets, refs, memo);
+		if (next !== value) changed = true;
+		out[key] = next;
+	}
+	const result = changed ? out : input;
+	memo.set(input, result);
 	return result;
 }
 
@@ -539,11 +706,12 @@ export function scrubText(text: string, secrets: SecretEntry[]): string {
 export function scrubContent<T extends { type: string; text?: string }>(
 	content: readonly T[],
 	secrets: SecretEntry[],
+	refs?: RefCodec,
 ): T[] | undefined {
 	let changed = false;
 	const scrubbed = content.map((part) => {
 		if (part.type !== "text" || typeof part.text !== "string") return part;
-		const text = scrubText(part.text, secrets);
+		const text = scrubText(part.text, secrets, refs);
 		if (text === part.text) return part;
 		changed = true;
 		return { ...part, text };

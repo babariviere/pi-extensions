@@ -2,14 +2,14 @@
  * secrets extension for pi
  *
  * - Injects secrets (from fnox CLI) as env vars into bash commands
- * - Scrubs secret values from all tool output (bash, read, grep, etc.)
- *   with partial masking: prefix****suffix so the agent can tell what kind
- *   of secret it is (e.g. `gho_ab****ef`).
+ * - Replaces secret values in tool output with reversible references
+ *   (`<secret:github-token:9f2c4ab1>`, see secret-ref.ts) and expands them
+ *   again when the model writes them back to a file
  * - Adds available secret names to the system prompt
  * - Provides /secret-list command
  *
  * Secrets are loaded from the fnox CLI (`fnox export --format json`).
- * Pattern-based masking also applies to recognized formats (GitHub tokens,
+ * Pattern-based detection also applies to recognized formats (GitHub tokens,
  * API keys, JWTs, AWS keys, etc.) even without fnox.
  *
  * Install:
@@ -21,9 +21,11 @@ import { execSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ToolCallEvent } from "@earendil-works/pi-coding-agent";
 import { createLocalBashOperations, isToolCallEventType } from "@earendil-works/pi-coding-agent";
-import { scrubContent, type SecretEntry } from "./secret-mask";
+import { applySecretPolicy } from "./secret-policy";
+import { scrubContent, scrubDeep, type SecretEntry } from "./secret-mask";
+import { REF_KEY_ENV, SecretRefRegistry } from "./secret-ref";
 
 /**
  * Resolve the shell pi is configured to use, so ! commands match the agent
@@ -88,6 +90,12 @@ export default function (pi: ExtensionAPI) {
 	// Find fnox config (for displaying config path in /secret-list)
 	const configPath = findFnoxConfig(cwd);
 
+	// Ref registry. The session key is inherited by child pi processes so refs
+	// minted by a parent resolve identically in a subagent; values are not passed,
+	// so a child only resolves what it re-derives from fnox or sees itself.
+	const registry = new SecretRefRegistry(process.env[REF_KEY_ENV]);
+	process.env[REF_KEY_ENV] = registry.key;
+
 	// Track loaded secrets in memory (lazy loaded)
 	let cachedSecrets: SecretEntry[] | null = null;
 	let cacheTime = 0;
@@ -100,29 +108,49 @@ export default function (pi: ExtensionAPI) {
 		}
 		cachedSecrets = await loadSecrets();
 		cacheTime = now;
+		// Registering up front is what makes authoring refs (`<secret:NAME>`) work for
+		// a secret the model has never seen in any tool output.
+		for (const secret of cachedSecrets) {
+			if (secret.value.length >= 8) registry.registerNamed(secret.name, secret.value);
+		}
 		return cachedSecrets;
 	};
 
-	// Inject secrets into bash tool calls by prepending fnox export
-	pi.on("tool_call", async (event) => {
-		if (!isToolCallEventType("bash", event)) return;
+	// Expand references on the way in, and inject env vars for bash.
+	pi.on("tool_call", async (event: ToolCallEvent, ctx) => {
+		// Only the file and shell tools need the fnox load, and a cache miss costs a
+		// blocking execSync; the rest of the tools just need the ref grammar.
+		const touchesSecrets =
+			isToolCallEventType("bash", event) ||
+			isToolCallEventType("write", event) ||
+			isToolCallEventType("edit", event);
+		const secrets = touchesSecrets ? await getSecrets() : [];
 
-		const secrets = await getSecrets();
-		if (secrets.length === 0) return;
+		const outcome = applySecretPolicy(event, registry);
+		if (outcome.block) return { block: true, reason: outcome.reason };
+		if (outcome.notify) ctx.ui.notify(outcome.notify, "info");
 
-		// Prepend fnox export command to inject secrets as env vars
-		event.input.command = `eval "$(fnox export)"\n${event.input.command}`;
+		if (isToolCallEventType("bash", event) && secrets.length > 0) {
+			// Prepend fnox export command to inject secrets as env vars
+			event.input.command = `eval "$(fnox export)"\n${event.input.command}`;
+		}
 	});
 
-	// Scrub secrets from all tool results (pattern + URL + env masking always runs;
-	// fnox exact-value masking also runs when secrets are available)
+	// Replace secret values with references in every tool result (pattern + URL +
+	// env detection always runs; fnox exact-value matching also runs when secrets
+	// are available).
 	pi.on("tool_result", async (event) => {
 		const secrets = await getSecrets();
 
 		// scrubContent returns undefined when nothing changed (see its docstring for
 		// why an untouched patch is harmful); cast keeps the SDK content-part union.
-		const scrubbed = scrubContent(event.content as any[], secrets);
-		return scrubbed ? { content: scrubbed } : undefined;
+		const scrubbed = scrubContent(event.content as any[], secrets, registry);
+		// details are persisted to the session file, so they are scrubbed too.
+		// scrubDeep returns the input by reference when nothing changed, which is what
+		// keeps an untouched result from being patched.
+		const details = scrubDeep(event.details, secrets, registry);
+		if (!scrubbed && details === event.details) return undefined;
+		return { content: scrubbed ?? event.content, details };
 	});
 
 	// Inject secrets into user ! commands too
@@ -160,7 +188,10 @@ export default function (pi: ExtensionAPI) {
 			"\n## secrets — Secret Management",
 			`Available secrets (injected as env vars in bash): ${names}`,
 			"Use $SECRET_NAME in bash commands to reference secrets. Never ask the user for secret values.",
-			"Secret values are partially masked in command output (shown as prefix****suffix, e.g. gho_ab****ef). Pattern-based masking also applies to recognized secret formats (GitHub tokens, API keys, JWTs, etc.).",
+			"Secret values never appear in tool output. They are replaced by references of the form `<secret:type:id>`.",
+			"Copy a reference verbatim. Written to a file with write or edit, it expands to the real value; in bash it becomes the matching variable.",
+			"To place a secret you have never seen into a file, write `<secret:NAME>` using a name from the list above.",
+			"Never transcribe a partially masked value: that destroys the secret. Use the reference.",
 		].join("\n");
 
 		return { systemPrompt: event.systemPrompt + instruction };
@@ -181,12 +212,12 @@ export default function (pi: ExtensionAPI) {
 
 			const configDir = configPath ? dirname(configPath) : "(unknown)";
 			const configName = configPath ? basename(configPath) : "(unknown)";
-			const formatLine = (s: SecretEntry) => `  • ${s.name}`;
+			const formatLine = (s: SecretEntry) => {
+				const entry = registry.lookupName(s.name);
+				return entry ? `  • ${s.name}  ${entry.ref}` : `  • ${s.name}`;
+			};
 			const list = secrets.map(formatLine).join("\n");
-			ctx.ui.notify(
-				`secrets (from ${configName} in ${configDir}):\n${list}`,
-				"info",
-			);
+			ctx.ui.notify(`secrets (from ${configName} in ${configDir}):\n${list}`, "info");
 
 			// Also let the model see the list on the next turn
 			const modelList = secrets.map((s) => s.name).join(", ");
