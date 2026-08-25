@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { type AgentConfig } from "./frontmatter.ts";
-import { type DiscoveredAgent } from "./discovery.ts";
+import { builtinAgent, BUILTIN_AGENT_NAME, type DiscoveredAgent } from "./discovery.ts";
 import { buildRunRequests, normalizeRequests, validateOverrides } from "./request.ts";
 
 function agent(name: string, config: Partial<AgentConfig> = {}): DiscoveredAgent {
@@ -29,9 +29,16 @@ test("normalizeRequests rejects providing both single and parallel shapes", () =
 	assert.ok("error" in r && /not both/.test(r.error));
 });
 
-test("normalizeRequests requires both agent and task for a single run", () => {
+test("normalizeRequests requires a task for a single run", () => {
 	assert.ok("error" in normalizeRequests({ agent: "a" }));
-	assert.ok("error" in normalizeRequests({ task: "t" }));
+});
+
+test("normalizeRequests accepts a task with no agent", () => {
+	const r = normalizeRequests({ task: "t" });
+	assert.ok("items" in r);
+	assert.equal(r.items.length, 1);
+	assert.equal(r.items[0].agent, undefined);
+	assert.equal(r.items[0].task, "t");
 });
 
 test("normalizeRequests errors when nothing is provided", () => {
@@ -46,6 +53,31 @@ test("buildRunRequests binds a single item to its agent and indexes it", () => {
 	assert.equal(r.requests[0].agent.config.name, "worker");
 	assert.equal(r.requests[0].index, 0);
 	assert.equal(r.requests[0].task, "do it");
+});
+
+test("buildRunRequests binds an agentless item to the built-in agent", () => {
+	const agents = [agent("worker"), builtinAgent()];
+	const r = buildRunRequests({ task: "just do it" }, agents, bareCwd());
+	assert.ok("requests" in r);
+	assert.equal(r.requests[0].agent.config.name, BUILTIN_AGENT_NAME);
+	assert.equal(r.requests[0].agent.systemPrompt, "");
+	assert.equal(r.requests[0].task, "just do it");
+});
+
+test("buildRunRequests mixes agentless and named items in one batch", () => {
+	const agents = [agent("worker"), builtinAgent()];
+	const r = buildRunRequests(
+		{ tasks: [{ agent: "worker", task: "a" }, { task: "b" }] },
+		agents,
+		bareCwd(),
+	);
+	assert.ok("requests" in r);
+	assert.deepEqual(r.requests.map((q) => q.agent.config.name), ["worker", BUILTIN_AGENT_NAME]);
+});
+
+test("buildRunRequests errors when the built-in agent is missing from the list", () => {
+	const r = buildRunRequests({ task: "t" }, [agent("worker")], bareCwd());
+	assert.ok("error" in r && new RegExp(`Unknown agent '${BUILTIN_AGENT_NAME}'`).test(r.error));
 });
 
 test("buildRunRequests reports an unknown agent with the available names", () => {

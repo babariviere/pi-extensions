@@ -5,14 +5,15 @@
  * spawning, so this is unit-testable in isolation.
  */
 
-import { type DiscoveredAgent } from "./discovery.ts";
+import { BUILTIN_AGENT_NAME, type DiscoveredAgent } from "./discovery.ts";
 import { planBatchOutputs } from "./output.ts";
 import { qualifyModel, stripThinkingSuffix, THINKING_LEVELS } from "./pi-args.ts";
 import { type RunRequest } from "./run.ts";
 import { readDefaultProvider, readEnabledModels } from "./settings.ts";
 
 export interface NormalizedItem {
-	agent: string;
+	/** Discovered agent name. Omitted means the built-in personaless agent. */
+	agent?: string;
 	task: string;
 	model?: string;
 	thinking?: string;
@@ -50,8 +51,9 @@ export function buildRunRequests(
 	const rawOutputs: (string | undefined)[] = [];
 	for (let i = 0; i < normalized.items.length; i++) {
 		const item = normalized.items[i];
-		const agent = agents.find((a) => a.config.name === item.agent);
-		if (!agent) return { error: unknownAgentError(item.agent, agents) };
+		const name = item.agent ?? BUILTIN_AGENT_NAME;
+		const agent = agents.find((a) => a.config.name === name);
+		if (!agent) return { error: unknownAgentError(name, agents) };
 		const overrides = item.model || item.thinking ? { model: item.model, thinking: item.thinking } : undefined;
 		rawOutputs.push(item.output ?? agent.config.output);
 		requests.push({
@@ -87,12 +89,12 @@ export function normalizeRequests(params: RawToolParams): { items: NormalizedIte
 		return { items: params.tasks! };
 	}
 	if (hasSingle) {
-		if (!params.agent || !params.task) {
-			return { error: "A single run needs both `agent` and `task`." };
+		if (!params.task) {
+			return { error: "A single run needs a `task`. `agent` is optional." };
 		}
 		return {
 			items: [{
-				agent: params.agent,
+				...(params.agent ? { agent: params.agent } : {}),
 				task: params.task,
 				model: params.model,
 				thinking: params.thinking,
@@ -101,7 +103,7 @@ export function normalizeRequests(params: RawToolParams): { items: NormalizedIte
 			}],
 		};
 	}
-	return { error: "Nothing to do. Use { action: \"list\" }, { agent, task }, or { tasks: [...] }." };
+	return { error: "Nothing to do. Use { action: \"list\" }, { task }, { agent, task }, or { tasks: [...] }." };
 }
 
 /** True when `model` (ignoring any thinking suffix / provider prefix) is in the allowlist. */
@@ -121,12 +123,13 @@ export function validateOverrides(items: NormalizedItem[], cwd: string): string 
 	const enabled = readEnabledModels(cwd);
 	const provider = readDefaultProvider(cwd);
 	for (const item of items) {
+		const name = item.agent ?? BUILTIN_AGENT_NAME;
 		if (item.thinking && !THINKING_LEVELS.includes(item.thinking)) {
-			return `Invalid thinking level '${item.thinking}' for agent '${item.agent}'. Allowed: ${THINKING_LEVELS.join(", ")}.`;
+			return `Invalid thinking level '${item.thinking}' for agent '${name}'. Allowed: ${THINKING_LEVELS.join(", ")}.`;
 		}
 		if (item.model && enabled.length > 0 && !isModelEnabled(item.model, enabled, provider)) {
 			return (
-				`Model override '${item.model}' for agent '${item.agent}' is not in enabledModels. ` +
+				`Model override '${item.model}' for agent '${name}' is not in enabledModels. ` +
 				`Allowed: ${enabled.join(", ")}.`
 			);
 		}

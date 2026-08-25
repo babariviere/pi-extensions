@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, test } from "node:test";
-import { discoverAgents } from "./discovery.ts";
+import { BUILTIN_AGENT_NAME, discoverAgents, withBuiltinAgent } from "./discovery.ts";
 
 let root: string;
 let userDir: string;
@@ -65,4 +65,29 @@ test("a malformed file does not crash discovery", () => {
 test("missing directories yield an empty list", () => {
 	const agents = discoverAgents(join(root, "nope"), join(root, "nope2"));
 	assert.deepEqual(agents, []);
+});
+
+test("withBuiltinAgent appends the personaless agent", () => {
+	agentFile(userDir, "worker.md", "worker");
+	const agents = withBuiltinAgent(discoverAgents(userDir, projectDir));
+	assert.deepEqual(
+		agents.map((a) => a.config.name),
+		[BUILTIN_AGENT_NAME, "worker"],
+	);
+	const builtin = agents.find((a) => a.config.name === BUILTIN_AGENT_NAME);
+	assert.equal(builtin?.scope, "builtin");
+	assert.equal(builtin?.systemPrompt, "");
+	assert.equal(builtin?.config.tools, undefined);
+});
+
+test("an on-disk agent shadows the built-in one", () => {
+	agentFile(userDir, `${BUILTIN_AGENT_NAME}.md`, BUILTIN_AGENT_NAME, "model: mine\n");
+	const agents = withBuiltinAgent(discoverAgents(userDir, projectDir));
+	assert.equal(agents.length, 1);
+	assert.equal(agents[0].scope, "user");
+	assert.equal(agents[0].config.model, "mine");
+});
+
+test("discoverAgents itself stays free of the built-in agent", () => {
+	assert.deepEqual(discoverAgents(join(root, "nope"), join(root, "nope2")), []);
 });

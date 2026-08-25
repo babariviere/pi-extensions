@@ -10,7 +10,7 @@
  *
  * Surface (exactly three actions):
  *   agents.list()                    → discovered markdown agent definitions
- *   agents.run({ agent, task, … })   → one run, blocks until it finishes
+ *   agents.run({ task, agent?, … })  → one run, blocks until it finishes
  *   agents.runAll({ tasks: [ … ] })  → batch of runs in parallel
  *
  * Progress does NOT go out as `progress.ts`'s ANSI block: each row is mirrored
@@ -20,7 +20,7 @@
  */
 
 import { selectBackend } from "../agents/backend.ts";
-import { discoverAgentsForCwd, getProjectAgentsDir, getUserAgentsDir } from "../agents/discovery.ts";
+import { discoverAgentsForCwd } from "../agents/discovery.ts";
 import { newRunId } from "../agents/paths.ts";
 import { buildRunRequests, type NormalizedItem } from "../agents/request.ts";
 import type { RunContext, RunRequest, RunResult } from "../agents/run.ts";
@@ -57,7 +57,7 @@ const taskItemSchema = {
     output: { type: "string" },
     reads: { type: "array", items: { type: "string" } },
   },
-  required: ["agent", "task"],
+  required: ["task"],
   additionalProperties: false,
 };
 
@@ -71,13 +71,13 @@ const descriptors: SpindleActionDescriptor[] = [
   {
     name: "run",
     description:
-      "Run one discovered agent on a task and wait for its result. Optional per-run model/thinking overrides, an `output` path for the agent's submitted result, and `reads` for read-first context files.",
+      "Run a subagent on a task and wait for its result. `agent` is optional: omit it to run a generic subagent that inherits the parent model, tools, skills and project context. Optional per-run model/thinking overrides, an `output` path for the submitted result, and `reads` for read-first context files.",
     inputSchema: taskItemSchema,
   },
   {
     name: "runAll",
     description:
-      "Run several discovered agents in parallel and wait for all of them to finish.",
+      "Run several subagents in parallel and wait for all of them to finish. Each item's `agent` is optional.",
     inputSchema: {
       type: "object",
       properties: { tasks: { type: "array", items: taskItemSchema } },
@@ -105,7 +105,7 @@ const normalizedItem = (value: unknown): NormalizedItem => {
   const output = stringOrUndefined(record.output);
   const reads = stringArrayOrUndefined(record.reads);
   return {
-    agent: String(record.agent ?? ""),
+    ...(record.agent === undefined ? {} : { agent: String(record.agent) }),
     task: String(record.task ?? ""),
     ...(model ? { model } : {}),
     ...(thinking ? { thinking } : {}),
@@ -192,9 +192,9 @@ export class SpindleAgentsProvider implements SpindleProvider {
   }
 
   /**
-   * Resolve raw items to run requests: discover the agents (throwing when none
-   * exist), apply the runtime model/thinking defaults, then build and validate
-   * the requests. Pure of UI and spawning.
+   * Resolve raw items to run requests: discover the agents (always at least the
+   * built-in personaless one), apply the runtime model/thinking defaults, then
+   * build and validate the requests. Pure of UI and spawning.
    */
   #resolveRequests(
     items: NormalizedItem[],
@@ -202,11 +202,6 @@ export class SpindleAgentsProvider implements SpindleProvider {
     runtimeConfig: SpindleAgentRuntimeConfig,
   ): RunRequest[] {
     const discovered = discoverAgentsForCwd(ref.cwd);
-    if (discovered.length === 0) {
-      throw new Error(
-        `No custom agents were found. Searched ${getUserAgentsDir()} and ${getProjectAgentsDir(ref.cwd)}.`,
-      );
-    }
     const withDefaults = items.map((item) => ({
       ...item,
       ...(item.model ?? runtimeConfig.defaultModel
