@@ -4,7 +4,8 @@
  * Overnight babysitting for long agent runs.
  *
  * Between 21:00 and 09:00 local:
- *  1. holds a `caffeinate -dimsu` process so the machine never sleeps,
+ *  1. holds a `caffeinate -dimsu` process while an agent run is in flight (or
+ *     while paused waiting for a reset) so the machine never sleeps mid-run,
  *  2. watches the Claude 5h subscription window (published by the `usage`
  *     extension on the event bus) and pauses the agent at 95% so the session
  *     never spills past the limit,
@@ -38,6 +39,7 @@ import {
 	formatDuration,
 	formatWindow,
 	isWithinWindow,
+	shouldHoldCaffeinate,
 	shouldPause,
 	windowStartingAt,
 } from "./night-mode.ts";
@@ -61,6 +63,10 @@ export interface NightModeState {
 	resumeAt?: number;
 	usedPercent?: number;
 	threshold: number;
+	/** True while an agent run is in flight (between `agent_start` and `agent_settled`). */
+	agentBusy: boolean;
+	/** True while this session holds a `caffeinate` process. */
+	caffeinated: boolean;
 }
 
 export default function (pi: ExtensionAPI): void {
@@ -70,6 +76,8 @@ export default function (pi: ExtensionAPI): void {
 	let enabled = true;
 	let inWindow = false;
 	let paused = false;
+	/** True between `agent_start` and `agent_settled`. */
+	let agentBusy = false;
 	let resumeAt: number | undefined;
 	let resumeTimer: ReturnType<typeof setTimeout> | undefined;
 	let tickTimer: ReturnType<typeof setInterval> | undefined;
@@ -122,6 +130,8 @@ export default function (pi: ExtensionAPI): void {
 			resumeAt,
 			usedPercent: usedPercent(),
 			threshold: DEFAULT_THRESHOLD_PERCENT,
+			agentBusy,
+			caffeinated: caffeinate !== undefined,
 		};
 	}
 
@@ -215,17 +225,20 @@ export default function (pi: ExtensionAPI): void {
 
 	// ── evaluation ────────────────────────────────────────────────────────
 
+	/** Take or release the caffeinate process to match the current state. */
+	function syncCaffeinate(): void {
+		if (shouldHoldCaffeinate({ enabled, inWindow, agentBusy, paused })) startCaffeinate();
+		else stopCaffeinate();
+	}
+
 	function evaluate(): void {
 		const active = enabled && isWithinWindow(new Date(), currentWindow());
 		if (active !== inWindow) {
 			inWindow = active;
-			if (active) startCaffeinate();
-			else {
-				stopCaffeinate();
-				clearPause();
-			}
+			if (!active) clearPause();
 		}
 		if (inWindow && !paused && shouldPause(usedPercent())) pause();
+		syncCaffeinate();
 		report();
 	}
 
@@ -264,6 +277,18 @@ export default function (pi: ExtensionAPI): void {
 			tickTimer = setInterval(() => evaluate(), TICK_MS);
 			tickTimer.unref?.();
 		}
+		evaluate();
+	});
+
+	pi.on("agent_start", () => {
+		agentBusy = true;
+		evaluate();
+	});
+
+	// `agent_settled` (not `agent_end`) is the real "nothing left to do" signal: no
+	// retry, compaction or queued continuation will follow.
+	pi.on("agent_settled", () => {
+		agentBusy = false;
 		evaluate();
 	});
 

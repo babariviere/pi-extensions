@@ -7,6 +7,7 @@ import {
 	formatDuration,
 	formatWindow,
 	isWithinWindow,
+	shouldHoldCaffeinate,
 	windowStartingAt,
 	shouldPause,
 } from "./night-mode.ts";
@@ -75,6 +76,27 @@ describe("formatWindow", () => {
 	it("renders zero padded hours", () => {
 		assert.equal(formatWindow({ startHour: 21, endHour: 9 }), "21:00-09:00");
 		assert.equal(formatWindow({ startHour: 0, endHour: 17 }), "00:00-17:00");
+	});
+});
+
+describe("shouldHoldCaffeinate", () => {
+	const base = { enabled: true, inWindow: true, agentBusy: false, paused: false };
+
+	it("holds while an agent run is in flight", () => {
+		assert.equal(shouldHoldCaffeinate({ ...base, agentBusy: true }), true);
+	});
+
+	it("holds while paused, so the resume timer is not stalled by sleep", () => {
+		assert.equal(shouldHoldCaffeinate({ ...base, paused: true }), true);
+	});
+
+	it("releases once the agent has settled", () => {
+		assert.equal(shouldHoldCaffeinate(base), false);
+	});
+
+	it("never holds when disabled or outside the window", () => {
+		assert.equal(shouldHoldCaffeinate({ ...base, agentBusy: true, enabled: false }), false);
+		assert.equal(shouldHoldCaffeinate({ ...base, paused: true, inWindow: false }), false);
 	});
 });
 

@@ -4,7 +4,9 @@ Overnight babysitting for long agent runs.
 
 Between **21:00 and 09:00** local time:
 
-1. **caffeinate**: holds a `caffeinate -dimsu` process so the machine never sleeps (macOS only, no-op elsewhere).
+1. **caffeinate**: holds a `caffeinate -dimsu` process while an agent run is in flight, and releases it on `agent_settled` (macOS only, no-op elsewhere). A pause waiting for the 5h reset also keeps it held, since sleep would stall the resume timer.
+
+   Each pi instance owns its own process. macOS power assertions are a union, so the machine only sleeps once *every* instance is idle: no cross-instance coordination needed.
 2. **5h budget guard**: watches the Claude 5h subscription window and pauses the agent at **95%**, so a night run never spills past the limit.
 3. **Automated resume**: once the window resets, sends a `continue` prompt on its own.
 

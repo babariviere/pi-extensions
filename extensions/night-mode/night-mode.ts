@@ -47,6 +47,24 @@ export function windowStartingAt(date: Date, window: NightWindow = DEFAULT_WINDO
 	return { startHour: date.getHours(), endHour: window.endHour };
 }
 
+/**
+ * True when this session should hold a `caffeinate` process.
+ *
+ * Sleep is only suppressed while there is a reason for it: an agent run in
+ * flight, or a pause waiting for the 5h window to reset (sleeping would stall
+ * the resume timer). macOS power assertions are a union, so each pi instance
+ * holding its own process means the machine sleeps once every instance is idle.
+ */
+export function shouldHoldCaffeinate(state: {
+	enabled: boolean;
+	inWindow: boolean;
+	agentBusy: boolean;
+	paused: boolean;
+}): boolean {
+	if (!state.enabled || !state.inWindow) return false;
+	return state.agentBusy || state.paused;
+}
+
 /** True when the 5h window has reached the safety threshold. */
 export function shouldPause(
 	usedPercent: number | undefined,
