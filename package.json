@@ -56,8 +56,5 @@
   "scripts": {
     "test": "node --import tsx --test 'extensions/**/*.test.ts'",
     "typecheck": "tsgo -p tsconfig.json"
-  },
-  "optionalDependencies": {
-    "calldiff": "^0.5.0"
   }
 }

@@ -10,7 +10,6 @@ Personal extensions for [pi](https://github.com/earendil-works/pi).
 | `workspaces` | Manage jj workspaces (list/create/switch/delete) with herdr integration |
 | `subagents` | Discover custom agents and spawn them headlessly, or as live panes in a dedicated herdr tab |
 | `pr` | GitHub pull request helpers |
-| `calldiff` | Call-stack diff panel after each agent run (TUI-only) + a `calldiff` tool for the agent |
 | `context` | Context-window usage + session token/cost footer data |
 | `footer` | Custom footer rendering (consumes `usage:snapshot`) |
 | `usage` | Single poller for the Claude subscription usage endpoint, republished on the event bus |
