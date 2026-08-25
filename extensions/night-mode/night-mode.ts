@@ -37,6 +37,16 @@ export function isWithinWindow(date: Date, window: NightWindow = DEFAULT_WINDOW)
 	return hour >= startHour || hour < endHour;
 }
 
+/**
+ * A copy of `window` whose start is moved to `date`'s hour, so night mode can be
+ * kicked off before the usual start hour. `startHour === endHour` (starting the
+ * session exactly at the closing hour) means "on until turned off", which is the
+ * intended reading of "start now, end at the usual hour tomorrow".
+ */
+export function windowStartingAt(date: Date, window: NightWindow = DEFAULT_WINDOW): NightWindow {
+	return { startHour: date.getHours(), endHour: window.endHour };
+}
+
 /** True when the 5h window has reached the safety threshold. */
 export function shouldPause(
 	usedPercent: number | undefined,
@@ -84,6 +94,11 @@ export function formatDuration(ms: number): string {
 	const h = Math.floor(totalMin / 60);
 	const m = totalMin % 60;
 	return h > 0 ? `${h}h${String(m).padStart(2, "0")}m` : `${m}m`;
+}
+
+/** "21:00-09:00" rendering of a window. */
+export function formatWindow(window: NightWindow): string {
+	return `${String(window.startHour).padStart(2, "0")}:00-${String(window.endHour).padStart(2, "0")}:00`;
 }
 
 /** Local wall clock "03:12". */

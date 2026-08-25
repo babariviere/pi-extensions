@@ -44,6 +44,7 @@ extension only subscribes. State is republished as `night-mode:state`.
 | Command | Effect |
 |---------|--------|
 | `/night` or `/night status` | Window state, caffeinate state, 5h usage, reset countdown, pause state |
+| `/night start` | Start the night right now: moves the window start to the current hour for this session (still ends at 09:00) |
 | `/night on` / `/night off` | Enable or disable the whole thing for this session |
 | `/night resume` | Clear a pause immediately and send the continue prompt |
 

@@ -31,12 +31,15 @@ import {
 import {
 	DEFAULT_THRESHOLD_PERCENT,
 	DEFAULT_WINDOW,
+	type NightWindow,
 	RESUME_RETRY_MS,
 	computeResumeDelayMs,
 	formatClock,
 	formatDuration,
+	formatWindow,
 	isWithinWindow,
 	shouldPause,
+	windowStartingAt,
 } from "./night-mode.ts";
 
 const TICK_MS = 30_000;
@@ -71,6 +74,10 @@ export default function (pi: ExtensionAPI): void {
 	let resumeTimer: ReturnType<typeof setTimeout> | undefined;
 	let tickTimer: ReturnType<typeof setInterval> | undefined;
 	let unsubscribeUsage: (() => void) | undefined;
+	/** Session-only window override, set by `/night start`. */
+	let windowOverride: NightWindow | undefined;
+
+	const currentWindow = (): NightWindow => windowOverride ?? DEFAULT_WINDOW;
 
 	const fiveHour = () => findWindow(usage, FIVE_HOUR_LABEL);
 	const usedPercent = () => fiveHour()?.usedPercent;
@@ -209,7 +216,7 @@ export default function (pi: ExtensionAPI): void {
 	// ── evaluation ────────────────────────────────────────────────────────
 
 	function evaluate(): void {
-		const active = enabled && isWithinWindow(new Date(), DEFAULT_WINDOW);
+		const active = enabled && isWithinWindow(new Date(), currentWindow());
 		if (active !== inWindow) {
 			inWindow = active;
 			if (active) startCaffeinate();
@@ -286,14 +293,26 @@ export default function (pi: ExtensionAPI): void {
 	});
 
 	pi.registerCommand("night", {
-		description: "Night mode: caffeinate + Claude 5h budget guard (status | on | off | resume)",
+		description:
+			"Night mode: caffeinate + Claude 5h budget guard (status | start | on | off | resume)",
 		getArgumentCompletions: (prefix) =>
-			["status", "on", "off", "resume"]
+			["status", "start", "on", "off", "resume"]
 				.filter((v) => v.startsWith(prefix))
 				.map((value) => ({ value, label: value })),
 		handler: async (args, ctx) => {
 			ctxRef = ctx;
 			const action = args.trim().toLowerCase();
+
+			if (action === "start") {
+				enabled = true;
+				windowOverride = windowStartingAt(new Date());
+				evaluate();
+				ctx.ui.notify(
+					`night-mode: started now, window ${formatWindow(currentWindow())} for this session`,
+					"info",
+				);
+				return;
+			}
 
 			if (action === "on" || action === "off") {
 				enabled = action === "on";
@@ -301,6 +320,7 @@ export default function (pi: ExtensionAPI): void {
 					stopCaffeinate();
 					clearPause();
 					inWindow = false;
+					windowOverride = undefined;
 				}
 				evaluate();
 				ctx.ui.notify(`night-mode: ${enabled ? "enabled" : "disabled"}`, "info");
@@ -321,7 +341,7 @@ export default function (pi: ExtensionAPI): void {
 			const resets = fiveHour()?.resetsAt;
 			const lines = [
 				`night-mode: ${enabled ? "enabled" : "disabled"}`,
-				`window: ${String(DEFAULT_WINDOW.startHour).padStart(2, "0")}:00-${String(DEFAULT_WINDOW.endHour).padStart(2, "0")}:00 (${inWindow ? "inside" : "outside"})`,
+				`window: ${formatWindow(currentWindow())} (${inWindow ? "inside" : "outside"}${windowOverride ? ", session override" : ""})`,
 				`caffeinate: ${caffeinate ? "holding" : "off"}`,
 				`5h usage: ${pct === undefined ? "unknown" : `${Math.round(pct)}% / ${DEFAULT_THRESHOLD_PERCENT}%`}`,
 				`5h reset: ${resets ? formatDuration(new Date(resets).getTime() - Date.now()) : "unknown"}`,

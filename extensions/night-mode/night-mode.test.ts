@@ -5,7 +5,9 @@ import {
 	computeResumeDelayMs,
 	formatClock,
 	formatDuration,
+	formatWindow,
 	isWithinWindow,
+	windowStartingAt,
 	shouldPause,
 } from "./night-mode.ts";
 
@@ -40,6 +42,39 @@ describe("isWithinWindow", () => {
 
 	it("defaults to 21-9", () => {
 		assert.deepEqual(DEFAULT_WINDOW, { startHour: 21, endHour: 9 });
+	});
+});
+
+describe("windowStartingAt", () => {
+	it("moves the start to the current hour and keeps the end", () => {
+		assert.deepEqual(windowStartingAt(at(19, 42)), { startHour: 19, endHour: 9 });
+		assert.deepEqual(windowStartingAt(at(13)), { startHour: 13, endHour: 9 });
+	});
+
+	it("makes the session active immediately", () => {
+		const now = at(19, 42);
+		assert.equal(isWithinWindow(now), false);
+		assert.equal(isWithinWindow(now, windowStartingAt(now)), true);
+	});
+
+	it("is always on when started at the closing hour", () => {
+		const window = windowStartingAt(at(9));
+		assert.deepEqual(window, { startHour: 9, endHour: 9 });
+		assert.equal(isWithinWindow(at(15), window), true);
+	});
+
+	it("honours a custom base window", () => {
+		assert.deepEqual(windowStartingAt(at(11), { startHour: 21, endHour: 6 }), {
+			startHour: 11,
+			endHour: 6,
+		});
+	});
+});
+
+describe("formatWindow", () => {
+	it("renders zero padded hours", () => {
+		assert.equal(formatWindow({ startHour: 21, endHour: 9 }), "21:00-09:00");
+		assert.equal(formatWindow({ startHour: 0, endHour: 17 }), "00:00-17:00");
 	});
 });
 
