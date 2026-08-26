@@ -191,13 +191,18 @@ function buildCiPrompt(pr: PrInfo, failed: Check[]): string {
 }
 
 function buildCommentsPrompt(pr: PrInfo, comments: Comment[]): string {
-	const lines = [`Address these review comments on PR ${pr.url}:`, ""];
+	const lines = [`Review these comments on PR ${pr.url}:`, ""];
 	comments.forEach((c, i) => {
 		const loc = c.path ? `${c.path}${c.line ? `:${c.line}` : ""}` : "(general)";
 		lines.push(`${i + 1}. [${loc}] (@${c.user}) ${c.body}`);
 		if (c.url) lines.push(`   ${c.url}`);
 	});
-	lines.push("", "Make the necessary code changes.");
+	lines.push(
+		"",
+		"For each comment, first judge whether it is actually valid: check the current code, the surrounding context, and whether the reviewer's assumption still holds.",
+		"If it is a real issue, fix it. If it is not (already handled, wrong, out of scope, or a deliberate tradeoff), do not change the code; explain why in your reply so it can be answered on the PR.",
+		"Do not blindly apply the suggested change.",
+	);
 	return lines.join("\n");
 }
 
