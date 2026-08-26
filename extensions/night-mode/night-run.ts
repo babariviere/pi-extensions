@@ -28,10 +28,11 @@ export interface ActiveNightRun {
 	sessionId?: string;
 }
 
+/** Next to the default prompt/report files, so one feature owns one directory. */
 export function activeRunPath(): string {
 	const base =
 		process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent");
-	return join(base, "night-mode", "active.json");
+	return join(base, "night", "active.json");
 }
 
 /** The currently active night run, or undefined. Never throws. */

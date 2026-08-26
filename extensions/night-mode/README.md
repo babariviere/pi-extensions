@@ -49,7 +49,7 @@ run.
 1. Reads the **base prompt** file: your standing routine, whatever it is (tickets, CI triage, inbox sweep, chores).
 2. Reads the **instructions** file (tonight's one-off asks) and inlines it under an `## Extra instructions for tonight` heading, or states there are none.
 3. Creates the **report** file from a skeleton and tells the agent to append to it as it goes.
-4. Publishes a handshake at `~/.pi/agent/night-mode/active.json` so subagents can pick up the same rules and report path.
+4. Publishes a handshake at `~/.pi/agent/night/active.json` so subagents can pick up the same rules and report path.
 5. Sends the composed prompt as a follow-up user message.
 
 The instructions file is archived and truncated when the run *ends*, not at
