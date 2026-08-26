@@ -56,6 +56,7 @@ const taskItemSchema = {
     thinking: { type: "string" },
     output: { type: "string" },
     reads: { type: "array", items: { type: "string" } },
+    night: { type: "boolean" },
   },
   required: ["task"],
   additionalProperties: false,
@@ -71,7 +72,7 @@ const descriptors: SpindleActionDescriptor[] = [
   {
     name: "run",
     description:
-      "Run a subagent on a task and wait for its result. `agent` is optional: omit it to run a generic subagent that inherits the parent model, tools, skills and project context. Optional per-run model/thinking overrides, an `output` path for the submitted result, and `reads` for read-first context files.",
+      "Run a subagent on a task and wait for its result. `agent` is optional: omit it to run a generic subagent that inherits the parent model, tools, skills and project context. Optional per-run model/thinking overrides, an `output` path for the submitted result, `reads` for read-first context files, and `night: true` to inherit the night-mode contract of an unattended overnight run.",
     inputSchema: taskItemSchema,
   },
   {
@@ -104,6 +105,7 @@ const normalizedItem = (value: unknown): NormalizedItem => {
   const thinking = stringOrUndefined(record.thinking);
   const output = stringOrUndefined(record.output);
   const reads = stringArrayOrUndefined(record.reads);
+  const night = record.night === true;
   return {
     ...(record.agent === undefined ? {} : { agent: String(record.agent) }),
     task: String(record.task ?? ""),
@@ -111,6 +113,7 @@ const normalizedItem = (value: unknown): NormalizedItem => {
     ...(thinking ? { thinking } : {}),
     ...(output ? { output } : {}),
     ...(reads ? { reads } : {}),
+    ...(night ? { night } : {}),
   };
 };
 

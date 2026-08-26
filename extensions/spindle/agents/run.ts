@@ -31,6 +31,12 @@ export interface RunRequest {
 	 * tool to open them.
 	 */
 	reads?: string[];
+	/**
+	 * Run under the night-mode contract: the hard rules of an unattended
+	 * overnight run (no questions, read-only Slack, draft PRs only) plus the
+	 * report path are prepended to the task. No-op when no night run is active.
+	 */
+	night?: boolean;
 }
 
 /** Live lifecycle state of a single run, surfaced to the in-progress indicator. */
@@ -160,6 +166,7 @@ export function prepareChildRun(
 		modelOverride: req.overrides?.model,
 		thinkingOverride: req.overrides?.thinking,
 		reads: req.reads,
+		night: req.night,
 		includeTask: opts.includeTask,
 	});
 

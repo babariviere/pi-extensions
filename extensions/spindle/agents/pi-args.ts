@@ -22,6 +22,7 @@
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
+import { buildNightContract, readActiveNightRun } from "../../night-mode/night-run.ts";
 import { ALLOWED_TOOLS_FLAG, SPINDLE_EXEC_TOOL } from "./constants.ts";
 import { type DiscoveredAgent } from "./discovery.ts";
 import { injectOutputInstruction } from "./paths.ts";
@@ -85,6 +86,8 @@ export interface ChildInvocationOpts {
 	includeTask?: boolean;
 	/** Files the child should read first for context; injected into the task. */
 	reads?: string[];
+	/** Inherit the night-mode contract (unattended run, read-only Slack, draft PRs). */
+	night?: boolean;
 }
 
 /** Prepend a read-first instruction listing the context files, if any. */
@@ -94,9 +97,20 @@ function withReads(task: string, reads: string[] | undefined): string {
 	return `Read these files first for context: ${list}.\n\n${task}`;
 }
 
+/**
+ * Prepend the night-mode contract when the run opts into it and a night run is
+ * actually in flight. Reading the handshake here (rather than passing the text
+ * down) keeps the caller from having to know about night mode.
+ */
+function withNight(task: string, night: boolean | undefined): string {
+	if (!night) return task;
+	const run = readActiveNightRun();
+	return run ? `${buildNightContract(run)}\n${task}` : task;
+}
+
 /** The task framing given to the child agent, with the final-message rider. */
-export function formatTaskMessage(task: string, reads?: string[]): string {
-	return `Task: ${injectOutputInstruction(withReads(task, reads))}`;
+export function formatTaskMessage(task: string, reads?: string[], night?: boolean): string {
+	return withNight(`Task: ${injectOutputInstruction(withReads(task, reads))}`, night);
 }
 
 /**
@@ -154,7 +168,7 @@ export function buildChildArgs(agent: DiscoveredAgent, task: string, opts: Child
 	// are safe). The herdr backend omits it here and submits it via `agent prompt`
 	// instead, since `agent start` cannot encode multi-line shell args.
 	if (opts.includeTask !== false) {
-		args.push(formatTaskMessage(task, opts.reads));
+		args.push(formatTaskMessage(task, opts.reads, opts.night));
 	}
 
 	return args;

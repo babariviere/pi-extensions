@@ -116,6 +116,8 @@ interface SpindleAgentRequest {
   output?: string;
   /** Files the agent should read first for context. */
   reads?: string[];
+  /** Inherit the night-mode contract when an overnight run is in flight. */
+  night?: boolean;
 }
 interface SpindleAgentResult {
   agent: string;

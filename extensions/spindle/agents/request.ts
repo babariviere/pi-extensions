@@ -19,6 +19,7 @@ export interface NormalizedItem {
 	thinking?: string;
 	output?: string;
 	reads?: string[];
+	night?: boolean;
 }
 
 export interface RawToolParams {
@@ -28,6 +29,7 @@ export interface RawToolParams {
 	thinking?: string;
 	output?: string;
 	reads?: string[];
+	night?: boolean;
 	tasks?: NormalizedItem[];
 }
 
@@ -62,6 +64,7 @@ export function buildRunRequests(
 			index: i,
 			overrides,
 			reads: item.reads ?? agent.config.defaultReads,
+			...(item.night ? { night: true } : {}),
 		});
 	}
 
@@ -100,6 +103,7 @@ export function normalizeRequests(params: RawToolParams): { items: NormalizedIte
 				thinking: params.thinking,
 				output: params.output,
 				reads: params.reads,
+				night: params.night,
 			}],
 		};
 	}

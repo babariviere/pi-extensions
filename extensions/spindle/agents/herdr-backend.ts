@@ -200,7 +200,7 @@ async function launchRun(p: PreparedRun, ctx: RunContext): Promise<SpawnedRun> {
 	// Label the pane with the task so a watcher can tell panes apart, then submit
 	// the task as a clean user message (bracketed paste handles its newlines).
 	await herdr.renamePane(p.paneId, paneLabel(p.req.agent.config.name, p.req.task));
-	const prompted = await herdr.promptAgent(p.paneId, formatTaskMessage(p.req.task, p.req.reads));
+	const prompted = await herdr.promptAgent(p.paneId, formatTaskMessage(p.req.task, p.req.reads, p.req.night));
 
 	ctx.onStatus?.(p.req.index, {
 		state: prompted.ok ? "running" : "failed",

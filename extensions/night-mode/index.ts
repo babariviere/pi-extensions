@@ -20,34 +20,76 @@
  */
 
 import { type ChildProcess, spawn } from "node:child_process";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import {
+	appendFileSync,
+	existsSync,
+	mkdirSync,
+	readFileSync,
+	writeFileSync,
+} from "node:fs";
+import { dirname, join } from "node:path";
+import type {
+	ExtensionAPI,
+	ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
 import {
 	FIVE_HOUR_LABEL,
+	findWindow,
+	isUsageSnapshotEvent,
 	USAGE_REQUEST_EVENT,
 	USAGE_SNAPSHOT_EVENT,
 	type UsageSnapshot,
-	findWindow,
-	isUsageSnapshotEvent,
 } from "../usage/protocol.ts";
 import {
+	formatDateTimeStamp,
+	type NightConfig,
+	noteNameFor,
+	readNightConfig,
+	reportPathFor,
+	resolvePath,
+} from "./config.ts";
+import {
+	fingerprint,
+	formatUnresolved,
+	type LedgerItem,
+	counts as ledgerCounts,
+	readLedger,
+	todosDir,
+	unresolved,
+} from "./ledger.ts";
+import {
+	computeResumeDelayMs,
 	DEFAULT_THRESHOLD_PERCENT,
 	DEFAULT_WINDOW,
-	type NightWindow,
-	RESUME_RETRY_MS,
-	computeResumeDelayMs,
 	formatClock,
 	formatDuration,
 	formatWindow,
 	isWithinWindow,
+	type NightWindow,
+	RESUME_RETRY_MS,
 	shouldHoldCaffeinate,
 	shouldPause,
 	windowStartingAt,
 } from "./night-mode.ts";
+import { clearActiveNightRun, writeActiveNightRun } from "./night-run.ts";
+import {
+	appendUnderHeading,
+	composeCarryOver,
+	composeLedgerReminder,
+	composeNightPrompt,
+	composeNudge,
+	composeReportHeader,
+	hasInstructions,
+	timelineLine,
+} from "./prompt.ts";
 
 const TICK_MS = 30_000;
 const STATUS_KEY = "night-mode";
 const PAUSE_ENTRY = "night-mode:pause";
 const STATE_EVENT = "night-mode:state";
+
+/** Hard cap on automated "you are not done" follow-ups in one night. */
+const MAX_CONTINUATIONS = 10;
 
 const RESUME_PROMPT =
 	"[night-mode] Automated resume: the Claude 5h usage window has reset. " +
@@ -89,6 +131,271 @@ export default function (pi: ExtensionAPI): void {
 
 	const fiveHour = () => findWindow(usage, FIVE_HOUR_LABEL);
 	const usedPercent = () => fiveHour()?.usedPercent;
+
+	// ── night run (prompt / instructions / report) ────────────────────────
+
+	/** Set for the lifetime of a `/night start` run. */
+	let run:
+		| {
+				config: NightConfig;
+				reportPath: string;
+				startedAt: Date;
+				/** Todo store backing the ledger, resolved once at start. */
+				ledgerDir: string;
+				/** Automated continuations sent so far. */
+				nudges: number;
+				/** Ledger fingerprint at the last continuation, for stall detection. */
+				lastFingerprint?: string;
+		  }
+		| undefined;
+	/** Instructions file waiting to be archived once the agent settles. */
+	let pendingInstructionsClear: string | undefined;
+
+	/** Append a line to tonight's report, if there is one. Never throws. */
+	function appendReport(text: string): void {
+		if (!run) return;
+		try {
+			appendFileSync(run.reportPath, text, "utf-8");
+		} catch {
+			// The report is the agent's file; losing an extension line is not fatal.
+		}
+	}
+
+	const noteTimeline = (text: string) =>
+		appendReport(timelineLine(new Date(), text));
+
+	/** Insert lines under a report heading. Never throws. */
+	function noteUnderHeading(heading: string, text: string): void {
+		if (!run) return;
+		try {
+			const body = readFileSync(run.reportPath, "utf-8");
+			writeFileSync(
+				run.reportPath,
+				appendUnderHeading(body, heading, text),
+				"utf-8",
+			);
+		} catch {
+			appendReport(`\n## ${heading}\n\n${text}\n`);
+		}
+	}
+
+	/**
+	 * Move the consumed instructions to the archive and truncate the original, so
+	 * the next night does not replay tonight's asks. Done when the run ends rather
+	 * than at inject time: a crash mid-run keeps the file intact.
+	 */
+	function consumeInstructions(): void {
+		const path = pendingInstructionsClear;
+		pendingInstructionsClear = undefined;
+		if (!path || !run) return;
+		try {
+			const body = readFileSync(path, "utf-8");
+			if (run.config.archiveDir) {
+				const dir = resolvePath(run.config.archiveDir, dirname(path));
+				mkdirSync(dir, { recursive: true });
+				const name = `${formatDateTimeStamp(run.startedAt)} - Night Instructions.md`;
+				writeFileSync(join(dir, name), body, "utf-8");
+			}
+			writeFileSync(path, "", "utf-8");
+		} catch {
+			// Leave the file alone if anything goes wrong; a replay beats a loss.
+		}
+	}
+
+	/**
+	 * Seed the (now empty) instructions file with what never got done, so the
+	 * next night starts on the leftovers instead of losing them at sunrise.
+	 */
+	function seedCarryOver(open: LedgerItem[]): void {
+		if (!run || open.length === 0 || !run.config.instructionsPath) return;
+		try {
+			const path = resolvePath(run.config.instructionsPath, process.cwd());
+			const existing = existsSync(path) ? readFileSync(path, "utf-8") : "";
+			const block = composeCarryOver(
+				run.startedAt,
+				formatUnresolved(open),
+				run.reportPath,
+			);
+			const separator = existing.trim() ? "\n\n" : "";
+			writeFileSync(
+				path,
+				`${existing.replace(/\s*$/, "")}${separator}${block}`,
+				"utf-8",
+			);
+		} catch {
+			// Carry-over is a convenience; the report still lists what is open.
+		}
+	}
+
+	/**
+	 * Tear down the night run: record what is still open in the report, hand it to
+	 * the next night, retire tonight's instructions and drop the handshake.
+	 */
+	function endRun(reason: string): void {
+		if (!run) return;
+		const items = readLedger(run.ledgerDir);
+		const open = unresolved(items);
+		const tally = ledgerCounts(items);
+		noteTimeline(
+			`night-mode: run ended (${reason}) - ${tally.done} done, ${tally.skipped} skipped, ${open.length} open`,
+		);
+		if (open.length > 0) {
+			noteUnderHeading(
+				"Needs Bastien",
+				`Still open when the run ended (${reason}), carried over to the next night:\n${formatUnresolved(open)}`,
+			);
+		}
+		consumeInstructions();
+		seedCarryOver(open);
+		clearActiveNightRun();
+		run = undefined;
+	}
+
+	/** One-line ledger tally for `/night status` and `/night report`. */
+	function ledgerSummary(): string {
+		if (!run) return "no run";
+		const tally = ledgerCounts(readLedger(run.ledgerDir));
+		if (tally.total === 0) return "empty (no todo tagged 'night' yet)";
+		return (
+			`${tally.total} item(s): ${tally.done} done, ${tally.skipped} skipped, ` +
+			`${tally.pending} pending, ${tally.unverified} unverified` +
+			` (continuations ${run.nudges}/${MAX_CONTINUATIONS})`
+		);
+	}
+
+	/**
+	 * Called when the agent decides it is finished. The ledger, not the agent, is
+	 * the authority: while it holds unresolved items, send an automated
+	 * continuation instead of letting the night stop.
+	 *
+	 * Two brakes keep this from spinning: a hard cap on continuations, and a
+	 * fingerprint check, since a nudge that changes nothing is a stall.
+	 */
+	function maybeContinue(): void {
+		if (!run || !enabled || !inWindow || paused) return;
+
+		const items = readLedger(run.ledgerDir);
+		const open = unresolved(items);
+		if (items.length > 0 && open.length === 0) {
+			endRun("every ledger item resolved");
+			return;
+		}
+
+		if (run.nudges >= MAX_CONTINUATIONS) {
+			noteUnderHeading(
+				"Needs Bastien",
+				`night-mode gave up after ${MAX_CONTINUATIONS} automated continuations with work still open.`,
+			);
+			endRun("continuation cap reached");
+			return;
+		}
+
+		const current = fingerprint(items);
+		if (run.nudges > 0 && current === run.lastFingerprint) {
+			noteUnderHeading(
+				"Needs Bastien",
+				"night-mode stopped: the last automated continuation changed nothing in the ledger, so the run is stuck.",
+			);
+			endRun("stalled, no progress since the last continuation");
+			return;
+		}
+
+		run.lastFingerprint = current;
+		run.nudges += 1;
+		const message =
+			items.length === 0
+				? composeLedgerReminder(run.reportPath)
+				: composeNudge({
+						unresolved: formatUnresolved(open),
+						reportPath: run.reportPath,
+						attempt: run.nudges,
+						maxAttempts: MAX_CONTINUATIONS,
+					});
+		noteTimeline(
+			`night-mode: settled with ${open.length || "no"} ledger item(s) open, sending continuation ${run.nudges}/${MAX_CONTINUATIONS}`,
+		);
+		pi.sendUserMessage(message, { deliverAs: "followUp" });
+	}
+
+	/**
+	 * Read the configured files, create the report, publish the handshake and
+	 * hand the composed prompt to the agent. Returns an error string on failure.
+	 */
+	function startRun(
+		ctx: ExtensionContext,
+		windowLabel: string,
+	): string | undefined {
+		const cwd = process.cwd();
+		const config = readNightConfig(cwd);
+		const promptPath = resolvePath(config.promptPath, cwd);
+		if (!existsSync(promptPath))
+			return `night-mode: prompt file not found at ${promptPath}`;
+
+		let prompt: string;
+		try {
+			prompt = readFileSync(promptPath, "utf-8");
+		} catch (error) {
+			return `night-mode: cannot read ${promptPath}: ${String(error)}`;
+		}
+		if (!prompt.trim()) return `night-mode: prompt file ${promptPath} is empty`;
+
+		const instructionsPath = resolvePath(config.instructionsPath, cwd);
+		let instructions = "";
+		try {
+			if (existsSync(instructionsPath))
+				instructions = readFileSync(instructionsPath, "utf-8");
+		} catch {
+			instructions = "";
+		}
+
+		const startedAt = new Date();
+		const reportPath = reportPathFor(config, startedAt, cwd);
+		try {
+			mkdirSync(dirname(reportPath), { recursive: true });
+			if (!existsSync(reportPath)) {
+				writeFileSync(
+					reportPath,
+					composeReportHeader(startedAt, windowLabel),
+					"utf-8",
+				);
+			}
+		} catch (error) {
+			return `night-mode: cannot create report at ${reportPath}: ${String(error)}`;
+		}
+
+		const sessionId = ctx.sessionManager?.getSessionId?.();
+		run = {
+			config,
+			reportPath,
+			startedAt,
+			ledgerDir: todosDir(cwd),
+			nudges: 0,
+		};
+		pendingInstructionsClear = hasInstructions(instructions)
+			? instructionsPath
+			: undefined;
+
+		writeActiveNightRun({
+			startedAt: startedAt.getTime(),
+			reportPath,
+			maxPullRequests: config.maxPullRequests,
+			...(sessionId ? { sessionId } : {}),
+		});
+
+		noteTimeline(`night-mode: run started, window ${windowLabel}`);
+		pi.sendUserMessage(
+			composeNightPrompt({
+				prompt,
+				instructions,
+				reportPath,
+				maxPullRequests: config.maxPullRequests,
+				windowLabel,
+				startedAt,
+			}),
+			{ deliverAs: "followUp" },
+		);
+		return undefined;
+	}
 
 	// ── caffeinate ────────────────────────────────────────────────────────
 
@@ -142,7 +449,9 @@ export default function (pi: ExtensionAPI): void {
 			return `\u{1F319} paused (5h ${Math.round(usedPercent() ?? 100)}%) \u27F3 ${left}`;
 		}
 		const pct = usedPercent();
-		return pct === undefined ? "\u{1F319} night" : `\u{1F319} night (5h ${Math.round(pct)}%)`;
+		return pct === undefined
+			? "\u{1F319} night"
+			: `\u{1F319} night (5h ${Math.round(pct)}%)`;
 	}
 
 	function report(): void {
@@ -182,6 +491,12 @@ export default function (pi: ExtensionAPI): void {
 			resumeAt,
 		});
 		report();
+		noteTimeline(
+			`⏸ paused: Claude 5h window at ${Math.round(usedPercent() ?? 100)}%` +
+				(resumeAt
+					? `, resuming around ${formatClock(new Date(resumeAt))}`
+					: ""),
+		);
 		if (resumeAt) {
 			ctxRef?.ui.notify(
 				`night-mode: Claude 5h window at ${Math.round(usedPercent() ?? 100)}%, pausing until ${formatClock(new Date(resumeAt))}`,
@@ -219,7 +534,11 @@ export default function (pi: ExtensionAPI): void {
 			usedPercent: usedPercent(),
 		});
 		report();
-		ctxRef?.ui.notify("night-mode: 5h window reset, sending automated continue", "info");
+		noteTimeline("▶ resumed: 5h window reset");
+		ctxRef?.ui.notify(
+			"night-mode: 5h window reset, sending automated continue",
+			"info",
+		);
 		pi.sendUserMessage(RESUME_PROMPT, { deliverAs: "followUp" });
 	}
 
@@ -227,7 +546,8 @@ export default function (pi: ExtensionAPI): void {
 
 	/** Take or release the caffeinate process to match the current state. */
 	function syncCaffeinate(): void {
-		if (shouldHoldCaffeinate({ enabled, inWindow, agentBusy, paused })) startCaffeinate();
+		if (shouldHoldCaffeinate({ enabled, inWindow, agentBusy, paused }))
+			startCaffeinate();
 		else stopCaffeinate();
 	}
 
@@ -235,7 +555,10 @@ export default function (pi: ExtensionAPI): void {
 		const active = enabled && isWithinWindow(new Date(), currentWindow());
 		if (active !== inWindow) {
 			inWindow = active;
-			if (!active) clearPause();
+			if (!active) {
+				clearPause();
+				endRun("window closed");
+			}
 		}
 		if (inWindow && !paused && shouldPause(usedPercent())) pause();
 		syncCaffeinate();
@@ -245,11 +568,16 @@ export default function (pi: ExtensionAPI): void {
 	/** Re-arm a pause recorded before a `/reload` or session resume. */
 	function restore(ctx: ExtensionContext): void {
 		try {
-			const entries = ctx.sessionManager.getEntries() as Array<{ customType?: string; data?: unknown }>;
+			const entries = ctx.sessionManager.getEntries() as Array<{
+				customType?: string;
+				data?: unknown;
+			}>;
 			for (let i = entries.length - 1; i >= 0; i--) {
 				const entry = entries[i];
 				if (entry?.customType !== PAUSE_ENTRY) continue;
-				const data = entry.data as { status?: string; resumeAt?: number } | undefined;
+				const data = entry.data as
+					| { status?: string; resumeAt?: number }
+					| undefined;
 				if (data?.status === "paused") {
 					paused = true;
 					armResume(Math.max(0, (data.resumeAt ?? Date.now()) - Date.now()));
@@ -290,12 +618,16 @@ export default function (pi: ExtensionAPI): void {
 	pi.on("agent_settled", () => {
 		agentBusy = false;
 		evaluate();
+		// The agent thinks it is done. The ledger decides whether it really is.
+		maybeContinue();
 	});
 
 	pi.on("tool_call", (_event, ctx) => {
 		ctxRef = ctx;
 		if (!enabled || !inWindow || !paused) return;
-		const until = resumeAt ? formatClock(new Date(resumeAt)) : "the next window";
+		const until = resumeAt
+			? formatClock(new Date(resumeAt))
+			: "the next window";
 		return {
 			block: true,
 			terminate: true,
@@ -307,6 +639,7 @@ export default function (pi: ExtensionAPI): void {
 	});
 
 	pi.on("session_shutdown", async () => {
+		endRun("session shutdown");
 		stopCaffeinate();
 		clearResumeTimer();
 		if (tickTimer) {
@@ -319,9 +652,9 @@ export default function (pi: ExtensionAPI): void {
 
 	pi.registerCommand("night", {
 		description:
-			"Night mode: caffeinate + Claude 5h budget guard (status | start | on | off | resume)",
+			"Night mode: caffeinate + Claude 5h budget guard (status | start | report | on | off | resume)",
 		getArgumentCompletions: (prefix) =>
-			["status", "start", "on", "off", "resume"]
+			["status", "start", "report", "on", "off", "resume"]
 				.filter((v) => v.startsWith(prefix))
 				.map((value) => ({ value, label: value })),
 		handler: async (args, ctx) => {
@@ -332,8 +665,44 @@ export default function (pi: ExtensionAPI): void {
 				enabled = true;
 				windowOverride = windowStartingAt(new Date());
 				evaluate();
+				const error = startRun(ctx, formatWindow(currentWindow()));
+				if (error) {
+					ctx.ui.notify(error, "error");
+					return;
+				}
 				ctx.ui.notify(
-					`night-mode: started now, window ${formatWindow(currentWindow())} for this session`,
+					[
+						`night-mode: started, window ${formatWindow(currentWindow())} for this session`,
+						`report: ${run?.reportPath}`,
+						`instructions: ${pendingInstructionsClear ? "loaded, cleared when the run ends" : "none tonight"}`,
+						`ledger: todos tagged 'night' in ${run?.ledgerDir}`,
+					].join("\n"),
+					"info",
+				);
+				return;
+			}
+
+			if (action === "report") {
+				if (!run) {
+					ctx.ui.notify(
+						"night-mode: no run in flight, no report for this session",
+						"info",
+					);
+					return;
+				}
+				let body = "";
+				try {
+					body = readFileSync(run.reportPath, "utf-8");
+				} catch {
+					body = "";
+				}
+				ctx.ui.notify(
+					[
+						`night-mode report: ${run.reportPath}`,
+						`note: [[${noteNameFor(run.reportPath)}]]`,
+						`size: ${body.length} chars, started ${formatDateTimeStamp(run.startedAt)}`,
+						ledgerSummary(),
+					].join("\n"),
 					"info",
 				);
 				return;
@@ -342,13 +711,17 @@ export default function (pi: ExtensionAPI): void {
 			if (action === "on" || action === "off") {
 				enabled = action === "on";
 				if (!enabled) {
+					endRun("turned off");
 					stopCaffeinate();
 					clearPause();
 					inWindow = false;
 					windowOverride = undefined;
 				}
 				evaluate();
-				ctx.ui.notify(`night-mode: ${enabled ? "enabled" : "disabled"}`, "info");
+				ctx.ui.notify(
+					`night-mode: ${enabled ? "enabled" : "disabled"}`,
+					"info",
+				);
 				return;
 			}
 
@@ -371,6 +744,8 @@ export default function (pi: ExtensionAPI): void {
 				`5h usage: ${pct === undefined ? "unknown" : `${Math.round(pct)}% / ${DEFAULT_THRESHOLD_PERCENT}%`}`,
 				`5h reset: ${resets ? formatDuration(new Date(resets).getTime() - Date.now()) : "unknown"}`,
 				`paused: ${paused ? `yes, resume in ${resumeAt ? formatDuration(resumeAt - Date.now()) : "?"}` : "no"}`,
+				`run: ${run ? `since ${formatDateTimeStamp(run.startedAt)}, report ${run.reportPath}` : "none"}`,
+				`ledger: ${ledgerSummary()}`,
 			];
 			ctx.ui.notify(lines.join("\n"), "info");
 		},

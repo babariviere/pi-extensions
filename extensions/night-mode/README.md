@@ -41,12 +41,102 @@ No HTTP calls of its own. The `usage` extension owns the poll of the Claude
 OAuth usage endpoint and publishes `usage:snapshot` on pi's event bus; this
 extension only subscribes. State is republished as `night-mode:state`.
 
+## Night runs
+
+`/night start` does more than move the window: it kicks off an actual unattended
+run.
+
+1. Reads the **base prompt** file (the standing routine: Linear tickets, CI, Slack, daily note).
+2. Reads the **instructions** file (tonight's one-off asks) and inlines it under an `## Extra instructions for tonight` heading, or states there are none.
+3. Creates the **report** file from a skeleton and tells the agent to append to it as it goes.
+4. Publishes a handshake at `~/.pi/agent/night-mode/active.json` so subagents can pick up the same rules and report path.
+5. Sends the composed prompt as a follow-up user message.
+
+The instructions file is archived and truncated when the run *ends*, not at
+inject time: a crash mid-run leaves the asks intact for the next night.
+
+Pauses and resumes are appended to the report's `## Timeline`, so a report read
+in the morning shows where the 5h window bit.
+
+## The ledger, and finishing
+
+An agent that decides it is done after two tickets is the main failure mode of an
+unattended run, and prompt wording does not fix it. So the run's task list is
+explicit and machine-readable, and the extension, not the agent, decides when the
+night is over.
+
+The ledger is **not a new store**: it is the `todos` extension's store
+(`PI_TODO_PATH`, else `<cwd>/.pi/todos`), filtered to items tagged `night`. The
+agent manages it with the todo tool it already has, and `/todos` shows it live.
+
+Classification is deliberately suspicious, because marking everything done is the
+cheapest way for an agent to end its night:
+
+| Todo status | Body | Counts as |
+|-------------|------|-----------|
+| `open`, `in-progress`, … | anything | open |
+| `done` / `closed` | has an `Evidence:` line | resolved |
+| `done` / `closed` | no evidence | **open** (`unverified`) |
+| `skipped` / `blocked` / … | has a `Reason:` line | resolved |
+| `skipped` / … | no reason | **open** (`unverified`) |
+
+On `agent_settled`, if the ledger still has open items, night-mode sends an
+automated continuation listing exactly what is left. Two brakes stop it spinning:
+
+- a hard cap of **10** continuations,
+- a **fingerprint check**: if a continuation changes nothing in the ledger, the
+  run is stuck rather than slow, so it stops and writes "stalled" into
+  `## Needs Bastien`.
+
+An empty ledger on the first settle gets one reminder to build it.
+
+## Carry-over
+
+When the run ends (ledger clear, window closed, stalled, cap reached, session
+shutdown), anything still open is:
+
+1. listed under `## Needs Bastien` in the report,
+2. appended to the **instructions file** under `## Carried over from the night of
+   <datetime>`, after tonight's instructions have been archived.
+
+So unfinished work becomes the next night's top priority instead of evaporating
+at sunrise.
+
+## Subagent contract
+
+While a night run is active, any subagent started with `night: true` gets a
+condensed contract prepended to its task message (no questions, Slack read-only,
+no push to `main`, draft PRs only, PR cap, report path). It is prepended by the
+spawner rather than left to the agent definition, so picking an agent that knows
+nothing about night mode cannot skip it. With no active run the flag is a no-op.
+
+```ts
+await agents.run({ agent: "worker", task: "Fix HS-1234", night: true });
+```
+
+## Configuration
+
+Under `nightMode` in `<cwd>/.pi/settings.json` (project) or
+`~/.pi/agent/settings.json` (user); project wins.
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `promptPath` | `~/Documents/Work/Agent/Night Prompt.md` | Standing routine |
+| `instructionsPath` | `~/Documents/Work/Agent/Night Instructions.md` | One-off asks, cleared after the run |
+| `reportPathTemplate` | `~/Documents/Work/Agent/{datetime} - Night Report.md` | `{datetime}`, `{date}`, `{time}` placeholders |
+| `archiveDir` | `~/Documents/Work/Agent/Archive` | Where consumed instructions go; `""` disables archiving |
+| `maxPullRequests` | `5` | Hard cap on PRs opened in one night |
+
+`{datetime}` renders as `2026-08-29 2130`, matching the Obsidian vault's note
+naming convention so the report is linkable as `[[2026-08-29 2130 - Night Report]]`.
+
 ## Commands
 
 | Command | Effect |
 |---------|--------|
-| `/night` or `/night status` | Window state, caffeinate state, 5h usage, reset countdown, pause state |
-| `/night start` | Start the night right now: moves the window start to the current hour for this session (still ends at 09:00) |
+| `/night` or `/night status` | Window state, caffeinate state, 5h usage, reset countdown, pause state, active run |
+| `/night start` | Start a night run now: moves the window start to the current hour, composes the prompt, creates the report |
+| `/night report` | Path, wiki-link and size of tonight's report |
 | `/night on` / `/night off` | Enable or disable the whole thing for this session |
 | `/night resume` | Clear a pause immediately and send the continue prompt |
 
