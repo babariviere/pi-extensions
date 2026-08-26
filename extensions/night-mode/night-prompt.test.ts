@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 import {
 	applyPathTemplate,
 	DEFAULT_NIGHT_CONFIG,
+	DEFAULT_REPORT_SECTIONS,
 	formatDateTimeStamp,
 	mergeNightConfig,
 	noteNameFor,
@@ -19,7 +20,7 @@ import {
 const startedAt = new Date(2026, 7, 29, 21, 30, 0, 0);
 
 describe("path templating", () => {
-	it("stamps dates the way the vault names notes", () => {
+	it("stamps a date and time for file names", () => {
 		assert.equal(formatDateTimeStamp(startedAt), "2026-08-29 2130");
 	});
 
@@ -45,7 +46,7 @@ describe("path templating", () => {
 		);
 	});
 
-	it("derives an Obsidian note name", () => {
+	it("derives a note name for a wiki-link", () => {
 		assert.equal(
 			noteNameFor("/a/b/2026-08-29 2130 - Night Report.md"),
 			"2026-08-29 2130 - Night Report",
@@ -71,6 +72,15 @@ describe("mergeNightConfig", () => {
 
 	it("lets an empty archiveDir disable archiving", () => {
 		assert.equal(mergeNightConfig({ archiveDir: "" }).archiveDir, "");
+	});
+
+	it("takes custom report sections, ignoring junk entries", () => {
+		const merged = mergeNightConfig({ reportSections: ["Tickets", "  ", 3] });
+		assert.deepEqual(merged.reportSections, ["Tickets"]);
+		assert.deepEqual(
+			mergeNightConfig({ reportSections: [] }).reportSections,
+			DEFAULT_REPORT_SECTIONS,
+		);
 	});
 });
 
@@ -114,9 +124,9 @@ describe("composeNightPrompt", () => {
 	it("inlines the extra instructions above the default routine", () => {
 		const text = composeNightPrompt({
 			...base,
-			instructions: "- ship the vishing spike",
+			instructions: "- ship the spike",
 		});
-		assert.match(text, /ship the vishing spike/);
+		assert.match(text, /ship the spike/);
 		assert.doesNotMatch(text, /None tonight/);
 	});
 });
@@ -124,19 +134,20 @@ describe("composeNightPrompt", () => {
 describe("report skeleton", () => {
 	it("has every section the prompt promises", () => {
 		const header = composeReportHeader(startedAt, "21:00-09:00");
-		for (const section of [
-			"Summary",
-			"Needs Bastien",
-			"Linear",
-			"CI",
-			"Slack",
-			"Daily note",
-			"Skipped / failed",
-			"Timeline",
-		]) {
+		for (const section of DEFAULT_REPORT_SECTIONS) {
 			assert.ok(header.includes(`## ${section}`), `missing ## ${section}`);
 		}
 		assert.match(header, /# Night Report - 2026-08-29 2130/);
+	});
+
+	it("uses the configured sections instead", () => {
+		const header = composeReportHeader(startedAt, "21:00-09:00", [
+			"Tickets",
+			"CI",
+		]);
+		assert.match(header, /## Tickets/);
+		assert.match(header, /## CI/);
+		assert.doesNotMatch(header, /## Summary/);
 	});
 
 	it("stamps timeline lines with a local clock", () => {
@@ -151,7 +162,7 @@ describe("buildNightContract", () => {
 			reportPath: "/tmp/report.md",
 			maxPullRequests: 3,
 		});
-		assert.match(contract, /Slack is read-only/);
+		assert.match(contract, /never send a message/);
 		assert.match(contract, /draft/);
 		assert.match(contract, /capped at 3 pull requests/);
 		assert.match(contract, /\/tmp\/report\.md/);

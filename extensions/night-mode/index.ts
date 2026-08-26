@@ -42,6 +42,7 @@ import {
 } from "../usage/protocol.ts";
 import {
 	formatDateTimeStamp,
+	NEEDS_HUMAN_HEADING,
 	type NightConfig,
 	noteNameFor,
 	readNightConfig,
@@ -241,7 +242,7 @@ export default function (pi: ExtensionAPI): void {
 		);
 		if (open.length > 0) {
 			noteUnderHeading(
-				"Needs Bastien",
+				NEEDS_HUMAN_HEADING,
 				`Still open when the run ended (${reason}), carried over to the next night:\n${formatUnresolved(open)}`,
 			);
 		}
@@ -283,7 +284,7 @@ export default function (pi: ExtensionAPI): void {
 
 		if (run.nudges >= MAX_CONTINUATIONS) {
 			noteUnderHeading(
-				"Needs Bastien",
+				NEEDS_HUMAN_HEADING,
 				`night-mode gave up after ${MAX_CONTINUATIONS} automated continuations with work still open.`,
 			);
 			endRun("continuation cap reached");
@@ -293,7 +294,7 @@ export default function (pi: ExtensionAPI): void {
 		const current = fingerprint(items);
 		if (run.nudges > 0 && current === run.lastFingerprint) {
 			noteUnderHeading(
-				"Needs Bastien",
+				NEEDS_HUMAN_HEADING,
 				"night-mode stopped: the last automated continuation changed nothing in the ledger, so the run is stuck.",
 			);
 			endRun("stalled, no progress since the last continuation");
@@ -355,7 +356,7 @@ export default function (pi: ExtensionAPI): void {
 			if (!existsSync(reportPath)) {
 				writeFileSync(
 					reportPath,
-					composeReportHeader(startedAt, windowLabel),
+					composeReportHeader(startedAt, windowLabel, config.reportSections),
 					"utf-8",
 				);
 			}

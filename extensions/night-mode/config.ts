@@ -22,16 +22,45 @@ export interface NightConfig {
 	archiveDir: string;
 	/** Hard cap on pull requests a single night may open. */
 	maxPullRequests: number;
+	/** `## ` headings seeded into a fresh report, in order. */
+	reportSections: string[];
 }
 
-const WORK_AGENT_DIR = join(homedir(), "Documents", "Work", "Agent");
+/**
+ * Default home of the night files. Everything is configurable, so someone who
+ * keeps their prompts in a notes vault points `nightMode` at it instead.
+ */
+function defaultNightDir(): string {
+	return join(
+		process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent"),
+		"night",
+	);
+}
+
+/** Sections seeded into a fresh report. Override per workflow. */
+export const DEFAULT_REPORT_SECTIONS = [
+	"Summary",
+	"Needs you",
+	"Work",
+	"Findings",
+	"Skipped / failed",
+	"Timeline",
+];
+
+/** Heading the extension writes blockers and leftovers under. */
+export const NEEDS_HUMAN_HEADING = DEFAULT_REPORT_SECTIONS[1];
 
 export const DEFAULT_NIGHT_CONFIG: NightConfig = {
-	promptPath: join(WORK_AGENT_DIR, "Night Prompt.md"),
-	instructionsPath: join(WORK_AGENT_DIR, "Night Instructions.md"),
-	reportPathTemplate: join(WORK_AGENT_DIR, "{datetime} - Night Report.md"),
-	archiveDir: join(WORK_AGENT_DIR, "Archive"),
+	promptPath: join(defaultNightDir(), "prompt.md"),
+	instructionsPath: join(defaultNightDir(), "instructions.md"),
+	reportPathTemplate: join(
+		defaultNightDir(),
+		"reports",
+		"{datetime} - report.md",
+	),
+	archiveDir: join(defaultNightDir(), "archive"),
 	maxPullRequests: 5,
+	reportSections: DEFAULT_REPORT_SECTIONS,
 };
 
 /** Expand a leading `~` to the home directory. Other paths are returned as-is. */
@@ -49,12 +78,12 @@ export function resolvePath(path: string, base: string): string {
 
 const pad = (value: number): string => String(value).padStart(2, "0");
 
-/** `2026-08-29`, matching the vault's note naming convention. */
+/** `2026-08-29`. */
 export function formatDateStamp(date: Date): string {
 	return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 }
 
-/** `2130`, matching the vault's note naming convention. */
+/** `2130`. */
 export function formatTimeStamp(date: Date): string {
 	return `${pad(date.getHours())}${pad(date.getMinutes())}`;
 }
@@ -89,7 +118,7 @@ export function reportPathFor(
 	return resolvePath(applyPathTemplate(config.reportPathTemplate, date), base);
 }
 
-/** Obsidian note name (basename without extension) for a wiki-link. */
+/** Basename without extension, for tools that link notes by name. */
 export function noteNameFor(path: string): string {
 	const file = path.split("/").pop() ?? path;
 	return file.replace(/\.md$/i, "");
@@ -121,6 +150,13 @@ export function mergeNightConfig(
 		return typeof value === "string" && value.trim() ? value.trim() : fallback;
 	};
 	const maxPullRequests = record.maxPullRequests;
+	const sections = Array.isArray(record.reportSections)
+		? record.reportSections
+				.filter(
+					(v): v is string => typeof v === "string" && v.trim().length > 0,
+				)
+				.map((v) => v.trim())
+		: undefined;
 	return {
 		promptPath: str("promptPath", base.promptPath),
 		instructionsPath: str("instructionsPath", base.instructionsPath),
@@ -135,6 +171,7 @@ export function mergeNightConfig(
 			maxPullRequests > 0
 				? Math.floor(maxPullRequests)
 				: base.maxPullRequests,
+		reportSections: sections?.length ? sections : base.reportSections,
 	};
 }
 

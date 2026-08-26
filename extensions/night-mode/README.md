@@ -46,7 +46,7 @@ extension only subscribes. State is republished as `night-mode:state`.
 `/night start` does more than move the window: it kicks off an actual unattended
 run.
 
-1. Reads the **base prompt** file (the standing routine: Linear tickets, CI, Slack, daily note).
+1. Reads the **base prompt** file: your standing routine, whatever it is (tickets, CI triage, inbox sweep, chores).
 2. Reads the **instructions** file (tonight's one-off asks) and inlines it under an `## Extra instructions for tonight` heading, or states there are none.
 3. Creates the **report** file from a skeleton and tells the agent to append to it as it goes.
 4. Publishes a handshake at `~/.pi/agent/night-mode/active.json` so subagents can pick up the same rules and report path.
@@ -85,8 +85,8 @@ automated continuation listing exactly what is left. Two brakes stop it spinning
 
 - a hard cap of **10** continuations,
 - a **fingerprint check**: if a continuation changes nothing in the ledger, the
-  run is stuck rather than slow, so it stops and writes "stalled" into
-  `## Needs Bastien`.
+  run is stuck rather than slow, so it stops and writes "stalled" into the
+  `## Needs you` section.
 
 An empty ledger on the first settle gets one reminder to build it.
 
@@ -95,7 +95,7 @@ An empty ledger on the first settle gets one reminder to build it.
 When the run ends (ledger clear, window closed, stalled, cap reached, session
 shutdown), anything still open is:
 
-1. listed under `## Needs Bastien` in the report,
+1. listed under `## Needs you` in the report,
 2. appended to the **instructions file** under `## Carried over from the night of
    <datetime>`, after tonight's instructions have been archived.
 
@@ -105,13 +105,14 @@ at sunrise.
 ## Subagent contract
 
 While a night run is active, any subagent started with `night: true` gets a
-condensed contract prepended to its task message (no questions, Slack read-only,
-no push to `main`, draft PRs only, PR cap, report path). It is prepended by the
-spawner rather than left to the agent definition, so picking an agent that knows
-nothing about night mode cannot skip it. With no active run the flag is a no-op.
+condensed contract prepended to its task message (no questions, no outbound
+messages, no push to the default branch, draft PRs only, PR cap, report path). It
+is prepended by the spawner rather than left to the agent definition, so picking
+an agent that knows nothing about night mode cannot skip it. With no active run
+the flag is a no-op.
 
 ```ts
-await agents.run({ agent: "worker", task: "Fix HS-1234", night: true });
+await agents.run({ agent: "worker", task: "Fix the flaky login test", night: true });
 ```
 
 ## Configuration
@@ -119,16 +120,35 @@ await agents.run({ agent: "worker", task: "Fix HS-1234", night: true });
 Under `nightMode` in `<cwd>/.pi/settings.json` (project) or
 `~/.pi/agent/settings.json` (user); project wins.
 
+Nothing personal is baked in: the routine lives entirely in *your* prompt file,
+and every path is configurable. Defaults keep the night files under
+`~/.pi/agent/night/`, but pointing them at a notes vault works just as well.
+
 | Key | Default | Meaning |
 |-----|---------|---------|
-| `promptPath` | `~/Documents/Work/Agent/Night Prompt.md` | Standing routine |
-| `instructionsPath` | `~/Documents/Work/Agent/Night Instructions.md` | One-off asks, cleared after the run |
-| `reportPathTemplate` | `~/Documents/Work/Agent/{datetime} - Night Report.md` | `{datetime}`, `{date}`, `{time}` placeholders |
-| `archiveDir` | `~/Documents/Work/Agent/Archive` | Where consumed instructions go; `""` disables archiving |
+| `promptPath` | `~/.pi/agent/night/prompt.md` | Your standing routine |
+| `instructionsPath` | `~/.pi/agent/night/instructions.md` | One-off asks, cleared after the run |
+| `reportPathTemplate` | `~/.pi/agent/night/reports/{datetime} - report.md` | `{datetime}`, `{date}`, `{time}` placeholders |
+| `archiveDir` | `~/.pi/agent/night/archive` | Where consumed instructions go; `""` disables archiving |
 | `maxPullRequests` | `5` | Hard cap on PRs opened in one night |
+| `reportSections` | `Summary`, `Needs you`, `Work`, `Findings`, `Skipped / failed`, `Timeline` | `## ` headings seeded into a fresh report |
 
-`{datetime}` renders as `2026-08-29 2130`, matching the Obsidian vault's note
-naming convention so the report is linkable as `[[2026-08-29 2130 - Night Report]]`.
+`{datetime}` renders as `2026-08-29 2130`. Blockers and leftovers are written
+under the **second** section, so rename it in `reportSections` and the extension
+follows.
+
+```json
+{
+  "nightMode": {
+    "promptPath": "~/notes/Night Prompt.md",
+    "instructionsPath": "~/notes/Night Instructions.md",
+    "reportPathTemplate": "~/notes/{datetime} - Night Report.md",
+    "archiveDir": "~/notes/Archive",
+    "maxPullRequests": 5,
+    "reportSections": ["Summary", "Needs you", "Tickets", "CI", "Timeline"]
+  }
+}
+```
 
 ## Commands
 

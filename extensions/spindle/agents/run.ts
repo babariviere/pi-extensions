@@ -33,7 +33,7 @@ export interface RunRequest {
 	reads?: string[];
 	/**
 	 * Run under the night-mode contract: the hard rules of an unattended
-	 * overnight run (no questions, read-only Slack, draft PRs only) plus the
+	 * overnight run (no questions, no outbound messages, draft PRs only) plus the
 	 * report path are prepended to the task. No-op when no night run is active.
 	 */
 	night?: boolean;

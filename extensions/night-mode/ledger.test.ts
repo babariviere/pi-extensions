@@ -76,13 +76,13 @@ describe("parseLedgerItem", () => {
 		const item = parseLedgerItem(
 			"a1",
 			todoFile(
-				{ id: "a1", title: "HS-1234", tags: ["night"], status: "done" },
+				{ id: "a1", title: "flaky-login", tags: ["night"], status: "done" },
 				"Evidence: https://x/1",
 			),
 		);
 		assert.equal(item?.state, "done");
 		assert.equal(item?.evidence, "https://x/1");
-		assert.equal(item?.title, "HS-1234");
+		assert.equal(item?.title, "flaky-login");
 	});
 
 	it("survives a malformed file", () => {
@@ -126,28 +126,28 @@ describe("ledger tallies", () => {
 
 describe("appendUnderHeading", () => {
 	const report =
-		"# R\n\n## Summary\n\n## Needs Bastien\n\n## Timeline\n\n- 21:30 started\n";
+		"# R\n\n## Summary\n\n## Needs you\n\n## Timeline\n\n- 21:30 started\n";
 
 	it("inserts under the right heading, not at the end", () => {
 		const next = appendUnderHeading(
 			report,
-			"Needs Bastien",
-			"- decide on HS-1",
+			"Needs you",
+			"- decide on the flaky test",
 		);
 		const lines = next.split("\n");
 		assert.ok(
-			lines.indexOf("- decide on HS-1") > lines.indexOf("## Needs Bastien"),
+			lines.indexOf("- decide on the flaky test") >
+				lines.indexOf("## Needs you"),
 		);
-		assert.ok(lines.indexOf("- decide on HS-1") < lines.indexOf("## Timeline"));
+		assert.ok(
+			lines.indexOf("- decide on the flaky test") <
+				lines.indexOf("## Timeline"),
+		);
 	});
 
 	it("creates the heading when the agent removed it", () => {
-		const next = appendUnderHeading(
-			"# R\n\n## Summary\n",
-			"Needs Bastien",
-			"- x",
-		);
-		assert.match(next, /## Needs Bastien\n\n- x/);
+		const next = appendUnderHeading("# R\n\n## Summary\n", "Needs you", "- x");
+		assert.match(next, /## Needs you\n\n- x/);
 	});
 });
 

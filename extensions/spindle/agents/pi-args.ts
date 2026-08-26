@@ -86,7 +86,7 @@ export interface ChildInvocationOpts {
 	includeTask?: boolean;
 	/** Files the child should read first for context; injected into the task. */
 	reads?: string[];
-	/** Inherit the night-mode contract (unattended run, read-only Slack, draft PRs). */
+	/** Inherit the night-mode contract (unattended run, no outbound messages, draft PRs). */
 	night?: boolean;
 }
 

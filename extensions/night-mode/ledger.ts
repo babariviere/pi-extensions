@@ -195,7 +195,7 @@ export function fingerprint(items: LedgerItem[]): string {
 		.join("|");
 }
 
-/** `- TODO-ab12 Fix HS-1234 (claimed done, no evidence)` lines for a prompt. */
+/** `- ab12 Fix the flaky login test (claimed done, no evidence)` lines for a prompt. */
 export function formatUnresolved(items: LedgerItem[]): string {
 	return unresolved(items)
 		.map((item) => {
