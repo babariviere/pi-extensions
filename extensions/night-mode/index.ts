@@ -4,8 +4,9 @@
  * Overnight babysitting for long agent runs.
  *
  * Between 21:00 and 09:00 local:
- *  1. holds a `caffeinate -dimsu` process while an agent run is in flight (or
- *     while paused waiting for a reset) so the machine never sleeps mid-run,
+ *  1. holds a wake lock (Amphetamine session, or `caffeinate` when Amphetamine
+ *     is not installed) while an agent run is in flight (or while paused waiting
+ *     for a reset) so the machine never sleeps mid-run,
  *  2. watches the Claude 5h subscription window (published by the `usage`
  *     extension on the event bus) and pauses the agent at 95% so the session
  *     never spills past the limit,
@@ -19,7 +20,6 @@
  * State is per session, per pi instance. Emits `night-mode:state` on the bus.
  */
 
-import { type ChildProcess, spawn } from "node:child_process";
 import {
 	appendFileSync,
 	existsSync,
@@ -87,6 +87,10 @@ import {
 	sandboxPathFor,
 } from "./sandbox-clone.ts";
 import {
+	WakeLock,
+	type WakeLockPreference,
+} from "./wake-lock.ts";
+import {
 	appendUnderHeading,
 	composeCarryOver,
 	composeLedgerReminder,
@@ -121,13 +125,15 @@ export interface NightModeState {
 	threshold: number;
 	/** True while an agent run is in flight (between `agent_start` and `agent_settled`). */
 	agentBusy: boolean;
-	/** True while this session holds a `caffeinate` process. */
+	/** True while this session holds a wake lock. */
 	caffeinated: boolean;
+	/** Mechanism holding sleep off, `"off"` when nothing is held. */
+	wakeLock: "amphetamine" | "caffeinate" | "off";
 }
 
 export default function (pi: ExtensionAPI): void {
 	let ctxRef: ExtensionContext | undefined;
-	let caffeinate: ChildProcess | undefined;
+	let wakeLock: WakeLock | undefined;
 	let usage: UsageSnapshot | undefined;
 	let enabled = true;
 	let inWindow = false;
@@ -545,39 +551,40 @@ export default function (pi: ExtensionAPI): void {
 		}
 	}
 
-	// ── caffeinate ────────────────────────────────────────────────────────
+	// ── wake lock ─────────────────────────────────────────────────────────
+
+	/**
+	 * The lock is built on first use rather than at load time: resolving the
+	 * backend reads settings and stats the Amphetamine bundle, and neither is
+	 * worth doing in a session that never enters the night window.
+	 */
+	function lock(): WakeLock {
+		if (!wakeLock) {
+			let preference: WakeLockPreference = "auto";
+			try {
+				preference = readNightConfig(process.cwd()).wakeLock;
+			} catch {
+				// settings unreadable, keep the default
+			}
+			wakeLock = new WakeLock(preference, {
+				warn: (message) => ctxRef?.ui.notify(message, "warning"),
+			});
+		}
+		return wakeLock;
+	}
 
 	function startCaffeinate(): void {
-		if (process.platform !== "darwin" || caffeinate) return;
-		try {
-			// -d display, -i idle sleep, -m disk, -s system sleep on AC, -u user active.
-			const child = spawn("caffeinate", ["-dimsu"], { stdio: "ignore" });
-			child.on("error", () => {
-				if (caffeinate === child) caffeinate = undefined;
-			});
-			child.on("exit", () => {
-				if (caffeinate === child) caffeinate = undefined;
-			});
-			child.unref?.();
-			caffeinate = child;
-		} catch {
-			caffeinate = undefined;
-		}
+		void lock().acquire();
 	}
 
 	function stopCaffeinate(): void {
-		if (!caffeinate) return;
-		try {
-			caffeinate.kill();
-		} catch {
-			// already gone
-		}
-		caffeinate = undefined;
+		void lock().release();
 	}
 
 	// ── state reporting ───────────────────────────────────────────────────
 
 	function snapshotState(): NightModeState {
+		const held = lock().status();
 		return {
 			enabled,
 			inWindow,
@@ -586,8 +593,20 @@ export default function (pi: ExtensionAPI): void {
 			usedPercent: usedPercent(),
 			threshold: DEFAULT_THRESHOLD_PERCENT,
 			agentBusy,
-			caffeinated: caffeinate !== undefined,
+			caffeinated: held.held,
+			wakeLock: held.backend === "none" ? "off" : held.backend,
 		};
+	}
+
+	/** `amphetamine (holding, 27m left)` / `caffeinate (off)`. */
+	function wakeLockLine(): string {
+		const state = lock().status();
+		const left =
+			state.expiresAt !== undefined
+				? `, ${formatDuration(state.expiresAt - Date.now())} left`
+				: "";
+		if (state.configured === "none") return "off (unsupported or disabled)";
+		return `${state.configured} (${state.held ? `holding${left}` : "idle"})`;
 	}
 
 	function statusText(): string | undefined {
@@ -692,8 +711,11 @@ export default function (pi: ExtensionAPI): void {
 
 	// ── evaluation ────────────────────────────────────────────────────────
 
-	/** Take or release the caffeinate process to match the current state. */
-	function syncCaffeinate(): void {
+	/**
+	 * Take or release the wake lock to match the current state. Called from every
+	 * `evaluate`, which is also what re-arms a bounded Amphetamine session.
+	 */
+	function syncWakeLock(): void {
 		if (shouldHoldCaffeinate({ enabled, inWindow, agentBusy, paused }))
 			startCaffeinate();
 		else stopCaffeinate();
@@ -709,7 +731,7 @@ export default function (pi: ExtensionAPI): void {
 			}
 		}
 		if (inWindow && !paused && shouldPause(usedPercent())) pause();
-		syncCaffeinate();
+		syncWakeLock();
 		report();
 	}
 
@@ -788,7 +810,7 @@ export default function (pi: ExtensionAPI): void {
 
 	pi.on("session_shutdown", async () => {
 		endRun("session shutdown");
-		stopCaffeinate();
+		lock().releaseSync();
 		clearResumeTimer();
 		if (tickTimer) {
 			clearInterval(tickTimer);
@@ -800,7 +822,7 @@ export default function (pi: ExtensionAPI): void {
 
 	pi.registerCommand("night", {
 		description:
-			"Night mode: caffeinate + Claude 5h budget guard (status | start | report | on | off | resume)",
+			"Night mode: wake lock + Claude 5h budget guard (status | start | report | on | off | resume)",
 		getArgumentCompletions: (prefix) =>
 			["status", "start", "report", "on", "off", "resume"]
 				.filter((v) => v.startsWith(prefix))
@@ -889,7 +911,7 @@ export default function (pi: ExtensionAPI): void {
 			const lines = [
 				`night-mode: ${enabled ? "enabled" : "disabled"}`,
 				`window: ${formatWindow(currentWindow())} (${inWindow ? "inside" : "outside"}${windowOverride ? ", session override" : ""})`,
-				`caffeinate: ${caffeinate ? "holding" : "off"}`,
+				`wake lock: ${wakeLockLine()}`,
 				`5h usage: ${pct === undefined ? "unknown" : `${Math.round(pct)}% / ${DEFAULT_THRESHOLD_PERCENT}%`}`,
 				`5h reset: ${resets ? formatDuration(new Date(resets).getTime() - Date.now()) : "unknown"}`,
 				`paused: ${paused ? `yes, resume in ${resumeAt ? formatDuration(resumeAt - Date.now()) : "?"}` : "no"}`,

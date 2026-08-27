@@ -10,6 +10,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join } from "node:path";
+import { isWakeLockPreference, type WakeLockPreference } from "./wake-lock.ts";
 
 export interface NightConfig {
 	/** Base prompt injected on `/night start`. */
@@ -44,6 +45,13 @@ export interface NightConfig {
 	 * untrusted-config error.
 	 */
 	sandboxTrust: boolean;
+	/**
+	 * How sleep is suppressed during a run. `auto` uses Amphetamine when it is
+	 * installed and falls back to `caffeinate`. Amphetamine is the only option
+	 * that survives closing the lid, and only when its "Allow system sleep when
+	 * display is closed" default is off.
+	 */
+	wakeLock: WakeLockPreference;
 	/** Hard cap on pull requests a single night may open. */
 	maxPullRequests: number;
 	/** `## ` headings seeded into a fresh report, in order. */
@@ -87,6 +95,7 @@ export const DEFAULT_NIGHT_CONFIG: NightConfig = {
 	sandboxCopyFiles: ["mise.local.toml"],
 	sandboxMode: "workspace-write",
 	sandboxTrust: true,
+	wakeLock: "auto",
 	maxPullRequests: 5,
 	reportSections: DEFAULT_REPORT_SECTIONS,
 };
@@ -220,6 +229,9 @@ export function mergeNightConfig(
 			typeof record.sandboxTrust === "boolean"
 				? record.sandboxTrust
 				: base.sandboxTrust,
+		wakeLock: isWakeLockPreference(record.wakeLock)
+			? record.wakeLock
+			: base.wakeLock,
 		maxPullRequests:
 			typeof maxPullRequests === "number" &&
 			Number.isFinite(maxPullRequests) &&

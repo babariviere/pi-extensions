@@ -4,9 +4,43 @@ Overnight babysitting for long agent runs.
 
 Between **21:00 and 09:00** local time:
 
-1. **caffeinate**: holds a `caffeinate -dimsu` process while an agent run is in flight, and releases it on `agent_settled` (macOS only, no-op elsewhere). A pause waiting for the 5h reset also keeps it held, since sleep would stall the resume timer.
+1. **wake lock**: keeps the machine awake while an agent run is in flight, and releases it on `agent_settled` (macOS only, no-op elsewhere). A pause waiting for the 5h reset also keeps it held, since sleep would stall the resume timer. See [Wake lock](#wake-lock) for the two backends.
 
-   Each pi instance owns its own process. macOS power assertions are a union, so the machine only sleeps once *every* instance is idle: no cross-instance coordination needed.
+   Each pi instance owns its own lock. macOS power assertions are a union, so the machine only sleeps once *every* instance is idle: no cross-instance coordination needed.
+
+## Wake lock
+
+| Backend | Survives a closed lid | Notes |
+| --- | --- | --- |
+| `amphetamine` | yes, with one setting | An [Amphetamine](https://apps.apple.com/app/amphetamine/id937984704) session driven over AppleScript |
+| `caffeinate` | no | A held `caffeinate -dimsu` child process |
+
+`wakeLock: "auto"` (the default) picks Amphetamine when `Amphetamine.app` is
+installed and falls back to `caffeinate` otherwise.
+
+`caffeinate` only blocks idle and display sleep. Closing the lid triggers
+clamshell sleep, which overrides power assertions, so a `caffeinate`-backed night
+run dies the moment you close the MacBook. Amphetamine is the way out of that,
+but it needs two things:
+
+- **Amphetamine -> Settings -> General -> Allow AppleScript/Automation** on, plus
+  the macOS automation prompt approved the first time night mode drives it. If
+  scripting is denied, the lock logs a warning once and falls back to
+  `caffeinate` for the rest of the session instead of retrying every tick.
+- **Amphetamine -> Settings -> Session Defaults -> Closed-Display Mode:**
+  "Allow system sleep when display is closed" **unchecked**. Closed-display mode
+  is not settable per session over AppleScript, so this default is what actually
+  governs a closed lid. Apple Silicon generally still wants the machine on AC
+  power.
+
+Amphetamine sessions outlive the process that started them, so a crashed pi must
+not leave the Mac awake until morning. Sessions are always bounded (30 minutes)
+and re-armed from the 30s night-mode tick, which also detects a session killed by
+hand or by an Amphetamine trigger and starts a new one. A crash self-heals within
+one session length.
+
+For an unconditional lid-close block, independent of this extension:
+`sudo pmset -a disablesleep 1` (and `0` to restore).
 2. **5h budget guard**: watches the Claude 5h subscription window and pauses the agent at **95%**, so a night run never spills past the limit.
 3. **Automated resume**: once the window resets, sends a `continue` prompt on its own.
 
@@ -244,6 +278,7 @@ and every path is configurable. Defaults keep the night files under
 | `sandboxCopyFiles` | `["mise.local.toml"]` | Gitignored, repo-relative files copied into a fresh working copy |
 | `sandboxMode` | `workspace-write` | Filesystem sandbox requested for the run: `off`, `read-only`, `workspace-write`, `full` |
 | `sandboxTrust` | `true` | Run `mise trust` / `direnv allow` on a fresh working copy |
+| `wakeLock` | `"auto"` | `auto` \| `amphetamine` \| `caffeinate` \| `off`, see [Wake lock](#wake-lock) |
 | `maxPullRequests` | `5` | Hard cap on PRs opened in one night |
 | `reportSections` | `Summary`, `Needs you`, `Work`, `Findings`, `Skipped / failed`, `Timeline` | `## ` headings seeded into a fresh report |
 
@@ -258,6 +293,7 @@ follows.
     "instructionsPath": "~/notes/Night Instructions.md",
     "reportPathTemplate": "~/notes/{datetime} - Night Report.md",
     "archiveDir": "~/notes/Archive",
+    "wakeLock": "auto",
     "maxPullRequests": 5,
     "reportSections": ["Summary", "Needs you", "Tickets", "CI", "Timeline"]
   }
@@ -268,7 +304,7 @@ follows.
 
 | Command | Effect |
 |---------|--------|
-| `/night` or `/night status` | Window state, caffeinate state, 5h usage, reset countdown, pause state, active run |
+| `/night` or `/night status` | Window state, wake lock state, 5h usage, reset countdown, pause state, active run |
 | `/night start` | Start a night run now: moves the window start to the current hour, composes the prompt, creates the report |
 | `/night report` | Path, wiki-link and size of tonight's report |
 | `/night on` / `/night off` | Enable or disable the whole thing for this session |
