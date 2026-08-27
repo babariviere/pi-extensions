@@ -16,6 +16,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { PI_CORE_TOOL_NAME_SET } from "./core/pi-tools.ts";
+import { isSandboxMode, type SandboxMode } from "./sandbox/policy.ts";
 import {
   CURRENT_SPINDLE_CONFIG_VERSION,
   migrateSpindleConfigDocument,
@@ -45,6 +46,26 @@ export interface SpindleAgentConfig {
   defaultThinking?: string;
 }
 
+/**
+ * Filesystem guardrail for the mutating core tools (see `sandbox/`).
+ *
+ * Defaults to `off`: an interactive session routinely writes outside its cwd
+ * (notes, sibling repos, agent files), so enforcement is opt-in per project or
+ * turned on for the duration of an unattended run.
+ */
+export interface SpindleSandboxConfig {
+  mode: SandboxMode;
+  /** Extra writable roots, beyond the cwd and the tool caches. */
+  allowWrite: string[];
+  /** Replaces the default deny-write patterns when non-empty. */
+  denyWrite: string[];
+  /** Replaces the default denied read paths when non-empty. */
+  denyRead: string[];
+  /** Domain allowlist for the sandbox network proxy. `*` means unrestricted. */
+  allowedDomains: string[];
+  deniedDomains: string[];
+}
+
 export interface SpindleToolCaptureConfig {
   enabled: boolean;
   hideFromModel: boolean;
@@ -64,6 +85,7 @@ export interface SpindleConfig {
   fullCodeMode: boolean;
   executor: SpindleExecutorConfig;
   agents: SpindleAgentConfig;
+  sandbox: SpindleSandboxConfig;
   capture: SpindleToolCaptureConfig;
   ui: SpindleUiConfig;
 }
@@ -93,6 +115,14 @@ export const DEFAULT_SPINDLE_CONFIG: SpindleConfig = {
   agents: {
     maxPerExecution: 100,
     timeoutMs: DEFAULT_AGENT_TIMEOUT_MS,
+  },
+  sandbox: {
+    mode: "off",
+    allowWrite: [],
+    denyWrite: [],
+    denyRead: [],
+    allowedDomains: ["*"],
+    deniedDomains: [],
   },
   capture: {
     enabled: true,
@@ -171,6 +201,14 @@ const thinkingValue = (value: unknown): string | undefined =>
     ? value
     : undefined;
 
+/** Trimmed, non-empty string entries of an array value; `fallback` when absent. */
+const stringList = (value: unknown, fallback: string[] = []): string[] =>
+  Array.isArray(value)
+    ? value
+        .filter((entry): entry is string => typeof entry === "string" && Boolean(entry.trim()))
+        .map((entry) => entry.trim())
+    : fallback;
+
 const objectValue = (value: unknown): Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -190,6 +228,7 @@ const resultFormatValue = (
 export const normalizeSpindleConfig = (input: Record<string, unknown>): SpindleConfig => {
   const executor = objectValue(input.executor);
   const agents = objectValue(input.agents);
+  const sandbox = objectValue(input.sandbox);
   const capture = objectValue(input.capture);
   const ui = objectValue(input.ui);
   const agentModel = stringValue(agents.defaultModel);
@@ -248,6 +287,14 @@ export const normalizeSpindleConfig = (input: Record<string, unknown>): SpindleC
       ),
       ...(agentModel ? { defaultModel: agentModel } : {}),
       ...(agentThinking ? { defaultThinking: agentThinking } : {}),
+    },
+    sandbox: {
+      mode: isSandboxMode(sandbox.mode) ? sandbox.mode : DEFAULT_SPINDLE_CONFIG.sandbox.mode,
+      allowWrite: stringList(sandbox.allowWrite),
+      denyWrite: stringList(sandbox.denyWrite),
+      denyRead: stringList(sandbox.denyRead),
+      allowedDomains: stringList(sandbox.allowedDomains, DEFAULT_SPINDLE_CONFIG.sandbox.allowedDomains),
+      deniedDomains: stringList(sandbox.deniedDomains),
     },
     capture: {
       enabled: booleanValue(capture.enabled, DEFAULT_SPINDLE_CONFIG.capture.enabled),

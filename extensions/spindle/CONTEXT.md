@@ -225,6 +225,122 @@ risk/approval hunks by hand.
 | `providers/agent-run-monitor.ts` | The widget-facing projection: `SpindleAgentRunRegistry` (the widget's data source) and `RunProgressMonitor`, which turns backend status updates into registry rows + the one-line ticker behind a `start`/`onStatus`/`stop` interface. |
 | `ui/transcript-types.ts` | `SpindleLogLine`, copied from upstream `src/agents/types.ts`, so the transcript parser does not import a dropped subsystem. |
 | `agents/` | The absorbed `extensions/subagents` code (see below). |
+| `sandbox/policy.ts` | Pure filesystem policy: modes, writable roots, deny patterns, and the config object `@anthropic-ai/sandbox-runtime` expects. |
+| `sandbox/manager.ts` | Runtime plumbing: loading `srt`, initializing it for a policy, and the late-bound `bash` operations. |
+| `sandbox/controller.ts` | The session's live sandbox state. Hands out stable operations whose closures read the *current* policy, so the mode can change mid-session. |
+| `sandbox/protocol.ts` | Bus contract for changing the mode at runtime (`spindle:sandbox-request` / `spindle:sandbox-state`). |
+| `sandbox/night-bridge.ts` | Reads the night-mode handshake, so a subagent process inherits the run's policy without any IPC. |
+| `sandbox/resolve.ts` | Precedence: config, request, and the floor an active night run imposes. Pure. |
+
+### Filesystem sandbox
+
+Upstream has no filesystem guardrail: `providers/pi-tools-provider.ts` built the
+seven core tools with no options, so a `pi.bash` inside `spindle_exec` had the
+full rights of the pi process. That is fine when a human is watching and a
+liability during an unattended run.
+
+The threat model is accidents, not adversaries: the goal is that an overnight
+agent cannot `rm -rf ~`. Two enforcement points, one policy:
+
+| Tool | Mechanism | Why |
+|---|---|---|
+| `bash` | `@anthropic-ai/sandbox-runtime` (Seatbelt on macOS, bubblewrap on Linux) | A shell command can do anything; only the kernel can bound it |
+| `write`, `edit` | direct path check against the write allowlist | They take absolute paths and never reach a shell, so the check is exact and needs no OS support |
+| `read`, `grep`, `find`, `ls` | none | Reading is not the destructive path, and image handling / truncation / offsets stay byte-identical to pi's defaults |
+
+`@anthropic-ai/sandbox-runtime` is an `optionalDependency`, imported through a
+variable specifier. A missing install or an unsupported platform degrades to
+"path guards only" with a warning, instead of breaking session startup.
+
+Config lives under `sandbox` in `spindle.json`. It defaults to `mode: "off"`,
+because an interactive session legitimately writes outside its cwd (notes,
+sibling repos, agent files); enforcement is opt-in per project, or turned on for
+the duration of a night run.
+
+```json
+{
+  "sandbox": {
+    "mode": "workspace-write",
+    "allowWrite": ["~/.pi/agent/night"],
+    "denyRead": ["~/.ssh", "~/.gnupg"]
+  }
+}
+```
+
+The mode names mirror Codex CLI's, since that vocabulary is already familiar:
+
+| Mode | Writable |
+|---|---|
+| `off` | everything (no enforcement) |
+| `read-only` | temp dirs only |
+| `workspace-write` | cwd, plus tool caches (`GOCACHE`, `GOMODCACHE`, the platform cache home, npm/Cargo), plus configured extras |
+| `full` | everything (no enforcement, named to be explicit about it) |
+
+Two known holes, both deliberate: `~/.aws` stays readable because SOPS/KMS
+decryption needs it, and granting Docker socket access defeats the filesystem
+boundary entirely, since a container can bind-mount `/`.
+
+#### Changing the mode mid-session
+
+The mode cannot be decided once at startup: an unattended run wants enforcement
+that an interactive session would find obstructive, and it starts hours after the
+session did. pi builds its tool definitions once and bakes the operations in, so
+the operations `SandboxController` hands out are **stable objects whose closures
+read the current policy on every call**. Turning enforcement on is a policy swap,
+not a re-registration. When nothing is enforced, `bash` delegates to pi's own
+`createLocalBashOperations()`, so an unsandboxed session behaves exactly as it did
+before any of this existed.
+
+Two delivery paths, one policy source:
+
+| Process | How it learns the policy |
+|---|---|
+| The session that ran `/night start` | `spindle:sandbox-request` on pi's event bus; `policy: null` reverts to `spindle.json` |
+| Subagent `pi` processes | `sandbox` in `~/.pi/agent/night/active.json`, read at startup by `sandbox/night-bridge.ts` |
+
+Subagents are separate processes, so the parent's bus never reaches them; they
+already read that file for the report path and the hard rules. Reading it also
+means the policy survives a `/reload`.
+
+This is extension-level trust, not model-level: `pi.events` is not reachable from
+inside `spindle_exec`, so the agent cannot request its own sandbox. Payloads are
+still validated (`parseSandboxRequestEvent`) rather than trusted.
+
+#### `/sandbox`
+
+The only slash command Spindle registers.
+
+| Invocation | Effect |
+|---|---|
+| `/sandbox` or `/sandbox status` | Mode, source, whether a night run holds it, and whether `bash` is OS-enforced or path-guarded only |
+| `/sandbox read-only` | Restrict now |
+| `/sandbox workspace-write [path…]` | Restrict now, granting extra writable roots |
+| `/sandbox off` | Revert to what `spindle.json` says |
+
+`off` is a *revert*, not a forced "no enforcement", so it can never loosen the
+configured baseline. While enforcing, the footer shows `🔒 workspace-write`, or
+`🔒 workspace-write (paths only)` when the OS backend is unavailable.
+
+#### Precedence, and why a night run cannot be unsandboxed
+
+`sandbox/resolve.ts` combines three inputs. Modes are ranked by how much they
+restrict (`read-only` > `workspace-write` > `off` = `full`), and an active night
+run is a **floor**, never a ceiling:
+
+| Config | Request | Night run | Effective |
+|---|---|---|---|
+| `off` | - | - | `off` |
+| `off` | `read-only` | - | `read-only` |
+| `read-only` | `off` (revert) | - | `read-only` |
+| `off` | `off` | `workspace-write` | **`workspace-write`**, request refused and reported |
+| `off` | `full` | `workspace-write` | **`workspace-write`**, request refused and reported |
+| `off` | `read-only` | `workspace-write` | `read-only` (tightening is allowed) |
+
+The night's own writable roots (its working copy, the report, the ledger) are
+always unioned in, so a tightening request cannot cut the run off from the files
+it has to write. A refused request is surfaced as a warning rather than silently
+appearing to work, and it is not remembered: when the run ends, night-mode emits
+a revert that clears it.
 
 ### Directory name collision warning
 
@@ -417,6 +533,10 @@ defensive check on `details.isError`).
 `diff`, `yaml`, `typescript` (`^6.0.3`, matching upstream) as `dependencies`;
 `@types/node` as a devDependency. `typebox` was already a peerDependency.
 **Upstream's embeddable MCP client package and `cross-spawn` are deliberately absent.**
+
+`@anthropic-ai/sandbox-runtime` is an **optionalDependency** used by `sandbox/`.
+It is not upstream's: upstream ships no filesystem sandbox. Linux also needs
+`bubblewrap`, `socat` and `ripgrep` on the host for it to enforce anything.
 
 The QuickJS WASM variant (`@jitl/quickjs-singlefile-mjs-release-sync` loaded via
 `newQuickJSWASMModuleFromVariant`) was validated to instantiate and evaluate in

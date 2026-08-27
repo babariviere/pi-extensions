@@ -1,0 +1,115 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { SandboxController } from "./controller.ts";
+import type { RuntimeAttempt, SandboxRuntime } from "./manager.ts";
+import { policyEnvironment, resolveSandboxPolicy, type SandboxMode } from "./policy.ts";
+
+const policyFor = (mode: SandboxMode) =>
+  resolveSandboxPolicy(
+    { mode },
+    policyEnvironment("/work/repo", { home: "/home/dev", platform: "linux", env: {}, tmp: "/tmp" }),
+  );
+
+/** A runtime double: records what it was asked to do, touches no OS sandbox. */
+function fakeRuntime() {
+  const calls = { initialized: 0, wrapped: [] as string[], resets: 0 };
+  const runtime: SandboxRuntime = {
+    initialize: async () => {
+      calls.initialized += 1;
+    },
+    wrapWithSandbox: async (command) => {
+      calls.wrapped.push(command);
+      return `sandboxed ${command}`;
+    },
+    reset: async () => {
+      calls.resets += 1;
+    },
+  };
+  const start = async (): Promise<RuntimeAttempt> => {
+    await runtime.initialize({});
+    return { runtime };
+  };
+  return { calls, start };
+}
+
+test("a controller that enforces nothing lets every write through", async () => {
+  const controller = new SandboxController(policyFor("off"));
+  await controller.apply(policyFor("off"), "config");
+  assert.equal(controller.enforcing, false);
+  assert.equal(controller.allowsWrite("/home/dev/.zshrc"), true);
+  assert.doesNotThrow(() => controller.writeGuard()("/home/dev/.zshrc"));
+});
+
+test("turning enforcement on mid-session changes the verdict of the same guard", async () => {
+  const { start } = fakeRuntime();
+  const controller = new SandboxController(policyFor("off"), "config", start);
+  // The guard object is captured once, exactly as pi captures the tool's ops.
+  const guard = controller.writeGuard();
+  assert.doesNotThrow(() => guard("/home/dev/.zshrc"));
+
+  await controller.apply(policyFor("workspace-write"), "request");
+  assert.throws(() => guard("/home/dev/.zshrc"), /denied by mode 'workspace-write'/);
+  assert.doesNotThrow(() => guard("/work/repo/src/a.ts"));
+
+  // Reverting releases it again, without rebuilding anything.
+  await controller.apply(policyFor("off"), "config");
+  assert.doesNotThrow(() => guard("/home/dev/.zshrc"));
+});
+
+test("edit operations follow the live policy too", async () => {
+  const { start } = fakeRuntime();
+  const controller = new SandboxController(policyFor("workspace-write"), "request", start);
+  await controller.apply(policyFor("workspace-write"), "request");
+  const ops = controller.editOperations();
+  await assert.rejects(() => ops.writeFile("/home/dev/.zshrc", "x"), /denied by mode/);
+});
+
+test("bash is routed through the runtime only while it is enforcing", async () => {
+  const { calls, start } = fakeRuntime();
+  const controller = new SandboxController(policyFor("off"), "config", start);
+  const bash = controller.bashOperations();
+
+  // Unsandboxed: pi's local backend runs it, so the runtime sees nothing.
+  let output = "";
+  const first = await bash.exec("echo plain", process.cwd(), {
+    onData: (data) => {
+      output += data.toString();
+    },
+  });
+  assert.equal(first.exitCode, 0);
+  assert.match(output, /plain/);
+  assert.deepEqual(calls.wrapped, []);
+
+  await controller.apply(policyFor("workspace-write"), "request");
+  output = "";
+  await bash.exec("echo wrapped", process.cwd(), {
+    onData: (data) => {
+      output += data.toString();
+    },
+  });
+  assert.deepEqual(calls.wrapped, ["echo wrapped"]);
+  assert.match(output, /sandboxed/);
+});
+
+test("applying a new enforcing policy resets the previous profile first", async () => {
+  const { calls, start } = fakeRuntime();
+  const controller = new SandboxController(policyFor("workspace-write"), "request", start);
+  await controller.apply(policyFor("workspace-write"), "request");
+  await controller.apply(policyFor("read-only"), "request");
+  assert.equal(calls.initialized, 2);
+  assert.equal(calls.resets, 1);
+  await controller.dispose();
+  assert.equal(calls.resets, 2);
+});
+
+test("state reports the mode, the source and the degradation reason", async () => {
+  const degraded = async (): Promise<RuntimeAttempt> => ({ degradedReason: "no bubblewrap" });
+  const controller = new SandboxController(policyFor("off"), "config", degraded);
+  const state = await controller.apply(policyFor("workspace-write"), "request");
+  assert.equal(state.mode, "workspace-write");
+  assert.equal(state.enforcing, true);
+  assert.equal(state.osEnforced, false);
+  assert.equal(state.source, "request");
+  assert.equal(state.degradedReason, "no bubblewrap");
+  assert.match(controller.describe(), /no bubblewrap/);
+});

@@ -28,6 +28,17 @@ import {
 import { CapturedToolsProvider } from "./providers/captured-tools-provider.ts";
 import { McpBridgeProvider } from "./providers/mcp-bridge-provider.ts";
 import { PiToolsProvider } from "./providers/pi-tools-provider.ts";
+import { SandboxController } from "./sandbox/controller.ts";
+import { activeNightSandboxRequest } from "./sandbox/night-bridge.ts";
+import { policyEnvironment, resolveSandboxPolicy } from "./sandbox/policy.ts";
+import { effectiveSandbox } from "./sandbox/resolve.ts";
+import {
+  parseSandboxRequestEvent,
+  SANDBOX_REQUEST_EVENT,
+  SANDBOX_STATE_EVENT,
+  type SandboxRequest,
+  type SandboxStateEvent,
+} from "./sandbox/protocol.ts";
 import {
   SPINDLE_PROVIDER_DISCOVER_EVENT,
   type SpindleProvider,
@@ -48,6 +59,15 @@ export class SpindleState {
    * for a normal session.
    */
   #gate: SpindleToolGate = SpindleToolGate.of(undefined);
+  /** Filesystem guardrail for the mutating core tools; undefined until initialize(). */
+  #sandbox: SandboxController | undefined;
+  /** Unsubscribe for the mid-session sandbox request listener. */
+  #unsubscribeSandbox: (() => void) | undefined;
+  /**
+   * Last sandbox request from `/sandbox` or the bus. Cleared by a revert, so a
+   * request refused by an active night run does not resurface when the run ends.
+   */
+  #sandboxRequest: SandboxRequest | undefined;
   readonly #externalProviders = new Map<string, SpindleProvider>();
   readonly activity = new SpindleActivityStore();
   readonly agentRuns = new SpindleAgentRunRegistry();
@@ -130,12 +150,18 @@ export class SpindleState {
         ? new CapturedToolsProvider(this.capturedTools, this.#gate)
         : undefined;
     if (this.#config.fullCodeMode) {
+      this.#sandbox = await this.#createSandbox(context);
       this.#registry.register(
         new PiToolsProvider(
           context.cwd,
           this.capturedTools,
           capturedToolsProvider,
           this.#gate,
+          {
+            bash: this.#sandbox.bashOperations(),
+            edit: this.#sandbox.editOperations(),
+            writeGuard: this.#sandbox.writeGuard(),
+          },
         ),
       );
     }
@@ -213,7 +239,117 @@ export class SpindleState {
     this.#externalProviders.clear();
   }
 
+  /**
+   * Resolve the effective policy from `spindle.json`, the last request, and the
+   * floor an active night run imposes (see `sandbox/resolve.ts`).
+   *
+   * The night policy is read from the handshake file rather than passed in, so a
+   * subagent process (which never sees the parent's event bus) inherits it just
+   * by starting up, and it survives a `/reload`.
+   */
+  #resolveSandbox(cwd: string) {
+    const effective = effectiveSandbox({
+      settings: this.config.sandbox,
+      requested: this.#sandboxRequest,
+      night: activeNightSandboxRequest(),
+    });
+    const policy = resolveSandboxPolicy(
+      {
+        mode: effective.mode,
+        allowWrite: effective.allowWrite,
+        ...(effective.denyWrite.length ? { denyWrite: effective.denyWrite } : {}),
+        ...(effective.denyRead.length ? { denyRead: effective.denyRead } : {}),
+        network: effective.network,
+      },
+      policyEnvironment(cwd),
+    );
+    return { policy, effective };
+  }
+
+  /**
+   * Build the session's sandbox and subscribe to mid-session change requests.
+   * Never throws: an unsupported platform or a missing
+   * `@anthropic-ai/sandbox-runtime` install degrades to write/edit path guards,
+   * and the reason is surfaced to the user once.
+   */
+  async #createSandbox(context: ExtensionContext): Promise<SandboxController> {
+    const { policy, effective } = this.#resolveSandbox(context.cwd);
+    const source = effective.source === "config" ? "config" : "request";
+    const controller = new SandboxController(policy, source);
+    const state = await controller.apply(policy, source);
+    if (state.enforcing && state.degradedReason) {
+      context.ui.notify(`spindle: ${controller.describe()}`, "warning");
+    }
+    this.pi.events.emit(SANDBOX_STATE_EVENT, state);
+
+    // Another extension (night-mode) or the `/sandbox` command can change the
+    // mode for the rest of the session. The operations installed on the tools
+    // are late-bound, so the swap needs no re-registration.
+    this.#unsubscribeSandbox = this.pi.events.on(SANDBOX_REQUEST_EVENT, (payload) => {
+      const request = parseSandboxRequestEvent(payload);
+      if (!request) return;
+      void this.applySandboxRequest(request.policy, request.reason, context);
+    });
+    return controller;
+  }
+
+  /**
+   * Adopt a sandbox request. `null` reverts to `spindle.json`. An active night
+   * run acts as a floor: a request that would loosen it is refused and reported,
+   * so nothing can un-sandbox an unattended run mid-flight.
+   *
+   * Returns the resulting state, or undefined when there is no sandbox to change
+   * (Spindle not in full code mode).
+   */
+  async applySandboxRequest(
+    request: SandboxRequest | null,
+    reason: string | undefined,
+    context: ExtensionContext,
+  ): Promise<SandboxStateEvent | undefined> {
+    const controller = this.#sandbox;
+    if (!controller) return undefined;
+    this.#sandboxRequest = request ?? undefined;
+    const cwd = this.#cwd ?? context.cwd;
+    const { policy, effective } = this.#resolveSandbox(cwd);
+    const state = await controller.apply(
+      policy,
+      effective.source === "config" ? "config" : "request",
+    );
+    this.pi.events.emit(SANDBOX_STATE_EVENT, state);
+    if (effective.refused) {
+      context.ui.notify(
+        `spindle: '${effective.refused.asked}' refused, an active night run holds the sandbox at ` +
+          `'${effective.refused.enforced}'. ${controller.describe()}`,
+        "warning",
+      );
+      return state;
+    }
+    const suffix = reason ? ` (${reason})` : "";
+    context.ui.notify(`spindle: ${controller.describe()}${suffix}`, "info");
+    return state;
+  }
+
+  /** Current sandbox state, or undefined when there is no sandbox. */
+  sandboxState(): SandboxStateEvent | undefined {
+    return this.#sandbox?.state();
+  }
+
+  /** True while an active night run pins the sandbox. */
+  sandboxHeldByNightRun(): boolean {
+    return activeNightSandboxRequest() !== undefined;
+  }
+
+  /** One-line sandbox status, for `/sandbox` output. */
+  sandboxStatus(): string {
+    return this.#sandbox ? this.#sandbox.describe() : "sandbox off (no enforcement)";
+  }
+
   async #closeInternal(): Promise<void> {
+    this.#unsubscribeSandbox?.();
+    this.#unsubscribeSandbox = undefined;
+    const sandbox = this.#sandbox;
+    this.#sandbox = undefined;
+    if (sandbox) await sandbox.dispose();
     if (!this.#registry) return;
     const externalNames = new Set(this.#externalProviders.keys());
     await this.#registry.close(externalNames);

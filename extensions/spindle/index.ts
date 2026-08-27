@@ -8,7 +8,15 @@
  * subsystems and are gone.
  */
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { isSandboxMode, SANDBOX_MODES } from "./sandbox/policy.ts";
+import {
+  SANDBOX_STATE_EVENT,
+  type SandboxStateEvent,
+} from "./sandbox/protocol.ts";
+
+/** Footer key for the sandbox indicator. */
+const SANDBOX_STATUS_KEY = "spindle-sandbox";
 import { loadCodePreviewSettings } from "./ui/code-preview.ts";
 import {
   type SpindleToolShellDecorator,
@@ -153,6 +161,8 @@ export default async function spindle(pi: ExtensionAPI): Promise<void> {
     await state.initialize(context);
     applySpindleMode();
     spindleUi.start(context);
+    sandboxContext = context;
+    renderSandboxStatus(context, state.sandboxState());
     // Throttled, best-effort prune of stale persisted subagent runs so they do
     // not accumulate forever next to the parent sessions.
     try {
@@ -160,6 +170,88 @@ export default async function spindle(pi: ExtensionAPI): Promise<void> {
     } catch {
       // Cleanup is housekeeping; never let it break session startup.
     }
+  });
+
+  // ── sandbox command ──────────────────────────────────────────────────
+
+  /**
+   * Latest session context, so the status indicator can be refreshed from an
+   * event handler (a night run turning enforcement on) and not only from a
+   * command invocation.
+   */
+  let sandboxContext: ExtensionContext | undefined;
+
+  const renderSandboxStatus = (
+    context: ExtensionContext,
+    state: SandboxStateEvent | undefined,
+  ): void => {
+    if (!state?.enforcing) {
+      context.ui.setStatus(SANDBOX_STATUS_KEY, undefined);
+      return;
+    }
+    // "paths only" matters: it is the difference between the kernel refusing a
+    // write and Spindle refusing one it can see.
+    const degraded = state.osEnforced ? "" : " (paths only)";
+    context.ui.setStatus(
+      SANDBOX_STATUS_KEY,
+      context.ui.theme.fg("accent", `\u{1F512} ${state.mode}${degraded}`),
+    );
+  };
+
+  pi.events.on(SANDBOX_STATE_EVENT, (payload) => {
+    const context = sandboxContext;
+    if (!context) return;
+    renderSandboxStatus(context, payload as SandboxStateEvent);
+  });
+
+  pi.registerCommand("sandbox", {
+    description:
+      "Filesystem sandbox for this session (status | off | read-only | workspace-write | full [extra writable paths])",
+    getArgumentCompletions: (prefix) =>
+      ["status", ...SANDBOX_MODES]
+        .filter((value) => value.startsWith(prefix))
+        .map((value) => ({ value, label: value })),
+    handler: async (args, context) => {
+      sandboxContext = context;
+      const [action, ...rest] = args.trim().split(/\s+/).filter(Boolean);
+
+      if (!action || action === "status") {
+        const current = state.sandboxState();
+        const lines = [
+          `spindle sandbox: ${state.sandboxStatus()}`,
+          current ? `mode: ${current.mode} (source: ${current.source})` : "mode: unavailable",
+          `held by night run: ${state.sandboxHeldByNightRun() ? "yes" : "no"}`,
+          "",
+          "Change it with: /sandbox read-only | workspace-write | off",
+        ];
+        context.ui.notify(lines.join("\n"), "info");
+        return;
+      }
+
+      if (!isSandboxMode(action)) {
+        context.ui.notify(
+          `spindle: unknown sandbox mode '${action}'. Use one of: ${SANDBOX_MODES.join(", ")}.`,
+          "error",
+        );
+        return;
+      }
+
+      // `off` is a revert to spindle.json rather than a forced "no enforcement",
+      // so it cannot loosen what the config (or a night run) asks for.
+      const applied = await state.applySandboxRequest(
+        action === "off" ? null : { mode: action, ...(rest.length ? { allowWrite: rest } : {}) },
+        "requested via /sandbox",
+        context,
+      );
+      if (!applied) {
+        context.ui.notify(
+          "spindle: no sandbox in this session (full code mode is off)",
+          "warning",
+        );
+        return;
+      }
+      renderSandboxStatus(context, applied);
+    },
   });
 
   pi.on("tool_call", (event) => spindleToolLifecycle.toolCall(event));

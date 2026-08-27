@@ -72,7 +72,20 @@ import {
 	shouldPause,
 	windowStartingAt,
 } from "./night-mode.ts";
-import { clearActiveNightRun, writeActiveNightRun } from "./night-run.ts";
+import {
+	clearActiveNightRun,
+	type NightSandboxRequest,
+	writeActiveNightRun,
+} from "./night-run.ts";
+import {
+	SANDBOX_REQUEST_EVENT,
+	type SandboxRequestEvent,
+} from "../spindle/sandbox/protocol.ts";
+import {
+	createRunSandbox,
+	prepareWorkingCopy,
+	sandboxPathFor,
+} from "./sandbox-clone.ts";
 import {
 	appendUnderHeading,
 	composeCarryOver,
@@ -143,6 +156,8 @@ export default function (pi: ExtensionAPI): void {
 				startedAt: Date;
 				/** Todo store backing the ledger, resolved once at start. */
 				ledgerDir: string;
+				/** Per-run working copy, when one was cloned for tonight. */
+				workspacePath?: string;
 				/** Automated continuations sent so far. */
 				nudges: number;
 				/** Ledger fingerprint at the last continuation, for stall detection. */
@@ -249,6 +264,9 @@ export default function (pi: ExtensionAPI): void {
 		consumeInstructions();
 		seedCarryOver(open);
 		clearActiveNightRun();
+		// Release the sandbox: the session goes back to whatever spindle.json says,
+		// so an interactive morning is not stuck inside the night's policy.
+		requestSandbox(null, "night run ended");
 		run = undefined;
 	}
 
@@ -365,25 +383,54 @@ export default function (pi: ExtensionAPI): void {
 		}
 
 		const sessionId = ctx.sessionManager?.getSessionId?.();
+		const prepared = prepareWorkspace(config, cwd, startedAt, ctx);
+		const workspace = prepared.path;
+		const sandbox = composeSandboxRequest({
+			config,
+			workspacePath: workspace,
+			cwd,
+			reportPath,
+			ledgerDir: todosDir(cwd),
+		});
 		run = {
 			config,
 			reportPath,
 			startedAt,
 			ledgerDir: todosDir(cwd),
 			nudges: 0,
+			...(workspace ? { workspacePath: workspace } : {}),
 		};
 		pendingInstructionsClear = hasInstructions(instructions)
 			? instructionsPath
 			: undefined;
 
+		// Written before the request is emitted: subagent processes read the policy
+		// from this file, so it has to be on disk before any child can start.
 		writeActiveNightRun({
 			startedAt: startedAt.getTime(),
 			reportPath,
 			maxPullRequests: config.maxPullRequests,
 			...(sessionId ? { sessionId } : {}),
+			...(workspace ? { workspacePath: workspace } : {}),
+			...(sandbox ? { sandbox } : {}),
 		});
+		if (sandbox) requestSandbox(sandbox, "night run started");
 
 		noteTimeline(`night-mode: run started, window ${windowLabel}`);
+		if (workspace) noteTimeline(`night-mode: working copy ${workspace}`);
+		// Reported here rather than inside prepareWorkspace: the report only exists
+		// once `run` is set, so an earlier note would be dropped.
+		for (const note of prepared.notes) noteTimeline(`night-mode: ${note}`);
+		if (prepared.problems.length > 0) {
+			noteUnderHeading(
+				NEEDS_HUMAN_HEADING,
+				`Working copy caveats:\n${prepared.problems.map((problem) => `- ${problem}`).join("\n")}`,
+			);
+		}
+		if (sandbox)
+			noteTimeline(
+				`night-mode: sandbox ${sandbox.mode}, writable: ${(sandbox.allowWrite ?? []).join(", ") || "(defaults)"}`,
+			);
 		pi.sendUserMessage(
 			composeNightPrompt({
 				prompt,
@@ -392,10 +439,110 @@ export default function (pi: ExtensionAPI): void {
 				maxPullRequests: config.maxPullRequests,
 				windowLabel,
 				startedAt,
+				...(workspace ? { workspacePath: workspace } : {}),
 			}),
 			{ deliverAs: "followUp" },
 		);
 		return undefined;
+	}
+
+	/**
+	 * Ask Spindle to sandbox the filesystem for the duration of the run.
+	 *
+	 * The writable set is derived from the run itself rather than configured: the
+	 * working copy the agent was told to use, the report it has to append to, and
+	 * the todo store backing the ledger. Anything else on the disk is read-only for
+	 * the night, which is the whole point.
+	 *
+	 * Returns undefined when the config disables it, so `nightMode.sandboxMode:
+	 * "off"` restores the previous behaviour exactly.
+	 */
+	function composeSandboxRequest(input: {
+		config: NightConfig;
+		workspacePath: string | undefined;
+		cwd: string;
+		reportPath: string;
+		ledgerDir: string;
+	}): NightSandboxRequest | undefined {
+		const mode = input.config.sandboxMode;
+		if (mode === "off") return undefined;
+		return {
+			mode,
+			allowWrite: [
+				input.workspacePath ?? input.cwd,
+				dirname(input.reportPath),
+				input.ledgerDir,
+			],
+		};
+	}
+
+	/** Publish a sandbox request on the bus. No listener means no spindle: harmless. */
+	function requestSandbox(policy: NightSandboxRequest | null, reason: string): void {
+		const event: SandboxRequestEvent = { policy, reason };
+		pi.events.emit(SANDBOX_REQUEST_EVENT, event);
+	}
+
+	/**
+	 * Clone the session's checkout into a private working copy for tonight, so an
+	 * unattended run cannot dirty, stash or reset the tree the user left open.
+	 *
+	 * Returns undefined when cloning is disabled or fails. A failed clone degrades
+	 * to "work in the real checkout" with a warning rather than blocking the run:
+	 * the night still has value, it just loses one layer of containment.
+	 */
+	function prepareWorkspace(
+		config: NightConfig,
+		cwd: string,
+		startedAt: Date,
+		ctx: ExtensionContext,
+	): { path?: string; notes: string[]; problems: string[] } {
+		if (!config.sandboxRoot) return { notes: [], problems: [] };
+		try {
+			const root = resolvePath(config.sandboxRoot, cwd);
+			const destination = sandboxPathFor(
+				root,
+				cwd,
+				formatDateTimeStamp(startedAt),
+			);
+			const created = createRunSandbox({
+				source: cwd,
+				destination,
+				copyFiles: config.sandboxCopyFiles,
+			});
+			if (created.fallbacks.length > 0) {
+				ctx.ui.notify(
+					`night-mode: cloned with '${created.strategy}' after ${created.fallbacks.join("; ")}`,
+					"info",
+				);
+			}
+
+			// mise and direnv trust by path, so a fresh copy is untrusted and every
+			// `mise` command in it would hard-fail. Done here, in the host process:
+			// the trust stores sit outside the run's writable roots.
+			const trusted = prepareWorkingCopy(created.path, {
+				trust: config.sandboxTrust,
+			});
+			if (trusted.problems.length > 0) {
+				ctx.ui.notify(
+					`night-mode: working copy caveats - ${trusted.problems.join("; ")}`,
+					"warning",
+				);
+			}
+			return {
+				path: created.path,
+				notes: trusted.ran.length ? [`working copy prepared (${trusted.ran.join(", ")})`] : [],
+				problems: trusted.problems,
+			};
+		} catch (error) {
+			ctx.ui.notify(
+				`night-mode: no private working copy tonight (${String(error)}). The run will use ${cwd}.`,
+				"warning",
+			);
+			return {
+				notes: [],
+				problems: [`no private working copy: ${String(error)}`],
+			};
+		}
 	}
 
 	// ── caffeinate ────────────────────────────────────────────────────────
@@ -675,6 +822,7 @@ export default function (pi: ExtensionAPI): void {
 					[
 						`night-mode: started, window ${formatWindow(currentWindow())} for this session`,
 						`report: ${run?.reportPath}`,
+						`working copy: ${run?.workspacePath ?? "session checkout (cloning disabled or failed)"}`,
 						`instructions: ${pendingInstructionsClear ? "loaded, cleared when the run ends" : "none tonight"}`,
 						`ledger: todos tagged 'night' in ${run?.ledgerDir}`,
 					].join("\n"),
@@ -746,6 +894,7 @@ export default function (pi: ExtensionAPI): void {
 				`5h reset: ${resets ? formatDuration(new Date(resets).getTime() - Date.now()) : "unknown"}`,
 				`paused: ${paused ? `yes, resume in ${resumeAt ? formatDuration(resumeAt - Date.now()) : "?"}` : "no"}`,
 				`run: ${run ? `since ${formatDateTimeStamp(run.startedAt)}, report ${run.reportPath}` : "none"}`,
+				`working copy: ${run?.workspacePath ?? (run ? "session checkout (no clone)" : "n/a")}`,
 				`ledger: ${ledgerSummary()}`,
 			];
 			ctx.ui.notify(lines.join("\n"), "info");

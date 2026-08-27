@@ -20,6 +20,30 @@ export interface NightConfig {
 	reportPathTemplate: string;
 	/** Where consumed instruction files are moved. Empty string disables archiving. */
 	archiveDir: string;
+	/**
+	 * Root for per-run working copies. `/night start` clones the cwd under
+	 * `<sandboxRoot>/<repo>/<datetime>` and points the run at it, so the agent
+	 * never touches the checkout you left open. Empty string disables cloning.
+	 */
+	sandboxRoot: string;
+	/**
+	 * Gitignored, repo-relative files copied into a fresh working copy. Local
+	 * toolchain config and credentials live here, and a copy strategy that lost
+	 * them would fail in a way that looks like a broken repo.
+	 */
+	sandboxCopyFiles: string[];
+	/**
+	 * Filesystem sandbox requested from Spindle for the duration of the run. The
+	 * working copy, the report directory and the ledger store stay writable;
+	 * everything else on the disk does not. `"off"` disables the request.
+	 */
+	sandboxMode: "off" | "read-only" | "workspace-write" | "full";
+	/**
+	 * Run `mise trust` / `direnv allow` on a fresh working copy. Both tools trust
+	 * by path, so without this every `mise` command in the copy hard-fails with an
+	 * untrusted-config error.
+	 */
+	sandboxTrust: boolean;
 	/** Hard cap on pull requests a single night may open. */
 	maxPullRequests: number;
 	/** `## ` headings seeded into a fresh report, in order. */
@@ -59,6 +83,10 @@ export const DEFAULT_NIGHT_CONFIG: NightConfig = {
 		"{datetime} - report.md",
 	),
 	archiveDir: join(defaultNightDir(), "archive"),
+	sandboxRoot: join(defaultNightDir(), "sandboxes"),
+	sandboxCopyFiles: ["mise.local.toml"],
+	sandboxMode: "workspace-write",
+	sandboxTrust: true,
 	maxPullRequests: 5,
 	reportSections: DEFAULT_REPORT_SECTIONS,
 };
@@ -137,6 +165,16 @@ function readJson(path: string): Record<string, unknown> | undefined {
 }
 
 /** Merge a raw `nightMode` settings object over the defaults, ignoring junk. */
+const NIGHT_SANDBOX_MODES = ["off", "read-only", "workspace-write", "full"] as const;
+
+/** Narrow an untrusted settings value to a sandbox mode. */
+function isNightSandboxMode(value: unknown): value is NightConfig["sandboxMode"] {
+	return (
+		typeof value === "string" &&
+		(NIGHT_SANDBOX_MODES as readonly string[]).includes(value)
+	);
+}
+
 export function mergeNightConfig(
 	raw: unknown,
 	base: NightConfig = DEFAULT_NIGHT_CONFIG,
@@ -150,6 +188,11 @@ export function mergeNightConfig(
 		return typeof value === "string" && value.trim() ? value.trim() : fallback;
 	};
 	const maxPullRequests = record.maxPullRequests;
+	const copyFiles = Array.isArray(record.sandboxCopyFiles)
+		? record.sandboxCopyFiles.filter(
+				(v): v is string => typeof v === "string" && v.trim().length > 0,
+			)
+		: undefined;
 	const sections = Array.isArray(record.reportSections)
 		? record.reportSections
 				.filter(
@@ -165,6 +208,18 @@ export function mergeNightConfig(
 			typeof record.archiveDir === "string"
 				? record.archiveDir.trim()
 				: base.archiveDir,
+		sandboxRoot:
+			typeof record.sandboxRoot === "string"
+				? record.sandboxRoot.trim()
+				: base.sandboxRoot,
+		sandboxCopyFiles: copyFiles ?? base.sandboxCopyFiles,
+		sandboxMode: isNightSandboxMode(record.sandboxMode)
+			? record.sandboxMode
+			: base.sandboxMode,
+		sandboxTrust:
+			typeof record.sandboxTrust === "boolean"
+				? record.sandboxTrust
+				: base.sandboxTrust,
 		maxPullRequests:
 			typeof maxPullRequests === "number" &&
 			Number.isFinite(maxPullRequests) &&

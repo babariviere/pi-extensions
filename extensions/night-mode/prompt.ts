@@ -19,6 +19,8 @@ export interface NightPromptInput {
 	windowLabel: string;
 	/** Run start, used for the header stamp. */
 	startedAt: Date;
+	/** Per-run working copy, when one was created for tonight. */
+	workspacePath?: string;
 }
 
 /** True when a file body carries no actual instruction. */
@@ -63,6 +65,12 @@ export function composeNightPrompt(input: NightPromptInput): string {
 		`Window: ${input.windowLabel}. Started ${formatDateTimeStamp(input.startedAt)}.`,
 		`Report file: \`${input.reportPath}\` - create it now and append to it as you go, not once at the end.`,
 		`Pull request cap for tonight: ${input.maxPullRequests}. Stop opening PRs once you reach it and log what is left.`,
+		...(input.workspacePath
+			? [
+					`Working copy: \`${input.workspacePath}\` - a private clone of the repo made for tonight. Work there, and ` +
+						"tell every subagent to do the same. The user's own checkout is off limits.",
+				]
+			: []),
 		"",
 		ORCHESTRATOR_CONTRACT,
 		"",

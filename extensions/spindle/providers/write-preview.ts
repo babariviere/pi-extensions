@@ -126,6 +126,12 @@ const readExistingFileForPreview = async (
 
 export const createPreviewWriteToolDefinition = (
   cwd: string,
+  /**
+   * Sandbox write check, called with the resolved absolute path before anything
+   * is created. This tool performs its own mkdir/writeFile (it needs the prior
+   * content for the diff preview), so it cannot inherit `WriteOperations`.
+   */
+  guard?: (absolutePath: string) => void,
 ): ToolDefinition<any, any, any> => {
   const original = createWriteToolDefinition(cwd);
   return {
@@ -142,6 +148,7 @@ export const createPreviewWriteToolDefinition = (
           if (signal?.aborted) throw new Error("Operation aborted");
         };
         throwIfAborted();
+        guard?.(absolutePath);
         const before = await readExistingFileForPreview(path, cwd, content);
         throwIfAborted();
         await mkdir(dirname(absolutePath), { recursive: true });

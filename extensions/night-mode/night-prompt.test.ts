@@ -131,6 +131,21 @@ describe("composeNightPrompt", () => {
 		assert.match(text, /ship the spike/);
 		assert.doesNotMatch(text, /None tonight/);
 	});
+
+	it("points the run at its private working copy when there is one", () => {
+		const text = composeNightPrompt({
+			...base,
+			instructions: "",
+			workspacePath: "/sandboxes/repo/2026-08-29 2130",
+		});
+		assert.match(text, /Working copy: `\/sandboxes\/repo\/2026-08-29 2130`/);
+		assert.match(text, /own checkout is off limits/);
+	});
+
+	it("says nothing about a working copy when cloning is off", () => {
+		const text = composeNightPrompt({ ...base, instructions: "" });
+		assert.doesNotMatch(text, /Working copy:/);
+	});
 });
 
 describe("orchestrator contract", () => {
@@ -200,5 +215,25 @@ describe("buildNightContract", () => {
 		assert.match(contract, /draft/);
 		assert.match(contract, /capped at 3 pull requests/);
 		assert.match(contract, /\/tmp\/report\.md/);
+	});
+
+	it("sends subagents into the run's working copy when one exists", () => {
+		const contract = buildNightContract({
+			startedAt: 0,
+			reportPath: "/tmp/report.md",
+			maxPullRequests: 3,
+			workspacePath: "/sandboxes/repo/2026-08-29 2130",
+		});
+		assert.match(contract, /Work in `\/sandboxes\/repo\/2026-08-29 2130`/);
+		assert.match(contract, /never touch the user's own checkout/);
+	});
+
+	it("omits the working-copy rule when the run has none", () => {
+		const contract = buildNightContract({
+			startedAt: 0,
+			reportPath: "/tmp/report.md",
+			maxPullRequests: 3,
+		});
+		assert.doesNotMatch(contract, /Work in `/);
 	});
 });

@@ -17,6 +17,16 @@ import {
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
+/**
+ * Filesystem sandbox a night run asks Spindle for. Deliberately a plain shape
+ * rather than an import from spindle: night-mode must not depend on it.
+ */
+export interface NightSandboxRequest {
+	mode: "off" | "read-only" | "workspace-write" | "full";
+	/** Extra writable roots on top of the run's working directory. */
+	allowWrite?: string[];
+}
+
 export interface ActiveNightRun {
 	/** Epoch ms the run was started. */
 	startedAt: number;
@@ -26,6 +36,18 @@ export interface ActiveNightRun {
 	maxPullRequests: number;
 	/** Session id of the coordinator, for debugging. */
 	sessionId?: string;
+	/**
+	 * Per-run working copy every participant works in, when one was created.
+	 * Absent means the run uses the session's own checkout.
+	 */
+	workspacePath?: string;
+	/**
+	 * Filesystem sandbox the run asks for. Spindle reads this to sandbox the
+	 * coordinator and every subagent process for the duration of the night; see
+	 * `spindle/sandbox/night-bridge.ts`. Structural on purpose: night-mode does
+	 * not import spindle.
+	 */
+	sandbox?: NightSandboxRequest;
 }
 
 /** Next to the default prompt/report files, so one feature owns one directory. */
@@ -80,6 +102,11 @@ export function buildNightContract(run: ActiveNightRun): string {
 		"Hard rules, no exceptions:",
 		"- Never ask a question and never wait for confirmation. If a choice is genuinely ambiguous or risky, skip the work and say so in your final message.",
 		"- Read-only on anything that talks to people: never send a message, reply, comment, DM, email or reaction on the user's behalf.",
+		...(run.workspacePath
+			? [
+					`- Work in \`${run.workspacePath}\`: a private copy of the repo made for tonight. \`cd\` there first and never touch the user's own checkout.`,
+				]
+			: []),
 		"- Never push to the default branch, never merge, never force-push a branch you do not own.",
 		"- Every pull request you open is a draft.",
 		`- The whole night is capped at ${run.maxPullRequests} pull requests. Do not open one unless the coordinator asked you to.`,

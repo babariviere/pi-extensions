@@ -1,5 +1,7 @@
 import {
   createBashToolDefinition,
+  type BashOperations,
+  type EditOperations,
   createEditToolDefinition,
   createFindToolDefinition,
   createGrepToolDefinition,
@@ -100,6 +102,17 @@ interface PiToolResult {
   terminate?: boolean;
 }
 
+/**
+ * Sandbox hooks for the mutating core tools. Built by `SpindleSandbox`; absent
+ * when the policy enforces nothing, in which case pi's defaults are used
+ * unchanged.
+ */
+export interface PiToolsSandbox {
+  bash?: BashOperations;
+  edit?: EditOperations;
+  writeGuard?: (absolutePath: string) => void;
+}
+
 export class PiToolsProvider implements SpindleProvider {
   readonly name = "pi";
   readonly description = "Pi's built-in coding tools";
@@ -115,14 +128,18 @@ export class PiToolsProvider implements SpindleProvider {
     catalog?: CapturedToolCatalog,
     capturedTools?: CapturedToolsProvider,
     gate: SpindleToolGate = SpindleToolGate.of(undefined),
+    sandbox?: PiToolsSandbox,
   ) {
     this.#cwd = cwd;
     this.#gate = gate;
+    // Only the mutating tools are gated: `bash` by the OS sandbox, `write` and
+    // `edit` by a path check. Read tools keep pi's defaults so image handling,
+    // truncation and offsets behave identically.
     this.#tools = {
       read: createReadToolDefinition(cwd),
-      bash: createBashToolDefinition(cwd),
-      edit: createEditToolDefinition(cwd),
-      write: createPreviewWriteToolDefinition(cwd),
+      bash: createBashToolDefinition(cwd, sandbox?.bash ? { operations: sandbox.bash } : undefined),
+      edit: createEditToolDefinition(cwd, sandbox?.edit ? { operations: sandbox.edit } : undefined),
+      write: createPreviewWriteToolDefinition(cwd, sandbox?.writeGuard),
       grep: createGrepToolDefinition(cwd),
       find: createFindToolDefinition(cwd),
       ls: createLsToolDefinition(cwd),

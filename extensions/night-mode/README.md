@@ -50,7 +50,8 @@ run.
 2. Reads the **instructions** file (tonight's one-off asks) and inlines it under an `## Extra instructions for tonight` heading, or states there are none.
 3. Creates the **report** file from a skeleton and tells the agent to append to it as it goes.
 4. Prepends the **orchestrator contract**: the session that receives the prompt coordinates and delegates, it does not implement.
-5. Publishes a handshake at `~/.pi/agent/night/active.json` so subagents can pick up the same rules and report path.
+5. Clones the repo into a **private working copy** for the night and points the run at it (see below).
+6. Publishes a handshake at `~/.pi/agent/night/active.json` so subagents can pick up the same rules, report path and working copy.
 6. Sends the composed prompt as a follow-up user message.
 
 The instructions file is archived and truncated when the run *ends*, not at
@@ -58,6 +59,100 @@ inject time: a crash mid-run leaves the asks intact for the next night.
 
 Pauses and resumes are appended to the report's `## Timeline`, so a report read
 in the morning shows where the 5h window bit.
+
+## Private working copy
+
+An unattended run should not be able to dirty, stash or reset the checkout you
+left open, so `/night start` clones it to
+`<sandboxRoot>/<repo>/<datetime>` and tells the coordinator and every subagent to
+work there instead.
+
+The copy strategy is a ladder, best first, because the cheap options are
+filesystem-specific and any of them can fail on a given machine:
+
+| Strategy | Command | Platform |
+|---|---|---|
+| `apfs` | `cp -c -R -p` clone-on-write | macOS |
+| `reflink` | `cp -a --reflink=always` | Linux btrfs / XFS |
+| `hardlink` | `cp -a --link` | Linux, last resort before a real copy |
+| `copy` | `cp -R -p` | anywhere |
+
+`jj workspace add` and `git clone --shared` are deliberately **not** in the
+ladder: they drop untracked and ignored files, which is exactly where local
+toolchain config and credentials live. `sandboxCopyFiles` still copies a
+configured list (default `mise.local.toml`) for the strategies that need it.
+
+A failed clone degrades to "work in the real checkout" with a warning rather
+than blocking the run. Set `sandboxRoot: ""` to disable cloning entirely.
+
+### Per-path trust
+
+`mise` and `direnv` trust config files **by path**, so a fresh copy is untrusted
+no matter that the original was, and mise does not warn and continue:
+
+```
+mise ERROR Config files in <clone>/mise.toml are not trusted.
+```
+
+Every `mise exec`, `mise run` and task in the copy would fail, which looks like a
+broken repo rather than a missing trust record. So the copy is trusted right
+after it is made, with `mise trust --all` (nested configs and `mise.<env>.toml`
+count) and `direnv allow` when there is an `.envrc`. Both run from the extension,
+not from a sandboxed shell, because the trust stores live outside the run's
+writable roots. `sandboxTrust: false` opts out.
+
+### When the copy is not actually independent
+
+A git linked worktree keeps `.git` as a pointer file, and a secondary jj
+workspace keeps `.jj/repo` as one. Copying either produces a directory that still
+writes into the repository you were trying to protect, and whose store sits
+outside the writable roots, so VCS commands fail confusingly. Both are detected
+and reported in `## Needs you`, since no amount of trusting fixes them. Start the
+run from the main checkout when it matters.
+
+The copies are **not** deleted when the run ends: a morning review needs them.
+Garbage-collect the root when you are done with it.
+
+This is one copy per night, not one per ledger item, so two subagents working in
+parallel still share it. The orchestrator contract already says to run one
+subagent at a time per repository.
+
+## Filesystem sandbox
+
+The working copy stops the agent from touching your checkout. It does not stop
+`rm -rf ~`. So `/night start` also asks Spindle to sandbox the filesystem **for
+the duration of the run**, and releases it when the run ends. Nothing to
+configure: an interactive session stays unsandboxed, the night does not.
+
+Enforcement is OS-level on `bash` (Seatbelt on macOS, bubblewrap on Linux, via
+`@anthropic-ai/sandbox-runtime`) plus a path check on `write` and `edit`.
+
+The writable set is derived from the run rather than configured, so it cannot
+drift out of sync with it:
+
+- the night's working copy (or the cwd, when cloning is off),
+- the report directory,
+- the todo store backing the ledger,
+- temp dirs and the tool caches (`GOCACHE`, `GOMODCACHE`, the platform cache home).
+
+Everything else on the disk is read-only for the night. `~/.ssh` and `~/.gnupg`
+are unreadable; `~/.aws` stays readable, because SOPS/KMS decryption needs it.
+
+Subagents are separate processes, so they pick the policy up from
+`~/.pi/agent/night/active.json` rather than from the parent's event bus. That also
+means it survives a `/reload`.
+
+Set `sandboxMode: "off"` to disable the request, or pick `read-only` for a
+triage-only night.
+
+While the run is active the sandbox is a **floor**: `/sandbox off` is refused and
+reported, so nothing can un-sandbox the night mid-flight. Tightening it (say
+`/sandbox read-only`) is allowed, and the run's own writable roots survive it.
+When the run ends, night-mode releases the floor and the session goes back to
+`spindle.json`. Two known holes: granting Docker socket access defeats the
+filesystem boundary entirely (a container can bind-mount `/`), and on macOS the
+backend is `sandbox-exec`, which Apple has deprecated. See
+`extensions/spindle/CONTEXT.md`.
 
 ## The ledger, and finishing
 
@@ -145,6 +240,10 @@ and every path is configurable. Defaults keep the night files under
 | `instructionsPath` | `~/.pi/agent/night/instructions.md` | One-off asks, cleared after the run |
 | `reportPathTemplate` | `~/.pi/agent/night/reports/{datetime} - report.md` | `{datetime}`, `{date}`, `{time}` placeholders |
 | `archiveDir` | `~/.pi/agent/night/archive` | Where consumed instructions go; `""` disables archiving |
+| `sandboxRoot` | `~/.pi/agent/night/sandboxes` | Root for the night's private working copy; `""` disables cloning |
+| `sandboxCopyFiles` | `["mise.local.toml"]` | Gitignored, repo-relative files copied into a fresh working copy |
+| `sandboxMode` | `workspace-write` | Filesystem sandbox requested for the run: `off`, `read-only`, `workspace-write`, `full` |
+| `sandboxTrust` | `true` | Run `mise trust` / `direnv allow` on a fresh working copy |
 | `maxPullRequests` | `5` | Hard cap on PRs opened in one night |
 | `reportSections` | `Summary`, `Needs you`, `Work`, `Findings`, `Skipped / failed`, `Timeline` | `## ` headings seeded into a fresh report |
 
