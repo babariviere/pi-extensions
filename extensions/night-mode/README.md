@@ -49,8 +49,9 @@ run.
 1. Reads the **base prompt** file: your standing routine, whatever it is (tickets, CI triage, inbox sweep, chores).
 2. Reads the **instructions** file (tonight's one-off asks) and inlines it under an `## Extra instructions for tonight` heading, or states there are none.
 3. Creates the **report** file from a skeleton and tells the agent to append to it as it goes.
-4. Publishes a handshake at `~/.pi/agent/night/active.json` so subagents can pick up the same rules and report path.
-5. Sends the composed prompt as a follow-up user message.
+4. Prepends the **orchestrator contract**: the session that receives the prompt coordinates and delegates, it does not implement.
+5. Publishes a handshake at `~/.pi/agent/night/active.json` so subagents can pick up the same rules and report path.
+6. Sends the composed prompt as a follow-up user message.
 
 The instructions file is archived and truncated when the run *ends*, not at
 inject time: a crash mid-run leaves the asks intact for the next night.
@@ -101,6 +102,20 @@ shutdown), anything still open is:
 
 So unfinished work becomes the next night's top priority instead of evaporating
 at sunrise.
+
+## Orchestrator contract
+
+The main session is the orchestrator: it triages, builds the ledger, delegates one
+ledger item per subagent run, and owns the report. `ORCHESTRATOR_CONTRACT` in
+`prompt.ts` states that in the composed prompt, and `composeNudge` restates it in
+every continuation, so an agent that started implementing inline gets pulled back.
+
+It lives in the extension rather than in the base prompt file for two reasons: it
+applies to every base prompt, and the orchestrator's context is the scarce
+resource of a long run. A base prompt that carries its per-task procedures inline
+spends that budget before any work starts. Keep the procedures in separate brief
+files and hand them to the child via `reads`, so only the subagent that needs a
+procedure ever loads it.
 
 ## Subagent contract
 

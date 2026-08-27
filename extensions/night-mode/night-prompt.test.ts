@@ -12,8 +12,10 @@ import {
 import { buildNightContract } from "./night-run.ts";
 import {
 	composeNightPrompt,
+	composeNudge,
 	composeReportHeader,
 	hasInstructions,
+	ORCHESTRATOR_CONTRACT,
 	timelineLine,
 } from "./prompt.ts";
 
@@ -128,6 +130,38 @@ describe("composeNightPrompt", () => {
 		});
 		assert.match(text, /ship the spike/);
 		assert.doesNotMatch(text, /None tonight/);
+	});
+});
+
+describe("orchestrator contract", () => {
+	it("names the delegation mechanics the coordinator has to use", () => {
+		assert.match(ORCHESTRATOR_CONTRACT, /night: true/);
+		assert.match(ORCHESTRATOR_CONTRACT, /reads/);
+		assert.match(ORCHESTRATOR_CONTRACT, /output/);
+		assert.match(ORCHESTRATOR_CONTRACT, /Evidence:/);
+	});
+
+	it("is carried by the start prompt, so a base prompt cannot omit it", () => {
+		const text = composeNightPrompt({
+			prompt: "# Night Run\nDo the work.",
+			instructions: "",
+			reportPath: "/tmp/report.md",
+			maxPullRequests: 5,
+			windowLabel: "21:00-09:00",
+			startedAt,
+		});
+		assert.ok(text.includes(ORCHESTRATOR_CONTRACT));
+	});
+
+	it("re-states delegation in a continuation, when the agent is drifting", () => {
+		const nudge = composeNudge({
+			unresolved: "- HS-1234 allowlist",
+			reportPath: "/tmp/report.md",
+			attempt: 1,
+			maxAttempts: 3,
+		});
+		assert.match(nudge, /orchestrator/);
+		assert.match(nudge, /night: true/);
 	});
 });
 

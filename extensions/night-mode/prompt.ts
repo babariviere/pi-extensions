@@ -26,6 +26,34 @@ export function hasInstructions(body: string): boolean {
 	return body.replace(/^---[\s\S]*?---/, "").trim().length > 0;
 }
 
+/**
+ * The coordinator's own contract: it orchestrates, it does not implement.
+ *
+ * This lives in the extension rather than in the base prompt file so it applies
+ * to every night prompt and cannot drift. Without it the agent reads the whole
+ * routine, does the first item inline "since it is small", and burns its
+ * context budget on file reads instead of on picking the next unit of work.
+ */
+export const ORCHESTRATOR_CONTRACT = [
+	"## Your role: orchestrator",
+	"",
+	"You coordinate, you do not implement. Your context is the scarce resource tonight: spend it on triage, on",
+	"choosing the next unit of work and on the report, never on the contents of the files a task touches.",
+	"",
+	"- One ledger item is one subagent run. Delegate it with the `run` tool of the `agents` provider.",
+	"- Always pass `night: true`. That injects the hard rules into the child, so they cannot be lost.",
+	"- Omit `agent` (or pass `task`) unless a specific persona clearly fits. A generic subagent inherits your",
+	"  model, tools, skills and project context.",
+	"- Pass the how-to as `reads` instead of pasting it into the task: the child loads those files itself.",
+	"- Pass an `output` path when the result is long, then append that file to the report without reading it.",
+	"- Every task message states: the goal, the repo and the base to branch from, the matching ledger item, the",
+	"  definition of done, and that the final message must end with an `Evidence:` line.",
+	"- Run one subagent at a time per repository. Two children creating changes in the same working copy fight.",
+	"- You own the report file exclusively. Subagents never write to it; you append from what they hand back.",
+	"- You may read files to triage and to write the report. Implementing a ledger item yourself, reading a",
+	"  source tree to fix something, or running a repo's tests is a delegation you skipped.",
+].join("\n");
+
 /** The message `/night start` sends to the agent. */
 export function composeNightPrompt(input: NightPromptInput): string {
 	const sections: string[] = [
@@ -35,7 +63,8 @@ export function composeNightPrompt(input: NightPromptInput): string {
 		`Window: ${input.windowLabel}. Started ${formatDateTimeStamp(input.startedAt)}.`,
 		`Report file: \`${input.reportPath}\` - create it now and append to it as you go, not once at the end.`,
 		`Pull request cap for tonight: ${input.maxPullRequests}. Stop opening PRs once you reach it and log what is left.`,
-		"Spawn subagents for isolated units of work; they inherit these rules automatically.",
+		"",
+		ORCHESTRATOR_CONTRACT,
 		"",
 		"Ledger: before doing any work, enumerate everything tonight covers as todos tagged `night`, one per unit of " +
 			"work. The ledger, not your judgement, decides when the night is over: settling with `night` todos still open " +
@@ -107,6 +136,8 @@ export function composeNudge(input: {
 		"Pick the next one and finish it. To close an item, set its status to `done` and put an `Evidence:` line in the " +
 			"todo body (a URL, a commit or change id, a file path). To drop one, set its status to `skipped` and put a " +
 			"`Reason:` line. An item with neither still counts as open.",
+		"You are still the orchestrator: delegate the item to a subagent with `night: true` rather than implementing " +
+			"it yourself, and append to the report from what it hands back.",
 		`Keep appending to \`${input.reportPath}\` as you go.`,
 		`(continuation ${input.attempt}/${input.maxAttempts})`,
 		"",
