@@ -122,7 +122,8 @@ export interface SpindleAgentResult {
   agent: string;
   ok: boolean;
   output: string;
-  outputPath: string;
+  /** Where the result was persisted. Absent when nothing landed on disk. */
+  outputPath?: string;
   exitCode?: number;
   paneId?: string;
   error?: string;
@@ -132,7 +133,7 @@ const agentResult = (result: RunResult): SpindleAgentResult => ({
   agent: result.agent,
   ok: result.ok,
   output: result.output,
-  outputPath: result.outputPath,
+  ...(result.outputPath ? { outputPath: result.outputPath } : {}),
   ...(result.backend === "headless" && result.exitCode !== undefined
     ? { exitCode: result.exitCode }
     : {}),

@@ -39,7 +39,7 @@ Resolves to `SpindleAgentResult`:
   agent: string;       // agent name
   ok: boolean;         // produced usable output AND finished cleanly
   output: string;      // the agent's final assistant message, else backend fallback
-  outputPath: string;  // where the result was persisted
+  outputPath?: string; // where the result was persisted; absent when nothing landed on disk (see `error`)
   exitCode?: number;   // headless backend only
   paneId?: string;     // herdr backend only
   error?: string;

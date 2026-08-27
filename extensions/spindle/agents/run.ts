@@ -84,7 +84,8 @@ export interface RunResultBase {
 	scope: string;
 	ok: boolean;
 	output: string;
-	outputPath: string;
+	/** Where the result was persisted. Absent when nothing was written. */
+	outputPath?: string;
 	error?: string;
 }
 
@@ -102,20 +103,25 @@ export type RunResult =
  * The fields every result shares, assembled from a run's request and its
  * resolved output. Each adapter spreads this, then adds its `backend` tag and
  * backend-specific diagnostics.
+ *
+ * `outputPath` comes from the resolved output, not from the *intended*
+ * destination: it is present only when the result actually landed on disk, and
+ * a failed write is folded into `error`. Reporting the intended path
+ * unconditionally made the tool claim a file existed when it did not.
  */
 export function baseResult(
 	req: RunRequest,
-	outputPath: string,
 	resolved: ResolvedOutput,
 	error?: string,
 ): RunResultBase {
+	const reason = [error, resolved.writeError].filter((v): v is string => !!v).join("; ");
 	return {
 		agent: req.agent.config.name,
 		scope: req.agent.scope,
 		ok: resolved.ok,
 		output: resolved.output,
-		outputPath,
-		...(error ? { error } : {}),
+		...(resolved.outputPath ? { outputPath: resolved.outputPath } : {}),
+		...(reason ? { error: reason } : {}),
 	};
 }
 

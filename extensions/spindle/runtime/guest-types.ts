@@ -123,7 +123,8 @@ interface SpindleAgentResult {
   agent: string;
   ok: boolean;
   output: string;
-  outputPath: string;
+  /** Where the result was persisted. Absent when nothing landed on disk. */
+  outputPath?: string;
   exitCode?: number;
   paneId?: string;
   error?: string;

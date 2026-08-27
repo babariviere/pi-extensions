@@ -116,7 +116,7 @@ test("resolveRunOutput reads the transcript first and persists it to outputPath"
 		},
 		finishedCleanly: true,
 	});
-	assert.deepEqual(r, { output: "from transcript", ok: true });
+	assert.deepEqual(r, { output: "from transcript", ok: true, outputPath: out });
 	assert.equal(fallbackCalls, 0); // fallback skipped when the transcript wins
 	assert.equal(readFileSync(out, "utf-8"), "from transcript");
 });
@@ -127,7 +127,7 @@ test("resolveRunOutput awaits the async fallback only when the transcript misses
 		fallback: () => Promise.resolve("from pane"),
 		finishedCleanly: true,
 	});
-	assert.deepEqual(r, { output: "from pane", ok: true });
+	assert.deepEqual(r, { output: "from pane", ok: true, outputPath: out });
 	assert.equal(readFileSync(out, "utf-8"), "from pane");
 });
 
@@ -149,4 +149,37 @@ test("resolveRunOutput uses the placeholder and is not ok when no source yields 
 		placeholder: "(nothing)",
 	});
 	assert.deepEqual(r, { output: "(nothing)", ok: false });
+});
+
+test("resolveRunOutput creates missing parent directories for a caller output path", async () => {
+	const session = tmpFile();
+	writeFileSync(session, sessionLine("assistant", [{ type: "text", text: "the review" }]));
+	const out = join(mkdtempSync(join(tmpdir(), "output-test-")), "night-2026-08-27", "reviewer.md");
+	const r = await resolveRunOutput(out, session, { fallback: () => undefined, finishedCleanly: true });
+	assert.equal(r.ok, true);
+	assert.equal(r.outputPath, out);
+	assert.equal(r.writeError, undefined);
+	assert.equal(readFileSync(out, "utf-8"), "the review");
+});
+
+test("resolveRunOutput reports a write failure instead of claiming an outputPath", async () => {
+	const session = tmpFile();
+	writeFileSync(session, sessionLine("assistant", [{ type: "text", text: "the review" }]));
+	// A file where a directory is expected: mkdir -p cannot fix this, so the
+	// write must fail loudly rather than silently.
+	const blocker = tmpFile();
+	writeFileSync(blocker, "not a directory");
+	const r = await resolveRunOutput(join(blocker, "nested", "out.md"), session, {
+		fallback: () => undefined,
+		finishedCleanly: true,
+	});
+	assert.equal(r.output, "the review");
+	assert.equal(r.outputPath, undefined);
+	assert.match(r.writeError ?? "", /could not write the result to/);
+});
+
+test("resolveRunOutput reports no outputPath when nothing was produced", async () => {
+	const r = await resolveRunOutput(tmpFile(), tmpFile(), { fallback: () => undefined, finishedCleanly: true });
+	assert.equal(r.outputPath, undefined);
+	assert.equal(r.writeError, undefined);
 });

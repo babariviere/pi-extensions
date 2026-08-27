@@ -133,13 +133,12 @@ test("cloneCommand passes paths as arguments, never as shell text", () => {
 
 test("cloneCommand uses reflink on Linux and plain copy as the floor", () => {
 	assert.ok(cloneCommand("reflink", "/a", "/b").args.includes("--reflink=always"));
-	assert.ok(cloneCommand("hardlink", "/a", "/b").args.includes("--link"));
 	assert.deepEqual(cloneCommand("copy", "/a", "/b").args, ["-R", "-p", "/a/.", "/b"]);
 });
 
 test("strategyOrder is platform specific and always ends in copy", () => {
 	assert.deepEqual(strategyOrder("darwin"), ["apfs", "copy"]);
-	assert.deepEqual(strategyOrder("linux"), ["reflink", "hardlink", "copy"]);
+	assert.deepEqual(strategyOrder("linux"), ["reflink", "copy"]);
 	assert.deepEqual(strategyOrder("win32"), ["copy"]);
 });
 
@@ -185,7 +184,7 @@ test("createRunSandbox throws with every failure when nothing works", () => {
 					throw new Error("nope");
 				},
 			}),
-		/could not clone .*\(reflink: nope; hardlink: nope; copy: nope\)/,
+		/could not clone .*\(reflink: nope; copy: nope\)/,
 	);
 });
 

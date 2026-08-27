@@ -44,7 +44,7 @@ function runHeadless(req: RunRequest, ctx: RunContext, defaultProvider: string |
 			});
 			ctx.onStatus?.(req.index, { state: resolved.ok ? "done" : "failed", outputPath });
 			resolve({
-				...baseResult(req, outputPath, resolved, error),
+				...baseResult(req, resolved, error),
 				backend: "headless",
 				exitCode: exitCode ?? undefined,
 			});

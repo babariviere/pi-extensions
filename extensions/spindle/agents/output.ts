@@ -14,7 +14,7 @@
  * contains.
  */
 
-import { readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join } from "node:path";
 
 // --- output override lifecycle ----------------------------------------------
@@ -129,13 +129,24 @@ export function readLastAssistantText(sessionPath: string): string | undefined {
 	return last;
 }
 
-/** Persist the resolved result to disk, best-effort; never throws. */
-function persistResult(path: string, text: string): void {
+/**
+ * Persist the resolved result to disk; never throws. Parent directories are
+ * created (`mkdir -p`) because a caller `output:` override routinely points at
+ * a directory that does not exist yet (e.g. a per-night report dir), and a bare
+ * `writeFileSync` would fail with ENOENT.
+ *
+ * Returns undefined on success, else a caller-facing reason. Failures are not
+ * fatal (the caller already has the text in-band) but they must be reported:
+ * silently swallowing them made the tool return an `outputPath` for a file that
+ * was never written.
+ */
+function persistResult(path: string, text: string): string | undefined {
 	try {
+		mkdirSync(dirname(path), { recursive: true });
 		writeFileSync(path, text, { mode: 0o600 });
-	} catch {
-		// The persisted artifact is a convenience (inspection, `output:` override);
-		// the caller already has the text in-band, so a write failure is non-fatal.
+		return undefined;
+	} catch (err) {
+		return `could not write the result to ${path}: ${err instanceof Error ? err.message : String(err)}`;
 	}
 }
 
@@ -156,6 +167,14 @@ export interface RunOutputSource {
 export interface ResolvedOutput {
 	output: string;
 	ok: boolean;
+	/**
+	 * The file the result was actually written to. Undefined when nothing was
+	 * persisted (no output, or the write failed), so a consumer never reports a
+	 * path that does not exist.
+	 */
+	outputPath?: string;
+	/** Why persistence failed, when it did. Surfaced to the caller as an error. */
+	writeError?: string;
 }
 
 /**
@@ -163,7 +182,9 @@ export interface ResolvedOutput {
  * assistant message (see `readLastAssistantText`), falling back to the
  * backend-specific `source.fallback` only when the transcript yields nothing.
  * Any resolved text is persisted to `outputPath` (the run-dir artifact, or a
- * caller `output:` override).
+ * caller `output:` override), creating its parent directories. The returned
+ * `outputPath` is set only when that write actually landed; a failed write is
+ * reported as `writeError` instead.
  *
  * A run is `ok` when it produced usable output AND finished cleanly. When no
  * source yields text, `output` is a placeholder and `ok` is false.
@@ -175,7 +196,12 @@ export async function resolveRunOutput(
 ): Promise<ResolvedOutput> {
 	let output = readLastAssistantText(sessionPath);
 	if (output === undefined) output = (await source.fallback()) || undefined;
-	if (output !== undefined) persistResult(outputPath, output);
+	const writeError = output === undefined ? undefined : persistResult(outputPath, output);
 	const ok = output !== undefined && source.finishedCleanly;
-	return { output: output ?? (source.placeholder ?? "(no output produced)"), ok };
+	return {
+		output: output ?? (source.placeholder ?? "(no output produced)"),
+		ok,
+		...(output !== undefined && !writeError ? { outputPath } : {}),
+		...(writeError ? { writeError } : {}),
+	};
 }
