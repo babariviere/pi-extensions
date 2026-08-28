@@ -37,6 +37,20 @@ export interface RunRequest {
 	 * report path are prepended to the task. No-op when no night run is active.
 	 */
 	night?: boolean;
+	/**
+	 * Working directory for the child, when it differs from the parent's.
+	 *
+	 * Host-only: absent from the tool schema and from `NormalizedItem`, so a model
+	 * cannot pick where its subagent runs. The one producer today is the night
+	 * workspace allocator (`night-workspace.ts`), which gives every child of a
+	 * night run its own jj workspace.
+	 */
+	cwd?: string;
+}
+
+/** The directory a run's child process starts in. */
+export function runCwd(req: RunRequest, ctx: RunContext): string {
+	return req.cwd ?? ctx.cwd;
 }
 
 /** Live lifecycle state of a single run, surfaced to the in-progress indicator. */
@@ -173,6 +187,7 @@ export function prepareChildRun(
 		thinkingOverride: req.overrides?.thinking,
 		reads: req.reads,
 		night: req.night,
+		...(req.cwd ? { workspacePath: req.cwd } : {}),
 		includeTask: opts.includeTask,
 	});
 

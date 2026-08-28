@@ -11,6 +11,7 @@ import { resolveRunOutput } from "./output.ts";
 import {
 	baseResult,
 	prepareChildRun,
+	runCwd,
 	type RunContext,
 	type RunRequest,
 	type RunResult,
@@ -30,7 +31,7 @@ function runHeadless(req: RunRequest, ctx: RunContext, defaultProvider: string |
 		let stderr = "";
 		let settled = false;
 
-		const child = spawn("pi", childArgs, { cwd: ctx.cwd });
+		const child = spawn("pi", childArgs, { cwd: runCwd(req, ctx) });
 		ctx.onStatus?.(req.index, { state: "running", outputPath });
 
 		const finish = async (exitCode: number | null, error: string | undefined) => {

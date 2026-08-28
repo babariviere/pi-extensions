@@ -23,6 +23,10 @@ import { selectBackend } from "../agents/backend.ts";
 import { discoverAgentsForCwd } from "../agents/discovery.ts";
 import { newRunId } from "../agents/paths.ts";
 import { buildRunRequests, type NormalizedItem } from "../agents/request.ts";
+import {
+  allocateNightWorkspaces,
+  releaseNightWorkspaces,
+} from "../agents/night-workspace.ts";
 import type { RunContext, RunRequest, RunResult } from "../agents/run.ts";
 import type {
   SpindleActionDescriptor,
@@ -229,6 +233,12 @@ export class SpindleAgentsProvider implements SpindleProvider {
     const requests = this.#resolveRequests(items, ref, runtimeConfig);
 
     const runId = newRunId();
+
+    // Host-side placement: a child of a night run gets its own jj workspace so
+    // two subagents never share a working copy. Nothing here comes from the
+    // model; `cwd` is not part of the tool schema.
+    const workspaces = await allocateNightWorkspaces(requests, runId, ref.cwd);
+
     const monitor = new RunProgressMonitor({ registry: this.registry, context, runId }, requests);
     monitor.start();
 
@@ -247,6 +257,7 @@ export class SpindleAgentsProvider implements SpindleProvider {
       return results.map(agentResult);
     } finally {
       monitor.stop();
+      await releaseNightWorkspaces(workspaces);
     }
   }
 }

@@ -88,6 +88,11 @@ export interface ChildInvocationOpts {
 	reads?: string[];
 	/** Inherit the night-mode contract (unattended run, no outbound messages, draft PRs). */
 	night?: boolean;
+	/**
+	 * The child's own working copy, when the host gave it one. Changes what the
+	 * night contract tells it about where to work.
+	 */
+	workspacePath?: string;
 }
 
 /** Prepend a read-first instruction listing the context files, if any. */
@@ -102,15 +107,28 @@ function withReads(task: string, reads: string[] | undefined): string {
  * actually in flight. Reading the handshake here (rather than passing the text
  * down) keeps the caller from having to know about night mode.
  */
-function withNight(task: string, night: boolean | undefined): string {
+function withNight(
+	task: string,
+	night: boolean | undefined,
+	workspacePath?: string,
+): string {
 	if (!night) return task;
 	const run = readActiveNightRun();
-	return run ? `${buildNightContract(run)}\n${task}` : task;
+	return run ? `${buildNightContract(run, workspacePath)}\n${task}` : task;
 }
 
 /** The task framing given to the child agent, with the final-message rider. */
-export function formatTaskMessage(task: string, reads?: string[], night?: boolean): string {
-	return withNight(`Task: ${injectOutputInstruction(withReads(task, reads))}`, night);
+export function formatTaskMessage(
+	task: string,
+	reads?: string[],
+	night?: boolean,
+	workspacePath?: string,
+): string {
+	return withNight(
+		`Task: ${injectOutputInstruction(withReads(task, reads))}`,
+		night,
+		workspacePath,
+	);
 }
 
 /**
@@ -168,7 +186,7 @@ export function buildChildArgs(agent: DiscoveredAgent, task: string, opts: Child
 	// are safe). The herdr backend omits it here and submits it via `agent prompt`
 	// instead, since `agent start` cannot encode multi-line shell args.
 	if (opts.includeTask !== false) {
-		args.push(formatTaskMessage(task, opts.reads, opts.night));
+		args.push(formatTaskMessage(task, opts.reads, opts.night, opts.workspacePath));
 	}
 
 	return args;

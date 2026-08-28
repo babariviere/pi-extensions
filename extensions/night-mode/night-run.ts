@@ -95,18 +95,28 @@ export function clearActiveNightRun(): void {
  * The condensed rules every subagent of a night run inherits. Prepended to the
  * child's task message rather than left to the agent definition, so it cannot
  * be skipped by picking an agent that does not know about night mode.
+ *
+ * `workspacePath` is the child's own working copy when it was given one (see
+ * `agent-workspace.ts`). The wording differs on purpose: a child with its own
+ * workspace is already there and must not wander into the shared clone, while a
+ * child without one has to `cd` into the run's clone itself.
  */
-export function buildNightContract(run: ActiveNightRun): string {
+export function buildNightContract(
+	run: ActiveNightRun,
+	workspacePath?: string,
+): string {
+	const workspace = workspacePath ?? run.workspacePath;
+	const workspaceLine = workspace
+		? workspacePath
+			? `- Work in \`${workspace}\`: your own workspace for this task, and already your working directory. Everything you change belongs there; never touch the user's own checkout.`
+			: `- Work in \`${workspace}\`: a private copy of the repo made for tonight. \`cd\` there first and never touch the user's own checkout.`
+		: undefined;
 	return [
 		"[night-mode] You are part of an unattended overnight run. Nobody is awake to answer.",
 		"Hard rules, no exceptions:",
 		"- Never ask a question and never wait for confirmation. If a choice is genuinely ambiguous or risky, skip the work and say so in your final message.",
 		"- Read-only on anything that talks to people: never send a message, reply, comment, DM, email or reaction on the user's behalf.",
-		...(run.workspacePath
-			? [
-					`- Work in \`${run.workspacePath}\`: a private copy of the repo made for tonight. \`cd\` there first and never touch the user's own checkout.`,
-				]
-			: []),
+		...(workspaceLine ? [workspaceLine] : []),
 		"- Never push to the default branch, never merge, never force-push a branch you do not own.",
 		"- Every pull request you open is a draft.",
 		`- The whole night is capped at ${run.maxPullRequests} pull requests. Do not open one unless the coordinator asked you to.`,

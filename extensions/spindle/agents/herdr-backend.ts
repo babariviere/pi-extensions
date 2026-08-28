@@ -47,6 +47,7 @@ import { outcomeError, type RunOutcome, waitForRunCompletion } from "./herdr-com
 import {
 	baseResult,
 	prepareChildRun,
+	runCwd,
 	type RunContext,
 	type RunRequest,
 	type RunResult,
@@ -56,19 +57,26 @@ export const SUBAGENTS_TAB_LABEL = "subagents";
 
 export async function runInHerdr(reqs: RunRequest[], ctx: RunContext): Promise<RunResult[]> {
 	const workspaceId = currentWorkspaceId();
-	const tab = await herdr.createTab(SUBAGENTS_TAB_LABEL, workspaceId);
+
+	// Prepare each run's files/args up front (pure, order-independent). Done
+	// before the tab exists because the tab's root pane is the first run's pane,
+	// so creating it needs to know that run's working directory.
+	const defaultProvider = readDefaultProvider(ctx.cwd);
+	const prepared = reqs.map((req) => prepareRun(req, ctx, defaultProvider));
+
+	const tab = await herdr.createTab(
+		SUBAGENTS_TAB_LABEL,
+		workspaceId,
+		prepared.length > 0 ? runCwd(prepared[0].req, ctx) : ctx.cwd,
+	);
 	if (!tab || !tab.rootPaneId) {
 		for (const req of reqs) ctx.onStatus?.(req.index, { state: "failed" });
 		return reqs.map((req) => failResult(req, "could not create the herdr 'subagents' tab"));
 	}
 
-	// Prepare each run's files/args up front (pure, order-independent).
-	const defaultProvider = readDefaultProvider(ctx.cwd);
-	const prepared = reqs.map((req) => prepareRun(req, ctx, defaultProvider));
-
 	// Build an evenly-sized grid so panes get usable rectangles instead of thin
 	// stacked strips. Cells are filled column-major (left-to-right, top-to-bottom).
-	await buildGrid(prepared, tab.rootPaneId, ctx.cwd);
+	await buildGrid(prepared, tab.rootPaneId, ctx);
 
 	// Launch pi in every pane now that the geometry is settled.
 	const spawned = await Promise.all(prepared.map((p) => launchRun(p, ctx)));
@@ -89,15 +97,26 @@ export async function runInHerdr(reqs: RunRequest[], ctx: RunContext): Promise<R
  * come out evenly sized. On a split failure the affected run is marked with an
  * error and skipped; the rest of the grid still builds.
  */
-async function buildGrid(prepared: PreparedRun[], rootPaneId: string, cwd: string): Promise<void> {
+async function buildGrid(prepared: PreparedRun[], rootPaneId: string, ctx: RunContext): Promise<void> {
 	const { cols, rowsPerCol } = computeGrid(prepared.length);
+
+	// A pane's working directory is fixed when it is split, so each split uses the
+	// cwd of the run that will land in the new pane rather than one cwd for the
+	// whole grid: night subagents each have their own workspace.
+	const cwdAt = (index: number): string =>
+		index < prepared.length ? runCwd(prepared[index].req, ctx) : ctx.cwd;
+	const firstRowOf = (col: number): number => {
+		let start = 0;
+		for (let c = 0; c < col; c++) start += rowsPerCol[c];
+		return start;
+	};
 
 	// Carve out the column panes (left-to-right). The root pane becomes column 0;
 	// each further column is split off the remaining right-hand region.
 	const columnPanes: string[] = [rootPaneId];
 	let rightRegion = rootPaneId;
 	for (let c = 1; c < cols; c++) {
-		const split = await herdr.splitPane(rightRegion, "right", 1 / (cols - c + 1), cwd);
+		const split = await herdr.splitPane(rightRegion, "right", 1 / (cols - c + 1), cwdAt(firstRowOf(c)));
 		if (!split.ok || !split.paneId) {
 			// Can't create this column: mark every run that would have landed in it.
 			const missing = split.error ?? "failed to split column";
@@ -121,7 +140,7 @@ async function buildGrid(prepared: PreparedRun[], rootPaneId: string, cwd: strin
 		if (idx < prepared.length) prepared[idx].paneId = columnPane; // first row reuses the column pane
 		idx++;
 		for (let r = 1; r < rows; r++) {
-			const split = await herdr.splitPane(bottomRegion, "down", 1 / (rows - r + 1), cwd);
+			const split = await herdr.splitPane(bottomRegion, "down", 1 / (rows - r + 1), cwdAt(idx));
 			if (!split.ok || !split.paneId) {
 				if (idx < prepared.length) prepared[idx].error = split.error ?? "failed to split row";
 				idx++;
@@ -200,7 +219,10 @@ async function launchRun(p: PreparedRun, ctx: RunContext): Promise<SpawnedRun> {
 	// Label the pane with the task so a watcher can tell panes apart, then submit
 	// the task as a clean user message (bracketed paste handles its newlines).
 	await herdr.renamePane(p.paneId, paneLabel(p.req.agent.config.name, p.req.task));
-	const prompted = await herdr.promptAgent(p.paneId, formatTaskMessage(p.req.task, p.req.reads, p.req.night));
+	const prompted = await herdr.promptAgent(
+		p.paneId,
+		formatTaskMessage(p.req.task, p.req.reads, p.req.night, p.req.cwd),
+	);
 
 	ctx.onStatus?.(p.req.index, {
 		state: prompted.ok ? "running" : "failed",

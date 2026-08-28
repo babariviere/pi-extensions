@@ -244,6 +244,21 @@ describe("buildNightContract", () => {
 		assert.match(contract, /never touch the user's own checkout/);
 	});
 
+	it("tells a subagent with its own workspace to stay in it", () => {
+		const contract = buildNightContract(
+			{
+				startedAt: 0,
+				reportPath: "/tmp/report.md",
+				maxPullRequests: 3,
+				workspacePath: "/sandboxes/repo/2026-08-29 2130",
+			},
+			"/sandboxes/repo/2026-08-29 2130.agents/agent-abc-0",
+		);
+		assert.match(contract, /Work in `[^`]*\.agents\/agent-abc-0`/);
+		assert.match(contract, /already your working directory/);
+		assert.doesNotMatch(contract, /`cd` there first/);
+	});
+
 	it("omits the working-copy rule when the run has none", () => {
 		const contract = buildNightContract({
 			startedAt: 0,

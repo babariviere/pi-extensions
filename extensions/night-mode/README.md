@@ -137,6 +137,28 @@ configured list (default `mise.local.toml`) for the strategies that need it.
 A failed clone degrades to "work in the real checkout" with a warning rather
 than blocking the run. Set `sandboxRoot: ""` to disable cloning entirely.
 
+### One workspace per subagent
+
+The clone keeps the run out of your checkout. It does not keep the run's own
+subagents out of each other: two children creating changes in one working copy
+fight over `@`. So every subagent spawned with `night: true` gets its own jj
+workspace, added to the clone under `<clone>.agents/agent-<runid>-<index>`, and
+its child `pi` process starts there.
+
+`jj workspace add` is the right tool at *this* level, unlike at the clone level:
+the workspaces share the clone's store, so the coordinator sees every child's
+commits in one `jj log` of the clone instead of round-tripping through the
+remote. A fresh workspace still checks out tracked files only, so
+`sandboxCopyFiles` is replayed into it and the new path is trusted like any
+other copy.
+
+Placement is host side. `cwd` is not part of the `agents.run` schema, so the
+coordinator can ask for a subagent but cannot choose where it runs. When the
+batch finishes, each workspace is snapshotted (`jj status`, so nothing a child
+wrote is lost), forgotten, and its directory removed. A clone that is not a jj
+repository, or a `jj workspace add` that fails, degrades to "run in the clone",
+which is the behaviour from before workspaces existed.
+
 ### Per-path trust
 
 `mise` and `direnv` trust config files **by path**, so a fresh copy is untrusted

@@ -85,6 +85,7 @@ import {
 	SANDBOX_REQUEST_EVENT,
 	type SandboxRequestEvent,
 } from "../spindle/sandbox/protocol.ts";
+import { agentWorkspacesRoot } from "./agent-workspace.ts";
 import {
 	createRunSandbox,
 	prepareWorkingCopy,
@@ -519,6 +520,12 @@ export default function (pi: ExtensionAPI): void {
 			mode,
 			allowWrite: [
 				input.workspacePath ?? input.cwd,
+				// Where each subagent's own jj workspace is created, once the run
+				// starts delegating. Granted up front because the policy is written
+				// once, at start, and child processes read it from that file.
+				...(input.workspacePath
+					? [agentWorkspacesRoot(input.workspacePath)]
+					: []),
 				dirname(input.reportPath),
 				input.ledgerDir,
 				// Roots the run cannot derive: a second repository the night is

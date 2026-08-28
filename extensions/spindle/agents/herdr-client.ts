@@ -56,9 +56,16 @@ export class HerdrClient {
 		return res.ok ? parseTabs(res.result) : [];
 	}
 
-	async createTab(label: string, workspaceId?: string): Promise<HerdrTab | undefined> {
+	async createTab(
+		label: string,
+		workspaceId?: string,
+		cwd?: string,
+	): Promise<HerdrTab | undefined> {
 		const args = ["tab", "create", "--label", label, "--no-focus"];
 		if (workspaceId) args.push("--workspace", workspaceId);
+		// The tab's root pane is reused as the first run's pane, and `agent start`
+		// cannot set a directory, so the first run's cwd has to be decided here.
+		if (cwd) args.push("--cwd", cwd);
 		const res = await this.#transport.run(args);
 		return res.ok ? parseTab(res.result) : undefined;
 	}

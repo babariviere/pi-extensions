@@ -137,7 +137,7 @@ export async function createRunSandbox(
 			}
 			continue;
 		}
-		copyExtraFiles(source, destination, input.copyFiles ?? []);
+		copyLocalFiles(source, destination, input.copyFiles ?? []);
 		return { path: destination, strategy, fallbacks };
 	}
 
@@ -310,8 +310,13 @@ function onPath(tool: string): boolean {
 	});
 }
 
-/** Copy configured extra files, ignoring ones that are absent or already there. */
-function copyExtraFiles(source: string, destination: string, files: string[]): void {
+/**
+ * Copy configured extra files, ignoring ones that are absent or already there.
+ *
+ * Exported because a fresh jj workspace has the same gap as a copy strategy that
+ * loses untracked files: see `agent-workspace.ts`.
+ */
+export function copyLocalFiles(source: string, destination: string, files: string[]): void {
 	for (const relative of files) {
 		const from = join(source, relative);
 		const to = join(destination, relative);
