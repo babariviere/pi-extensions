@@ -16,6 +16,12 @@ export const DEFAULT_WINDOW: NightWindow = { startHour: 21, endHour: 9 };
 /** Stop before the 5h window is actually exhausted, so we never spill over. */
 export const DEFAULT_THRESHOLD_PERCENT = 95;
 
+/**
+ * Same margin on the weekly subscription window. Overshooting it is worse than
+ * overshooting the 5h one: there is no "wait a few hours" way back.
+ */
+export const DEFAULT_WEEKLY_THRESHOLD_PERCENT = 95;
+
 /** Grace period after the reported reset before trusting the new window. */
 export const RESUME_BUFFER_MS = 60_000;
 
@@ -24,6 +30,13 @@ export const RESUME_JITTER_MS = 5 * 60_000;
 
 /** Retry delay when the reset time is unknown or usage is still above threshold. */
 export const RESUME_RETRY_MS = 5 * 60_000;
+
+/**
+ * Poll interval for a weekly pause. The provider reports a reset timestamp for
+ * the 5h window only, so a weekly pause cannot schedule anything: it can only
+ * re-read the usage snapshot now and then, and a week does not need a fine grain.
+ */
+export const WEEKLY_RETRY_MS = 30 * 60_000;
 
 /**
  * True when `date` falls inside the night window. Windows that wrap past
@@ -74,6 +87,30 @@ export function shouldPause(
 	return usedPercent >= threshold;
 }
 
+/** Which subscription window stopped the run. */
+export type PauseReason = "5h" | "week";
+
+export interface PauseThresholds {
+	fiveHour?: number;
+	week?: number;
+}
+
+/**
+ * The window that should stop the run right now, if any. The weekly limit wins
+ * when both are hit: it is the one with the longer, more expensive recovery, and
+ * the resume prompt has to say so.
+ */
+export function pauseReasonFor(
+	usage: { fiveHourPercent?: number; weekPercent?: number },
+	thresholds: PauseThresholds = {},
+): PauseReason | undefined {
+	if (shouldPause(usage.weekPercent, thresholds.week ?? DEFAULT_WEEKLY_THRESHOLD_PERCENT))
+		return "week";
+	if (shouldPause(usage.fiveHourPercent, thresholds.fiveHour ?? DEFAULT_THRESHOLD_PERCENT))
+		return "5h";
+	return undefined;
+}
+
 export interface ResumeDelayOptions {
 	bufferMs?: number;
 	jitterMs?: number;
@@ -101,6 +138,31 @@ export function computeResumeDelayMs(
 
 	const untilReset = Math.max(0, resetMs - now);
 	return untilReset + bufferMs + Math.floor(random() * jitterMs);
+}
+
+const WEEKDAYS = [
+	"Sunday",
+	"Monday",
+	"Tuesday",
+	"Wednesday",
+	"Thursday",
+	"Friday",
+	"Saturday",
+];
+
+/**
+ * "Monday 2026-08-29 03:12", the stamp handed to a resuming agent.
+ *
+ * A weekly pause can span days, so "continue where you left off" is not enough
+ * context: the agent has to know which day it woke up on before it trusts
+ * anything it remembers about branches, PRs or CI.
+ */
+export function formatDayStamp(date: Date): string {
+	const pad = (value: number) => String(value).padStart(2, "0");
+	return (
+		`${WEEKDAYS[date.getDay()]} ${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}` +
+		` ${pad(date.getHours())}:${pad(date.getMinutes())}`
+	);
 }
 
 /** Compact "2h34m" / "12m" / "45s" rendering of a duration. */

@@ -10,6 +10,8 @@ import {
 	shouldHoldCaffeinate,
 	windowStartingAt,
 	shouldPause,
+	pauseReasonFor,
+	formatDayStamp,
 } from "./night-mode.ts";
 
 const at = (hour: number, minute = 0): Date => new Date(2025, 0, 15, hour, minute, 0, 0);
@@ -120,6 +122,43 @@ describe("shouldPause", () => {
 	it("honours a custom threshold", () => {
 		assert.equal(shouldPause(80, 75), true);
 		assert.equal(shouldPause(80, 90), false);
+	});
+});
+
+describe("pauseReasonFor", () => {
+	it("pauses on the 5h window", () => {
+		assert.equal(pauseReasonFor({ fiveHourPercent: 96, weekPercent: 10 }), "5h");
+	});
+
+	it("pauses on the weekly window", () => {
+		assert.equal(pauseReasonFor({ fiveHourPercent: 3, weekPercent: 95 }), "week");
+	});
+
+	it("reports the weekly limit when both are hit", () => {
+		assert.equal(pauseReasonFor({ fiveHourPercent: 99, weekPercent: 99 }), "week");
+	});
+
+	it("stays running below both thresholds", () => {
+		assert.equal(pauseReasonFor({ fiveHourPercent: 50, weekPercent: 80 }), undefined);
+		assert.equal(pauseReasonFor({}), undefined);
+	});
+
+	it("honours custom thresholds", () => {
+		assert.equal(
+			pauseReasonFor({ weekPercent: 80 }, { week: 75 }),
+			"week",
+		);
+		assert.equal(
+			pauseReasonFor({ fiveHourPercent: 96 }, { fiveHour: 99 }),
+			undefined,
+		);
+	});
+});
+
+describe("formatDayStamp", () => {
+	it("names the day, so a multi-day pause resumes with the right date", () => {
+		assert.equal(formatDayStamp(at(3, 7)), "Wednesday 2025-01-15 03:07");
+		assert.equal(formatDayStamp(new Date(2026, 7, 29, 21, 30)), "Saturday 2026-08-29 21:30");
 	});
 });
 
