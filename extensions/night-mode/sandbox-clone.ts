@@ -13,9 +13,14 @@
  *   1. `apfs`     - `cp -c` clone-on-write. Instant on macOS, keeps ignored
  *                   files, build outputs and `.git`/`.jj` intact.
  *   2. `reflink`  - the same trick on Linux btrfs/XFS.
- *   3. `hardlink` - `cp -al`: instant, but in-place writers mutate the original,
- *                   so it is only used when nothing better exists.
- *   4. `copy`     - a plain recursive copy. Slow, always works.
+ *   3. `copy`     - a plain recursive copy. Slow, always works.
+ *
+ * `cp -a --link` used to sit between reflink and copy. It is gone: hardlinks
+ * share the inode, so a tool that rewrites a file in place (rather than writing
+ * a temp file and renaming) edits the original through the clone, which is the
+ * exact failure this module exists to prevent. On a filesystem without reflink
+ * support the ladder now drops straight to a real copy: slower, but the
+ * isolation guarantee holds everywhere.
  *
  * The VCS-level options (`jj workspace add`, `git clone --shared`) are
  * deliberately NOT in the ladder: they drop untracked and ignored files, which
@@ -28,7 +33,7 @@ import { execFileSync } from "node:child_process";
 import { accessSync, constants, copyFileSync, existsSync, mkdirSync, rmSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 
-export const CLONE_STRATEGIES = ["apfs", "reflink", "hardlink", "copy"] as const;
+export const CLONE_STRATEGIES = ["apfs", "reflink", "copy"] as const;
 export type CloneStrategy = (typeof CLONE_STRATEGIES)[number];
 
 export interface CloneCommand {
@@ -48,7 +53,6 @@ export function cloneCommand(
 	const flags: Record<CloneStrategy, string[]> = {
 		apfs: ["-c", "-R", "-p"],
 		reflink: ["-a", "--reflink=always"],
-		hardlink: ["-a", "--link"],
 		copy: ["-R", "-p"],
 	};
 	// Trailing `/.` copies the directory's contents into an existing destination,
@@ -59,7 +63,7 @@ export function cloneCommand(
 /** Strategies to try, best first, for a platform. */
 export function strategyOrder(platform: NodeJS.Platform): CloneStrategy[] {
 	if (platform === "darwin") return ["apfs", "copy"];
-	if (platform === "linux") return ["reflink", "hardlink", "copy"];
+	if (platform === "linux") return ["reflink", "copy"];
 	return ["copy"];
 }
 

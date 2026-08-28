@@ -219,7 +219,7 @@ async function launchRun(p: PreparedRun, ctx: RunContext): Promise<SpawnedRun> {
 
 async function settleRun(s: SpawnedRun, ctx: RunContext): Promise<RunResult> {
 	if (s.error) {
-		return failResult(s.req, s.error, s.paneId, s.outputPath);
+		return failResult(s.req, s.error, s.paneId);
 	}
 	const report = (ok: boolean) =>
 		ctx.onStatus?.(s.req.index, { state: ok ? "done" : "failed", paneId: s.paneId, outputPath: s.outputPath });
@@ -251,19 +251,19 @@ async function settleRun(s: SpawnedRun, ctx: RunContext): Promise<RunResult> {
 	});
 	report(resolved.ok);
 	return {
-		...baseResult(s.req, s.outputPath, resolved, resolved.ok ? undefined : outcomeError(outcome)),
+		...baseResult(s.req, resolved, resolved.ok ? undefined : outcomeError(outcome)),
 		backend: "herdr",
 		paneId: s.paneId,
 	};
 }
 
-function failResult(req: RunRequest, error: string, paneId?: string, outputPath = ""): RunResult {
+/** A run that never got far enough to produce (or persist) output. */
+function failResult(req: RunRequest, error: string, paneId?: string): RunResult {
 	return {
 		agent: req.agent.config.name,
 		scope: req.agent.scope,
 		ok: false,
 		output: `(failed to run in herdr: ${error})`,
-		outputPath,
 		backend: "herdr",
 		paneId,
 		error,

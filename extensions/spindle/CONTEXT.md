@@ -490,7 +490,10 @@ and docs aligned with these.)
   end to end: the `output` override lifecycle (`normalizeOutputOverride`,
   `indexOutputOverride`/`planBatchOutputs`, `resolveOutputOverride`/`outputPathFor`)
   and resolution (`readLastAssistantText`, `resolveRunOutput` taking a
-  `RunOutputSource`). `paths.ts` keeps only the run-dir layout and the sweep;
+  `RunOutputSource`). Persisting creates the destination's parent directories
+  and reports a failed write, and a result carries `outputPath` only when the
+  file actually landed, so the tool never claims an artifact that is not there.
+  `paths.ts` keeps only the run-dir layout and the sweep;
   each adapter passes just its backend `fallback` + `finishedCleanly`.
 - **status probe**: the read-only view of a herdr pane's agent status that the
   pane-lifecycle machine polls to decide when a run has finished or its pane is

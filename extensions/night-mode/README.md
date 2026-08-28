@@ -108,7 +108,6 @@ filesystem-specific and any of them can fail on a given machine:
 |---|---|---|
 | `apfs` | `cp -c -R -p` clone-on-write | macOS |
 | `reflink` | `cp -a --reflink=always` | Linux btrfs / XFS |
-| `hardlink` | `cp -a --link` | Linux, last resort before a real copy |
 | `copy` | `cp -R -p` | anywhere |
 
 `jj workspace add` and `git clone --shared` are deliberately **not** in the
