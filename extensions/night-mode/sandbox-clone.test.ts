@@ -53,13 +53,15 @@ test("prepareCommands skips steps with no config or no tool", () => {
 	);
 });
 
-test("prepareWorkingCopy trusts a copy that has a mise config", () => {
+test("prepareWorkingCopy trusts a copy that has a mise config", async () => {
 	const dir = mkdtempSync(join(tmpdir(), "night-trust-"));
 	try {
 		writeFileSync(join(dir, "mise.local.toml"), "[env]\nFOO = 'bar'\n");
 		const calls: PrepareCommand[] = [];
-		const result = prepareWorkingCopy(dir, {
-			run: (command) => calls.push(command),
+		const result = await prepareWorkingCopy(dir, {
+			run: (command) => {
+				calls.push(command);
+			},
 			lookup: () => true,
 		});
 		assert.deepEqual(result.ran, ["mise trust"]);
@@ -70,11 +72,11 @@ test("prepareWorkingCopy trusts a copy that has a mise config", () => {
 	}
 });
 
-test("prepareWorkingCopy reports a failed trust step instead of throwing", () => {
+test("prepareWorkingCopy reports a failed trust step instead of throwing", async () => {
 	const dir = mkdtempSync(join(tmpdir(), "night-trust-"));
 	try {
 		writeFileSync(join(dir, "mise.toml"), "[tools]\n");
-		const result = prepareWorkingCopy(dir, {
+		const result = await prepareWorkingCopy(dir, {
 			run: () => {
 				throw new Error("mise: command failed\ndetail");
 			},
@@ -87,12 +89,15 @@ test("prepareWorkingCopy reports a failed trust step instead of throwing", () =>
 	}
 });
 
-test("trust: false skips the steps but still reports shared state", () => {
+test("trust: false skips the steps but still reports shared state", async () => {
 	const dir = mkdtempSync(join(tmpdir(), "night-trust-"));
 	try {
 		writeFileSync(join(dir, "mise.toml"), "[tools]\n");
 		writeFileSync(join(dir, ".git"), "gitdir: /elsewhere/.git/worktrees/x\n");
-		const result = prepareWorkingCopy(dir, { trust: false, lookup: () => true });
+		const result = await prepareWorkingCopy(dir, {
+			trust: false,
+			lookup: () => true,
+		});
 		assert.deepEqual(result.ran, []);
 		assert.match(result.problems[0], /git linked worktree/);
 	} finally {
@@ -149,7 +154,7 @@ test("sandboxPathFor groups by repo name", () => {
 	);
 });
 
-test("createRunSandbox falls back to the next strategy and reports the failure", () => {
+test("createRunSandbox falls back to the next strategy and reports the failure", async () => {
 	const source = join(dir, "repo");
 	mkdirSync(source, { recursive: true });
 	writeFileSync(join(source, "a.txt"), "hello");
@@ -159,7 +164,7 @@ test("createRunSandbox falls back to the next strategy and reports the failure",
 		if (command.args[0] === "-c") throw new Error("cp: --clone not supported\nmore detail");
 	};
 
-	const result = createRunSandbox({
+	const result = await createRunSandbox({
 		source,
 		destination: join(dir, "sandbox"),
 		platform: "darwin",
@@ -171,10 +176,10 @@ test("createRunSandbox falls back to the next strategy and reports the failure",
 	assert.deepEqual(result.fallbacks, ["apfs: cp: --clone not supported"]);
 });
 
-test("createRunSandbox throws with every failure when nothing works", () => {
+test("createRunSandbox rejects with every failure when nothing works", async () => {
 	const source = join(dir, "repo");
 	mkdirSync(source, { recursive: true });
-	assert.throws(
+	await assert.rejects(
 		() =>
 			createRunSandbox({
 				source,
@@ -188,20 +193,24 @@ test("createRunSandbox throws with every failure when nothing works", () => {
 	);
 });
 
-test("createRunSandbox rejects a missing source", () => {
-	assert.throws(
-		() => createRunSandbox({ source: join(dir, "absent"), destination: join(dir, "out") }),
+test("createRunSandbox rejects a missing source", async () => {
+	await assert.rejects(
+		() =>
+			createRunSandbox({
+				source: join(dir, "absent"),
+				destination: join(dir, "out"),
+			}),
 		/does not exist/,
 	);
 });
 
-test("createRunSandbox really clones, and brings ignored files along", () => {
+test("createRunSandbox really clones, and brings ignored files along", async () => {
 	const source = join(dir, "repo");
 	mkdirSync(join(source, "src"), { recursive: true });
 	writeFileSync(join(source, "src", "a.txt"), "tracked");
 	writeFileSync(join(source, "mise.local.toml"), "secret");
 
-	const result = createRunSandbox({
+	const result = await createRunSandbox({
 		source,
 		destination: join(dir, "sandbox"),
 		copyFiles: ["mise.local.toml", "absent.toml"],

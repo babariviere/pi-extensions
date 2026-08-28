@@ -212,6 +212,21 @@ export default function (pi: ExtensionAPI): void {
 	const noteTimeline = (text: string) =>
 		appendReport(timelineLine(new Date(), text));
 
+	/**
+	 * Hand a message to the agent, picking the delivery mode from the session's
+	 * state.
+	 *
+	 * `deliverAs: "followUp"` appends to the turn currently in flight. Sending it
+	 * while the session is idle queues it against a turn that will never run, so
+	 * `/night start` typed at an idle prompt used to report success and then sit
+	 * there forever. Idle means "start a turn", which is the default delivery.
+	 */
+	function deliver(message: string, ctx?: ExtensionContext): void {
+		const context = ctx ?? ctxRef;
+		const idle = context?.isIdle?.() ?? false;
+		pi.sendUserMessage(message, idle ? undefined : { deliverAs: "followUp" });
+	}
+
 	/** Insert lines under a report heading. Never throws. */
 	function noteUnderHeading(heading: string, text: string): void {
 		if (!run) return;
@@ -365,17 +380,17 @@ export default function (pi: ExtensionAPI): void {
 		noteTimeline(
 			`night-mode: settled with ${open.length || "no"} ledger item(s) open, sending continuation ${run.nudges}/${MAX_CONTINUATIONS}`,
 		);
-		pi.sendUserMessage(message, { deliverAs: "followUp" });
+		deliver(message);
 	}
 
 	/**
 	 * Read the configured files, create the report, publish the handshake and
 	 * hand the composed prompt to the agent. Returns an error string on failure.
 	 */
-	function startRun(
+	async function startRun(
 		ctx: ExtensionContext,
 		windowLabel: string,
-	): string | undefined {
+	): Promise<string | undefined> {
 		const cwd = process.cwd();
 		const config = readNightConfig(cwd);
 		const promptPath = resolvePath(config.promptPath, cwd);
@@ -415,7 +430,9 @@ export default function (pi: ExtensionAPI): void {
 		}
 
 		const sessionId = ctx.sessionManager?.getSessionId?.();
-		const prepared = prepareWorkspace(config, cwd, startedAt, ctx);
+		// Awaited: cloning a real repository takes seconds, and doing it
+		// synchronously would freeze the UI for the whole copy.
+		const prepared = await prepareWorkspace(config, cwd, startedAt, ctx);
 		const workspace = prepared.path;
 		const sandbox = composeSandboxRequest({
 			config,
@@ -463,7 +480,7 @@ export default function (pi: ExtensionAPI): void {
 			noteTimeline(
 				`night-mode: sandbox ${sandbox.mode}, writable: ${(sandbox.allowWrite ?? []).join(", ") || "(defaults)"}`,
 			);
-		pi.sendUserMessage(
+		deliver(
 			composeNightPrompt({
 				prompt,
 				instructions,
@@ -473,7 +490,7 @@ export default function (pi: ExtensionAPI): void {
 				startedAt,
 				...(workspace ? { workspacePath: workspace } : {}),
 			}),
-			{ deliverAs: "followUp" },
+			ctx,
 		);
 		return undefined;
 	}
@@ -527,12 +544,12 @@ export default function (pi: ExtensionAPI): void {
 	 * to "work in the real checkout" with a warning rather than blocking the run:
 	 * the night still has value, it just loses one layer of containment.
 	 */
-	function prepareWorkspace(
+	async function prepareWorkspace(
 		config: NightConfig,
 		cwd: string,
 		startedAt: Date,
 		ctx: ExtensionContext,
-	): { path?: string; notes: string[]; problems: string[] } {
+	): Promise<{ path?: string; notes: string[]; problems: string[] }> {
 		if (!config.sandboxRoot) return { notes: [], problems: [] };
 		try {
 			const root = resolvePath(config.sandboxRoot, cwd);
@@ -541,7 +558,11 @@ export default function (pi: ExtensionAPI): void {
 				cwd,
 				formatDateTimeStamp(startedAt),
 			);
-			const created = createRunSandbox({
+			ctx.ui.notify(
+				`night-mode: copying ${cwd} into a private working copy, this can take a moment...`,
+				"info",
+			);
+			const created = await createRunSandbox({
 				source: cwd,
 				destination,
 				copyFiles: config.sandboxCopyFiles,
@@ -556,7 +577,7 @@ export default function (pi: ExtensionAPI): void {
 			// mise and direnv trust by path, so a fresh copy is untrusted and every
 			// `mise` command in it would hard-fail. Done here, in the host process:
 			// the trust stores sit outside the run's writable roots.
-			const trusted = prepareWorkingCopy(created.path, {
+			const trusted = await prepareWorkingCopy(created.path, {
 				trust: config.sandboxTrust,
 			});
 			if (trusted.problems.length > 0) {
@@ -774,13 +795,12 @@ export default function (pi: ExtensionAPI): void {
 			`night-mode: ${limitLabel(reason)} has room again, sending automated continue`,
 			"info",
 		);
-		pi.sendUserMessage(
+		deliver(
 			composeResumePrompt({
 				reason,
 				now: new Date(),
 				...(since ? { pausedAt: since } : {}),
 			}),
-			{ deliverAs: "followUp" },
 		);
 	}
 
@@ -919,7 +939,7 @@ export default function (pi: ExtensionAPI): void {
 				enabled = true;
 				windowOverride = windowStartingAt(new Date());
 				evaluate();
-				const error = startRun(ctx, formatWindow(currentWindow()));
+				const error = await startRun(ctx, formatWindow(currentWindow()));
 				if (error) {
 					ctx.ui.notify(error, "error");
 					return;
@@ -988,13 +1008,13 @@ export default function (pi: ExtensionAPI): void {
 				const reason = pausedReason ?? "5h";
 				const since = pausedAt;
 				clearPause();
-				pi.sendUserMessage(
+				deliver(
 					composeResumePrompt({
 						reason,
 						now: new Date(),
 						...(since ? { pausedAt: since } : {}),
 					}),
-					{ deliverAs: "followUp" },
+					ctx,
 				);
 				return;
 			}

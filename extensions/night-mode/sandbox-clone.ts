@@ -29,9 +29,18 @@
  * that looks like a broken repo rather than a broken copy.
  */
 
-import { execFileSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import { accessSync, constants, copyFileSync, existsSync, mkdirSync, rmSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
+import { promisify } from "node:util";
+
+/**
+ * Copies are run through the async `execFile` rather than `execFileSync`: a
+ * clone of a real repository takes seconds (minutes without reflink support),
+ * and doing it synchronously freezes pi's event loop for the whole duration, so
+ * `/night start` looks hung rather than busy.
+ */
+const execFileAsync = promisify(execFile);
 
 export const CLONE_STRATEGIES = ["apfs", "reflink", "copy"] as const;
 export type CloneStrategy = (typeof CLONE_STRATEGIES)[number];
@@ -80,8 +89,8 @@ export interface CreateSandboxInput {
 	/** Repo-relative files to copy in afterwards, for strategies that lose them. */
 	copyFiles?: string[];
 	platform?: NodeJS.Platform;
-	/** Injected for tests. Returns nothing and throws on failure. */
-	run?: (command: CloneCommand) => void;
+	/** Injected for tests. Throws or rejects on failure. */
+	run?: (command: CloneCommand) => void | Promise<void>;
 }
 
 export interface CreatedSandbox {
@@ -91,16 +100,20 @@ export interface CreatedSandbox {
 	fallbacks: string[];
 }
 
-const defaultRun = (command: CloneCommand): void => {
-	execFileSync(command.command, command.args, { stdio: "pipe" });
+const defaultRun = async (command: CloneCommand): Promise<void> => {
+	await execFileAsync(command.command, command.args);
 };
 
 /**
- * Clone `source` into `destination`, trying each strategy in turn. Throws only
+ * Clone `source` into `destination`, trying each strategy in turn. Rejects only
  * when every strategy fails, with all the failures in the message: a silent
  * fallback to "no sandbox" would be worse than not starting the run.
+ *
+ * Async so the copy does not block the caller's event loop.
  */
-export function createRunSandbox(input: CreateSandboxInput): CreatedSandbox {
+export async function createRunSandbox(
+	input: CreateSandboxInput,
+): Promise<CreatedSandbox> {
 	const { source, destination } = input;
 	if (!existsSync(source)) throw new Error(`night-mode: source ${source} does not exist`);
 
@@ -111,7 +124,7 @@ export function createRunSandbox(input: CreateSandboxInput): CreatedSandbox {
 	for (const strategy of strategyOrder(platform)) {
 		mkdirSync(destination, { recursive: true });
 		try {
-			run(cloneCommand(strategy, source, destination));
+			await run(cloneCommand(strategy, source, destination));
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			fallbacks.push(`${strategy}: ${message.split("\n")[0]}`);
@@ -162,6 +175,7 @@ export interface PrepareCommand {
 	command: string;
 	args: string[];
 }
+
 
 export interface PrepareInput {
 	/** The fresh working copy. */
@@ -239,23 +253,25 @@ export interface PreparedWorkingCopy {
 
 /**
  * Make a fresh copy usable: trust its config files, then report anything that
- * makes it less isolated than it looks. Never throws; a failed trust step is a
+ * makes it less isolated than it looks. Never rejects; a failed trust step is a
  * degraded run, not a dead one.
  */
-export function prepareWorkingCopy(
+export async function prepareWorkingCopy(
 	path: string,
 	opts: {
 		trust?: boolean;
-		run?: (command: PrepareCommand) => void;
+		run?: (command: PrepareCommand) => void | Promise<void>;
 		lookup?: (tool: string) => boolean;
 	} = {},
-): PreparedWorkingCopy {
+): Promise<PreparedWorkingCopy> {
 	const problems = detectSharedStateWarnings(path);
 	if (opts.trust === false) return { ran: [], problems };
 
-	const run = opts.run ?? ((command: PrepareCommand) => {
-		execFileSync(command.command, command.args, { stdio: "pipe", cwd: path });
-	});
+	const run =
+		opts.run ??
+		(async (command: PrepareCommand) => {
+			await execFileAsync(command.command, command.args, { cwd: path });
+		});
 	const lookup = opts.lookup ?? onPath;
 	const commands = prepareCommands({
 		path,
@@ -267,7 +283,7 @@ export function prepareWorkingCopy(
 	const ran: string[] = [];
 	for (const command of commands) {
 		try {
-			run(command);
+			await run(command);
 			ran.push(command.label);
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
