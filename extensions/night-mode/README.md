@@ -166,7 +166,21 @@ drift out of sync with it:
 - the night's working copy (or the cwd, when cloning is off),
 - the report directory,
 - the todo store backing the ledger,
-- temp dirs and the tool caches (`GOCACHE`, `GOMODCACHE`, the platform cache home).
+- temp dirs and the tool caches (`GOCACHE`, `GOMODCACHE`, the platform cache home),
+- anything listed in `sandboxAllowWrite`.
+
+That last one is the escape hatch for what the run cannot derive: a second
+repository the night is expected to touch, a notes vault, a scratch directory.
+Paths expand `~` and resolve against the cwd, and grant writes to everything
+under them.
+
+```json
+{
+  "nightMode": {
+    "sandboxAllowWrite": ["~/src/github.com/acme/other-repo"]
+  }
+}
+```
 
 Everything else on the disk is read-only for the night. `~/.ssh` and `~/.gnupg`
 are unreadable; `~/.aws` stays readable, because SOPS/KMS decryption needs it.
@@ -276,6 +290,7 @@ and every path is configurable. Defaults keep the night files under
 | `sandboxRoot` | `~/.pi/agent/night/sandboxes` | Root for the night's private working copy; `""` disables cloning |
 | `sandboxCopyFiles` | `["mise.local.toml"]` | Gitignored, repo-relative files copied into a fresh working copy |
 | `sandboxMode` | `workspace-write` | Filesystem sandbox requested for the run: `off`, `read-only`, `workspace-write`, `full` |
+| `sandboxAllowWrite` | `[]` | Extra writable roots for the run, on top of the derived ones |
 | `sandboxTrust` | `true` | Run `mise trust` / `direnv allow` on a fresh working copy |
 | `wakeLock` | `"auto"` | `auto` \| `amphetamine` \| `caffeinate` \| `off`, see [Wake lock](#wake-lock) |
 | `maxPullRequests` | `5` | Hard cap on PRs opened in one night |

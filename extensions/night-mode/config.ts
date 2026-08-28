@@ -40,6 +40,13 @@ export interface NightConfig {
 	 */
 	sandboxMode: "off" | "read-only" | "workspace-write" | "full";
 	/**
+	 * Extra roots the run may write to, on top of the ones derived from it. For
+	 * nights that touch a repository other than the one the run was started from,
+	 * which the derived set cannot know about. `~` is expanded and relative paths
+	 * resolve against the cwd.
+	 */
+	sandboxAllowWrite: string[];
+	/**
 	 * Run `mise trust` / `direnv allow` on a fresh working copy. Both tools trust
 	 * by path, so without this every `mise` command in the copy hard-fails with an
 	 * untrusted-config error.
@@ -94,6 +101,7 @@ export const DEFAULT_NIGHT_CONFIG: NightConfig = {
 	sandboxRoot: join(defaultNightDir(), "sandboxes"),
 	sandboxCopyFiles: ["mise.local.toml"],
 	sandboxMode: "workspace-write",
+	sandboxAllowWrite: [],
 	sandboxTrust: true,
 	wakeLock: "auto",
 	maxPullRequests: 5,
@@ -202,6 +210,13 @@ export function mergeNightConfig(
 				(v): v is string => typeof v === "string" && v.trim().length > 0,
 			)
 		: undefined;
+	// An empty array is meaningful here ("no extra roots"), so it is kept rather
+	// than falling back to the base like the lists whose default is non-empty.
+	const allowWrite = Array.isArray(record.sandboxAllowWrite)
+		? record.sandboxAllowWrite
+				.filter((v): v is string => typeof v === "string" && v.trim().length > 0)
+				.map((v) => v.trim())
+		: undefined;
 	const sections = Array.isArray(record.reportSections)
 		? record.reportSections
 				.filter(
@@ -225,6 +240,7 @@ export function mergeNightConfig(
 		sandboxMode: isNightSandboxMode(record.sandboxMode)
 			? record.sandboxMode
 			: base.sandboxMode,
+		sandboxAllowWrite: allowWrite ?? base.sandboxAllowWrite,
 		sandboxTrust:
 			typeof record.sandboxTrust === "boolean"
 				? record.sandboxTrust

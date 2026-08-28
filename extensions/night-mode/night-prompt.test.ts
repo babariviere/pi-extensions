@@ -76,6 +76,22 @@ describe("mergeNightConfig", () => {
 		assert.equal(mergeNightConfig({ archiveDir: "" }).archiveDir, "");
 	});
 
+	it("takes extra writable roots, ignoring junk entries", () => {
+		const merged = mergeNightConfig({
+			sandboxAllowWrite: [" ~/src/other ", "", 7],
+		});
+		assert.deepEqual(merged.sandboxAllowWrite, ["~/src/other"]);
+		assert.deepEqual(mergeNightConfig({}).sandboxAllowWrite, []);
+	});
+
+	it("lets an empty list clear inherited writable roots", () => {
+		const base = mergeNightConfig({ sandboxAllowWrite: ["~/src/other"] });
+		assert.deepEqual(
+			mergeNightConfig({ sandboxAllowWrite: [] }, base).sandboxAllowWrite,
+			[],
+		);
+	});
+
 	it("takes custom report sections, ignoring junk entries", () => {
 		const merged = mergeNightConfig({ reportSections: ["Tickets", "  ", 3] });
 		assert.deepEqual(merged.reportSections, ["Tickets"]);

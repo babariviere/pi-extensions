@@ -478,6 +478,11 @@ export default function (pi: ExtensionAPI): void {
 				input.workspacePath ?? input.cwd,
 				dirname(input.reportPath),
 				input.ledgerDir,
+				// Roots the run cannot derive: a second repository the night is
+				// expected to touch, a notes vault, and so on.
+				...input.config.sandboxAllowWrite.map((path) =>
+					resolvePath(path, input.cwd),
+				),
 			],
 		};
 	}
