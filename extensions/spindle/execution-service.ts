@@ -8,17 +8,13 @@ import {
   type SpindleExecutionTraceV1,
 } from "./audit/trace.ts";
 import { SpindleActivityStore } from "./activity/store.ts";
-import type {
-  SpindleActivityEventInput,
-  SpindleActivityItemInput,
-  SpindlePhaseInput,
-  SpindleRunDisplay,
-} from "./activity/types.ts";
+import type { SpindleRunDisplay } from "./activity/types.ts";
 import {
   MAX_AGENT_TIMEOUT_MS,
   MIN_AGENT_TIMEOUT_MS,
   type SpindleConfig,
 } from "./config.ts";
+import { fullCodeProvider, hostCallTable, type HostCallContext } from "./host-calls.ts";
 import {
   ActionRegistry,
   type SpindleCallAudit,
@@ -174,11 +170,6 @@ export class SpindleExecutionService {
         throw new Error(`Spindle agent budget exhausted (${maxAgentCalls} per execution)`);
       }
     };
-    const fullCodeProvider = (value: string): "pi" | "extensions" | undefined => {
-      const separator = value.indexOf(".");
-      const provider = separator > 0 ? value.slice(0, separator) : value;
-      return provider === "pi" || provider === "extensions" ? provider : undefined;
-    };
     const guardFullCodeRef = (ref: string): void => {
       if (effectiveFullCodeMode) return;
       const provider = fullCodeProvider(ref);
@@ -333,204 +324,31 @@ export class SpindleExecutionService {
         observeInvocation,
       });
     };
+    // The per-execution state every host-call handler runs against; dispatch
+    // itself is a table lookup (see host-calls.ts).
+    const hostContext: HostCallContext = {
+      registry: this.registry,
+      activity: this.activity,
+      parentToolCallId: options.parentToolCallId,
+      fullCodeMode: effectiveFullCodeMode,
+      phases,
+      workflowSpans,
+      registryContext: (signal) => ({ ...baseContext, signal }),
+      update,
+      guardFullCodeRef,
+      traceAttempt,
+      issueCall: (ref, args) => traceRecorder.issueCall(ref, args),
+      invokeAction: (ref, args, signal) => invokeAction(ref, args, { ...baseContext, signal }),
+    };
     let sandboxResult: SpindleSandboxResult;
     try {
       this.#runtime ??= new dependencies.QuickJsRuntime();
       sandboxResult = await this.#runtime.execute(
         options.code,
         async (ref, args, runtimeSignal) => {
-          const callContext = { ...baseContext, signal: runtimeSignal };
-          switch (ref) {
-            case "spindle.$providers":
-              return traceAttempt(
-                "spindle.discovery.providers",
-                args,
-                runtimeSignal,
-                () =>
-                  this.registry
-                    .providers()
-                    .filter(
-                      (provider) => effectiveFullCodeMode || !fullCodeProvider(provider.name),
-                    ),
-              );
-            case "spindle.$catalog":
-              return traceAttempt(
-                "spindle.discovery.catalog",
-                args,
-                runtimeSignal,
-                async (setStage) => {
-                  const provider = typeof args.provider === "string" ? args.provider : undefined;
-                  setStage("guard");
-                  if (provider) guardFullCodeRef(`${provider}.*`);
-                  setStage(provider && !this.registry.has(provider) ? "resolve" : "invoke");
-                  return this.registry.catalog(callContext, {
-                    ...(provider ? { provider } : {}),
-                    ...(typeof args.limit === "number" ? { limit: args.limit } : {}),
-                    includeProvider: (name) => effectiveFullCodeMode || !fullCodeProvider(name),
-                  });
-                },
-              );
-            case "spindle.$list":
-              return traceAttempt(
-                "spindle.discovery.list",
-                args,
-                runtimeSignal,
-                async (setStage) => {
-                  setStage("guard");
-                  if (typeof args.provider === "string") guardFullCodeRef(`${args.provider}.*`);
-                  setStage(
-                    typeof args.provider === "string" && !this.registry.has(args.provider)
-                      ? "resolve"
-                      : "invoke",
-                  );
-                  const actions = await this.registry.list(
-                    {
-                      ...(typeof args.provider === "string" ? { provider: args.provider } : {}),
-                      ...(typeof args.namespace === "string" ? { namespace: args.namespace } : {}),
-                      ...(typeof args.query === "string" ? { query: args.query } : {}),
-                      ...(typeof args.limit === "number" ? { limit: args.limit } : {}),
-                    },
-                    callContext,
-                  );
-                  return actions.filter(
-                    (action) => effectiveFullCodeMode || !fullCodeProvider(action.provider),
-                  );
-                },
-              );
-            case "spindle.$search":
-              return traceAttempt(
-                "spindle.discovery.search",
-                args,
-                runtimeSignal,
-                async () => {
-                  const actions = await this.registry.search(
-                    String(args.query ?? ""),
-                    callContext,
-                    typeof args.limit === "number" ? args.limit : undefined,
-                  );
-                  return actions.filter(
-                    (action) => effectiveFullCodeMode || !fullCodeProvider(action.provider),
-                  );
-                },
-              );
-            case "spindle.$describe":
-              return traceAttempt(
-                "spindle.discovery.describe",
-                args,
-                runtimeSignal,
-                async (setStage) => {
-                  const targetRef = String(args.ref ?? "");
-                  setStage("guard");
-                  guardFullCodeRef(targetRef);
-                  setStage("resolve");
-                  return this.registry.describe(targetRef, callContext);
-                },
-              );
-            case "spindle.$call": {
-              const callArgs =
-                typeof args.args === "object" && args.args !== null && !Array.isArray(args.args)
-                  ? (args.args as Record<string, unknown>)
-                  : {};
-              const targetRef = String(args.ref ?? "");
-              return invokeAction(targetRef, callArgs, callContext);
-            }
-            case "spindle.$progress":
-              return traceAttempt(
-                "spindle.workflow.progress",
-                args,
-                runtimeSignal,
-                () => update(String(args.message ?? "Working")),
-              );
-            case "spindle.$configure":
-              return traceAttempt(
-                "spindle.workflow.configure",
-                args,
-                runtimeSignal,
-                () => {
-                  const display: SpindleRunDisplay = {
-                    ...(typeof args.name === "string" ? { name: args.name } : {}),
-                    ...(typeof args.description === "string" ? { description: args.description } : {}),
-                  };
-                  return this.activity?.configure(options.parentToolCallId, display) ?? display;
-                },
-              );
-            case "spindle.$phase":
-              return traceAttempt(
-                "spindle.workflow.phase",
-                args,
-                runtimeSignal,
-                (setStage) => {
-                  setStage("validate");
-                  const name =
-                    typeof args.name === "string" ? args.name.trim() : "";
-                  if (!name) throw new Error("Workflow phase name must be a non-empty string");
-                  phases.push(name);
-                  const phaseIndex = phases.length - 1;
-                  const phaseInput: SpindlePhaseInput = {
-                    name,
-                    ...(typeof args.id === "string" ? { id: args.id } : {}),
-                    ...(typeof args.description === "string" ? { description: args.description } : {}),
-                    ...(typeof args.total === "number" ? { total: args.total } : {}),
-                  };
-                  setStage("invoke");
-                  const activityPhase = this.activity?.phase(options.parentToolCallId, phaseInput);
-                  update(`Phase: ${name}`);
-                  return {
-                    name,
-                    index: phaseIndex,
-                    ...(activityPhase ? { id: activityPhase.id } : {}),
-                  };
-                },
-              );
-            case "spindle.$item":
-              return traceAttempt(
-                "spindle.workflow.item",
-                args,
-                runtimeSignal,
-                () => {
-                  const item = args as unknown as SpindleActivityItemInput;
-                  return this.activity?.upsertItem(options.parentToolCallId, item) ?? item;
-                },
-              );
-            case "spindle.$event":
-              return traceAttempt(
-                "spindle.workflow.event",
-                args,
-                runtimeSignal,
-                () => {
-                  const event = args as unknown as SpindleActivityEventInput;
-                  this.activity?.event(options.parentToolCallId, event);
-                },
-              );
-            case "spindle.$spanStart": {
-              const id = typeof args.id === "string" ? args.id : "";
-              const kind = args.kind;
-              if (!id || (kind !== "parallel" && kind !== "pipeline")) {
-                throw new Error("Invalid internal workflow span start");
-              }
-              if (workflowSpans.has(id)) throw new Error("Duplicate internal workflow span");
-              const operation = traceRecorder.issueCall(`spindle.workflow.${kind}`, args);
-              workflowSpans.set(id, { kind, operation });
-              return undefined;
-            }
-            case "spindle.$spanEnd": {
-              const id = typeof args.id === "string" ? args.id : "";
-              const span = workflowSpans.get(id);
-              if (!span) throw new Error("Unknown internal workflow span");
-              workflowSpans.delete(id);
-              if (args.outcome === "succeeded") span.operation.succeed(undefined);
-              else {
-                span.operation.fail(
-                  "invoke",
-                  undefined,
-                  executionOutcomeFromError(new Error("Workflow span failed"), runtimeSignal),
-                );
-              }
-              return undefined;
-            }
-            default:
-              return invokeAction(ref, args, callContext);
-          }
+          const hostCall = hostCallTable.get(ref);
+          if (hostCall) return hostCall.handle(args, hostContext, runtimeSignal);
+          return invokeAction(ref, args, { ...baseContext, signal: runtimeSignal });
         },
         {
           timeoutMs: effectiveTimeoutMs,

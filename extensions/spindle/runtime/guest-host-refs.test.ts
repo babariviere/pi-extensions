@@ -4,16 +4,16 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 
+import { HOST_CALLS } from "../host-calls.ts";
 import { QuickJsRuntime } from "./quickjs-runtime.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const runtimeSource = readFileSync(join(here, "quickjs-runtime.ts"), "utf8");
 const serviceSource = readFileSync(join(here, "..", "execution-service.ts"), "utf8");
+const hostCallsSource = readFileSync(join(here, "..", "host-calls.ts"), "utf8");
 
-/** Host calls the execution service handles with an explicit case. */
-const serviceCaseRefs = new Set(
-  [...serviceSource.matchAll(/case "([a-z]+\.[A-Za-z0-9$._]+)"/g)].map((match) => match[1]!),
-);
+/** Host calls the dispatch table answers (see ../host-calls.ts). */
+const serviceCaseRefs = new Set(HOST_CALLS.map((call) => call.ref));
 
 /** Host calls the runtime itself satisfies before the bridge is reached. */
 const runtimeInternalRefs = new Set(
@@ -55,6 +55,10 @@ const probeCode = [
   "await new Promise((resolve) => setTimeout(resolve, 1));",
   "print('hi');",
 ].join("\n");
+
+test("the host-call table has exactly one entry per ref", () => {
+  assert.equal(serviceCaseRefs.size, HOST_CALLS.length);
+});
 
 test("every static ref GUEST_SETUP can emit is exercised by the probe", async () => {
   const recorded = new Set<string>();
@@ -109,10 +113,9 @@ test("every static host-call case is reachable from the guest", async () => {
   );
   assert.equal(result.terminationReason, "completed");
   for (const ref of serviceCaseRefs) {
-    if (!ref.startsWith("spindle.$")) continue;
     assert.ok(
       recorded.has(ref) || HOST_ONLY_REFS.has(ref),
-      `execution-service case ${ref} has no guest producer`,
+      `host-call table entry ${ref} has no guest producer`,
     );
   }
 });
@@ -120,4 +123,5 @@ test("every static host-call case is reachable from the guest", async () => {
 test("the vendored rename left no fabric host-call refs", () => {
   assert.ok(!/fabric\.\$/.test(runtimeSource), "quickjs-runtime.ts still names fabric.$ refs");
   assert.ok(!/fabric\.\$/.test(serviceSource), "execution-service.ts still names fabric.$ refs");
+  assert.ok(!/fabric\.\$/.test(hostCallsSource), "host-calls.ts still names fabric.$ refs");
 });

@@ -96,16 +96,16 @@ this table before it applies.
 | `"pi-fabric"` widget id | `"spindle"` |
 | `fabric.json` config file | `spindle.json` |
 
-The `fabric.$*` → `spindle.$*` row spans a host/guest boundary that no
+The `fabric.$*` → `spindle.$*` row spans a host/guest seam that no
 type-checker covers: the guest half lives inside the `GUEST_SETUP`
 string literal in `runtime/quickjs-runtime.ts`, the host half in the host-call
-`switch` in `execution-service.ts`. They must be renamed together; a mismatch
+table in `host-calls.ts` (dispatched by `execution-service.ts`). They must be renamed together; a mismatch
 fails only at runtime, silently. Two guards exist: after any port,
 `rg 'fabric\.\$' extensions/spindle` must be empty, and
 `runtime/guest-host-refs.test.ts` executes every guest API against a recording
-host bridge and asserts each emitted ref is handled (an explicit case, a
-runtime-internal handler such as `spindle.$timer`, or a registry provider
-namespace) and that every static `spindle.$*` case is reachable.
+host bridge and asserts each emitted ref is handled (a `host-calls.ts` table
+entry, a runtime-internal handler such as `spindle.$timer`, or a registry
+provider namespace) and that every static `spindle.$*` table entry is reachable.
 
 ## Render parity set
 
@@ -186,7 +186,7 @@ fd -e ts . extensions/spindle -x perl -pi -e 's{(from\s+")(\.\.?/[^"]*)\.js(")}{
 | *(whole tree)* | Relative import specifiers rewritten `.js` → `.ts` |
 | `index.ts` | **Rewritten.** Dropped the actor host-event observers, upstream's slash command, prewalk handoff `message_end` boundary, compaction hook, ESC halt-the-world gate, `resources_discover` bundled-skills contribution, and all `publishHostLifecycle` / `dispatchHostEvent` / `noteMainActivity` wiring. Kept code-preview settings, the capture install, tool ownership/lifecycle, the `tool_result` + `context` skill-dir expansion, the `before_agent_start` guidance (rewritten for the surviving namespaces), and `session_start` / `session_shutdown`. Added the throttled `cleanupOldRuns()` sweep inherited from the deleted `extensions/subagents/index.ts`. |
 | `spindle-state.ts` | **Rewritten.** Now holds only config, `ActionRegistry`, the four providers, `SpindleExecutionService`, `SpindleActivityStore`, the subagent run registry, and the parent `SessionRef`. |
-| `execution-service.ts` | Trimmed: no Node-process runtime, no schema-enforce branches, no `agents.handoff` deferral, no `authorizer` plumbing. Upstream's `$models` case dropped. **The six discovery cases are spindle-local, not upstream**: `spindle.$providers` / `$catalog` / `$list` / `$search` / `$describe` / `$call` back the guest `tools` namespace (see `runtime/guest-host-refs.test.ts` for the contract). `spindle.$timer` is satisfied inside `runtime/quickjs-runtime.ts` and never reaches this switch. `spindle.$progress` currently has no guest producer (host-side `context.update` drives progress instead) but is kept callable. `guardAgentCall` now guards `agents.run` / `agents.runAll`. The type-check failure path reports the first errors verbatim (activity + trace message), and the emitted source map is forwarded to the runtime so guest stack positions map back to the program. Added a local `UsageWithReasoning` type because the installed `@earendil-works/pi-ai` `Usage` has no `reasoning` field. |
+| `execution-service.ts` | Trimmed: no Node-process runtime, no schema-enforce branches, no `agents.handoff` deferral, no `authorizer` plumbing. Upstream's `$models` case dropped. **All `spindle.$*` host-call cases live in the `host-calls.ts` table**, not here: the service builds one `HostCallContext` per execution and dispatches through `hostCallTable`. The six discovery entries (`spindle.$providers` / `$catalog` / `$list` / `$search` / `$describe` / `$call`) are spindle-local, not upstream, and back the guest `tools` namespace (see `runtime/guest-host-refs.test.ts` for the contract). `spindle.$timer` is satisfied inside `runtime/quickjs-runtime.ts` and never reaches this switch. `spindle.$progress` currently has no guest producer (host-side `context.update` drives progress instead) but is kept callable. `guardAgentCall` now guards `agents.run` / `agents.runAll`. The type-check failure path reports the first errors verbatim (activity + trace message), and the emitted source map is forwarded to the runtime so guest stack positions map back to the program. Added a local `UsageWithReasoning` type because the installed `@earendil-works/pi-ai` `Usage` has no `reasoning` field. |
 | `spindle-exec-tool.ts` | Tool renamed to `spindle_exec`; `label` is `Spindle`. `description`, `promptSnippet` and the `code` parameter description rewritten for the surviving namespaces. `tokenBudget` parameter and the prewalk handoff block removed; `agentBudget` kept (maps to `maxAgentCalls`). `renderCall` / `renderResult` bodies are otherwise unchanged, except type-check failures: `details.typeErrors` (persisted via `audit/details.ts`) renders as one red `Line L:C: message` row per error with an expand hint, so the TUI shows why the program never ran instead of a bare failure. Exported factory is `createSpindleExecTool`. |
 | `config.ts` | Trimmed: removed `mesh`, `memory`, `schema`, `compaction`, `retention`, `mcp` (upstream's own MCP client block) and `prewalk`. `executor.runtime` narrowed to the literal `"quickjs"`. `agents` repurposed to `{ maxPerExecution, timeoutMs, defaultModel?, defaultThinking? }`. `capture.keepVisible` default is `["spindle_exec"]`. **Config file renamed to `spindle.json`** (`<agentDir>/spindle.json`, `<cwd>/.pi/spindle.json`) so spindle never reads or writes pi-fabric's user config; the env override is `PI_SPINDLE_FULL_CODE_MODE`. Upstream's compaction-engine env side effect is gone. |
 | `config-migrations.ts` | Untouched. Its legacy `subagents` → `agents` migration is inert for a fresh `spindle.json`; it still provides the `configVersion` guard. |
@@ -245,7 +245,8 @@ risk/approval hunks by hand.
 | `core/arg-redaction.ts` | Redacts `pi.bash` `env` values and `stdin` from recorded surfaces (audits, previews, traces); the live call keeps raw values. |
 | `runtime/source-map.ts` | Minimal source-map consumer: decodes the transpile map and rewrites `pi-spindle-guest.js:L:C` stack positions to `program.ts:L:C` in the program the model wrote. |
 | `runtime/checker-backend.ts` | The type-checker backend seam: `check` / `transpile` behind one interface, with the stock `typescript` backend as default and runtime-installable alternatives (e.g. a native-compiler process) without touching the checker core. |
-| `runtime/guest-host-refs.test.ts` | The guest/host ref contract: runs a probe program through a real sandbox with a recording bridge, asserts every emitted ref is handled and every static `spindle.$*` case is reachable, and that no `fabric.$` names survive a port. |
+| `host-calls.ts` | The host half of the guest/host call contract: one `HOST_CALLS` table entry per `spindle.$*` ref (discovery, workflow, spans), each owning its handler over a per-execution `HostCallContext`. The execution service dispatches through `hostCallTable` and holds no host-call cases of its own; `runtime/guest-host-refs.test.ts` drives the table from the guest side. |
+| `runtime/guest-host-refs.test.ts` | The guest/host ref contract: runs a probe program through a real sandbox with a recording bridge, asserts every emitted ref is handled and every static `spindle.$*` table entry is reachable, and that no `fabric.$` names survive a port. |
 | `execution-service.test.ts` | Headless execution-service tests over a stub-provider registry: type errors, extension calls, discovery dispatch, phases, agent budget, and source-mapped runtime errors. |
 | `runtime/quickjs-runtime.test.ts` | Runtime integration tests: host-call marshalling and rejection, concurrency, logs and truncation, deadline, abort (pre-start and mid-host-call), memory limit, timers, `π` strings, `process` shim, and error-position mapping. |
 | `sandbox/policy.ts` | Pure filesystem policy: modes, writable roots, deny patterns, and the config object `@anthropic-ai/sandbox-runtime` expects. |
