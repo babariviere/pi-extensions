@@ -25,6 +25,8 @@ import {
   type SpindleRegistryActivityEvent,
 } from "./core/action-registry.ts";
 import type { SpindleToolGate } from "./core/tool-allowlist.ts";
+import { redactRecordedArgs } from "./core/arg-redaction.ts";
+import { spindleProcessSnapshot } from "./env-snapshot.ts";
 import {
   codeUsesOrchestration,
   isBlockingHostTimeoutRef,
@@ -301,7 +303,7 @@ export class SpindleExecutionService {
       args: Record<string, unknown>,
       callContext: typeof baseContext & { signal: AbortSignal },
     ): Promise<unknown> => {
-      const traceOperation = traceRecorder.issueCall(ref, args);
+      const traceOperation = traceRecorder.issueCall(ref, redactRecordedArgs(ref, args));
       try {
         guardFullCodeRef(ref);
         guardAgentCall(ref);
@@ -527,6 +529,8 @@ export class SpindleExecutionService {
           minimumTimeoutMsForHostCall,
           ...(checked.javascript ? { transpiledCode: checked.javascript } : {}),
           ...(options.strings ? { strings: options.strings } : {}),
+          // Allowlisted env snapshot injected as the guest's `process` global.
+          process: spindleProcessSnapshot(options.context.cwd),
           ...(options.signal ? { signal: options.signal } : {}),
         },
       );

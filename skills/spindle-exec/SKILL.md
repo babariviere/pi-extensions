@@ -11,7 +11,9 @@ description: >-
 
 One type-checked TS program in a fresh isolated QuickJS sandbox. Only the `return` value reaches the model; `print()`/`console.log` go to the activity widget. `π` is not a tool.
 
-Available globals: `pi` and `extensions` (full code mode only), `mcp`, `agents`, `workflow`, `print`, `console`, `π`, and the bare aliases `parallel` / `pipeline` / `phase` / `log`. Nothing else exists — there is no `tools`, `memory`, `state`, `schema`, `compact`, `mesh`, `council`, `rlm`, `agent()`, or `budget`.
+Available globals: `pi` and `extensions` (full code mode only), `mcp`, `agents`, `workflow`, `print`, `console`, `π`, `process`, and the bare aliases `parallel` / `pipeline` / `phase` / `log`. Nothing else exists — there is no `tools`, `memory`, `state`, `schema`, `compact`, `mesh`, `council`, `rlm`, `agent()`, or `budget`.
+
+`process` is a minimal shim: `process.env` is an allowlisted host snapshot (HOME, USER, LOGNAME, SHELL, PWD, PATH, LANG, LC_*, TERM, TMPDIR, XDG_*), `process.platform`/`process.arch` are host facts, and `process.cwd()` returns the session working directory. Sensitive variables are never exposed; for secrets in bash use the `<\\secret:NAME>` reference path.
 
 ## `pi` core tools (full code mode only)
 
@@ -20,7 +22,7 @@ Available globals: `pi` and `extensions` (full code mode only), `mcp`, `agents`,
 | Tool | Form | Returns |
 |------|------|---------|
 | `read` | `path` \| `{path,offset?,limit?}` | `string` |
-| `bash` | `command` \| `{command,timeout?}` | `{ok:true,output,details}`; rejects on a nonzero exit (`settle:true` returns `{ok:false,output,details:null,exitCode,error}` instead) |
+| `bash` | `command` \| `{command,timeout?,cwd?,env?,stdin?}` | `{ok:true,output,details}`; rejects on a nonzero exit (`settle:true` returns `{ok:false,output,details:null,exitCode,error}` instead) |
 | `grep` | `pattern` \| `{pattern,path?,glob?,ignoreCase?,literal?,context?,limit?}` \| `(pattern, path?, limit?)` | `string` |
 | `find` | `pattern` \| `{pattern,path?,limit?}` \| `(pattern, path?, limit?)` | `string` |
 | `ls` | `path?` \| `{path?,limit?}` | `string` |
@@ -29,7 +31,15 @@ Available globals: `pi` and `extensions` (full code mode only), `mcp`, `agents`,
 
 `bash` rejects on an ordinary nonzero exit; pass `settle:true` to get `{ok:false,output,details:null,exitCode,error}` instead of a rejection. Timeout, cancellation, approval, security, and spawn failures still reject. Other Pi core tool errors reject normally.
 
-Aliases (normalized to canonical before the host validates args): `cmd`/`shell`/`cmdline`→`command`; Bash `timeout` is in seconds, while `timeoutMs` is converted from milliseconds to `timeout`; `query`/`regex`/`search`→`pattern`; `ic`/`caseInsensitive`→`ignoreCase`; `globPattern`→`glob`; `ctx`→`context`; `max`→`limit`; `file`/`dir`→`path`; `start`→`offset`; `old`→`oldText`; `new`/`replacement`→`newText`; `contents`/`body`/`text`→`content`. Misspelled keys still fail the excess-property type check.
+Aliases (normalized to canonical before the host validates args): `cmd`/`shell`/`cmdline`→`command`; `workdir`/`workingDir`/`workingDirectory`→`cwd`; Bash `timeout` is in seconds, while `timeoutMs` is converted from milliseconds to `timeout`; `query`/`regex`/`search`→`pattern`; `ic`/`caseInsensitive`→`ignoreCase`; `globPattern`→`glob`; `ctx`→`context`; `max`→`limit`; `file`/`dir`→`path`; `start`→`offset`; `old`→`oldText`; `new`/`replacement`→`newText`; `contents`/`body`/`text`→`content`. Misspelled keys still fail the excess-property type check.
+
+`pi.bash` per-call extras:
+
+- `cwd` — absolute working directory for this one command (must exist).
+- `env` — extra variables **merged over** the shell environment (override, not replace).
+- `stdin` — text piped to the command. This is the canonical way to run a multiline script on a remote host, with no quoting layers: `pi.bash({ command: 'ssh hezflix bash -s', stdin: π.script })`. Never build `echo ${JSON.stringify(π.script)} | ssh ...` — the `\n` escapes survive to the remote shell and mangle the script.
+
+Env values and stdin are redacted from recorded surfaces (audits, previews, session files); the live command still receives them.
 
 When a program needs a string containing literal `${...}` (shell snippets, tool arguments, or grep patterns), do not use a TypeScript template literal: TypeScript will interpolate it. Use a plain quoted string or pass the content through the `strings` parameter and read it from `π.key`.
 

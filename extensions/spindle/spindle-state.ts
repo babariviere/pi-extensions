@@ -151,6 +151,7 @@ export class SpindleState {
         : undefined;
     if (this.#config.fullCodeMode) {
       this.#sandbox = await this.#createSandbox(context);
+      const sandbox = this.#sandbox;
       this.#registry.register(
         new PiToolsProvider(
           context.cwd,
@@ -158,9 +159,10 @@ export class SpindleState {
           capturedToolsProvider,
           this.#gate,
           {
-            bash: this.#sandbox.bashOperations(),
-            edit: this.#sandbox.editOperations(),
-            writeGuard: this.#sandbox.writeGuard(),
+            bash: sandbox.bashOperations(),
+            wrapCommand: (command: string) => sandbox.wrapCommand(command),
+            edit: sandbox.editOperations(),
+            writeGuard: sandbox.writeGuard(),
           },
         ),
       );

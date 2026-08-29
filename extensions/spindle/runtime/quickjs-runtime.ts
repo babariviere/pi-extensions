@@ -21,6 +21,13 @@ export interface SpindleSandboxOptions {
   memoryLimitBytes: number;
   maxLogChars?: number;
   strings?: Record<string, string>;
+  /** Injected as the guest's `process` global; the host filters the env allowlist. */
+  process?: {
+    env: Record<string, string>;
+    platform: string;
+    arch: string;
+    cwd: string;
+  };
   signal?: AbortSignal;
   minimumTimeoutMsForHostCall?(
     ref: string,
@@ -49,6 +56,17 @@ export const GUEST_SETUP = `
 const __spindleBridge = globalThis.__spindleHostCall;
 delete globalThis.__spindleHostCall;
 const __call = async (ref, args) => __spindleBridge(ref, args ?? {});
+const __spindleProcessInfo = globalThis.__spindleProcess ?? { env: {}, platform: "unknown", arch: "unknown", cwd: "" };
+delete globalThis.__spindleProcess;
+// Minimal process shim: the host injects an allowlisted env snapshot
+// (HOME, USER, LOGNAME, SHELL, PATH, LANG, LC_*, TERM, TMPDIR, XDG_*), so no
+// secret ever enters the sandbox. cwd() is the agent session's directory.
+globalThis.process = Object.freeze({
+  env: Object.freeze(__spindleProcessInfo.env ?? {}),
+  platform: __spindleProcessInfo.platform,
+  arch: __spindleProcessInfo.arch,
+  cwd: () => __spindleProcessInfo.cwd,
+});
 const __piToolNames = ["read","bash","edit","write","grep","find","ls"];
 const __piStringFields = { bash: "command", read: "path", ls: "path", grep: "pattern", find: "pattern" };
 // Per-tool key aliases. The runtime normalizes them to the canonical form
@@ -58,7 +76,7 @@ const __piStringFields = { bash: "command", read: "path", ls: "path", grep: "pat
 // call. Keep these in sync with the PiToolsApi overloads in guest-types.ts so
 // the type-checker accepts the same spellings it coercion-handles at runtime.
 const __piArgAliases = {
-  bash: { cmd: "command", shell: "command", cmdline: "command" },
+  bash: { cmd: "command", shell: "command", cmdline: "command", workdir: "cwd", workingDir: "cwd", workingDirectory: "cwd" },
   find: { query: "pattern", regex: "pattern", search: "pattern", max: "limit" },
   grep: {
     query: "pattern", regex: "pattern", search: "pattern",
@@ -628,6 +646,15 @@ export class QuickJsRuntime {
       const strings = jsonHandle(context, jsonObject, jsonParse, options.strings ?? {});
       context.setProp(context.global, "π", strings);
       strings.dispose();
+
+      const processInfo = jsonHandle(
+        context,
+        jsonObject,
+        jsonParse,
+        options.process ?? { env: {}, platform: "unknown", arch: "unknown", cwd: "" },
+      );
+      context.setProp(context.global, "__spindleProcess", processInfo);
+      processInfo.dispose();
 
       const setupResult = context.evalCode(GUEST_SETUP, "spindle-setup.js");
       if (setupResult.error) {

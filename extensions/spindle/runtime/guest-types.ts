@@ -88,9 +88,24 @@ interface SpindleToolsApi {
 // flat edit shape ({ path, oldText, newText }) are also accepted; the runtime
 // proxy normalizes them to the canonical form before the host validates args.
 // Bash timeout is measured in seconds; timeoutMs is converted from milliseconds.
+// Per-call pi.bash extras: cwd (absolute working directory; workdir /
+// workingDir / workingDirectory are normalized aliases), env (extra variables
+// merged over the shell environment), and stdin (text piped to the command,
+// e.g. pi.bash({ command: 'ssh host bash -s', stdin: π.script })).
+type SpindleBashOptions = {
+  timeout?: number;
+  timeoutMs?: number;
+  settle?: boolean;
+  cwd?: string;
+  workdir?: string;
+  workingDir?: string;
+  workingDirectory?: string;
+  env?: Record<string, string>;
+  stdin?: string;
+};
 interface PiToolsApi {
   read(args: string | { path: string; offset?: number; limit?: number; start?: number; max?: number } | { file: string; offset?: number; limit?: number; start?: number; max?: number }): Promise<string>;
-  bash(args: string | { command: string; timeout?: number; timeoutMs?: number; settle?: boolean } | { cmd: string; timeout?: number; timeoutMs?: number; settle?: boolean } | { shell: string; timeout?: number; timeoutMs?: number; settle?: boolean }): Promise<{ ok: true; output: string; details: unknown } | { ok: false; output: string; details: null; exitCode: number; error: string }>;
+  bash(args: string | (({ command: string } | { cmd: string } | { shell: string }) & SpindleBashOptions)): Promise<{ ok: true; output: string; details: unknown } | { ok: false; output: string; details: null; exitCode: number; error: string }>;
   edit(args: { path: string; edits: Array<{ oldText: string; newText: string }> } | { file: string; edits: Array<{ oldText: string; newText: string }> } | { path: string; oldText: string; newText: string } | { file: string; oldText: string; newText: string } | { path: string; old: string; new: string } | { path: string; old: string; replacement: string }): Promise<{ ok: true; output: string; details: unknown }>;
   edit(path: string, oldText: string, newText: string): Promise<{ ok: true; output: string; details: unknown }>;
   write(args: { path: string; content: string } | { file: string; content: string } | { path: string; contents: string } | { path: string; body: string } | { path: string; text: string }): Promise<{ ok: true; output: string; details: unknown }>;
@@ -215,6 +230,15 @@ interface SpindleConsole {
 }
 declare const console: SpindleConsole;
 declare const π: Readonly<Record<string, string>>;
+// Allowlisted host env (HOME, USER, LOGNAME, SHELL, PWD, PATH, LANG, LC_*,
+// TERM, TMPDIR, XDG_*), platform facts, and the session working directory.
+// Sensitive variables are never exposed to the sandbox.
+declare const process: {
+  env: Readonly<Record<string, string>>;
+  platform: string;
+  arch: string;
+  cwd(): string;
+};
 declare function print(...args: unknown[]): void;
 declare function setTimeout(handler: (...args: any[]) => void, timeout?: number): number;
 declare function clearTimeout(handle: number): void;

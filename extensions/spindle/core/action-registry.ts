@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { Value } from "typebox/value";
 import { runAbortable, settleWithin } from "../async-settlement.ts";
+import { redactRecordedArgs } from "./arg-redaction.ts";
 import {
   executionOutcomeFromError,
   type SpindleExecutionTraceOperationHandle,
@@ -116,9 +117,12 @@ const boundedPreviewValue = (value: unknown, maxChars: number): unknown => {
 };
 
 const previewArgs = (ref: string, args: Record<string, unknown>): Record<string, unknown> => {
+  // Recorded surfaces (audits, previews) must not persist pi.bash env values
+  // or stdin; redact before truncation.
+  const source = redactRecordedArgs(ref, args);
   const out: Record<string, unknown> = {};
   let count = 0;
-  for (const [key, value] of Object.entries(args)) {
+  for (const [key, value] of Object.entries(source)) {
     if (count++ >= PREVIEW_ARG_KEYS) break;
     const maxChars =
       ref === "pi.write" && key === "content"
@@ -459,7 +463,7 @@ export class ActionRegistry {
       if (typeof preparedArgs !== "object" || preparedArgs === null || Array.isArray(preparedArgs)) {
         throw new Error(`Argument preparation for ${ref} did not return an object`);
       }
-      traceOperation?.prepared(preparedArgs);
+      traceOperation?.prepared(redactRecordedArgs(ref, preparedArgs));
 
       failureStage = "validate";
       const invalid = validationMessage(action.inputSchema, preparedArgs);

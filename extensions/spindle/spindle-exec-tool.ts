@@ -93,6 +93,7 @@ export const createSpindleExecTool = (
     promptGuidelines: [
       "Batch independent operations in one `spindle_exec` program, not one call per tool; keep dependent/conditional steps sequential. Use `Promise.all` for a few independent calls; reach for `workflow.parallel(items, fn, N)` when fanning out over many items (cap concurrency with N), and `workflow.pipeline(items, ...stages)` for repeated read->transform->write stages. Return only the compact final value; intermediate results stay in the sandbox.",
       "Awkward payloads MUST go through `strings` and be read as `π.key`, never inlined in `code`: multi-line file content, JSON blobs, long prose, and strings with literal `${...}`. Inlining multi-line content nests it through three escape layers and the model emits literal `\\n`, corrupting the file; template literals also interpolate `${...}`. E.g. `strings: { body }` then `pi.write({ path, content: π.body })`; JSON-encode data and `JSON.parse(π.key)`.",
+      "`process.env` exposes an allowlisted host environment (HOME, USER, SHELL, PWD, PATH, LANG, LC_*, TERM, TMPDIR, XDG_*); sensitive variables are never exposed. `pi.bash` accepts per-call `cwd` (absolute working directory), `env` (merged over the shell environment), and `stdin` (text piped to the command) — e.g. `pi.bash({ command: 'ssh host bash -s', stdin: π.script })` runs a multiline remote script without quoting tricks.",
     ],
     // The model-facing schema is intentionally flat: one large `code` string
     // plus scalar/optional params. Do not add nested arrays-of-objects with
@@ -105,7 +106,7 @@ export const createSpindleExecTool = (
     parameters: Type.Object({
       code: Type.String({
         description:
-          "TypeScript function body. Top-level await and return are supported. Globals include `mcp`, `agents`, `workflow`, `print`, and `π`; full-code mode adds `pi` and `extensions`. See session guidance / `spindle-exec` skill for exact signatures.",
+          "TypeScript function body. Top-level await and return are supported. Globals include `mcp`, `agents`, `workflow`, `print`, `π`, and `process` (allowlisted `process.env`, `process.cwd()`); full-code mode adds `pi` and `extensions`. `pi.bash` also takes `cwd`, `env`, and `stdin`. See session guidance / `spindle-exec` skill for exact signatures.",
       }),
       strings: Type.Optional(
         Type.Record(Type.String(), Type.String(), {

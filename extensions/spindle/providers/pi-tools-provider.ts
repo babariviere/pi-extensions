@@ -1,5 +1,4 @@
 import {
-  createBashToolDefinition,
   type BashOperations,
   type EditOperations,
   createEditToolDefinition,
@@ -11,6 +10,7 @@ import {
   type ExtensionRunner,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
+import { createSpindleBashToolDefinition } from "./spindle-bash-tool.ts";
 import { runAbortable, throwIfAborted } from "../async-settlement.ts";
 import { CapturedToolCatalog } from "../capture/catalog.ts";
 import { PI_CORE_TOOL_NAMES, type PiCoreToolName } from "../core/pi-tools.ts";
@@ -109,6 +109,8 @@ interface PiToolResult {
  */
 export interface PiToolsSandbox {
   bash?: BashOperations;
+  /** Wrap a command for the OS sandbox when one is active (pi.bash stdin path). */
+  wrapCommand?: (command: string) => Promise<string>;
   edit?: EditOperations;
   writeGuard?: (absolutePath: string) => void;
 }
@@ -137,7 +139,10 @@ export class PiToolsProvider implements SpindleProvider {
     // truncation and offsets behave identically.
     this.#tools = {
       read: createReadToolDefinition(cwd),
-      bash: createBashToolDefinition(cwd, sandbox?.bash ? { operations: sandbox.bash } : undefined),
+      bash: createSpindleBashToolDefinition(cwd, {
+        operations: sandbox?.bash,
+        wrapCommand: sandbox?.wrapCommand,
+      }),
       edit: createEditToolDefinition(cwd, sandbox?.edit ? { operations: sandbox.edit } : undefined),
       write: createPreviewWriteToolDefinition(cwd, sandbox?.writeGuard),
       grep: createGrepToolDefinition(cwd),

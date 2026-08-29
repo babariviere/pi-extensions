@@ -130,6 +130,16 @@ export class SandboxController {
     return this.#bash;
   }
 
+  /**
+   * Wrap a command for the OS sandbox when one is active; identity otherwise.
+   * Used by spindle-owned exec paths (pi.bash stdin) so they stay bounded by
+   * the same policy as the operations above.
+   */
+  wrapCommand(command: string): Promise<string> {
+    const runtime = this.#runtime;
+    return runtime ? runtime.wrapWithSandbox(command) : Promise.resolve(command);
+  }
+
   /** Path check for Spindle's preview write tool, which does its own writing. */
   writeGuard(): (absolutePath: string) => void {
     return (absolutePath: string) => {
