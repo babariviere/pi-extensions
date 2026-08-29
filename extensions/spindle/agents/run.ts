@@ -72,7 +72,8 @@ export type OnStatus = (index: number, update: RunStatusUpdate) => void;
  * Ambient inputs a backend needs to run a batch: the parent session it belongs
  * to, a shared `runId`, the cwd, a per-run timeout, an abort signal, and the
  * status callback. Both adapters take the same context, so the tool builds it
- * once and hands it to whichever backend `selectBackend` returns.
+ * once and hands it to the run launcher (`backend.ts`), which picks the
+ * adapter and contains herdr CLI drift.
  */
 export interface RunContext {
 	sessionId: string | undefined;
@@ -86,7 +87,7 @@ export interface RunContext {
 
 /**
  * The run-backend seam: turn a batch of requests into results. Two adapters
- * implement it (headless child processes, live herdr panes); `selectBackend`
+ * implement it (headless child processes, live herdr panes); the run launcher
  * (see backend.ts) picks one by environment. Batch-shaped because the herdr
  * adapter needs the whole batch at once to tile its pane grid; the headless
  * adapter fans out with Promise.all internally.

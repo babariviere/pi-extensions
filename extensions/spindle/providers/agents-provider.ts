@@ -19,7 +19,7 @@
  * renderer shows an in-flight ticker.
  */
 
-import { selectBackend } from "../agents/backend.ts";
+import { RunLauncher } from "../agents/backend.ts";
 import { discoverAgentsForCwd } from "../agents/discovery.ts";
 import { newRunId } from "../agents/paths.ts";
 import { buildRunRequests, type NormalizedItem } from "../agents/request.ts";
@@ -150,6 +150,9 @@ export class SpindleAgentsProvider implements SpindleProvider {
   readonly description =
     "Custom markdown agents discovered on disk, run as child Pi sessions (headless, or live herdr panes)";
 
+  /** Adapter selection and herdr drift containment (see agents/backend.ts). */
+  readonly #launcher = new RunLauncher();
+
   constructor(
     readonly session: () => SessionRef,
     readonly registry: SpindleAgentRunRegistry,
@@ -239,7 +242,17 @@ export class SpindleAgentsProvider implements SpindleProvider {
     // model; `cwd` is not part of the tool schema.
     const workspaces = await allocateNightWorkspaces(requests, runId, ref.cwd);
 
-    const monitor = new RunProgressMonitor({ registry: this.registry, context, runId }, requests);
+    // One selection per process (the herdr dialect probe runs at most once):
+    // a drifted herdr CLI degrades to headless instead of failing the batch.
+    const selection = await this.#launcher.selection();
+    const note = selection.degradedReason
+      ? `herdr CLI drifted (${selection.degradedReason}); running headless`
+      : undefined;
+
+    const monitor = new RunProgressMonitor(
+      { registry: this.registry, context, runId, ...(note ? { note } : {}) },
+      requests,
+    );
     monitor.start();
 
     const runContext: RunContext = {
@@ -253,7 +266,7 @@ export class SpindleAgentsProvider implements SpindleProvider {
     };
 
     try {
-      const results = await selectBackend()(requests, runContext);
+      const results = await this.#launcher.run(requests, runContext);
       return results.map(agentResult);
     } finally {
       monitor.stop();

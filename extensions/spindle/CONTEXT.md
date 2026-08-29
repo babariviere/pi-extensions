@@ -236,7 +236,7 @@ risk/approval hunks by hand.
 | File | Purpose |
 |---|---|
 | `providers/mcp-bridge-provider.ts` | `mcp.*` → the `pi-mcp-adapter` `mcp` gateway tool. **Upstream has a file with the same provider name (`mcp`) that is deliberately not vendored.** |
-| `providers/agents-provider.ts` | `agents.*` → the absorbed subagents code. Its `#run` reduces to a pipeline (`#resolveRequests` → start monitor → invoke backend → format results). **Upstream also ships `src/providers/agents-provider.ts`, fronting its own RLM/handoff agent runtime; that file is NOT vendored, and this file is unrelated to it.** |
+| `providers/agents-provider.ts` | `agents.*` → the absorbed subagents code. Its `#run` reduces to a pipeline (`#resolveRequests` → start monitor → invoke the run launcher → format results). **Upstream also ships `src/providers/agents-provider.ts`, fronting its own RLM/handoff agent runtime; that file is NOT vendored, and this file is unrelated to it.** |
 | `providers/agent-run-monitor.ts` | The widget-facing projection: `SpindleAgentRunRegistry` (the widget's data source) and `RunProgressMonitor`, which turns backend status updates into registry rows + the one-line ticker behind a `start`/`onStatus`/`stop` interface. |
 | `ui/transcript-types.ts` | `SpindleLogLine`, copied from upstream `src/agents/types.ts`, so the transcript parser does not import a dropped subsystem. |
 | `agents/` | The absorbed `extensions/subagents` code (see below). |
@@ -432,7 +432,9 @@ block is no longer emitted as raw tool text. Instead `RunProgressMonitor`
   `SpindleUiAgent`-shaped record (`id`, `name`, `status`, `startedAt`,
   `updatedAt`, `currentTool`, `error`, `runId`), which `ui/snapshot.ts` feeds to
   `ui/widget.ts`'s existing `agentLines()`;
-- calls `renderProgress(...)` once per tick, flattened to a single line, as the
+- calls `renderProgress(...)` once per tick, flattened to a single line (prefixed
+  by an optional `note`, e.g. the run launcher's fallback reason when a drifted
+  herdr CLI degraded the batch to headless), as the
   `context.update(...)` body, so `ui/spindle-render.ts`'s
   `singleCallProgressLine` / `renderNestedAgentToolLines` /
   `renderSpindleMulticallPartial` render the in-flight ticker;
@@ -499,7 +501,7 @@ and docs aligned with these.)
     waits for each pane to settle. Its completion rule (`waitForRunCompletion`,
     `RunOutcome`, `outcomeError`) lives in `herdr-completion.ts`, not the shared
     `run.ts`, because only herdr needs it.
-  `backend.ts` owns `selectBackend()`, which picks the adapter by environment.
+  `backend.ts` owns the **run launcher** (`RunLauncher`), the deep module that picks the adapter by environment *and* contains herdr CLI drift: it probes the installed herdr for the dialect the adapter speaks (`agent start --kind`, `agent wait`) at most once per process, and falls back to the headless adapter with a surfaced reason when the binary has drifted, instead of failing every run.
   `RunResult` is a discriminated union on `backend` (`"headless"` carries
   `exitCode`, `"herdr"` carries `paneId`) so backend-specific diagnostics do not
   leak as bare optionals into the shared type; `run.ts`'s `baseResult` builds the

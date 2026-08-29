@@ -95,14 +95,22 @@ export class RunProgressMonitor {
 	#live = false;
 	#frame = 0;
 	#ticker: ReturnType<typeof setInterval> | undefined;
+	readonly #note: string | undefined;
 
 	constructor(
-		deps: { registry: SpindleAgentRunRegistry; context: SpindleInvocationContext; runId: string },
+		deps: {
+			registry: SpindleAgentRunRegistry;
+			context: SpindleInvocationContext;
+			runId: string;
+			/** Prefix for the ticker line, e.g. the run launcher's fallback reason. */
+			note?: string;
+		},
 		requests: RunRequest[],
 	) {
 		this.#registry = deps.registry;
 		this.#context = deps.context;
 		this.#runId = deps.runId;
+		this.#note = deps.note === undefined ? undefined : deps.note.slice(0, 120);
 		const startedAt = Date.now();
 		this.#progress = requests.map((request) => ({
 			name: request.agent.config.name,
@@ -172,7 +180,8 @@ export class RunProgressMonitor {
 		if (!this.#live) return;
 		// renderProgress stays the tested renderer; one line per tick keeps the
 		// spindle progress line compact instead of dumping an ANSI block.
-		const message = renderProgress(this.#progress, now, { frame: this.#frame }).split("\n").join(" · ");
+		let message = renderProgress(this.#progress, now, { frame: this.#frame }).split("\n").join(" · ");
+		if (this.#note) message = `${this.#note} · ${message}`;
 		this.#context.update(message);
 		this.#context.activity?.({ type: "progress", message });
 	}
