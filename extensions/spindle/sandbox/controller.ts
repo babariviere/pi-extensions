@@ -24,6 +24,7 @@ import {
   type SandboxRuntime,
 } from "./manager.ts";
 import {
+  assertReadAllowed,
   assertWriteAllowed,
   describeSandbox,
   isEnforcing,
@@ -145,6 +146,18 @@ export class SandboxController {
     return (absolutePath: string) => {
       if (!this.enforcing) return;
       assertWriteAllowed(this.#policy, absolutePath);
+    };
+  }
+
+  /**
+   * Stable path check for the read tools (`read` / `grep` / `find` / `ls`),
+   * enforcing the policy's denyRead roots. Reads outside those roots stay
+   * untouched, so image handling and truncation behave exactly like pi's.
+   */
+  readGuard(): (absolutePath: string) => void {
+    return (absolutePath: string) => {
+      if (!this.enforcing) return;
+      assertReadAllowed(this.#policy, absolutePath);
     };
   }
 

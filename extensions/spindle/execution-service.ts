@@ -130,14 +130,24 @@ export class SpindleExecutionService {
       dependencies.guestTypeDeclarations(effectiveFullCodeMode, this.toolGate),
     );
     if (checked.errors.length > 0) {
-      this.activity?.finish(options.parentToolCallId, false, "Type checking failed");
+      // The widget and trace must say *why* the program never ran, not just
+      // that it failed: surface the first errors verbatim (bounded).
+      const typeErrorSummary = checked.errors
+        .slice(0, 3)
+        .map((error) =>
+          error.line > 0 ? `L${error.line}:${error.column} ${error.message}` : error.message,
+        )
+        .join("; ")
+        .slice(0, 400);
+      const failureMessage = `Type checking failed: ${typeErrorSummary}`;
+      this.activity?.finish(options.parentToolCallId, false, failureMessage);
       return {
         success: false,
         value: undefined,
         logs: [],
         audits: [],
         phases: [],
-        trace: traceRecorder.seal("failed", [], "Type checking failed"),
+        trace: traceRecorder.seal("failed", [], failureMessage),
         elapsedMs: performance.now() - startedAt,
         typeErrors: checked.errors,
       };
@@ -528,6 +538,9 @@ export class SpindleExecutionService {
           maxLogChars: this.config.executor.maxOutputChars,
           minimumTimeoutMsForHostCall,
           ...(checked.javascript ? { transpiledCode: checked.javascript } : {}),
+          // The map for checked.javascript, so guest stack positions map back
+          // to the program the model wrote (runtime/source-map.ts).
+          ...(checked.javascript && checked.sourceMap ? { sourceMap: checked.sourceMap } : {}),
           ...(options.strings ? { strings: options.strings } : {}),
           // Allowlisted env snapshot injected as the guest's `process` global.
           process: spindleProcessSnapshot(options.context.cwd),

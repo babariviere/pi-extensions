@@ -1,6 +1,11 @@
 import releaseSyncVariant from "@jitl/quickjs-singlefile-mjs-release-sync";
 import { newQuickJSWASMModuleFromVariant } from "quickjs-emscripten-core";
 import { runAbortable, settleWithin } from "../async-settlement.ts";
+import {
+  mapGuestErrorText,
+  parseGuestSourceMap,
+  type GuestSourceMap,
+} from "./source-map.ts";
 import { transpileSpindleCode } from "./type-checker.ts";
 
 export type SpindleSandboxTerminationReason =
@@ -21,6 +26,12 @@ export interface SpindleSandboxOptions {
   memoryLimitBytes: number;
   maxLogChars?: number;
   strings?: Record<string, string>;
+  /**
+   * JSON text of the source map for `transpiledCode`, used to rewrite guest
+   * stack positions back to the program the model wrote. Ignored when the
+   * runtime transpiles `code` itself (it then uses its own emitted map).
+   */
+  sourceMap?: string;
   /** Injected as the guest's `process` global; the host filters the env allowlist. */
   process?: {
     env: Record<string, string>;
@@ -429,6 +440,21 @@ globalThis.clearInterval = (id) => { __timerCallbacks.delete(id); };
 const formatValue = (value: unknown): string => {
   if (typeof value === "string") return value;
   if (value instanceof Error) return value.stack ?? value.message;
+  // QuickJS Error values arrive from context.dump() as plain objects holding
+  // name/message/stack; render them like a real Error instead of raw JSON so
+  // the failure text reads "Error: boom" plus frames, not an escaped blob.
+  if (typeof value === "object" && value !== null) {
+    const record = value as { name?: unknown; message?: unknown; stack?: unknown };
+    if (
+      typeof record.message === "string" &&
+      (typeof record.stack === "string" || typeof record.name === "string")
+    ) {
+      const head = `${String(record.name)}: ${record.message}`;
+      return typeof record.stack === "string" && record.stack.length > 0
+        ? `${head}\n${record.stack}`
+        : head;
+    }
+  }
   try {
     return JSON.stringify(value);
   } catch {
@@ -682,7 +708,23 @@ export class QuickJsRuntime {
 
       executionGate = context.newPromise();
       context.setProp(context.global, "__spindleExecutionGate", executionGate.handle);
-      const guestProgram = options.transpiledCode ?? transpileSpindleCode(code);
+      // When the caller supplies the transpiled code it must supply its map
+      // too (a self-transpiled map would not match); otherwise transpile here
+      // and keep the emitted map for error-position translation.
+      let sourceMap: GuestSourceMap | undefined;
+      let guestProgram: string;
+      if (options.transpiledCode !== undefined) {
+        guestProgram = options.transpiledCode;
+        sourceMap = parseGuestSourceMap(options.sourceMap);
+      } else {
+        const transpiled = transpileSpindleCode(code);
+        guestProgram = transpiled.javascript;
+        sourceMap = parseGuestSourceMap(options.sourceMap ?? transpiled.sourceMap);
+      }
+      // Guest stack frames point into the emitted JS; rewrite them to the
+      // user's program coordinates so the reported line is the line written.
+      const formatGuestError = (handle: any): string =>
+        mapGuestErrorText(formatValue(context.dump(handle)), sourceMap);
       const wrappedCode = `${guestProgram}\nPromise.race([__piSpindleMain(), globalThis.__spindleExecutionGate])`;
       const evaluation = context.evalCode(wrappedCode, "pi-spindle-guest.js");
       runtime.executePendingJobs();
@@ -693,7 +735,7 @@ export class QuickJsRuntime {
           ? "Execution cancelled"
           : deadlineExceeded
             ? timeoutMessage()
-            : formatValue(context.dump(evaluation.error));
+            : formatGuestError(evaluation.error);
         evaluation.error.dispose();
         abortHostCalls(error);
         return {
@@ -737,7 +779,7 @@ export class QuickJsRuntime {
           ? "Execution cancelled"
           : deadlineExceeded
             ? timeoutMessage()
-            : formatValue(context.dump(resolution.error));
+            : formatGuestError(resolution.error);
         resolution.error.dispose();
         abortHostCalls(error);
         return {

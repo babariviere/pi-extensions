@@ -10,6 +10,7 @@ import {
   type ExtensionRunner,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
+import { isAbsolute, resolve } from "node:path";
 import { createSpindleBashToolDefinition } from "./spindle-bash-tool.ts";
 import { runAbortable, throwIfAborted } from "../async-settlement.ts";
 import { CapturedToolCatalog } from "../capture/catalog.ts";
@@ -113,6 +114,12 @@ export interface PiToolsSandbox {
   wrapCommand?: (command: string) => Promise<string>;
   edit?: EditOperations;
   writeGuard?: (absolutePath: string) => void;
+  /**
+   * Path check enforcing the sandbox policy's denyRead roots on the read
+   * tools (`read` / `grep` / `find` / `ls`). Denied reads throw before the
+   * tool runs; everything else keeps pi's behavior unchanged.
+   */
+  readGuard?: (absolutePath: string) => void;
 }
 
 export class PiToolsProvider implements SpindleProvider {
@@ -124,6 +131,7 @@ export class PiToolsProvider implements SpindleProvider {
   readonly #cwd: string;
   /** Subagent `tools:` gate; an unrestricted gate for a normal session. */
   readonly #gate: SpindleToolGate;
+  readonly #readGuard: ((absolutePath: string) => void) | undefined;
 
   constructor(
     cwd: string,
@@ -134,9 +142,12 @@ export class PiToolsProvider implements SpindleProvider {
   ) {
     this.#cwd = cwd;
     this.#gate = gate;
-    // Only the mutating tools are gated: `bash` by the OS sandbox, `write` and
-    // `edit` by a path check. Read tools keep pi's defaults so image handling,
-    // truncation and offsets behave identically.
+    this.#readGuard = sandbox?.readGuard;
+    // The mutating tools are gated: `bash` by the OS sandbox, `write` and
+    // `edit` by a path check. The read tools keep pi's definitions (image
+    // handling, truncation and offsets stay identical) but the sandbox's
+    // denyRead roots are checked first, so a sandboxed program cannot read a
+    // credential the OS sandbox would already hide from `bash`.
     this.#tools = {
       read: createReadToolDefinition(cwd),
       bash: createSpindleBashToolDefinition(cwd, {
@@ -209,6 +220,11 @@ export class PiToolsProvider implements SpindleProvider {
     if (!(actionName in this.#tools)) throw new Error(`Unknown Pi tool: ${actionName}`);
     this.#gate.assert(this.name, actionName);
     const name = actionName as PiCoreToolName;
+    // Runs for captured overrides too: the denyRead roots must bind every
+    // path a read-shaped tool can open.
+    if (name === "read" || name === "grep" || name === "find" || name === "ls") {
+      this.#guardReadPath(args);
+    }
     // A captured extension override (e.g. an extension that registered a "read"
     // tool) already replays the full event lifecycle itself via
     // CapturedToolsProvider, so delegate to it unchanged.
@@ -240,6 +256,16 @@ export class PiToolsProvider implements SpindleProvider {
       return this.#normalizeResult(name, result, args);
     }
     return this.#invokeWithEvents(name, tool, args, context, runner);
+  }
+
+  // Apply the sandbox read guard to a read-shaped call. `path` is canonical
+  // post-alias-normalization, but the sibling spellings are checked too so a
+  // generic `tools.call` with raw args cannot slip past the guard.
+  #guardReadPath(args: Record<string, unknown>): void {
+    if (this.#readGuard === undefined) return;
+    const candidate = args.path ?? args.file ?? args.dir;
+    if (typeof candidate !== "string" || candidate === "") return;
+    this.#readGuard(isAbsolute(candidate) ? candidate : resolve(this.#cwd, candidate));
   }
 
   // Replay the agent-core tool-execution lifecycle for a nested pi.* call, so

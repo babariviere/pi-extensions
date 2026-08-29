@@ -163,6 +163,7 @@ export class SpindleState {
             wrapCommand: (command: string) => sandbox.wrapCommand(command),
             edit: sandbox.editOperations(),
             writeGuard: sandbox.writeGuard(),
+            readGuard: sandbox.readGuard(),
           },
         ),
       );

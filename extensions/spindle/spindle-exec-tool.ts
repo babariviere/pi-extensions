@@ -434,6 +434,29 @@ export const createSpindleExecTool = (
       const failed = details.success === false;
 
       if (audits.length === 0) {
+        // Type-check failures are the one error class where the diagnosis is a
+        // list, not a sentence: render each error as its own red line so the
+        // user sees exactly why the program never ran (expand shows all).
+        const typeErrors = details.typeErrors;
+        if (failed && typeErrors !== undefined && typeErrors.length > 0) {
+          const limit = expanded ? typeErrors.length : Math.min(typeErrors.length, 6);
+          const shown = typeErrors.slice(0, limit);
+          let text = theme.fg(
+            "error",
+            `✗ Type errors; code was not executed (${countLabel(typeErrors.length, "error")})`,
+          );
+          for (const typeError of shown) {
+            const where =
+              typeError.line > 0 ? `Line ${typeError.line}:${typeError.column}: ` : "";
+            text += nl + theme.fg("error", `  ${where}${safeTerminalText(typeError.message)}`);
+          }
+          const hidden = typeErrors.length - shown.length;
+          if (hidden > 0) {
+            text += nl + theme.fg("dim", `… ${countLabel(hidden, "error")} hidden`);
+            if (!expanded) text += theme.fg("dim", " · ") + expandHint(theme);
+          }
+          return trackRows(new Text(text, 0, 0));
+        }
         if (failed && details.error) {
           return trackRows(
             new Text(
@@ -696,7 +719,7 @@ export const createSpindleExecTool = (
         const text = result.typeErrors
           .map((error) =>
             error.line > 0
-              ? `Line ${error.line}:${error.column} — ${error.message}`
+              ? `Line ${error.line}:${error.column}: ${error.message}`
               : error.message,
           )
           .join("\n");

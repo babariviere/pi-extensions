@@ -1,12 +1,14 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+  assertReadAllowed,
   assertWriteAllowed,
   DEFAULT_DENY_READ,
   describeSandbox,
   expandPath,
   isEnforcing,
   isInside,
+  isReadDenied,
   isSandboxMode,
   isWriteAllowed,
   matchesPattern,
@@ -56,6 +58,24 @@ test("matchesPattern matches basenames, and full paths when the pattern has a sl
   assert.equal(matchesPattern("*.pem", "/work/repo/certs/key.pub"), false);
   assert.equal(matchesPattern("/work/repo/dist/*", "/work/repo/dist/app.js"), true);
   assert.equal(matchesPattern("/work/repo/dist/*", "/work/repo/src/app.js"), false);
+});
+
+test("denyRead roots deny reads only while enforcing", () => {
+  const enforcing = resolveSandboxPolicy({ mode: "workspace-write" }, environment());
+  assert.equal(isReadDenied(enforcing, "/home/dev/.ssh/id_ed25519"), true);
+  assert.equal(isReadDenied(enforcing, "/home/dev/.gnupg/pubring.kbx"), true);
+  assert.equal(isReadDenied(enforcing, "/home/dev/.ssh"), true);
+  assert.equal(isReadDenied(enforcing, "/work/repo/src/a.ts"), false);
+
+  const off = resolveSandboxPolicy({ mode: "off" }, environment());
+  assert.equal(isReadDenied(off, "/home/dev/.ssh/id_ed25519"), false);
+
+  assert.throws(
+    () => assertReadAllowed(enforcing, "/home/dev/.ssh/id_ed25519"),
+    /sandbox: read of \/home\/dev\/\.ssh\/id_ed25519 denied by mode 'workspace-write'/,
+  );
+  assert.doesNotThrow(() => assertReadAllowed(enforcing, "/work/repo/src/a.ts"));
+  assert.doesNotThrow(() => assertReadAllowed(off, "/home/dev/.ssh/id_ed25519"));
 });
 
 test("workspace-write grants the run dir plus tool caches", () => {

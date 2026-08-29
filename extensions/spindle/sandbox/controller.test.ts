@@ -56,6 +56,22 @@ test("turning enforcement on mid-session changes the verdict of the same guard",
   assert.doesNotThrow(() => guard("/home/dev/.zshrc"));
 });
 
+test("the read guard follows the live policy too", async () => {
+  const { start } = fakeRuntime();
+  const controller = new SandboxController(policyFor("off"), "config", start);
+  // The guard object is captured once, exactly as the pi tool holds it.
+  const guard = controller.readGuard();
+  assert.doesNotThrow(() => guard("/home/dev/.ssh/id_ed25519"));
+
+  await controller.apply(policyFor("workspace-write"), "request");
+  assert.throws(() => guard("/home/dev/.ssh/id_ed25519"), /denied by mode 'workspace-write'/);
+  assert.doesNotThrow(() => guard("/work/repo/src/a.ts"));
+
+  // Reverting releases it again, without rebuilding anything.
+  await controller.apply(policyFor("off"), "config");
+  assert.doesNotThrow(() => guard("/home/dev/.ssh/id_ed25519"));
+});
+
 test("edit operations follow the live policy too", async () => {
   const { start } = fakeRuntime();
   const controller = new SandboxController(policyFor("workspace-write"), "request", start);

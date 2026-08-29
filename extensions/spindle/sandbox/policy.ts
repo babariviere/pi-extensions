@@ -245,6 +245,26 @@ export function assertWriteAllowed(policy: SandboxPolicy, absolutePath: string):
   );
 }
 
+/**
+ * Whether a read of `absolutePath` is denied. The read tools (`read`, `grep`,
+ * `find`, `ls`) check this as a plain path guard, mirroring the denyRead roots
+ * the OS sandbox already enforces on `bash`. Without it, a sandboxed program
+ * could still pull a credential through `pi.read` and send it out through any
+ * channel `bash` is allowed to reach.
+ */
+export function isReadDenied(policy: SandboxPolicy, absolutePath: string): boolean {
+  if (!isEnforcing(policy)) return false;
+  return policy.denyRead.some((root) => isInside(root, absolutePath));
+}
+
+/** Throw a caller-facing error when a read is under a denied root. */
+export function assertReadAllowed(policy: SandboxPolicy, absolutePath: string): void {
+  if (!isReadDenied(policy, absolutePath)) return;
+  throw new Error(
+    `sandbox: read of ${absolutePath} denied by mode '${policy.mode}'. Denied read roots: ${policy.denyRead.join(", ")}`,
+  );
+}
+
 /** The config object `@anthropic-ai/sandbox-runtime` expects. */
 export function toSandboxRuntimeConfig(policy: SandboxPolicy): {
   network: SandboxNetworkPolicy;

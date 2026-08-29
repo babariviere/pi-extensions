@@ -1,15 +1,22 @@
 import path from "node:path";
 import ts from "typescript";
+import {
+  activeCheckerBackend,
+  setDefaultCheckerBackend,
+  type SpindleTypeCheckOutcome,
+  type SpindleTypeError,
+  type SpindleTranspileResult,
+} from "./checker-backend.ts";
 
-export interface SpindleTypeError {
-  line: number;
-  column: number;
-  message: string;
-}
+export type { SpindleTypeCheckOutcome, SpindleTypeError, SpindleTranspileResult };
+export {
+  activeCheckerBackend,
+  checkerBackendName,
+  installCheckerBackend,
+} from "./checker-backend.ts";
 
-export interface SpindleTypeCheckResult {
+export interface SpindleTypeCheckResult extends SpindleTypeCheckOutcome {
   errors: SpindleTypeError[];
-  javascript?: string;
 }
 
 const compilerOptions: ts.CompilerOptions = {
@@ -28,6 +35,9 @@ const compilerOptions: ts.CompilerOptions = {
   noEmit: false,
   skipLibCheck: true,
   lib: ["lib.es2022.d.ts"],
+  // The emitted map is what runtime/source-map.ts uses to translate guest
+  // stack positions back to the program the model wrote.
+  sourceMap: true,
 };
 
 const TYPE_CORRECTNESS_CODES = new Set<number>([
@@ -141,10 +151,16 @@ class SpindleTypeChecker {
     if (errors.length > 0) return { errors };
 
     let javascript: string | undefined;
+    let sourceMap: string | undefined;
     program.emit(this.#sourceFile, (fileName, content) => {
       if (fileName.endsWith(".js")) javascript = content;
+      else if (fileName.endsWith(".js.map")) sourceMap = content;
     });
-    return { errors, ...(javascript ? { javascript } : {}) };
+    return {
+      errors,
+      ...(javascript !== undefined ? { javascript } : {}),
+      ...(sourceMap !== undefined ? { sourceMap } : {}),
+    };
   }
 }
 
@@ -168,15 +184,41 @@ const checkerFor = (declarations: string): SpindleTypeChecker => {
   return checker;
 };
 
-export const transpileSpindleCode = (code: string): string =>
-  ts.transpileModule(`async function __piSpindleMain() {\n${code}\n}\n`, {
+const transpileWrapped = (code: string): SpindleTranspileResult => {
+  const wrapped = `async function __piSpindleMain() {\n${code}\n}\n`;
+  const output = ts.transpileModule(wrapped, {
     compilerOptions: {
       target: ts.ScriptTarget.ES2022,
       module: ts.ModuleKind.ESNext,
+      sourceMap: true,
     },
-  }).outputText;
+  });
+  return {
+    javascript: output.outputText,
+    ...(output.sourceMapText !== undefined ? { sourceMap: output.sourceMapText } : {}),
+  };
+};
+
+/**
+ * The stock backend: the `typescript` compiler, in-process, with a small
+ * per-declarations checker cache. Registered as the default at import time.
+ */
+export const typescriptCheckerBackend = {
+  name: "typescript",
+  check(code: string, declarations: string): SpindleTypeCheckOutcome {
+    return checkerFor(declarations).check(code);
+  },
+  transpile(code: string): SpindleTranspileResult {
+    return transpileWrapped(code);
+  },
+} as const satisfies import("./checker-backend.ts").SpindleCheckerBackend;
+
+setDefaultCheckerBackend(typescriptCheckerBackend);
+
+export const transpileSpindleCode = (code: string): SpindleTranspileResult =>
+  activeCheckerBackend().transpile(code);
 
 export const typeCheckSpindleCode = (
   code: string,
   declarations: string,
-): SpindleTypeCheckResult => checkerFor(declarations).check(code);
+): SpindleTypeCheckResult => activeCheckerBackend().check(code, declarations);

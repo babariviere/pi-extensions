@@ -6,12 +6,24 @@ import {
 
 export const SPINDLE_EXECUTION_DETAILS_MAX_BYTES = 512 * 1024;
 
+/** One type-check failure, as reported to the model and rendered in the TUI. */
+export interface SpindleRenderTypeError {
+  line: number;
+  column: number;
+  message: string;
+}
+
+const MAX_PERSISTED_TYPE_ERRORS = 50;
+const MAX_TYPE_ERROR_MESSAGE_CHARS = 500;
+
 export interface SpindlePersistedExecutionDetailsV1 {
   success: boolean;
   trace: SpindleExecutionTraceV1;
   outputFormat?: "yaml" | "json";
   outputFormatStartLine?: number;
   outputFormatLines?: number;
+  /** Present when the program failed type checking and was never executed. */
+  typeErrors?: SpindleRenderTypeError[];
 }
 
 export interface SpindleLegacyRenderAudit {
@@ -37,6 +49,7 @@ export interface SpindleExecutionRenderDetails {
   outputFormatLines?: number;
   phases: string[];
   audits: SpindleLegacyRenderAudit[];
+  typeErrors?: SpindleRenderTypeError[];
 }
 
 const serializedBytes = (value: unknown): number =>
@@ -56,6 +69,7 @@ export const createSpindlePersistedExecutionDetails = (input: {
   outputFormat?: "yaml" | "json";
   outputFormatStartLine?: number;
   outputFormatLines?: number;
+  typeErrors?: SpindleRenderTypeError[];
 }): SpindlePersistedExecutionDetailsV1 => {
   const details: SpindlePersistedExecutionDetailsV1 = {
     success: input.success,
@@ -66,6 +80,17 @@ export const createSpindlePersistedExecutionDetails = (input: {
       : {}),
     ...(input.outputFormatLines !== undefined
       ? { outputFormatLines: Math.max(0, Math.floor(input.outputFormatLines)) }
+      : {}),
+    ...(input.typeErrors !== undefined && input.typeErrors.length > 0
+      ? {
+          typeErrors: input.typeErrors
+            .slice(0, MAX_PERSISTED_TYPE_ERRORS)
+            .map((error) => ({
+              line: Math.max(0, Math.floor(error.line)),
+              column: Math.max(0, Math.floor(error.column)),
+              message: error.message.slice(0, MAX_TYPE_ERROR_MESSAGE_CHARS),
+            })),
+        }
       : {}),
   };
   while (
@@ -81,6 +106,13 @@ export const createSpindlePersistedExecutionDetails = (input: {
   ) {
     details.trace.phases.pop();
     details.trace.counts.droppedValues++;
+  }
+  while (
+    serializedBytes(details) > SPINDLE_EXECUTION_DETAILS_MAX_BYTES &&
+    details.typeErrors !== undefined &&
+    details.typeErrors.length > 0
+  ) {
+    details.typeErrors.pop();
   }
   if (serializedBytes(details) > SPINDLE_EXECUTION_DETAILS_MAX_BYTES) {
     delete details.trace.error;
@@ -166,5 +198,20 @@ export const readSpindleExecutionRenderDetails = (
       : {}),
     phases: oldPhases ?? trace?.phases ?? [],
     audits: oldAudits ?? trace?.operations.map(auditFromOperation) ?? [],
+    ...(Array.isArray(value.typeErrors)
+      ? {
+          typeErrors: value.typeErrors
+            .filter(
+              (error): error is SpindleRenderTypeError =>
+                typeof error === "object" &&
+                error !== null &&
+                !Array.isArray(error) &&
+                typeof (error as SpindleRenderTypeError).line === "number" &&
+                typeof (error as SpindleRenderTypeError).column === "number" &&
+                typeof (error as SpindleRenderTypeError).message === "string",
+            )
+            .slice(0, MAX_PERSISTED_TYPE_ERRORS),
+        }
+      : {}),
   };
 };
