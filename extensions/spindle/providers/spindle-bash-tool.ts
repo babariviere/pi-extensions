@@ -16,13 +16,12 @@
  * extras-free path delegates to the shared base tool unchanged.
  *
  * `stdin` needs a spindle-owned spawn: both exec paths pi provides use
- * `stdio: ["ignore", ...]`. The spawn mirrors `sandbox/manager.ts` (detached
- * child, process-tree kill on abort/timeout, `timeout:<seconds>` / `aborted`
- * error strings) so pi's tool-level error formatting still applies, and
- * routes the command through the OS-sandbox wrap when one is active.
+ * `stdio: ["ignore", ...]`. The stdin path delegates to the shared supervised
+ * spawn (`sandbox/supervised-spawn.ts`, also the OS-sandbox wrap's backend),
+ * so pi's tool-level error formatting still applies, and it routes the command
+ * through the OS-sandbox wrap when one is active.
  */
 
-import { spawn } from "node:child_process";
 import { stat } from "node:fs/promises";
 import { isAbsolute } from "node:path";
 import {
@@ -31,6 +30,7 @@ import {
   type BashOperations,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
+import { supervisedSpawn } from "../sandbox/supervised-spawn.ts";
 import { Type } from "typebox";
 
 export const MAX_STDIN_CHARS = 8 * 1024 * 1024;
@@ -61,71 +61,6 @@ const spindleBashSchema = Type.Object({
 });
 
 const SKIPPED_ENV_KEYS = new Set(["__proto__", "constructor", "prototype"]);
-
-const execWithStdin = async (
-  command: string,
-  cwd: string,
-  options: {
-    onData: (data: Buffer) => void;
-    signal?: AbortSignal;
-    timeout?: number;
-    env?: Record<string, string | undefined>;
-    stdin: string;
-  },
-  wrapCommand: (command: string) => Promise<string>,
-): Promise<{ exitCode: number | null }> => {
-  const wrapped = await wrapCommand(command);
-  return new Promise((resolve, reject) => {
-    const child = spawn("bash", ["-c", wrapped], {
-      cwd,
-      detached: true,
-      stdio: ["pipe", "pipe", "pipe"],
-      ...(options.env ? { env: options.env } : {}),
-    });
-    // The command may never read stdin; an EPIPE on our side must not fail it.
-    child.stdin?.on("error", () => {});
-    child.stdin?.end(options.stdin);
-
-    let timedOut = false;
-    const killTree = () => {
-      if (!child.pid) return;
-      try {
-        process.kill(-child.pid, "SIGKILL");
-      } catch {
-        child.kill("SIGKILL");
-      }
-    };
-
-    const timer =
-      options.timeout !== undefined && options.timeout > 0
-        ? setTimeout(() => {
-            timedOut = true;
-            killTree();
-          }, options.timeout * 1000)
-        : undefined;
-
-    child.stdout?.on("data", options.onData);
-    child.stderr?.on("data", options.onData);
-
-    const onAbort = () => killTree();
-    options.signal?.addEventListener("abort", onAbort, { once: true });
-
-    const settle = (run: () => void) => {
-      if (timer) clearTimeout(timer);
-      options.signal?.removeEventListener("abort", onAbort);
-      run();
-    };
-
-    child.on("error", (error) => settle(() => reject(error)));
-    child.on("close", (code) =>
-      settle(() => {
-        if (options.signal?.aborted) reject(new Error("aborted"));
-        else if (timedOut) reject(new Error(`timeout:${options.timeout}`));
-        else resolve({ exitCode: code });
-      }),
-    );
-  });
-};
 
 export const createSpindleBashToolDefinition = (
   cwd: string,
@@ -199,7 +134,7 @@ export const createSpindleBashToolDefinition = (
       }
 
       const operations: BashOperations = {
-        exec: (innerCommand, defaultCwd, options) => {
+        exec: async (innerCommand, defaultCwd, options) => {
           const effectiveCwd = callCwd ?? defaultCwd;
           const env =
             mergedCallEnv !== undefined
@@ -208,12 +143,16 @@ export const createSpindleBashToolDefinition = (
           if (callStdin === undefined) {
             return inner.exec(innerCommand, effectiveCwd, { ...options, env });
           }
-          return execWithStdin(
-            innerCommand,
-            effectiveCwd,
-            { ...options, env, stdin: callStdin },
-            wrapCommand,
-          );
+          const command = await wrapCommand(innerCommand);
+          return supervisedSpawn({
+            command,
+            cwd: effectiveCwd,
+            onData: options.onData,
+            ...(options.signal ? { signal: options.signal } : {}),
+            ...(options.timeout !== undefined ? { timeout: options.timeout } : {}),
+            ...(env ? { env } : {}),
+            stdin: callStdin,
+          });
         },
       };
       const perCall = createBashToolDefinition(cwd, { operations });

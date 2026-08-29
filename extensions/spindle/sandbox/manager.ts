@@ -11,10 +11,10 @@
  * variable specifier so a missing install degrades instead of breaking startup.
  */
 
-import { spawn } from "node:child_process";
 import type { BashOperations } from "@earendil-works/pi-coding-agent";
 import { createLocalBashOperations } from "@earendil-works/pi-coding-agent";
 import { type SandboxPolicy, toSandboxRuntimeConfig } from "./policy.ts";
+import { supervisedSpawn } from "./supervised-spawn.ts";
 
 const RUNTIME_MODULE = "@anthropic-ai/sandbox-runtime";
 
@@ -72,9 +72,10 @@ export async function initializeSandboxRuntime(policy: SandboxPolicy): Promise<R
  * it delegates to pi's own local shell backend, which keeps unsandboxed
  * behaviour byte-identical to the default tool.
  *
- * The sandboxed path mirrors the shipped pi `sandbox` example: a detached
- * process group so a timeout kills the whole tree, not just `bash`. `timeout` is
- * in seconds, matching pi's bash tool contract.
+ * The sandboxed path wraps the command through `srt` and hands it to the
+ * shared supervised spawn (`./supervised-spawn.ts`), which owns the detached
+ * process group and the timeout/abort kill-tree. `timeout` is in seconds,
+ * matching pi's bash tool contract.
  */
 export function lateBoundBashOperations(
   current: () => SandboxRuntime | undefined,
@@ -88,51 +89,13 @@ export function lateBoundBashOperations(
 
       const { onData, signal, timeout, env } = options;
       const wrapped = await runtime.wrapWithSandbox(command);
-      return new Promise((resolve, reject) => {
-        const child = spawn("bash", ["-c", wrapped], {
-          cwd,
-          detached: true,
-          stdio: ["ignore", "pipe", "pipe"],
-          ...(env ? { env } : {}),
-        });
-
-        let timedOut = false;
-        const killTree = () => {
-          if (!child.pid) return;
-          try {
-            process.kill(-child.pid, "SIGKILL");
-          } catch {
-            child.kill("SIGKILL");
-          }
-        };
-
-        const timer =
-          timeout !== undefined && timeout > 0
-            ? setTimeout(() => {
-                timedOut = true;
-                killTree();
-              }, timeout * 1000)
-            : undefined;
-
-        child.stdout?.on("data", onData);
-        child.stderr?.on("data", onData);
-
-        const onAbort = () => killTree();
-        signal?.addEventListener("abort", onAbort, { once: true });
-
-        child.on("error", (error) => {
-          if (timer) clearTimeout(timer);
-          signal?.removeEventListener("abort", onAbort);
-          reject(error);
-        });
-
-        child.on("close", (code) => {
-          if (timer) clearTimeout(timer);
-          signal?.removeEventListener("abort", onAbort);
-          if (signal?.aborted) reject(new Error("aborted"));
-          else if (timedOut) reject(new Error(`timeout:${timeout}`));
-          else resolve({ exitCode: code });
-        });
+      return supervisedSpawn({
+        command: wrapped,
+        cwd,
+        onData,
+        ...(signal ? { signal } : {}),
+        ...(timeout !== undefined ? { timeout } : {}),
+        ...(env ? { env } : {}),
       });
     },
   };

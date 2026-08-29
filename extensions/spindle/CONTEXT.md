@@ -240,7 +240,7 @@ risk/approval hunks by hand.
 | `providers/agent-run-monitor.ts` | The widget-facing projection: `SpindleAgentRunRegistry` (the widget's data source) and `RunProgressMonitor`, which turns backend status updates into registry rows + the one-line ticker behind a `start`/`onStatus`/`stop` interface. |
 | `ui/transcript-types.ts` | `SpindleLogLine`, copied from upstream `src/agents/types.ts`, so the transcript parser does not import a dropped subsystem. |
 | `agents/` | The absorbed `extensions/subagents` code (see below). |
-| `providers/spindle-bash-tool.ts` | Spindle's `pi.bash` definition: wraps pi's bash tool with per-call `cwd` / `env` / `stdin` extras (validated, then applied via per-call `BashOperations`); extras-free calls delegate to the base tool unchanged. The `stdin` path uses a spindle-owned spawn mirroring `sandbox/manager.ts` and routes through the OS-sandbox wrap. |
+| `providers/spindle-bash-tool.ts` | Spindle's `pi.bash` definition: wraps pi's bash tool with per-call `cwd` / `env` / `stdin` extras (validated, then applied via per-call `BashOperations`); extras-free calls delegate to the base tool unchanged. The `stdin` path delegates to the shared supervised spawn (`sandbox/supervised-spawn.ts`) and routes through the OS-sandbox wrap. |
 | `env-snapshot.ts` | The allowlisted environment snapshot injected as the guest's `process` global; secrets never enter the sandbox. |
 | `core/arg-redaction.ts` | Redacts `pi.bash` `env` values and `stdin` from recorded surfaces (audits, previews, traces); the live call keeps raw values. |
 | `runtime/source-map.ts` | Minimal source-map consumer: decodes the transpile map and rewrites `pi-spindle-guest.js:L:C` stack positions to `program.ts:L:C` in the program the model wrote. |
@@ -249,7 +249,8 @@ risk/approval hunks by hand.
 | `execution-service.test.ts` | Headless execution-service tests over a stub-provider registry: type errors, extension calls, discovery dispatch, phases, agent budget, and source-mapped runtime errors. |
 | `runtime/quickjs-runtime.test.ts` | Runtime integration tests: host-call marshalling and rejection, concurrency, logs and truncation, deadline, abort (pre-start and mid-host-call), memory limit, timers, `π` strings, `process` shim, and error-position mapping. |
 | `sandbox/policy.ts` | Pure filesystem policy: modes, writable roots, deny patterns, and the config object `@anthropic-ai/sandbox-runtime` expects. |
-| `sandbox/manager.ts` | Runtime plumbing: loading `srt`, initializing it for a policy, and the late-bound `bash` operations. |
+| `sandbox/manager.ts` | Runtime plumbing: loading `srt`, initializing it for a policy, and the late-bound `bash` operations (supervised by `sandbox/supervised-spawn.ts`). |
+| `sandbox/supervised-spawn.ts` | The one supervised process-tree spawn: detached process group, kill-tree on timeout/abort, stdin piping, and the `timeout:<seconds>` / `aborted` error contract, behind one small interface. Two adapters ride on it: the OS-sandbox wrap (`sandbox/manager.ts`) and the `pi.bash` stdin extras (`providers/spindle-bash-tool.ts`), which previously carried two private copies of these mechanics. |
 | `sandbox/controller.ts` | The session's live sandbox state. Hands out stable operations whose closures read the *current* policy, so the mode can change mid-session. `readGuard()` hands out the same shape of stable closure for the denyRead roots. |
 | `sandbox/protocol.ts` | Bus contract for changing the mode at runtime (`spindle:sandbox-request` / `spindle:sandbox-state`). |
 | `sandbox/night-bridge.ts` | Reads the night-mode handshake, so a subagent process inherits the run's policy without any IPC. |
