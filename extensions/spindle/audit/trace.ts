@@ -471,7 +471,7 @@ export class SpindleExecutionTraceRecorder {
   seal(
     outcome: SpindleExecutionOutcomeV1,
     phases: readonly string[],
-    _error?: string,
+    error?: string,
   ): SpindleExecutionTraceV1 {
     this.sealed = true;
     for (const operation of this.#operations) {
@@ -531,7 +531,10 @@ export class SpindleExecutionTraceRecorder {
       counts.droppedValues += phases.length - boundedPhases.length;
       counts.truncatedValues++;
     }
-    const safeRunError = executionErrorMessage(outcome);
+    // Prefer the caller's concrete failure text (runtime error, type-check
+    // summary) over the generic outcome label, so the transcript shows *why*
+    // the execution failed instead of "Execution failed".
+    const safeRunError = error?.trim() ? error : executionErrorMessage(outcome);
     const runError = safeRunError ? sanitizeString(safeRunError, MAX_ERROR_BYTES) : undefined;
     if (runError) addCounts(counts, runError.counts);
     const trace: SpindleExecutionTraceV1 = {

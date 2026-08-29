@@ -78,9 +78,11 @@ test("type errors fail before execution and carry positions", async () => {
   assert.equal(result.typeErrors?.length, 1);
   assert.equal(result.typeErrors![0]!.line, 1);
   assert.match(result.typeErrors![0]!.message, /missing_identifier/);
-  // The trace seals with its own generic failure text; the specifics travel in
-  // typeErrors (rendered by the tool layer) and the activity finish message.
-  assert.equal(result.trace.outcome, "failed");
+  // The trace carries the concrete failure, not the generic "Execution failed".
+  assert.match(
+    result.trace.error ?? "",
+    /Type checking failed: L1:\d+ Cannot find name 'missing_identifier'/,
+  );
 });
 
 test("a program can call a registered extension tool", async () => {
@@ -172,6 +174,8 @@ test("guest runtime errors map back to the program's lines", async () => {
   );
   assert.equal(result.success, false);
   assert.equal(result.error !== undefined && /program\.ts:2:\d+/.test(result.error), true);
+  assert.match(result.trace.error ?? "", /Error: boom/);
+  assert.match(result.trace.error ?? "", /program\.ts:2:/);
 });
 
 test("print output reaches the result logs", async () => {

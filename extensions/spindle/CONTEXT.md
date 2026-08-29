@@ -223,7 +223,11 @@ provider (`pi` / `mcp` / `agents` / captured) and on `CapturedToolEntry`
 The subagent `tools:` allowlist (`core/tool-allowlist.ts`, `SpindleToolGate`)
 is a separate system and is untouched. The `"approve"` member was also removed
 from `audit/trace.ts`'s `SpindleExecutionFailureStageV1` union and its `stages`
-validator Set. This is a deliberate divergence from upstream pi-fabric: porting
+validator Set. Additionally, `SpindleExecutionTraceRecorder.seal()` now honors
+its `error` argument: the caller's concrete failure text (runtime error,
+type-check summary) becomes `trace.error` instead of the generic
+"Execution failed" label, which is what the transcript renders. This is a
+deliberate divergence from upstream pi-fabric: porting
 future upstream changes to any of the files above now requires dropping the
 risk/approval hunks by hand.
 
