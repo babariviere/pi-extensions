@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { type AgentProgress, applyStatus, formatElapsed, renderProgress, SPINNER_FRAMES, stateGlyph } from "./progress.ts";
+import {
+	type AgentProgress,
+	applyStatus,
+	formatElapsed,
+	renderProgress,
+	SPINNER_FRAMES,
+	stateGlyph,
+} from "./progress.ts";
 
 test("formatElapsed formats sub-minute and minute durations", () => {
 	assert.equal(formatElapsed(-500), "0s");
@@ -15,7 +22,14 @@ test("formatElapsed formats sub-minute and minute durations", () => {
 test("renderProgress shows a spinner glyph, state, elapsed, pane and output per agent", () => {
 	const now = 100_000;
 	const model: AgentProgress[] = [
-		{ name: "worker", scope: "user", state: "running", startedAt: now - 75_000, paneId: "wA:p3", outputPath: "/tmp/out/worker_0.md" },
+		{
+			name: "worker",
+			scope: "user",
+			state: "running",
+			startedAt: now - 75_000,
+			paneId: "wA:p3",
+			outputPath: "/tmp/out/worker_0.md",
+		},
 		{ name: "reviewer", scope: "user", state: "spawning", startedAt: now },
 	];
 	const text = renderProgress(model, now);
@@ -35,17 +49,12 @@ test("renderProgress uses singular noun, terminal header and a check glyph when 
 		{ name: "worker", scope: "project", state: "done", startedAt: now - 3_000, outputPath: "/tmp/out.md" },
 	];
 	const text = renderProgress(model, now);
-	assert.equal(
-		text,
-		["Subagents (1):", "- \u2713 worker [done] \u00b7 3s \u00b7 output: /tmp/out.md"].join("\n"),
-	);
+	assert.equal(text, ["Subagents (1):", "- \u2713 worker [done] \u00b7 3s \u00b7 output: /tmp/out.md"].join("\n"));
 });
 
 test("renderProgress marks failed runs with a cross glyph and uppercase label", () => {
 	const now = 5_000;
-	const model: AgentProgress[] = [
-		{ name: "worker", scope: "user", state: "failed", startedAt: now - 1_000 },
-	];
+	const model: AgentProgress[] = [{ name: "worker", scope: "user", state: "failed", startedAt: now - 1_000 }];
 	assert.equal(renderProgress(model, now), ["Subagents (1):", "- \u2717 worker [FAILED] \u00b7 1s"].join("\n"));
 });
 
@@ -54,7 +63,10 @@ test("renderProgress freezes elapsed at endedAt for terminal rows", () => {
 		{ name: "worker", scope: "user", state: "done", startedAt: 0, endedAt: 3_000, outputPath: "/tmp/out.md" },
 	];
 	// now advances far past endedAt, but elapsed must stay frozen at 3s.
-	assert.equal(renderProgress(model, 999_000), ["Subagents (1):", "- \u2713 worker [done] \u00b7 3s \u00b7 output: /tmp/out.md"].join("\n"));
+	assert.equal(
+		renderProgress(model, 999_000),
+		["Subagents (1):", "- \u2713 worker [done] \u00b7 3s \u00b7 output: /tmp/out.md"].join("\n"),
+	);
 });
 
 test("renderProgress advances the spinner frame by injected index", () => {
@@ -80,10 +92,16 @@ test("renderProgress can wrap terminal glyphs in ANSI color when requested", () 
 
 test("renderProgress wraps active spinner glyphs in orange when color requested", () => {
 	const model: AgentProgress[] = [{ name: "worker", scope: "user", state: "running", startedAt: 0 }];
-	assert.ok(renderProgress(model, 1_000, { frame: 0, color: true }).includes(`\u001b[38;5;208m${SPINNER_FRAMES[0]}\u001b[0m`));
+	assert.ok(
+		renderProgress(model, 1_000, { frame: 0, color: true }).includes(`\u001b[38;5;208m${SPINNER_FRAMES[0]}\u001b[0m`),
+	);
 	// spawning is also active and orange
 	const spawning: AgentProgress[] = [{ name: "reviewer", scope: "user", state: "spawning", startedAt: 0 }];
-	assert.ok(renderProgress(spawning, 1_000, { frame: 0, color: true }).includes(`\u001b[38;5;208m${SPINNER_FRAMES[0]}\u001b[0m`));
+	assert.ok(
+		renderProgress(spawning, 1_000, { frame: 0, color: true }).includes(
+			`\u001b[38;5;208m${SPINNER_FRAMES[0]}\u001b[0m`,
+		),
+	);
 });
 
 test("applyStatus updates the row at the given index and preserves others", () => {

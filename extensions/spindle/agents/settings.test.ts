@@ -21,7 +21,10 @@ afterEach(() => {
 
 function writeSettings(base: string, defaultProvider: unknown): void {
 	mkdirSync(join(base, ".pi"), { recursive: true });
-	writeFileSync(join(base, ".pi", "settings.json"), JSON.stringify(defaultProvider === undefined ? {} : { defaultProvider }));
+	writeFileSync(
+		join(base, ".pi", "settings.json"),
+		JSON.stringify(defaultProvider === undefined ? {} : { defaultProvider }),
+	);
 }
 
 test("readDefaultProvider reads user settings via PI_CODING_AGENT_DIR", () => {

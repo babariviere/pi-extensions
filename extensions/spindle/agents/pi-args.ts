@@ -107,28 +107,15 @@ function withReads(task: string, reads: string[] | undefined): string {
  * actually in flight. Reading the handshake here (rather than passing the text
  * down) keeps the caller from having to know about night mode.
  */
-function withNight(
-	task: string,
-	night: boolean | undefined,
-	workspacePath?: string,
-): string {
+function withNight(task: string, night: boolean | undefined, workspacePath?: string): string {
 	if (!night) return task;
 	const run = readActiveNightRun();
 	return run ? `${buildNightContract(run, workspacePath)}\n${task}` : task;
 }
 
 /** The task framing given to the child agent, with the final-message rider. */
-export function formatTaskMessage(
-	task: string,
-	reads?: string[],
-	night?: boolean,
-	workspacePath?: string,
-): string {
-	return withNight(
-		`Task: ${injectOutputInstruction(withReads(task, reads))}`,
-		night,
-		workspacePath,
-	);
+export function formatTaskMessage(task: string, reads?: string[], night?: boolean, workspacePath?: string): string {
+	return withNight(`Task: ${injectOutputInstruction(withReads(task, reads))}`, night, workspacePath);
 }
 
 /**
@@ -147,7 +134,8 @@ export function buildChildArgs(agent: DiscoveredAgent, task: string, opts: Child
 	const model = qualified ? stripThinkingSuffix(qualified) : undefined;
 	// Thinking precedence: explicit override, then a suffix embedded in the chosen
 	// model, then the agent's frontmatter thinking.
-	const thinking = opts.thinkingOverride ?? (qualified ? extractThinkingSuffix(qualified) : undefined) ?? agent.config.thinking;
+	const thinking =
+		opts.thinkingOverride ?? (qualified ? extractThinkingSuffix(qualified) : undefined) ?? agent.config.thinking;
 	if (model) args.push("--model", model);
 	if (thinking && thinking !== "off") args.push("--thinking", thinking);
 

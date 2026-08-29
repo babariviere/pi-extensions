@@ -10,26 +10,15 @@ import {
 	readField,
 	unresolved,
 } from "./ledger.ts";
-import {
-	appendUnderHeading,
-	composeCarryOver,
-	composeNudge,
-} from "./prompt.ts";
+import { appendUnderHeading, composeCarryOver, composeNudge } from "./prompt.ts";
 
-const todoFile = (front: Record<string, unknown>, body = ""): string =>
-	`${JSON.stringify(front, null, 2)}\n\n${body}`;
+const todoFile = (front: Record<string, unknown>, body = ""): string => `${JSON.stringify(front, null, 2)}\n\n${body}`;
 
 describe("readField", () => {
 	it("finds a labelled line whatever the decoration", () => {
 		assert.equal(readField("Evidence: https://x/1", "evidence"), "https://x/1");
-		assert.equal(
-			readField("- **Evidence**: https://x/2", "evidence"),
-			"https://x/2",
-		);
-		assert.equal(
-			readField("notes\nReason:  too vague  \n", "reason"),
-			"too vague",
-		);
+		assert.equal(readField("- **Evidence**: https://x/2", "evidence"), "https://x/2");
+		assert.equal(readField("notes\nReason:  too vague  \n", "reason"), "too vague");
 	});
 
 	it("ignores an empty value", () => {
@@ -46,39 +35,24 @@ describe("classify", () => {
 
 	it("only accepts a close that carries evidence", () => {
 		assert.equal(classify("done", "").state, "unverified");
-		assert.equal(
-			classify("closed", "Evidence: https://github.com/x/pull/1").state,
-			"done",
-		);
+		assert.equal(classify("closed", "Evidence: https://github.com/x/pull/1").state, "done");
 	});
 
 	it("only accepts a skip that carries a reason", () => {
 		assert.equal(classify("skipped", "").state, "unverified");
-		assert.equal(
-			classify("skipped", "Reason: needs a product call").state,
-			"skipped",
-		);
+		assert.equal(classify("skipped", "Reason: needs a product call").state, "skipped");
 	});
 });
 
 describe("parseLedgerItem", () => {
 	it("ignores todos that are not tagged night", () => {
-		assert.equal(
-			parseLedgerItem(
-				"a1",
-				todoFile({ id: "a1", tags: ["qa"], status: "open" }),
-			),
-			undefined,
-		);
+		assert.equal(parseLedgerItem("a1", todoFile({ id: "a1", tags: ["qa"], status: "open" })), undefined);
 	});
 
 	it("reads a night todo and its evidence", () => {
 		const item = parseLedgerItem(
 			"a1",
-			todoFile(
-				{ id: "a1", title: "flaky-login", tags: ["night"], status: "done" },
-				"Evidence: https://x/1",
-			),
+			todoFile({ id: "a1", title: "flaky-login", tags: ["night"], status: "done" }, "Evidence: https://x/1"),
 		);
 		assert.equal(item?.state, "done");
 		assert.equal(item?.evidence, "https://x/1");
@@ -125,24 +99,13 @@ describe("ledger tallies", () => {
 });
 
 describe("appendUnderHeading", () => {
-	const report =
-		"# R\n\n## Summary\n\n## Needs you\n\n## Timeline\n\n- 21:30 started\n";
+	const report = "# R\n\n## Summary\n\n## Needs you\n\n## Timeline\n\n- 21:30 started\n";
 
 	it("inserts under the right heading, not at the end", () => {
-		const next = appendUnderHeading(
-			report,
-			"Needs you",
-			"- decide on the flaky test",
-		);
+		const next = appendUnderHeading(report, "Needs you", "- decide on the flaky test");
 		const lines = next.split("\n");
-		assert.ok(
-			lines.indexOf("- decide on the flaky test") >
-				lines.indexOf("## Needs you"),
-		);
-		assert.ok(
-			lines.indexOf("- decide on the flaky test") <
-				lines.indexOf("## Timeline"),
-		);
+		assert.ok(lines.indexOf("- decide on the flaky test") > lines.indexOf("## Needs you"));
+		assert.ok(lines.indexOf("- decide on the flaky test") < lines.indexOf("## Timeline"));
 	});
 
 	it("creates the heading when the agent removed it", () => {
@@ -166,11 +129,7 @@ describe("continuation and carry-over prompts", () => {
 	});
 
 	it("hands leftovers to the next night", () => {
-		const text = composeCarryOver(
-			new Date(2026, 7, 29, 21, 30),
-			"- 1 a",
-			"/tmp/r.md",
-		);
+		const text = composeCarryOver(new Date(2026, 7, 29, 21, 30), "- 1 a", "/tmp/r.md");
 		assert.match(text, /Carried over from the night of 2026-08-29 2130/);
 		assert.match(text, /- 1 a/);
 	});

@@ -59,7 +59,10 @@ export function isPaneBusyError(error: string | undefined): boolean {
  */
 export function lastJsonLine(stdout: string | undefined): unknown {
 	if (!stdout) return undefined;
-	const lines = stdout.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+	const lines = stdout
+		.split(/\r?\n/)
+		.map((l) => l.trim())
+		.filter(Boolean);
 	for (let i = lines.length - 1; i >= 0; i--) {
 		if (!lines[i].startsWith("{")) continue;
 		try {
@@ -77,9 +80,7 @@ export function lastJsonLine(stdout: string | undefined): unknown {
  * that as an empty-result success).
  */
 export function parseHerdrJson(stdout: string): HerdrCliResult | undefined {
-	const msg = lastJsonLine(stdout) as
-		| { result?: Record<string, unknown>; error?: unknown }
-		| undefined;
+	const msg = lastJsonLine(stdout) as { result?: Record<string, unknown>; error?: unknown } | undefined;
 	if (msg === undefined) return undefined;
 	if (msg.error) {
 		const message =
@@ -119,7 +120,12 @@ export function parseTabs(result: Record<string, unknown> | undefined): HerdrTab
 		out.push({
 			tabId,
 			label: typeof o.label === "string" ? o.label : undefined,
-			workspaceId: typeof o.workspace_id === "string" ? o.workspace_id : typeof o.workspaceId === "string" ? o.workspaceId : undefined,
+			workspaceId:
+				typeof o.workspace_id === "string"
+					? o.workspace_id
+					: typeof o.workspaceId === "string"
+						? o.workspaceId
+						: undefined,
 		});
 	}
 	return out;
@@ -133,7 +139,9 @@ export function parseTabs(result: Record<string, unknown> | undefined): HerdrTab
 export function parseTab(result: Record<string, unknown> | undefined): HerdrTab | undefined {
 	if (!result) return undefined;
 	const rootPaneId = parsePaneId(
-		result.root_pane && typeof result.root_pane === "object" ? (result.root_pane as Record<string, unknown>) : undefined,
+		result.root_pane && typeof result.root_pane === "object"
+			? (result.root_pane as Record<string, unknown>)
+			: undefined,
 	);
 	const direct = result.tab_id ?? result.tabId ?? result.id;
 	if (typeof direct === "string") {

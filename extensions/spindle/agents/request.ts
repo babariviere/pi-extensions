@@ -96,18 +96,20 @@ export function normalizeRequests(params: RawToolParams): { items: NormalizedIte
 			return { error: "A single run needs a `task`. `agent` is optional." };
 		}
 		return {
-			items: [{
-				...(params.agent ? { agent: params.agent } : {}),
-				task: params.task,
-				model: params.model,
-				thinking: params.thinking,
-				output: params.output,
-				reads: params.reads,
-				night: params.night,
-			}],
+			items: [
+				{
+					...(params.agent ? { agent: params.agent } : {}),
+					task: params.task,
+					model: params.model,
+					thinking: params.thinking,
+					output: params.output,
+					reads: params.reads,
+					night: params.night,
+				},
+			],
 		};
 	}
-	return { error: "Nothing to do. Use { action: \"list\" }, { task }, { agent, task }, or { tasks: [...] }." };
+	return { error: 'Nothing to do. Use { action: "list" }, { task }, { agent, task }, or { tasks: [...] }.' };
 }
 
 /** True when `model` (ignoring any thinking suffix / provider prefix) is in the allowlist. */

@@ -110,15 +110,17 @@ provider namespace) and that every static `spindle.$*` table entry is reachable.
 ## Render parity set
 
 These files carry **no hand edits**. They differ from upstream `v0.28.2` by
-exactly two mechanical rewrites, and nothing else:
+exactly three mechanical passes, and nothing else:
 
-1. the `.js` → `.ts` relative-import-specifier rewrite described below, and
+1. the `.js` → `.ts` relative-import-specifier rewrite described below,
 2. the `fabric` → `spindle` rename from the mapping table above (which also
-   renamed two of the files themselves).
+   renamed two of the files themselves), and
+3. the repo-wide biome format (`npm run fmt`, upstream pi's settings: tabs,
+   `indentWidth` 3, `lineWidth` 120).
 
 So they are **not byte-identical to upstream** — do not assume a clean `diff`.
-Still, do not edit them by hand: port upstream changes verbatim and re-apply
-both rewrites.
+Still, do not edit them by hand: port upstream changes verbatim, re-apply the
+first two passes, then run `npm run fmt`.
 
 `ui/spindle-render.ts`, `ui/core-tool-render.ts`, `ui/code-preview.ts`,
 `ui/code-preview-shell.ts`, `ui/highlight.ts`, `ui/format.ts`,
@@ -605,6 +607,7 @@ vendoring was done. No wasmfile fallback substitution was needed.
      extensions/spindle/<local path>
    perl -pi -e 's{(from\s+")(\.\.?/[^"]*)\.js(")}{$1$2.ts$3}g' \
      extensions/spindle/<local path>
+   npm run fmt -- extensions/spindle/<local path>
    ```
 
    The blanket `fabric` → `spindle` substitution is only safe inside
@@ -630,8 +633,8 @@ vendoring was done. No wasmfile fallback substitution was needed.
 
 5. Bump the pinned tag and SHA in the table at the top of this file.
 
-6. Verify: `npm run typecheck` and `npm test` must both exit 0, plus the rename
-   invariants:
+6. Verify: `npm run typecheck`, `npm test` and `npm run fmt:check` must all exit
+   0, plus the rename invariants:
 
    ```sh
    fd fabric extensions/spindle skills          # must be empty

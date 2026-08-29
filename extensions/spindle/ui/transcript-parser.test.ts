@@ -13,8 +13,16 @@ test("assembles live assistant text from delta-only message_update events", () =
 	acc.append([
 		{ type: "message_start", message: { role: "assistant", content: [] } },
 		{ type: "message_update", usage: {}, assistantMessageEvent: { type: "text_start", contentIndex: 0 } },
-		{ type: "message_update", usage: {}, assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "Hel" } },
-		{ type: "message_update", usage: {}, assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "lo" } },
+		{
+			type: "message_update",
+			usage: {},
+			assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "Hel" },
+		},
+		{
+			type: "message_update",
+			usage: {},
+			assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "lo" },
+		},
 	]);
 
 	const assistant = acc.entries.filter((entry) => entry.kind === "assistant");
@@ -26,8 +34,16 @@ test("assembles live assistant text from delta-only message_update events", () =
 test("text_end supplies the authoritative block and message_end completes the entry", () => {
 	const acc = new TranscriptAccumulator();
 	acc.append([
-		{ type: "message_update", usage: {}, assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "par" } },
-		{ type: "message_update", usage: {}, assistantMessageEvent: { type: "text_end", contentIndex: 0, content: "partial then final" } },
+		{
+			type: "message_update",
+			usage: {},
+			assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "par" },
+		},
+		{
+			type: "message_update",
+			usage: {},
+			assistantMessageEvent: { type: "text_end", contentIndex: 0, content: "partial then final" },
+		},
 		{ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "partial then final" }] } },
 	]);
 
@@ -40,9 +56,21 @@ test("text_end supplies the authoritative block and message_end completes the en
 test("concatenates multiple content blocks in index order and ignores non-text deltas", () => {
 	const acc = new TranscriptAccumulator();
 	acc.append([
-		{ type: "message_update", usage: {}, assistantMessageEvent: { type: "thinking_delta", contentIndex: 0, delta: "hmm" } },
-		{ type: "message_update", usage: {}, assistantMessageEvent: { type: "text_delta", contentIndex: 2, delta: "second" } },
-		{ type: "message_update", usage: {}, assistantMessageEvent: { type: "text_delta", contentIndex: 1, delta: "first " } },
+		{
+			type: "message_update",
+			usage: {},
+			assistantMessageEvent: { type: "thinking_delta", contentIndex: 0, delta: "hmm" },
+		},
+		{
+			type: "message_update",
+			usage: {},
+			assistantMessageEvent: { type: "text_delta", contentIndex: 2, delta: "second" },
+		},
+		{
+			type: "message_update",
+			usage: {},
+			assistantMessageEvent: { type: "text_delta", contentIndex: 1, delta: "first " },
+		},
 	]);
 
 	const assistant = acc.entries.filter((entry) => entry.kind === "assistant");
@@ -53,9 +81,17 @@ test("concatenates multiple content blocks in index order and ignores non-text d
 test("a new turn does not inherit the previous turn's stream buffer", () => {
 	const acc = new TranscriptAccumulator();
 	acc.append([
-		{ type: "message_update", usage: {}, assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "one" } },
+		{
+			type: "message_update",
+			usage: {},
+			assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "one" },
+		},
 		{ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "one" }] } },
-		{ type: "message_update", usage: {}, assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "two" } },
+		{
+			type: "message_update",
+			usage: {},
+			assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "two" },
+		},
 	]);
 
 	const assistant = acc.entries.filter((entry) => entry.kind === "assistant");

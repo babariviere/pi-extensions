@@ -27,14 +27,8 @@ describe("path templating", () => {
 	});
 
 	it("expands both the {datetime} and <datetime> spellings", () => {
-		assert.equal(
-			applyPathTemplate("{datetime} - Night Report.md", startedAt),
-			"2026-08-29 2130 - Night Report.md",
-		);
-		assert.equal(
-			applyPathTemplate("<date>/<time>.md", startedAt),
-			"2026-08-29/2130.md",
-		);
+		assert.equal(applyPathTemplate("{datetime} - Night Report.md", startedAt), "2026-08-29 2130 - Night Report.md");
+		assert.equal(applyPathTemplate("<date>/<time>.md", startedAt), "2026-08-29/2130.md");
 	});
 
 	it("resolves a relative template against the base directory", () => {
@@ -42,17 +36,11 @@ describe("path templating", () => {
 			...DEFAULT_NIGHT_CONFIG,
 			reportPathTemplate: "reports/{date}.md",
 		};
-		assert.equal(
-			reportPathFor(config, startedAt, "/tmp/work"),
-			"/tmp/work/reports/2026-08-29.md",
-		);
+		assert.equal(reportPathFor(config, startedAt, "/tmp/work"), "/tmp/work/reports/2026-08-29.md");
 	});
 
 	it("derives a note name for a wiki-link", () => {
-		assert.equal(
-			noteNameFor("/a/b/2026-08-29 2130 - Night Report.md"),
-			"2026-08-29 2130 - Night Report",
-		);
+		assert.equal(noteNameFor("/a/b/2026-08-29 2130 - Night Report.md"), "2026-08-29 2130 - Night Report");
 	});
 });
 
@@ -86,19 +74,13 @@ describe("mergeNightConfig", () => {
 
 	it("lets an empty list clear inherited writable roots", () => {
 		const base = mergeNightConfig({ sandboxAllowWrite: ["~/src/other"] });
-		assert.deepEqual(
-			mergeNightConfig({ sandboxAllowWrite: [] }, base).sandboxAllowWrite,
-			[],
-		);
+		assert.deepEqual(mergeNightConfig({ sandboxAllowWrite: [] }, base).sandboxAllowWrite, []);
 	});
 
 	it("takes custom report sections, ignoring junk entries", () => {
 		const merged = mergeNightConfig({ reportSections: ["Tickets", "  ", 3] });
 		assert.deepEqual(merged.reportSections, ["Tickets"]);
-		assert.deepEqual(
-			mergeNightConfig({ reportSections: [] }).reportSections,
-			DEFAULT_REPORT_SECTIONS,
-		);
+		assert.deepEqual(mergeNightConfig({ reportSections: [] }).reportSections, DEFAULT_REPORT_SECTIONS);
 	});
 });
 
@@ -111,10 +93,7 @@ describe("hasInstructions", () => {
 
 	it("sees real content", () => {
 		assert.equal(hasInstructions("- fix the flaky test"), true);
-		assert.equal(
-			hasInstructions("---\ntags: []\n---\n- fix the flaky test"),
-			true,
-		);
+		assert.equal(hasInstructions("---\ntags: []\n---\n- fix the flaky test"), true);
 	});
 });
 
@@ -206,10 +185,7 @@ describe("report skeleton", () => {
 	});
 
 	it("uses the configured sections instead", () => {
-		const header = composeReportHeader(startedAt, "21:00-09:00", [
-			"Tickets",
-			"CI",
-		]);
+		const header = composeReportHeader(startedAt, "21:00-09:00", ["Tickets", "CI"]);
 		assert.match(header, /## Tickets/);
 		assert.match(header, /## CI/);
 		assert.doesNotMatch(header, /## Summary/);

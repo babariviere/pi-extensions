@@ -172,9 +172,7 @@ export class RunProgressMonitor {
 				// The activity run id is the outer spindle_exec tool call id, so the
 				// widget can associate these rows with the running program.
 				runId: this.#context.parentToolCallId,
-				...(row.state === "spawning" || row.state === "running"
-					? { currentTool: row.state }
-					: {}),
+				...(row.state === "spawning" || row.state === "running" ? { currentTool: row.state } : {}),
 			});
 		}
 		if (!this.#live) return;

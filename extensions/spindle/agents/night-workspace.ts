@@ -31,10 +31,7 @@ export async function allocateNightWorkspaces(
 	const acquired: AgentWorkspace[] = [];
 	for (const request of requests) {
 		if (!request.night) continue;
-		const workspace = await acquireNightAgentWorkspace(
-			agentWorkspaceName(runId, request.index),
-			cwd,
-		);
+		const workspace = await acquireNightAgentWorkspace(agentWorkspaceName(runId, request.index), cwd);
 		if (!workspace) continue;
 		request.cwd = workspace.path;
 		acquired.push(workspace);
@@ -43,8 +40,6 @@ export async function allocateNightWorkspaces(
 }
 
 /** Release every workspace a batch acquired. Never throws. */
-export async function releaseNightWorkspaces(
-	workspaces: AgentWorkspace[],
-): Promise<void> {
+export async function releaseNightWorkspaces(workspaces: AgentWorkspace[]): Promise<void> {
 	for (const workspace of workspaces) await releaseAgentWorkspace(workspace);
 }

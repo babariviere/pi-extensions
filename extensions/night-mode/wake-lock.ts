@@ -32,26 +32,15 @@ export type WakeLockBackend = "amphetamine" | "caffeinate" | "none";
 /** User preference, from `nightMode.wakeLock` in settings. */
 export type WakeLockPreference = "auto" | "amphetamine" | "caffeinate" | "off";
 
-export const WAKE_LOCK_PREFERENCES: readonly WakeLockPreference[] = [
-	"auto",
-	"amphetamine",
-	"caffeinate",
-	"off",
-];
+export const WAKE_LOCK_PREFERENCES: readonly WakeLockPreference[] = ["auto", "amphetamine", "caffeinate", "off"];
 
 /** Narrow an untrusted settings value to a wake lock preference. */
 export function isWakeLockPreference(value: unknown): value is WakeLockPreference {
-	return (
-		typeof value === "string" &&
-		(WAKE_LOCK_PREFERENCES as readonly string[]).includes(value)
-	);
+	return typeof value === "string" && (WAKE_LOCK_PREFERENCES as readonly string[]).includes(value);
 }
 
 /** Where the App Store puts Amphetamine. */
-export const AMPHETAMINE_APP_PATHS = [
-	"/Applications/Amphetamine.app",
-	"/System/Applications/Amphetamine.app",
-];
+export const AMPHETAMINE_APP_PATHS = ["/Applications/Amphetamine.app", "/System/Applications/Amphetamine.app"];
 
 /**
  * Length of a single Amphetamine session. Short enough that a crashed pi lets
@@ -98,20 +87,17 @@ export function startSessionScript(minutes: number = SESSION_MINUTES): string {
 }
 
 /** AppleScript that ends whatever session is running. */
-export const END_SESSION_SCRIPT =
-	'tell application "Amphetamine" to end session';
+export const END_SESSION_SCRIPT = 'tell application "Amphetamine" to end session';
 
 /** AppleScript that reports whether a session is running. */
-export const SESSION_ACTIVE_SCRIPT =
-	'tell application "Amphetamine" to return session is active';
+export const SESSION_ACTIVE_SCRIPT = 'tell application "Amphetamine" to return session is active';
 
 /**
  * AppleScript that reports whether the session survives a closed lid. Inverted
  * from the checkbox: `true` here means the UI's "Allow system sleep when display
  * is closed" is *off*, which is the state an overnight run wants.
  */
-export const CLOSED_DISPLAY_MODE_SCRIPT =
-	'tell application "Amphetamine" to return closed display mode enabled';
+export const CLOSED_DISPLAY_MODE_SCRIPT = 'tell application "Amphetamine" to return closed display mode enabled';
 
 /** Read the boolean `osascript` prints for `session is active`. */
 export function parseSessionActive(stdout: string): boolean {
@@ -122,11 +108,7 @@ export function parseSessionActive(stdout: string): boolean {
  * True when the current session is close enough to expiry to be re-armed.
  * An unknown expiry means nothing is held, which also needs a start.
  */
-export function shouldRenew(
-	expiresAt: number | undefined,
-	now: number,
-	marginMs: number = RENEW_MARGIN_MS,
-): boolean {
+export function shouldRenew(expiresAt: number | undefined, now: number, marginMs: number = RENEW_MARGIN_MS): boolean {
 	if (expiresAt === undefined) return true;
 	return expiresAt - now <= marginMs;
 }
@@ -235,10 +217,7 @@ export class WakeLock {
 	private pending: Promise<void> = Promise.resolve();
 	private warned = new Set<string>();
 
-	constructor(
-		preference: WakeLockPreference = "auto",
-		deps: Partial<WakeLockDeps> = {},
-	) {
+	constructor(preference: WakeLockPreference = "auto", deps: Partial<WakeLockDeps> = {}) {
 		this.preference = preference;
 		this.deps = { ...defaultWakeLockDeps, ...deps };
 	}
@@ -257,11 +236,7 @@ export class WakeLock {
 	status(): WakeLockStatus {
 		const held = this.caffeinate !== undefined || this.sessionExpiresAt !== undefined;
 		return {
-			backend: held
-				? this.caffeinate
-					? "caffeinate"
-					: "amphetamine"
-				: "none",
+			backend: held ? (this.caffeinate ? "caffeinate" : "amphetamine") : "none",
 			configured: this.backend,
 			held,
 			expiresAt: this.sessionExpiresAt,

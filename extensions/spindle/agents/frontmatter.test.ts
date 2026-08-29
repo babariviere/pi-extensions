@@ -42,7 +42,7 @@ test("parseFrontmatter ignores nested/list lines instead of throwing", () => {
 });
 
 test("parseFrontmatter strips surrounding quotes", () => {
-	const { data } = parseFrontmatter(['---', 'name: "quoted name"', "---", "b"].join("\n"));
+	const { data } = parseFrontmatter(["---", 'name: "quoted name"', "---", "b"].join("\n"));
 	assert.equal(data.name, "quoted name");
 });
 
@@ -81,7 +81,10 @@ test("toAgentConfig handles single-item tools string", () => {
 });
 
 test("toAgentConfig parses output and defaultReads (list and single)", () => {
-	const cfg = toAgentConfig({ name: "planner", output: "plan.md", defaultReads: ["context.md", "plan.md"] }, "planner");
+	const cfg = toAgentConfig(
+		{ name: "planner", output: "plan.md", defaultReads: ["context.md", "plan.md"] },
+		"planner",
+	);
 	assert.equal(cfg.output, "plan.md");
 	assert.deepEqual(cfg.defaultReads, ["context.md", "plan.md"]);
 	const single = toAgentConfig({ name: "worker", defaultReads: "context.md" }, "worker");

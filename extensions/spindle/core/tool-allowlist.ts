@@ -40,13 +40,13 @@ export type SpindleToolAllowlist = ReadonlySet<string>;
  * which is the normal case for a top-level session.
  */
 export const parseToolAllowlist = (raw: unknown): SpindleToolAllowlist | undefined => {
-  if (typeof raw !== "string" || raw.trim().length === 0) return undefined;
-  return new Set(
-    raw
-      .split(",")
-      .map((name) => name.trim())
-      .filter((name) => name.length > 0 && !TRANSPORT_TOOL_NAMES.has(name)),
-  );
+	if (typeof raw !== "string" || raw.trim().length === 0) return undefined;
+	return new Set(
+		raw
+			.split(",")
+			.map((name) => name.trim())
+			.filter((name) => name.length > 0 && !TRANSPORT_TOOL_NAMES.has(name)),
+	);
 };
 
 /**
@@ -54,23 +54,20 @@ export const parseToolAllowlist = (raw: unknown): SpindleToolAllowlist | undefin
  * `--flag value` and `--flag=value`. The last occurrence wins, matching how a
  * CLI parser would treat a repeated flag.
  */
-export const readToolAllowlistArgument = (
-  flag: string,
-  argv: readonly string[] = process.argv,
-): string | undefined => {
-  const long = `--${flag}`;
-  const assigned = `${long}=`;
-  let value: string | undefined;
-  for (let index = 0; index < argv.length; index++) {
-    const argument = argv[index];
-    if (argument === long) {
-      const next = argv[index + 1];
-      if (next !== undefined && !next.startsWith("--")) value = next;
-      continue;
-    }
-    if (argument.startsWith(assigned)) value = argument.slice(assigned.length);
-  }
-  return value;
+export const readToolAllowlistArgument = (flag: string, argv: readonly string[] = process.argv): string | undefined => {
+	const long = `--${flag}`;
+	const assigned = `${long}=`;
+	let value: string | undefined;
+	for (let index = 0; index < argv.length; index++) {
+		const argument = argv[index];
+		if (argument === long) {
+			const next = argv[index + 1];
+			if (next !== undefined && !next.startsWith("--")) value = next;
+			continue;
+		}
+		if (argument.startsWith(assigned)) value = argument.slice(assigned.length);
+	}
+	return value;
 };
 
 /**
@@ -81,47 +78,43 @@ export const readToolAllowlistArgument = (
  * sandbox call (`pi.bash`, `extensions.web_search`).
  */
 export class SpindleToolGate {
-  readonly #allowlist: SpindleToolAllowlist | undefined;
+	readonly #allowlist: SpindleToolAllowlist | undefined;
 
-  private constructor(allowlist: SpindleToolAllowlist | undefined) {
-    this.#allowlist = allowlist;
-  }
+	private constructor(allowlist: SpindleToolAllowlist | undefined) {
+		this.#allowlist = allowlist;
+	}
 
-  /** Build from an explicit allowlist; `undefined` yields an unrestricted gate. */
-  static of(allowlist: SpindleToolAllowlist | undefined): SpindleToolGate {
-    return new SpindleToolGate(allowlist);
-  }
+	/** Build from an explicit allowlist; `undefined` yields an unrestricted gate. */
+	static of(allowlist: SpindleToolAllowlist | undefined): SpindleToolGate {
+		return new SpindleToolGate(allowlist);
+	}
 
-  /** Build from the process arguments: read the flag, parse it, wrap it. */
-  static fromArgv(flag: string, argv?: readonly string[]): SpindleToolGate {
-    return new SpindleToolGate(parseToolAllowlist(readToolAllowlistArgument(flag, argv)));
-  }
+	/** Build from the process arguments: read the flag, parse it, wrap it. */
+	static fromArgv(flag: string, argv?: readonly string[]): SpindleToolGate {
+		return new SpindleToolGate(parseToolAllowlist(readToolAllowlistArgument(flag, argv)));
+	}
 
-  /** True when a subagent's `tools:` list narrowed what may be called. */
-  get restricted(): boolean {
-    return this.#allowlist !== undefined;
-  }
+	/** True when a subagent's `tools:` list narrowed what may be called. */
+	get restricted(): boolean {
+		return this.#allowlist !== undefined;
+	}
 
-  /** Whether `name` may be called. Unrestricted gates and the transport tool always pass. */
-  allows(name: string): boolean {
-    return (
-      this.#allowlist === undefined ||
-      TRANSPORT_TOOL_NAMES.has(name) ||
-      this.#allowlist.has(name)
-    );
-  }
+	/** Whether `name` may be called. Unrestricted gates and the transport tool always pass. */
+	allows(name: string): boolean {
+		return this.#allowlist === undefined || TRANSPORT_TOOL_NAMES.has(name) || this.#allowlist.has(name);
+	}
 
-  /**
-   * Throw when `name` is disallowed. `namespace` is the sandbox namespace the
-   * caller belongs to (`pi` / `extensions`), so the message names the call as
-   * the model wrote it. A no-op on an unrestricted gate.
-   */
-  assert(namespace: string, name: string): void {
-    if (this.#allowlist === undefined || this.allows(name)) return;
-    throw new Error(
-      `Tool ${namespace}.${name} is not in this agent's tool allowlist (allowed: ${
-        [...this.#allowlist].sort().join(", ") || "none"
-      })`,
-    );
-  }
+	/**
+	 * Throw when `name` is disallowed. `namespace` is the sandbox namespace the
+	 * caller belongs to (`pi` / `extensions`), so the message names the call as
+	 * the model wrote it. A no-op on an unrestricted gate.
+	 */
+	assert(namespace: string, name: string): void {
+		if (this.#allowlist === undefined || this.allows(name)) return;
+		throw new Error(
+			`Tool ${namespace}.${name} is not in this agent's tool allowlist (allowed: ${
+				[...this.#allowlist].sort().join(", ") || "none"
+			})`,
+		);
+	}
 }

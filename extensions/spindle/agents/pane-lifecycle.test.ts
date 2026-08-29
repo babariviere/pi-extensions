@@ -8,7 +8,10 @@ import { type StatusProbe, waitForAgentFinish } from "./pane-lifecycle.ts";
  * `waitUntil` calls; `peeks` for successive `peek` calls. Records how many of
  * each were consumed so tests can assert the machine stopped early.
  */
-function fakeProbe(script: { waits: AgentWaitResult[]; peeks?: PaneAgentState[] }): StatusProbe & { waitCalls: number; peekCalls: number } {
+function fakeProbe(script: {
+	waits: AgentWaitResult[];
+	peeks?: PaneAgentState[];
+}): StatusProbe & { waitCalls: number; peekCalls: number } {
 	let waitCalls = 0;
 	let peekCalls = 0;
 	const probe = {

@@ -54,11 +54,7 @@ export interface CloneCommand {
  * The `cp` invocation for a strategy. Both paths are passed as arguments, never
  * interpolated into a shell string, so a path with spaces or quotes is safe.
  */
-export function cloneCommand(
-	strategy: CloneStrategy,
-	source: string,
-	destination: string,
-): CloneCommand {
+export function cloneCommand(strategy: CloneStrategy, source: string, destination: string): CloneCommand {
 	const flags: Record<CloneStrategy, string[]> = {
 		apfs: ["-c", "-R", "-p"],
 		reflink: ["-a", "--reflink=always"],
@@ -111,9 +107,7 @@ const defaultRun = async (command: CloneCommand): Promise<void> => {
  *
  * Async so the copy does not block the caller's event loop.
  */
-export async function createRunSandbox(
-	input: CreateSandboxInput,
-): Promise<CreatedSandbox> {
+export async function createRunSandbox(input: CreateSandboxInput): Promise<CreatedSandbox> {
 	const { source, destination } = input;
 	if (!existsSync(source)) throw new Error(`night-mode: source ${source} does not exist`);
 
@@ -141,9 +135,7 @@ export async function createRunSandbox(
 		return { path: destination, strategy, fallbacks };
 	}
 
-	throw new Error(
-		`night-mode: could not clone ${source} into ${destination} (${fallbacks.join("; ")})`,
-	);
+	throw new Error(`night-mode: could not clone ${source} into ${destination} (${fallbacks.join("; ")})`);
 }
 
 /**
@@ -163,19 +155,13 @@ export async function createRunSandbox(
  */
 
 /** Config file names that make a directory a mise project. */
-const MISE_CONFIG_FILES = [
-	"mise.toml",
-	"mise.local.toml",
-	".mise.toml",
-	".mise.local.toml",
-];
+const MISE_CONFIG_FILES = ["mise.toml", "mise.local.toml", ".mise.toml", ".mise.local.toml"];
 
 export interface PrepareCommand {
 	label: string;
 	command: string;
 	args: string[];
 }
-
 
 export interface PrepareInput {
 	/** The fresh working copy. */

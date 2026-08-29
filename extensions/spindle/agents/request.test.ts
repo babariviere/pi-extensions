@@ -66,13 +66,12 @@ test("buildRunRequests binds an agentless item to the built-in agent", () => {
 
 test("buildRunRequests mixes agentless and named items in one batch", () => {
 	const agents = [agent("worker"), builtinAgent()];
-	const r = buildRunRequests(
-		{ tasks: [{ agent: "worker", task: "a" }, { task: "b" }] },
-		agents,
-		bareCwd(),
-	);
+	const r = buildRunRequests({ tasks: [{ agent: "worker", task: "a" }, { task: "b" }] }, agents, bareCwd());
 	assert.ok("requests" in r);
-	assert.deepEqual(r.requests.map((q) => q.agent.config.name), ["worker", BUILTIN_AGENT_NAME]);
+	assert.deepEqual(
+		r.requests.map((q) => q.agent.config.name),
+		["worker", BUILTIN_AGENT_NAME],
+	);
 });
 
 test("buildRunRequests errors when the built-in agent is missing from the list", () => {
@@ -102,7 +101,11 @@ test("buildRunRequests lets per-run output and reads override agent config", () 
 });
 
 test("buildRunRequests keeps a single run's output override verbatim", () => {
-	const r = buildRunRequests({ agent: "planner", task: "plan", output: ".pi/goal/plan.md" }, [agent("planner")], bareCwd());
+	const r = buildRunRequests(
+		{ agent: "planner", task: "plan", output: ".pi/goal/plan.md" },
+		[agent("planner")],
+		bareCwd(),
+	);
 	assert.ok("requests" in r);
 	assert.equal(r.requests[0].output, ".pi/goal/plan.md"); // no -index suffix for a single run
 });
@@ -112,37 +115,61 @@ test("buildRunRequests suffixes shared output overrides per index for parallel r
 	// resolve to the same file and clobber each other (only the last write
 	// survived, so all runs read back identical content).
 	const agents = [agent("reviewer")];
-	const r = buildRunRequests({
-		tasks: [
-			{ agent: "reviewer", task: "a", output: "review.md" },
-			{ agent: "reviewer", task: "b", output: "review.md" },
-			{ agent: "reviewer", task: "c", output: "review.md" },
-		],
-	}, agents, bareCwd());
+	const r = buildRunRequests(
+		{
+			tasks: [
+				{ agent: "reviewer", task: "a", output: "review.md" },
+				{ agent: "reviewer", task: "b", output: "review.md" },
+				{ agent: "reviewer", task: "c", output: "review.md" },
+			],
+		},
+		agents,
+		bareCwd(),
+	);
 	assert.ok("requests" in r);
-	assert.deepEqual(r.requests.map((x) => x.output), ["review-0.md", "review-1.md", "review-2.md"]);
+	assert.deepEqual(
+		r.requests.map((x) => x.output),
+		["review-0.md", "review-1.md", "review-2.md"],
+	);
 });
 
 test("buildRunRequests suffixes an agent-config output default across parallel runs", () => {
 	const agents = [agent("reviewer", { output: "out/report.md" })];
-	const r = buildRunRequests({
-		tasks: [
-			{ agent: "reviewer", task: "a" },
-			{ agent: "reviewer", task: "b" },
-		],
-	}, agents, bareCwd());
+	const r = buildRunRequests(
+		{
+			tasks: [
+				{ agent: "reviewer", task: "a" },
+				{ agent: "reviewer", task: "b" },
+			],
+		},
+		agents,
+		bareCwd(),
+	);
 	assert.ok("requests" in r);
-	assert.deepEqual(r.requests.map((x) => x.output), [join("out", "report-0.md"), join("out", "report-1.md")]);
+	assert.deepEqual(
+		r.requests.map((x) => x.output),
+		[join("out", "report-0.md"), join("out", "report-1.md")],
+	);
 });
 
 test("buildRunRequests leaves runs without an output override on their unique default path", () => {
 	const agents = [agent("a"), agent("b")];
-	const r = buildRunRequests({
-		tasks: [{ agent: "a", task: "x" }, { agent: "b", task: "y" }],
-	}, agents, bareCwd());
+	const r = buildRunRequests(
+		{
+			tasks: [
+				{ agent: "a", task: "x" },
+				{ agent: "b", task: "y" },
+			],
+		},
+		agents,
+		bareCwd(),
+	);
 	assert.ok("requests" in r);
 	// No override set, so nothing to disambiguate; the backend uses the per-index default path.
-	assert.deepEqual(r.requests.map((x) => x.output), [undefined, undefined]);
+	assert.deepEqual(
+		r.requests.map((x) => x.output),
+		[undefined, undefined],
+	);
 });
 
 test("validateOverrides rejects an unknown thinking level", () => {
@@ -158,7 +185,10 @@ test("validateOverrides rejects a model outside enabledModels", () => {
 
 test("validateOverrides accepts an allowlisted model ignoring the thinking suffix", () => {
 	const cwd = cwdWithEnabled(["anthropic/claude-sonnet-5"]);
-	assert.equal(validateOverrides([{ agent: "a", task: "t", model: "anthropic/claude-sonnet-5:high" }], cwd), undefined);
+	assert.equal(
+		validateOverrides([{ agent: "a", task: "t", model: "anthropic/claude-sonnet-5:high" }], cwd),
+		undefined,
+	);
 });
 
 test("validateOverrides imposes no model restriction when the allowlist is empty", () => {

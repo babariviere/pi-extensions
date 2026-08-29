@@ -36,8 +36,7 @@ export function builtinAgent(): DiscoveredAgent {
 	return {
 		config: {
 			name: BUILTIN_AGENT_NAME,
-			description:
-				"Generic subagent with no persona; inherits the parent model, tools, skills and project context",
+			description: "Generic subagent with no persona; inherits the parent model, tools, skills and project context",
 		},
 		systemPrompt: "",
 		sourcePath: "<builtin>",

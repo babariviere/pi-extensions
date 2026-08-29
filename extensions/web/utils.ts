@@ -171,12 +171,7 @@ export function isRawGitHubUrl(input: string): boolean {
  * and as non-interpolated git arguments.
  */
 export function isSafeSegment(segment: string): boolean {
-	return (
-		/^[A-Za-z0-9._-]+$/.test(segment) &&
-		!segment.startsWith("-") &&
-		segment !== "." &&
-		segment !== ".."
-	);
+	return /^[A-Za-z0-9._-]+$/.test(segment) && !segment.startsWith("-") && segment !== "." && segment !== "..";
 }
 
 /**

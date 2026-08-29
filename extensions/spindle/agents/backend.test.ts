@@ -11,9 +11,10 @@ import type { RunBackend, RunContext } from "./run.ts";
  * processes are involved.
  */
 
-function scriptedTransport(
-	result: (args: string[]) => HerdrCliResult,
-): { transport: HerdrTransport; calls: string[][] } {
+function scriptedTransport(result: (args: string[]) => HerdrCliResult): {
+	transport: HerdrTransport;
+	calls: string[][];
+} {
 	const calls: string[][] = [];
 	return {
 		calls,
@@ -38,9 +39,7 @@ const AGENT_HELP: HerdrCliResult = {
 };
 
 test("probe accepts the dialect the adapter speaks", async () => {
-	const { transport, calls } = scriptedTransport((args) =>
-		args.includes("start") ? START_HELP : AGENT_HELP,
-	);
+	const { transport, calls } = scriptedTransport((args) => (args.includes("start") ? START_HELP : AGENT_HELP));
 	const verdict = await probeHerdrDialect(transport);
 	assert.equal(verdict.compatible, true);
 	assert.equal(calls.length, 2);
@@ -59,9 +58,7 @@ test("probe rejects a CLI whose agent start lacks --kind (the observed drift)", 
 
 test("probe rejects a CLI without agent wait", async () => {
 	const { transport } = scriptedTransport((args) =>
-		args.includes("start")
-			? START_HELP
-			: { ok: true, result: {}, stdout: "Commands: start, prompt" },
+		args.includes("start") ? START_HELP : { ok: true, result: {}, stdout: "Commands: start, prompt" },
 	);
 	const verdict = await probeHerdrDialect(transport);
 	assert.equal(verdict.compatible, false);

@@ -247,9 +247,9 @@ declare function clearInterval(handle: number): void;
 `;
 
 const FULL_CODE_GLOBAL_DECLARATIONS = [
-  "declare const pi: PiToolsApi;\n",
-  "declare const extensions: SpindleExtensionsApi;\n",
-  "declare const tools: SpindleToolsApi;\n",
+	"declare const pi: PiToolsApi;\n",
+	"declare const extensions: SpindleExtensionsApi;\n",
+	"declare const tools: SpindleToolsApi;\n",
 ];
 
 const PI_TOOLS_API_HEADER = "interface PiToolsApi {";
@@ -261,43 +261,38 @@ const PI_TOOLS_API_MEMBER = /^ {2}([A-Za-z][A-Za-z0-9_]*)\(/;
  * nothing is left, the `pi` global goes too.
  */
 const restrictPiTools = (declarations: string, gate: SpindleToolGate): string => {
-  const lines = declarations.split("\n");
-  const kept: string[] = [];
-  let inPiTools = false;
-  let members = 0;
-  for (const line of lines) {
-    if (!inPiTools) {
-      inPiTools = line.startsWith(PI_TOOLS_API_HEADER);
-      kept.push(line);
-      continue;
-    }
-    if (line === "}") {
-      inPiTools = false;
-      kept.push(line);
-      continue;
-    }
-    const member = PI_TOOLS_API_MEMBER.exec(line);
-    if (member) {
-      if (!gate.allows(member[1])) continue;
-      members++;
-    }
-    kept.push(line);
-  }
-  const restricted = kept.join("\n");
-  return members > 0 ? restricted : restricted.replace("declare const pi: PiToolsApi;\n", "");
+	const lines = declarations.split("\n");
+	const kept: string[] = [];
+	let inPiTools = false;
+	let members = 0;
+	for (const line of lines) {
+		if (!inPiTools) {
+			inPiTools = line.startsWith(PI_TOOLS_API_HEADER);
+			kept.push(line);
+			continue;
+		}
+		if (line === "}") {
+			inPiTools = false;
+			kept.push(line);
+			continue;
+		}
+		const member = PI_TOOLS_API_MEMBER.exec(line);
+		if (member) {
+			if (!gate.allows(member[1])) continue;
+			members++;
+		}
+		kept.push(line);
+	}
+	const restricted = kept.join("\n");
+	return members > 0 ? restricted : restricted.replace("declare const pi: PiToolsApi;\n", "");
 };
 
-export const guestTypeDeclarations = (
-  fullCodeMode: boolean,
-  gate?: SpindleToolGate,
-): string => {
-  if (!fullCodeMode) {
-    return FULL_CODE_GLOBAL_DECLARATIONS.reduce(
-      (declarations, declaration) => declarations.replace(declaration, ""),
-      GUEST_TYPE_DECLARATIONS,
-    );
-  }
-  return gate?.restricted
-    ? restrictPiTools(GUEST_TYPE_DECLARATIONS, gate)
-    : GUEST_TYPE_DECLARATIONS;
+export const guestTypeDeclarations = (fullCodeMode: boolean, gate?: SpindleToolGate): string => {
+	if (!fullCodeMode) {
+		return FULL_CODE_GLOBAL_DECLARATIONS.reduce(
+			(declarations, declaration) => declarations.replace(declaration, ""),
+			GUEST_TYPE_DECLARATIONS,
+		);
+	}
+	return gate?.restricted ? restrictPiTools(GUEST_TYPE_DECLARATIONS, gate) : GUEST_TYPE_DECLARATIONS;
 };

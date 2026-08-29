@@ -3,78 +3,78 @@ import { Value } from "typebox/value";
 import { runAbortable, settleWithin } from "../async-settlement.ts";
 import { redactRecordedArgs } from "./arg-redaction.ts";
 import {
-  executionOutcomeFromError,
-  type SpindleExecutionTraceOperationHandle,
-  type SpindleExecutionTraceRecorder,
+	executionOutcomeFromError,
+	type SpindleExecutionTraceOperationHandle,
+	type SpindleExecutionTraceRecorder,
 } from "../audit/trace.ts";
 import {
-  SPINDLE_NESTED_TOOL_CALL_ID_PREFIX,
-  type SpindleActionDescriptor,
-  type SpindleCapabilityCatalog,
-  type SpindleInvocationActivityUpdate,
-  type SpindleInvocationContext,
-  type SpindleMediaBlock,
-  type SpindleProvider,
-  type SpindleProviderListRequest,
+	SPINDLE_NESTED_TOOL_CALL_ID_PREFIX,
+	type SpindleActionDescriptor,
+	type SpindleCapabilityCatalog,
+	type SpindleInvocationActivityUpdate,
+	type SpindleInvocationContext,
+	type SpindleMediaBlock,
+	type SpindleProvider,
+	type SpindleProviderListRequest,
 } from "../protocol.ts";
 import type { SpindleNestedToolResultProxy } from "./tool-result-proxy.ts";
 
 export interface ResolvedSpindleAction extends SpindleActionDescriptor {
-  ref: string;
-  provider: string;
+	ref: string;
+	provider: string;
 }
 
 export interface SpindleCallAudit {
-  ref: string;
-  nestedToolCallId: string;
-  startedAt: number;
-  endedAt?: number;
-  success?: boolean;
-  error?: string;
-  resultChars?: number;
-  resultTruncated?: boolean;
-  tool?: string;
-  provider?: string;
-  args?: Record<string, unknown>;
-  result?: unknown;
-  media?: SpindleMediaBlock[];
-  mediaNote?: string;
-  preview?: unknown;
+	ref: string;
+	nestedToolCallId: string;
+	startedAt: number;
+	endedAt?: number;
+	success?: boolean;
+	error?: string;
+	resultChars?: number;
+	resultTruncated?: boolean;
+	tool?: string;
+	provider?: string;
+	args?: Record<string, unknown>;
+	result?: unknown;
+	media?: SpindleMediaBlock[];
+	mediaNote?: string;
+	preview?: unknown;
 }
 
 export type SpindleRegistryActivityEvent =
-  | {
-      type: "call_start";
-      callId: string;
-      ref: string;
-      args: Record<string, unknown>;
-    }
-  | {
-      type: "call_update";
-      callId: string;
-      update: SpindleInvocationActivityUpdate;
-    }
-  | {
-      type: "call_args";
-      callId: string;
-      args: Record<string, unknown>;
-    }
-  | {
-      type: "call_end";
-      callId: string;
-      success: boolean;
-      result?: unknown;
-      preview?: unknown;
-      error?: string;
-    };
+	| {
+			type: "call_start";
+			callId: string;
+			ref: string;
+			args: Record<string, unknown>;
+	  }
+	| {
+			type: "call_update";
+			callId: string;
+			update: SpindleInvocationActivityUpdate;
+	  }
+	| {
+			type: "call_args";
+			callId: string;
+			args: Record<string, unknown>;
+	  }
+	| {
+			type: "call_end";
+			callId: string;
+			success: boolean;
+			result?: unknown;
+			preview?: unknown;
+			error?: string;
+	  };
 
 export interface SpindleRegistryInvocationContext extends SpindleInvocationContext {
-  authorize?(action: ResolvedSpindleAction): Promise<void>;
-  audits: SpindleCallAudit[];
-  maxResultChars: number;
-  trace?: SpindleExecutionTraceRecorder;
-  traceOperation?: SpindleExecutionTraceOperationHandle;
-  observeInvocation?(event: SpindleRegistryActivityEvent): void;
+	authorize?(action: ResolvedSpindleAction): Promise<void>;
+	audits: SpindleCallAudit[];
+	maxResultChars: number;
+	trace?: SpindleExecutionTraceRecorder;
+	traceOperation?: SpindleExecutionTraceOperationHandle;
+	observeInvocation?(event: SpindleRegistryActivityEvent): void;
 }
 
 /**
@@ -99,534 +99,504 @@ const MAX_AUDIT_VALUE_CHARS = 64_000;
 const MAX_VALIDATION_MESSAGE_CHARS = 2_000;
 
 const truncateString = (value: string, max: number): string =>
-  value.length <= max ? value : `${value.slice(0, max)}…`;
+	value.length <= max ? value : `${value.slice(0, max)}…`;
 
 const boundedPreviewValue = (value: unknown, maxChars: number): unknown => {
-  if (value === undefined || value === null || typeof value !== "object") return value;
-  try {
-    const serialized = JSON.stringify(value);
-    if (serialized.length <= maxChars) return JSON.parse(serialized) as unknown;
-    return {
-      spindleTruncated: true,
-      originalChars: serialized.length,
-      preview: serialized.slice(0, Math.max(1, maxChars - 100)),
-    };
-  } catch {
-    return truncateString(String(value), maxChars);
-  }
+	if (value === undefined || value === null || typeof value !== "object") return value;
+	try {
+		const serialized = JSON.stringify(value);
+		if (serialized.length <= maxChars) return JSON.parse(serialized) as unknown;
+		return {
+			spindleTruncated: true,
+			originalChars: serialized.length,
+			preview: serialized.slice(0, Math.max(1, maxChars - 100)),
+		};
+	} catch {
+		return truncateString(String(value), maxChars);
+	}
 };
 
 const previewArgs = (ref: string, args: Record<string, unknown>): Record<string, unknown> => {
-  // Recorded surfaces (audits, previews) must not persist pi.bash env values
-  // or stdin; redact before truncation.
-  const source = redactRecordedArgs(ref, args);
-  const out: Record<string, unknown> = {};
-  let count = 0;
-  for (const [key, value] of Object.entries(source)) {
-    if (count++ >= PREVIEW_ARG_KEYS) break;
-    const maxChars =
-      ref === "pi.write" && key === "content"
-        ? WRITE_PREVIEW_CONTENT_CHARS
-        : PREVIEW_ARG_CHARS;
-    out[key] =
-      typeof value === "string"
-        ? truncateString(value, maxChars)
-        : boundedPreviewValue(value, PREVIEW_NESTED_CHARS);
-  }
-  return out;
+	// Recorded surfaces (audits, previews) must not persist pi.bash env values
+	// or stdin; redact before truncation.
+	const source = redactRecordedArgs(ref, args);
+	const out: Record<string, unknown> = {};
+	let count = 0;
+	for (const [key, value] of Object.entries(source)) {
+		if (count++ >= PREVIEW_ARG_KEYS) break;
+		const maxChars = ref === "pi.write" && key === "content" ? WRITE_PREVIEW_CONTENT_CHARS : PREVIEW_ARG_CHARS;
+		out[key] =
+			typeof value === "string" ? truncateString(value, maxChars) : boundedPreviewValue(value, PREVIEW_NESTED_CHARS);
+	}
+	return out;
 };
 
 const previewResult = (value: unknown): unknown => {
-  if (typeof value === "string") return truncateString(value, PREVIEW_RESULT_CHARS);
-  if (value !== null && typeof value === "object" && !Array.isArray(value)) {
-    const out: Record<string, unknown> = {};
-    let count = 0;
-    for (const [key, val] of Object.entries(value as Record<string, unknown>)) {
-      if (count++ >= PREVIEW_ARG_KEYS) break;
-      out[key] =
-        typeof val === "string"
-          ? truncateString(val, PREVIEW_RESULT_CHARS)
-          : boundedPreviewValue(val, PREVIEW_NESTED_CHARS);
-    }
-    return out;
-  }
-  return boundedPreviewValue(value, PREVIEW_RESULT_CHARS);
+	if (typeof value === "string") return truncateString(value, PREVIEW_RESULT_CHARS);
+	if (value !== null && typeof value === "object" && !Array.isArray(value)) {
+		const out: Record<string, unknown> = {};
+		let count = 0;
+		for (const [key, val] of Object.entries(value as Record<string, unknown>)) {
+			if (count++ >= PREVIEW_ARG_KEYS) break;
+			out[key] =
+				typeof val === "string"
+					? truncateString(val, PREVIEW_RESULT_CHARS)
+					: boundedPreviewValue(val, PREVIEW_NESTED_CHARS);
+		}
+		return out;
+	}
+	return boundedPreviewValue(value, PREVIEW_RESULT_CHARS);
 };
 
 const failedResultError = (value: unknown): string | undefined => {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
-  const record = value as Record<string, unknown>;
-  const status = record.status;
-  if (status !== "failed" && status !== "stopped" && status !== "timed_out") return undefined;
-  const error = typeof record.error === "string" ? record.error.trim() : "";
-  return error ? truncateString(error, PREVIEW_RESULT_CHARS) : `Spindle action returned ${status}`;
+	if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+	const record = value as Record<string, unknown>;
+	const status = record.status;
+	if (status !== "failed" && status !== "stopped" && status !== "timed_out") return undefined;
+	const error = typeof record.error === "string" ? record.error.trim() : "";
+	return error ? truncateString(error, PREVIEW_RESULT_CHARS) : `Spindle action returned ${status}`;
 };
 
 const failedResultOutcome = (value: unknown): "failed" | "aborted" | "timed_out" => {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return "failed";
-  const status = (value as Record<string, unknown>).status;
-  return status === "timed_out" ? "timed_out" : status === "stopped" ? "aborted" : "failed";
+	if (typeof value !== "object" || value === null || Array.isArray(value)) return "failed";
+	const status = (value as Record<string, unknown>).status;
+	return status === "timed_out" ? "timed_out" : status === "stopped" ? "aborted" : "failed";
 };
 
-const boundedResult = (
-  value: unknown,
-  maxChars: number,
-): { value: unknown; chars: number; truncated: boolean } => {
-  let serialized: string;
-  try {
-    const encoded = JSON.stringify(value);
-    if (encoded === undefined && value !== undefined) {
-      throw new Error(`unsupported result type: ${typeof value}`);
-    }
-    serialized = encoded ?? "null";
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`Spindle action returned a non-JSON-serializable value: ${message}`);
-  }
-  if (serialized.length <= maxChars) {
-    return { value, chars: serialized.length, truncated: false };
-  }
-  const previewChars = Math.max(1, maxChars - 200);
-  return {
-    value: {
-      spindleTruncated: true,
-      originalChars: serialized.length,
-      preview: serialized.slice(0, previewChars),
-    },
-    chars: serialized.length,
-    truncated: true,
-  };
+const boundedResult = (value: unknown, maxChars: number): { value: unknown; chars: number; truncated: boolean } => {
+	let serialized: string;
+	try {
+		const encoded = JSON.stringify(value);
+		if (encoded === undefined && value !== undefined) {
+			throw new Error(`unsupported result type: ${typeof value}`);
+		}
+		serialized = encoded ?? "null";
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		throw new Error(`Spindle action returned a non-JSON-serializable value: ${message}`);
+	}
+	if (serialized.length <= maxChars) {
+		return { value, chars: serialized.length, truncated: false };
+	}
+	const previewChars = Math.max(1, maxChars - 200);
+	return {
+		value: {
+			spindleTruncated: true,
+			originalChars: serialized.length,
+			preview: serialized.slice(0, previewChars),
+		},
+		chars: serialized.length,
+		truncated: true,
+	};
 };
 
-const resolveDescriptor = (
-  provider: SpindleProvider,
-  descriptor: SpindleActionDescriptor,
-): ResolvedSpindleAction => ({
-  ...descriptor,
-  provider: provider.name,
-  ref: `${provider.name}.${descriptor.name}`,
+const resolveDescriptor = (provider: SpindleProvider, descriptor: SpindleActionDescriptor): ResolvedSpindleAction => ({
+	...descriptor,
+	provider: provider.name,
+	ref: `${provider.name}.${descriptor.name}`,
 });
 
 const stableJsonValue = (value: unknown): unknown => {
-  if (Array.isArray(value)) return value.map(stableJsonValue);
-  if (value === null || typeof value !== "object") return value;
-  return Object.fromEntries(
-    Object.entries(value as Record<string, unknown>)
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(([key, nested]) => [key, stableJsonValue(nested)]),
-  );
+	if (Array.isArray(value)) return value.map(stableJsonValue);
+	if (value === null || typeof value !== "object") return value;
+	return Object.fromEntries(
+		Object.entries(value as Record<string, unknown>)
+			.sort(([left], [right]) => left.localeCompare(right))
+			.map(([key, nested]) => [key, stableJsonValue(nested)]),
+	);
 };
 
 const descriptorHash = (value: unknown): string =>
-  createHash("sha256").update(JSON.stringify(stableJsonValue(value))).digest("hex");
+	createHash("sha256")
+		.update(JSON.stringify(stableJsonValue(value)))
+		.digest("hex");
 
 const discoveryTerms = (value: string): string[] =>
-  [...value.normalize("NFKC").matchAll(/[\p{L}\p{N}_]+/gu)]
-    .map((match) => match[0].toLowerCase());
+	[...value.normalize("NFKC").matchAll(/[\p{L}\p{N}_]+/gu)].map((match) => match[0].toLowerCase());
 
-const validationMessage = (
-  schema: Record<string, unknown>,
-  value: Record<string, unknown>,
-): string | undefined => {
-  try {
-    if (Value.Check(schema, value)) return undefined;
-    const message = [...Value.Errors(schema, value)]
-      .slice(0, 5)
-      .map((error) => error.message)
-      .join("; ");
-    return truncateString(message || "Schema validation failed", MAX_VALIDATION_MESSAGE_CHARS);
-  } catch {
-    return "Schema validator failed";
-  }
+const validationMessage = (schema: Record<string, unknown>, value: Record<string, unknown>): string | undefined => {
+	try {
+		if (Value.Check(schema, value)) return undefined;
+		const message = [...Value.Errors(schema, value)]
+			.slice(0, 5)
+			.map((error) => error.message)
+			.join("; ");
+		return truncateString(message || "Schema validation failed", MAX_VALIDATION_MESSAGE_CHARS);
+	} catch {
+		return "Schema validator failed";
+	}
 };
 
 export class ActionRegistry {
-  readonly #providers = new Map<string, SpindleProvider>();
+	readonly #providers = new Map<string, SpindleProvider>();
 
-  constructor(readonly toolResultProxy?: SpindleNestedToolResultProxy) {}
+	constructor(readonly toolResultProxy?: SpindleNestedToolResultProxy) {}
 
-  register(provider: SpindleProvider, options: { overwrite?: boolean } = {}): void {
-    if (!providerNamePattern.test(provider.name)) {
-      throw new Error(`Invalid Spindle provider name: ${provider.name}`);
-    }
-    if (this.#providers.has(provider.name) && !options.overwrite) {
-      throw new Error(`Spindle provider already registered: ${provider.name}`);
-    }
-    this.#providers.set(provider.name, provider);
-  }
+	register(provider: SpindleProvider, options: { overwrite?: boolean } = {}): void {
+		if (!providerNamePattern.test(provider.name)) {
+			throw new Error(`Invalid Spindle provider name: ${provider.name}`);
+		}
+		if (this.#providers.has(provider.name) && !options.overwrite) {
+			throw new Error(`Spindle provider already registered: ${provider.name}`);
+		}
+		this.#providers.set(provider.name, provider);
+	}
 
-  has(name: string): boolean {
-    return this.#providers.has(name);
-  }
+	has(name: string): boolean {
+		return this.#providers.has(name);
+	}
 
-  unregister(name: string): SpindleProvider | undefined {
-    const provider = this.#providers.get(name);
-    this.#providers.delete(name);
-    return provider;
-  }
+	unregister(name: string): SpindleProvider | undefined {
+		const provider = this.#providers.get(name);
+		this.#providers.delete(name);
+		return provider;
+	}
 
-  providers(): Array<{ name: string; description: string }> {
-    return [...this.#providers.values()]
-      .map((provider) => ({ name: provider.name, description: provider.description }))
-      .sort((left, right) => left.name.localeCompare(right.name));
-  }
+	providers(): Array<{ name: string; description: string }> {
+		return [...this.#providers.values()]
+			.map((provider) => ({ name: provider.name, description: provider.description }))
+			.sort((left, right) => left.name.localeCompare(right.name));
+	}
 
-  async list(
-    request: SpindleProviderListRequest & { provider?: string },
-    context: SpindleInvocationContext,
-  ): Promise<ResolvedSpindleAction[]> {
-    const providers = request.provider
-      ? [this.#requireProvider(request.provider)]
-      : [...this.#providers.values()];
-    const lists = await Promise.all(
-      providers.map(async (provider) => {
-        const descriptors = await provider.list(request, context);
-        return descriptors.map((descriptor) => resolveDescriptor(provider, descriptor));
-      }),
-    );
-    const limit = Math.max(1, Math.min(request.limit ?? 100, 1_000));
-    return lists.flat().slice(0, limit);
-  }
+	async list(
+		request: SpindleProviderListRequest & { provider?: string },
+		context: SpindleInvocationContext,
+	): Promise<ResolvedSpindleAction[]> {
+		const providers = request.provider ? [this.#requireProvider(request.provider)] : [...this.#providers.values()];
+		const lists = await Promise.all(
+			providers.map(async (provider) => {
+				const descriptors = await provider.list(request, context);
+				return descriptors.map((descriptor) => resolveDescriptor(provider, descriptor));
+			}),
+		);
+		const limit = Math.max(1, Math.min(request.limit ?? 100, 1_000));
+		return lists.flat().slice(0, limit);
+	}
 
-  async catalog(
-    context: SpindleInvocationContext,
-    options: {
-      provider?: string;
-      limit?: number;
-      includeProvider?: (provider: string) => boolean;
-    } = {},
-  ): Promise<SpindleCapabilityCatalog> {
-    const providers = (options.provider
-      ? [this.#requireProvider(options.provider)]
-      : [...this.#providers.values()])
-      .filter((provider) => options.includeProvider?.(provider.name) ?? true)
-      .sort((left, right) => left.name.localeCompare(right.name));
-    const lists = await Promise.all(
-      providers.map(async (provider) => ({
-        provider,
-        actions: (await provider.list({}, context))
-          .map((descriptor) => resolveDescriptor(provider, descriptor)),
-      })),
-    );
-    const allActions = lists.flatMap(({ actions }) => actions)
-      .sort((left, right) => left.ref.localeCompare(right.ref));
-    const limit = Math.max(1, Math.min(Math.floor(options.limit ?? 1_000), 1_000));
-    const retainedRefs = new Set(allActions.slice(0, limit).map((action) => action.ref));
-    const providerHeads = lists.map(({ provider, actions }) => {
-      const actionHeads = actions
-        .filter((action) => retainedRefs.has(action.ref))
-        .sort((left, right) => left.ref.localeCompare(right.ref))
-        .map((action) => ({
-          key: `action:${action.ref}`,
-          parentKey: `provider:${provider.name}`,
-          ref: action.ref,
-          name: action.name,
-          description: action.description,
-          descriptorHash: descriptorHash({
-            ref: action.ref,
-            description: action.description,
-            inputSchema: action.inputSchema,
-            outputSchema: action.outputSchema,
-            namespace: action.namespace,
-          }),
-          ...(action.namespace === undefined ? {} : { namespace: action.namespace }),
-        }));
-      return {
-        key: `provider:${provider.name}`,
-        parentKey: "capability:spindle",
-        name: provider.name,
-        description: provider.description,
-        descriptorHash: descriptorHash({
-          name: provider.name,
-          description: provider.description,
-          actions: actionHeads.map((action) => action.descriptorHash),
-        }),
-        actions: actionHeads,
-      };
-    });
-    const indexedActions = providerHeads.reduce((total, provider) => total + provider.actions.length, 0);
-    const rootHash = descriptorHash(providerHeads.map((provider) => provider.descriptorHash));
-    return {
-      kind: "pi-spindle.capability-catalog",
-      version: 1,
-      root: {
-        key: "capability:spindle",
-        name: "Spindle capabilities",
-        description: "Current registered provider and action metadata for navigation; not historical session evidence.",
-        descriptorHash: rootHash,
-      },
-      providers: providerHeads,
-      totalActions: allActions.length,
-      indexedActions,
-      complete: indexedActions === allActions.length,
-      reasons: indexedActions === allActions.length ? [] : ["action_limit"],
-    };
-  }
+	async catalog(
+		context: SpindleInvocationContext,
+		options: {
+			provider?: string;
+			limit?: number;
+			includeProvider?: (provider: string) => boolean;
+		} = {},
+	): Promise<SpindleCapabilityCatalog> {
+		const providers = (options.provider ? [this.#requireProvider(options.provider)] : [...this.#providers.values()])
+			.filter((provider) => options.includeProvider?.(provider.name) ?? true)
+			.sort((left, right) => left.name.localeCompare(right.name));
+		const lists = await Promise.all(
+			providers.map(async (provider) => ({
+				provider,
+				actions: (await provider.list({}, context)).map((descriptor) => resolveDescriptor(provider, descriptor)),
+			})),
+		);
+		const allActions = lists
+			.flatMap(({ actions }) => actions)
+			.sort((left, right) => left.ref.localeCompare(right.ref));
+		const limit = Math.max(1, Math.min(Math.floor(options.limit ?? 1_000), 1_000));
+		const retainedRefs = new Set(allActions.slice(0, limit).map((action) => action.ref));
+		const providerHeads = lists.map(({ provider, actions }) => {
+			const actionHeads = actions
+				.filter((action) => retainedRefs.has(action.ref))
+				.sort((left, right) => left.ref.localeCompare(right.ref))
+				.map((action) => ({
+					key: `action:${action.ref}`,
+					parentKey: `provider:${provider.name}`,
+					ref: action.ref,
+					name: action.name,
+					description: action.description,
+					descriptorHash: descriptorHash({
+						ref: action.ref,
+						description: action.description,
+						inputSchema: action.inputSchema,
+						outputSchema: action.outputSchema,
+						namespace: action.namespace,
+					}),
+					...(action.namespace === undefined ? {} : { namespace: action.namespace }),
+				}));
+			return {
+				key: `provider:${provider.name}`,
+				parentKey: "capability:spindle",
+				name: provider.name,
+				description: provider.description,
+				descriptorHash: descriptorHash({
+					name: provider.name,
+					description: provider.description,
+					actions: actionHeads.map((action) => action.descriptorHash),
+				}),
+				actions: actionHeads,
+			};
+		});
+		const indexedActions = providerHeads.reduce((total, provider) => total + provider.actions.length, 0);
+		const rootHash = descriptorHash(providerHeads.map((provider) => provider.descriptorHash));
+		return {
+			kind: "pi-spindle.capability-catalog",
+			version: 1,
+			root: {
+				key: "capability:spindle",
+				name: "Spindle capabilities",
+				description:
+					"Current registered provider and action metadata for navigation; not historical session evidence.",
+				descriptorHash: rootHash,
+			},
+			providers: providerHeads,
+			totalActions: allActions.length,
+			indexedActions,
+			complete: indexedActions === allActions.length,
+			reasons: indexedActions === allActions.length ? [] : ["action_limit"],
+		};
+	}
 
-  async search(
-    query: string,
-    context: SpindleInvocationContext,
-    limit = 30,
-  ): Promise<ResolvedSpindleAction[]> {
-    const normalizedQuery = query.normalize("NFKC").trim().toLowerCase();
-    if (!normalizedQuery) return [];
-    const queryTerms = [...new Set(discoveryTerms(normalizedQuery))];
-    const listed = await this.list({ limit: 1_000 }, context);
-    return listed
-      .map((action) => {
-        const providerDescription = this.#providers.get(action.provider)?.description ?? "";
-        const ref = action.ref.normalize("NFKC").toLowerCase();
-        const name = action.name.normalize("NFKC").toLowerCase();
-        const description = action.description.normalize("NFKC").toLowerCase();
-        const provider = action.provider.normalize("NFKC").toLowerCase();
-        const providerBody = providerDescription.normalize("NFKC").toLowerCase();
-        const namespace = (action.namespace ?? "").normalize("NFKC").toLowerCase();
-        const schema = JSON.stringify(action.inputSchema).normalize("NFKC").toLowerCase();
-        const tokenSets = {
-          ref: new Set(discoveryTerms(ref)),
-          name: new Set(discoveryTerms(name)),
-          description: new Set(discoveryTerms(description)),
-          provider: new Set(discoveryTerms(provider)),
-          providerBody: new Set(discoveryTerms(providerBody)),
-          namespace: new Set(discoveryTerms(namespace)),
-          schema: new Set(discoveryTerms(schema)),
-        };
-        const fields = Object.values(tokenSets);
-        let score = 0;
-        if (ref === normalizedQuery) score += 1_000;
-        if (name === normalizedQuery) score += 800;
-        if (ref.startsWith(normalizedQuery)) score += 300;
-        else if (ref.includes(normalizedQuery)) score += 120;
-        if (description.includes(normalizedQuery)) score += 40;
-        if (providerBody.includes(normalizedQuery)) score += 20;
-        if (schema.includes(normalizedQuery)) score += 10;
-        let matchedTerms = 0;
-        for (const term of queryTerms) {
-          const matched = fields.some((field) => field.has(term));
-          if (!matched) continue;
-          matchedTerms += 1;
-          if (tokenSets.ref.has(term) || tokenSets.name.has(term)) score += 30;
-          if (tokenSets.provider.has(term)) score += 20;
-          if (tokenSets.description.has(term)) score += 8;
-          if (tokenSets.providerBody.has(term)) score += 4;
-          if (tokenSets.namespace.has(term)) score += 6;
-          if (tokenSets.schema.has(term)) score += 2;
-        }
-        if (queryTerms.length > 0 && matchedTerms === queryTerms.length) score += 15;
-        return { action, score };
-      })
-      .filter((entry) => entry.score > 0)
-      .sort(
-        (left, right) =>
-          right.score - left.score || left.action.ref.localeCompare(right.action.ref),
-      )
-      .slice(0, Math.max(1, Math.min(limit, 100)))
-      .map((entry) => entry.action);
-  }
+	async search(query: string, context: SpindleInvocationContext, limit = 30): Promise<ResolvedSpindleAction[]> {
+		const normalizedQuery = query.normalize("NFKC").trim().toLowerCase();
+		if (!normalizedQuery) return [];
+		const queryTerms = [...new Set(discoveryTerms(normalizedQuery))];
+		const listed = await this.list({ limit: 1_000 }, context);
+		return listed
+			.map((action) => {
+				const providerDescription = this.#providers.get(action.provider)?.description ?? "";
+				const ref = action.ref.normalize("NFKC").toLowerCase();
+				const name = action.name.normalize("NFKC").toLowerCase();
+				const description = action.description.normalize("NFKC").toLowerCase();
+				const provider = action.provider.normalize("NFKC").toLowerCase();
+				const providerBody = providerDescription.normalize("NFKC").toLowerCase();
+				const namespace = (action.namespace ?? "").normalize("NFKC").toLowerCase();
+				const schema = JSON.stringify(action.inputSchema).normalize("NFKC").toLowerCase();
+				const tokenSets = {
+					ref: new Set(discoveryTerms(ref)),
+					name: new Set(discoveryTerms(name)),
+					description: new Set(discoveryTerms(description)),
+					provider: new Set(discoveryTerms(provider)),
+					providerBody: new Set(discoveryTerms(providerBody)),
+					namespace: new Set(discoveryTerms(namespace)),
+					schema: new Set(discoveryTerms(schema)),
+				};
+				const fields = Object.values(tokenSets);
+				let score = 0;
+				if (ref === normalizedQuery) score += 1_000;
+				if (name === normalizedQuery) score += 800;
+				if (ref.startsWith(normalizedQuery)) score += 300;
+				else if (ref.includes(normalizedQuery)) score += 120;
+				if (description.includes(normalizedQuery)) score += 40;
+				if (providerBody.includes(normalizedQuery)) score += 20;
+				if (schema.includes(normalizedQuery)) score += 10;
+				let matchedTerms = 0;
+				for (const term of queryTerms) {
+					const matched = fields.some((field) => field.has(term));
+					if (!matched) continue;
+					matchedTerms += 1;
+					if (tokenSets.ref.has(term) || tokenSets.name.has(term)) score += 30;
+					if (tokenSets.provider.has(term)) score += 20;
+					if (tokenSets.description.has(term)) score += 8;
+					if (tokenSets.providerBody.has(term)) score += 4;
+					if (tokenSets.namespace.has(term)) score += 6;
+					if (tokenSets.schema.has(term)) score += 2;
+				}
+				if (queryTerms.length > 0 && matchedTerms === queryTerms.length) score += 15;
+				return { action, score };
+			})
+			.filter((entry) => entry.score > 0)
+			.sort((left, right) => right.score - left.score || left.action.ref.localeCompare(right.action.ref))
+			.slice(0, Math.max(1, Math.min(limit, 100)))
+			.map((entry) => entry.action);
+	}
 
-  async describe(ref: string, context: SpindleInvocationContext): Promise<ResolvedSpindleAction> {
-    const { provider, actionName } = this.#parseRef(ref);
-    const descriptor = await provider.describe(actionName, context);
-    if (!descriptor) throw new Error(`Unknown Spindle action: ${ref}`);
-    return resolveDescriptor(provider, descriptor);
-  }
+	async describe(ref: string, context: SpindleInvocationContext): Promise<ResolvedSpindleAction> {
+		const { provider, actionName } = this.#parseRef(ref);
+		const descriptor = await provider.describe(actionName, context);
+		if (!descriptor) throw new Error(`Unknown Spindle action: ${ref}`);
+		return resolveDescriptor(provider, descriptor);
+	}
 
-  async invoke(
-    ref: string,
-    args: Record<string, unknown>,
-    context: SpindleRegistryInvocationContext,
-  ): Promise<unknown> {
-    const traceOperation = context.traceOperation ?? context.trace?.issueCall(ref, args);
-    let failureStage: "resolve" | "guard" | "prepare" | "validate" | "invoke" = "resolve";
-    let audit: SpindleCallAudit | undefined;
-    let invocationActive = false;
-    try {
-      const { provider, actionName } = this.#parseRef(ref);
-      const descriptor = await runAbortable(context.signal, () =>
-        provider.describe(actionName, context),
-      );
-      if (!descriptor) throw new Error(`Unknown Spindle action: ${ref}`);
-      const action = resolveDescriptor(provider, descriptor);
-      traceOperation?.resolved(action.provider, action.name);
+	async invoke(
+		ref: string,
+		args: Record<string, unknown>,
+		context: SpindleRegistryInvocationContext,
+	): Promise<unknown> {
+		const traceOperation = context.traceOperation ?? context.trace?.issueCall(ref, args);
+		let failureStage: "resolve" | "guard" | "prepare" | "validate" | "invoke" = "resolve";
+		let audit: SpindleCallAudit | undefined;
+		let invocationActive = false;
+		try {
+			const { provider, actionName } = this.#parseRef(ref);
+			const descriptor = await runAbortable(context.signal, () => provider.describe(actionName, context));
+			if (!descriptor) throw new Error(`Unknown Spindle action: ${ref}`);
+			const action = resolveDescriptor(provider, descriptor);
+			traceOperation?.resolved(action.provider, action.name);
 
-      failureStage = "guard";
-      if (context.authorize) {
-        await runAbortable(context.signal, () => context.authorize!(action));
-      }
+			failureStage = "guard";
+			if (context.authorize) {
+				await runAbortable(context.signal, () => context.authorize!(action));
+			}
 
-      failureStage = "prepare";
-      const preparedArgs = provider.prepareArguments
-        ? await runAbortable(context.signal, () =>
-            provider.prepareArguments!(actionName, args, context),
-          )
-        : args;
-      if (typeof preparedArgs !== "object" || preparedArgs === null || Array.isArray(preparedArgs)) {
-        throw new Error(`Argument preparation for ${ref} did not return an object`);
-      }
-      traceOperation?.prepared(redactRecordedArgs(ref, preparedArgs));
+			failureStage = "prepare";
+			const preparedArgs = provider.prepareArguments
+				? await runAbortable(context.signal, () => provider.prepareArguments!(actionName, args, context))
+				: args;
+			if (typeof preparedArgs !== "object" || preparedArgs === null || Array.isArray(preparedArgs)) {
+				throw new Error(`Argument preparation for ${ref} did not return an object`);
+			}
+			traceOperation?.prepared(redactRecordedArgs(ref, preparedArgs));
 
-      failureStage = "validate";
-      const invalid = validationMessage(action.inputSchema, preparedArgs);
-      if (invalid) throw new Error(`Invalid arguments for ${ref}: ${invalid}`);
+			failureStage = "validate";
+			const invalid = validationMessage(action.inputSchema, preparedArgs);
+			if (invalid) throw new Error(`Invalid arguments for ${ref}: ${invalid}`);
 
-      failureStage = "invoke";
-      const nestedToolCallId = `${NESTED_TOOL_CALL_ID_PREFIX}${randomUUID()}`;
-      const argsPreview = previewArgs(ref, preparedArgs);
-      const activeAudit: SpindleCallAudit = {
-        ref,
-        nestedToolCallId,
-        startedAt: Date.now(),
-        tool: action.name,
-        provider: action.provider,
-        args: boundedPreviewValue(
-          argsPreview,
-          MAX_AUDIT_VALUE_CHARS,
-        ) as Record<string, unknown>,
-      };
-      audit = activeAudit;
-      invocationActive = true;
-      context.audits.push(activeAudit);
-      context.observeInvocation?.({
-        type: "call_start",
-        callId: nestedToolCallId,
-        ref,
-        args: argsPreview,
-      });
-      context.update(`Calling ${ref}`);
-      const providerValue = await runAbortable(context.signal, () =>
-        provider.invoke(actionName, preparedArgs, {
-          ...context,
-          nestedToolCallId,
-          update(message) {
-            if (!invocationActive) return;
-            context.update(message);
-            context.observeInvocation?.({
-              type: "call_update",
-              callId: nestedToolCallId,
-              update: { type: "progress", message },
-            });
-          },
-          activity(update) {
-            if (!invocationActive) return;
-            context.activity?.(update);
-            context.observeInvocation?.({
-              type: "call_update",
-              callId: nestedToolCallId,
-              update,
-            });
-          },
-          attachMedia(blocks, note) {
-            if (!invocationActive) return;
-            if (!activeAudit.media) activeAudit.media = [];
-            for (const block of blocks) activeAudit.media.push(block);
-            if (note) activeAudit.mediaNote = note;
-          },
-          updateArguments(updatedArgs) {
-            if (!invocationActive) return;
-            const updatedPreview = previewArgs(ref, updatedArgs);
-            activeAudit.args = boundedPreviewValue(
-              updatedPreview,
-              MAX_AUDIT_VALUE_CHARS,
-            ) as Record<string, unknown>;
-            traceOperation?.prepared(updatedArgs);
-            context.observeInvocation?.({
-              type: "call_args",
-              callId: nestedToolCallId,
-              args: updatedPreview,
-            });
-          },
-          attachPreview(preview) {
-            if (!invocationActive) return;
-            activeAudit.preview = preview;
-          },
-        }),
-      );
-      const value = this.toolResultProxy
-        ? await runAbortable(context.signal, () => this.toolResultProxy!.proxy({
-            action,
-            args: preparedArgs,
-            toolCallId: nestedToolCallId,
-            value: providerValue,
-            ...(context.signal ? { signal: context.signal } : {}),
-          }))
-        : providerValue;
-      const bounded = boundedResult(value, context.maxResultChars);
-      const resultError = failedResultError(value);
-      activeAudit.success = resultError === undefined;
-      if (resultError) activeAudit.error = resultError;
-      activeAudit.resultChars = bounded.chars;
-      activeAudit.resultTruncated = bounded.truncated;
-      const resultPreview = previewResult(bounded.value);
-      activeAudit.result = boundedPreviewValue(resultPreview, MAX_AUDIT_VALUE_CHARS);
-      activeAudit.endedAt = Date.now();
-      context.observeInvocation?.({
-        type: "call_end",
-        callId: nestedToolCallId,
-        success: resultError === undefined,
-        result: resultPreview,
-        ...(activeAudit.preview !== undefined ? { preview: activeAudit.preview } : {}),
-        ...(resultError ? { error: resultError } : {}),
-      });
-      if (resultError) {
-        traceOperation?.fail("invoke", resultError, failedResultOutcome(value), bounded.value);
-      } else {
-        traceOperation?.succeed(bounded.value);
-      }
-      return bounded.value;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      traceOperation?.fail(failureStage, error, executionOutcomeFromError(error, context.signal));
-      if (audit) {
-        audit.success = false;
-        audit.error = message;
-        audit.endedAt = Date.now();
-        context.observeInvocation?.({
-          type: "call_end",
-          callId: audit.nestedToolCallId,
-          success: false,
-          error: audit.error,
-        });
-      }
-      throw error;
-    } finally {
-      invocationActive = false;
-      if (audit) audit.endedAt ??= Date.now();
-    }
-  }
+			failureStage = "invoke";
+			const nestedToolCallId = `${NESTED_TOOL_CALL_ID_PREFIX}${randomUUID()}`;
+			const argsPreview = previewArgs(ref, preparedArgs);
+			const activeAudit: SpindleCallAudit = {
+				ref,
+				nestedToolCallId,
+				startedAt: Date.now(),
+				tool: action.name,
+				provider: action.provider,
+				args: boundedPreviewValue(argsPreview, MAX_AUDIT_VALUE_CHARS) as Record<string, unknown>,
+			};
+			audit = activeAudit;
+			invocationActive = true;
+			context.audits.push(activeAudit);
+			context.observeInvocation?.({
+				type: "call_start",
+				callId: nestedToolCallId,
+				ref,
+				args: argsPreview,
+			});
+			context.update(`Calling ${ref}`);
+			const providerValue = await runAbortable(context.signal, () =>
+				provider.invoke(actionName, preparedArgs, {
+					...context,
+					nestedToolCallId,
+					update(message) {
+						if (!invocationActive) return;
+						context.update(message);
+						context.observeInvocation?.({
+							type: "call_update",
+							callId: nestedToolCallId,
+							update: { type: "progress", message },
+						});
+					},
+					activity(update) {
+						if (!invocationActive) return;
+						context.activity?.(update);
+						context.observeInvocation?.({
+							type: "call_update",
+							callId: nestedToolCallId,
+							update,
+						});
+					},
+					attachMedia(blocks, note) {
+						if (!invocationActive) return;
+						if (!activeAudit.media) activeAudit.media = [];
+						for (const block of blocks) activeAudit.media.push(block);
+						if (note) activeAudit.mediaNote = note;
+					},
+					updateArguments(updatedArgs) {
+						if (!invocationActive) return;
+						const updatedPreview = previewArgs(ref, updatedArgs);
+						activeAudit.args = boundedPreviewValue(updatedPreview, MAX_AUDIT_VALUE_CHARS) as Record<
+							string,
+							unknown
+						>;
+						traceOperation?.prepared(updatedArgs);
+						context.observeInvocation?.({
+							type: "call_args",
+							callId: nestedToolCallId,
+							args: updatedPreview,
+						});
+					},
+					attachPreview(preview) {
+						if (!invocationActive) return;
+						activeAudit.preview = preview;
+					},
+				}),
+			);
+			const value = this.toolResultProxy
+				? await runAbortable(context.signal, () =>
+						this.toolResultProxy!.proxy({
+							action,
+							args: preparedArgs,
+							toolCallId: nestedToolCallId,
+							value: providerValue,
+							...(context.signal ? { signal: context.signal } : {}),
+						}),
+					)
+				: providerValue;
+			const bounded = boundedResult(value, context.maxResultChars);
+			const resultError = failedResultError(value);
+			activeAudit.success = resultError === undefined;
+			if (resultError) activeAudit.error = resultError;
+			activeAudit.resultChars = bounded.chars;
+			activeAudit.resultTruncated = bounded.truncated;
+			const resultPreview = previewResult(bounded.value);
+			activeAudit.result = boundedPreviewValue(resultPreview, MAX_AUDIT_VALUE_CHARS);
+			activeAudit.endedAt = Date.now();
+			context.observeInvocation?.({
+				type: "call_end",
+				callId: nestedToolCallId,
+				success: resultError === undefined,
+				result: resultPreview,
+				...(activeAudit.preview !== undefined ? { preview: activeAudit.preview } : {}),
+				...(resultError ? { error: resultError } : {}),
+			});
+			if (resultError) {
+				traceOperation?.fail("invoke", resultError, failedResultOutcome(value), bounded.value);
+			} else {
+				traceOperation?.succeed(bounded.value);
+			}
+			return bounded.value;
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			traceOperation?.fail(failureStage, error, executionOutcomeFromError(error, context.signal));
+			if (audit) {
+				audit.success = false;
+				audit.error = message;
+				audit.endedAt = Date.now();
+				context.observeInvocation?.({
+					type: "call_end",
+					callId: audit.nestedToolCallId,
+					success: false,
+					error: audit.error,
+				});
+			}
+			throw error;
+		} finally {
+			invocationActive = false;
+			if (audit) audit.endedAt ??= Date.now();
+		}
+	}
 
-  async endInvocation(parentToolCallId: string, timeoutMs = 1_000): Promise<void> {
-    const finalizers = [...this.#providers.values()].flatMap((provider) =>
-      provider.invocationEnded
-        ? [Promise.resolve().then(() => provider.invocationEnded!(parentToolCallId))]
-        : [],
-    );
-    await settleWithin(finalizers, timeoutMs);
-  }
+	async endInvocation(parentToolCallId: string, timeoutMs = 1_000): Promise<void> {
+		const finalizers = [...this.#providers.values()].flatMap((provider) =>
+			provider.invocationEnded ? [Promise.resolve().then(() => provider.invocationEnded!(parentToolCallId))] : [],
+		);
+		await settleWithin(finalizers, timeoutMs);
+	}
 
-  async close(excludedProviderNames: Set<string> = new Set()): Promise<void> {
-    await Promise.allSettled(
-      [...this.#providers.values()]
-        .filter((provider) => !excludedProviderNames.has(provider.name))
-        .map((provider) => provider.close?.()),
-    );
-    this.#providers.clear();
-  }
+	async close(excludedProviderNames: Set<string> = new Set()): Promise<void> {
+		await Promise.allSettled(
+			[...this.#providers.values()]
+				.filter((provider) => !excludedProviderNames.has(provider.name))
+				.map((provider) => provider.close?.()),
+		);
+		this.#providers.clear();
+	}
 
-  #parseRef(ref: string): { provider: SpindleProvider; actionName: string } {
-    const separator = ref.indexOf(".");
-    if (separator <= 0 || separator === ref.length - 1) {
-      throw new Error(`Spindle action references must use provider.action: ${ref}`);
-    }
-    const providerName = ref.slice(0, separator);
-    return {
-      provider: this.#requireProvider(providerName),
-      actionName: ref.slice(separator + 1),
-    };
-  }
+	#parseRef(ref: string): { provider: SpindleProvider; actionName: string } {
+		const separator = ref.indexOf(".");
+		if (separator <= 0 || separator === ref.length - 1) {
+			throw new Error(`Spindle action references must use provider.action: ${ref}`);
+		}
+		const providerName = ref.slice(0, separator);
+		return {
+			provider: this.#requireProvider(providerName),
+			actionName: ref.slice(separator + 1),
+		};
+	}
 
-  #requireProvider(name: string): SpindleProvider {
-    const provider = this.#providers.get(name);
-    if (!provider) throw new Error(`Unknown Spindle provider: ${name}`);
-    return provider;
-  }
+	#requireProvider(name: string): SpindleProvider {
+		const provider = this.#providers.get(name);
+		if (!provider) throw new Error(`Unknown Spindle provider: ${name}`);
+		return provider;
+	}
 }

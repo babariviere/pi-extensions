@@ -56,11 +56,7 @@ export class HerdrClient {
 		return res.ok ? parseTabs(res.result) : [];
 	}
 
-	async createTab(
-		label: string,
-		workspaceId?: string,
-		cwd?: string,
-	): Promise<HerdrTab | undefined> {
+	async createTab(label: string, workspaceId?: string, cwd?: string): Promise<HerdrTab | undefined> {
 		const args = ["tab", "create", "--label", label, "--no-focus"];
 		if (workspaceId) args.push("--workspace", workspaceId);
 		// The tab's root pane is reused as the first run's pane, and `agent start`
@@ -116,7 +112,19 @@ export class HerdrClient {
 		timeoutMs = 60000,
 		opts?: { readyTimeoutMs?: number; pollMs?: number; signal?: AbortSignal },
 	): Promise<{ ok: boolean; error?: string }> {
-		const args = ["agent", "start", name, "--kind", kind, "--pane", paneId, "--timeout", String(timeoutMs), "--", ...childArgs];
+		const args = [
+			"agent",
+			"start",
+			name,
+			"--kind",
+			kind,
+			"--pane",
+			paneId,
+			"--timeout",
+			String(timeoutMs),
+			"--",
+			...childArgs,
+		];
 		const readyTimeoutMs = opts?.readyTimeoutMs ?? 30000;
 		const pollMs = opts?.pollMs ?? 250;
 		const deadline = Date.now() + readyTimeoutMs;
@@ -206,7 +214,17 @@ export class HerdrClient {
 
 	/** Read recent pane output as a fallback when the output file is missing. */
 	async readPane(paneId: string, lines = 200): Promise<string | undefined> {
-		const res = await this.#transport.run(["pane", "read", paneId, "--source", "recent-unwrapped", "--lines", String(lines), "--format", "text"]);
+		const res = await this.#transport.run([
+			"pane",
+			"read",
+			paneId,
+			"--source",
+			"recent-unwrapped",
+			"--lines",
+			String(lines),
+			"--format",
+			"text",
+		]);
 		if (!res.ok || !res.result) return undefined;
 		const text = res.result.text ?? res.result.output ?? res.result.content;
 		return typeof text === "string" ? text : undefined;

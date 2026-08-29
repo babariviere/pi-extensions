@@ -8,14 +8,7 @@
 import { spawn } from "node:child_process";
 import { readDefaultProvider } from "./settings.ts";
 import { resolveRunOutput } from "./output.ts";
-import {
-	baseResult,
-	prepareChildRun,
-	runCwd,
-	type RunContext,
-	type RunRequest,
-	type RunResult,
-} from "./run.ts";
+import { baseResult, prepareChildRun, runCwd, type RunContext, type RunRequest, type RunResult } from "./run.ts";
 
 export function runHeadlessBatch(reqs: RunRequest[], ctx: RunContext): Promise<RunResult[]> {
 	const defaultProvider = readDefaultProvider(ctx.cwd);
@@ -69,7 +62,7 @@ function runHeadless(req: RunRequest, ctx: RunContext, defaultProvider: string |
 			void finish(null, err.message);
 		});
 		child.on("close", (code) => {
-			const err = code === 0 ? undefined : (stderr.trim() || `pi exited with code ${code}`);
+			const err = code === 0 ? undefined : stderr.trim() || `pi exited with code ${code}`;
 			void finish(code, err);
 		});
 	});

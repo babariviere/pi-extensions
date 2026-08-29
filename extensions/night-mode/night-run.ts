@@ -7,13 +7,7 @@
  * an in-memory channel would not reach them.
  */
 
-import {
-	existsSync,
-	mkdirSync,
-	readFileSync,
-	rmSync,
-	writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -52,8 +46,7 @@ export interface ActiveNightRun {
 
 /** Next to the default prompt/report files, so one feature owns one directory. */
 export function activeRunPath(): string {
-	const base =
-		process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent");
+	const base = process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent");
 	return join(base, "night", "active.json");
 }
 
@@ -65,9 +58,7 @@ export function readActiveNightRun(): ActiveNightRun | undefined {
 		const parsed = JSON.parse(readFileSync(path, "utf-8"));
 		if (!parsed || typeof parsed !== "object") return undefined;
 		const run = parsed as ActiveNightRun;
-		return typeof run.reportPath === "string" && run.reportPath
-			? run
-			: undefined;
+		return typeof run.reportPath === "string" && run.reportPath ? run : undefined;
 	} catch {
 		return undefined;
 	}
@@ -101,10 +92,7 @@ export function clearActiveNightRun(): void {
  * workspace is already there and must not wander into the shared clone, while a
  * child without one has to `cd` into the run's clone itself.
  */
-export function buildNightContract(
-	run: ActiveNightRun,
-	workspacePath?: string,
-): string {
+export function buildNightContract(run: ActiveNightRun, workspacePath?: string): string {
 	const workspace = workspacePath ?? run.workspacePath;
 	const workspaceLine = workspace
 		? workspacePath

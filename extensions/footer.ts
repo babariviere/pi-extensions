@@ -51,7 +51,10 @@ const colorizeOrange = (text: string): string => `${ORANGE}${text}${RESET}`;
  * carriage returns, and collapses repeated spaces.
  */
 function sanitizeStatusText(text: string): string {
-	return text.replace(/[\r\n\t]/g, " ").replace(/ +/g, " ").trim();
+	return text
+		.replace(/[\r\n\t]/g, " ")
+		.replace(/ +/g, " ")
+		.trim();
 }
 
 /** Formats a token count into a human-readable string. */
@@ -111,8 +114,7 @@ function renderContextGauge(
 	const barWidth = Math.max(4, options?.barWidth ?? CTX_BAR_WIDTH);
 	const bar = renderBar(percent, barWidth, contextColor, theme);
 	const pct = `${Math.round(clampPercent(percent))}%`;
-	const counts =
-		options?.includeCounts === false || !total ? "" : ` ${formatTokens(used)}/${formatTokens(total)}`;
+	const counts = options?.includeCounts === false || !total ? "" : ` ${formatTokens(used)}/${formatTokens(total)}`;
 	return theme.fg("dim", "ctx ") + bar + " " + theme.fg("dim", pct + counts);
 }
 
@@ -266,12 +268,7 @@ export default function (pi: ExtensionAPI): void {
 					const used = contextUsage?.tokens ?? Math.round((percent / 100) * contextWindow);
 
 					const contextSegment = renderContextGauge(percent, used, contextWindow, theme);
-					const modelSegment = renderModel(
-						pi,
-						ctx,
-						footerData.getAvailableProviderCount() > 1,
-						theme,
-					);
+					const modelSegment = renderModel(pi, ctx, footerData.getAvailableProviderCount() > 1, theme);
 
 					// Build the left side: project path + context gauge. The project
 					// path is the expendable part, so reserve space for the context

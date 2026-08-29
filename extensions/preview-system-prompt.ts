@@ -48,9 +48,10 @@ export default function (pi: ExtensionAPI) {
 
 					// Scroll indicator
 					result.push("");
-					const scrollBar = maxOffset > 0
-						? `${theme.fg("dim", `[${scrollOffset}/${maxOffset}]`)} ${theme.fg("accent", "↑↓")} scroll ${theme.fg("dim", "• Enter")} close`
-						: `${theme.fg("dim", "[no scroll needed]")} ${theme.fg("dim", "• Enter")} close`;
+					const scrollBar =
+						maxOffset > 0
+							? `${theme.fg("dim", `[${scrollOffset}/${maxOffset}]`)} ${theme.fg("accent", "↑↓")} scroll ${theme.fg("dim", "• Enter")} close`
+							: `${theme.fg("dim", "[no scroll needed]")} ${theme.fg("dim", "• Enter")} close`;
 					add(scrollBar);
 
 					// Bottom border

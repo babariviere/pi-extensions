@@ -23,7 +23,9 @@ test("execFileTransport treats a clean exit with empty stdout as success", async
 });
 
 test("execFileTransport reports failure when the command exits non-zero", async () => {
-	const res = await withFakeHerdr("echo boom 1>&2; exit 1", () => execFileTransport.run(["pane", "run", "wA:p1", "x"]));
+	const res = await withFakeHerdr("echo boom 1>&2; exit 1", () =>
+		execFileTransport.run(["pane", "run", "wA:p1", "x"]),
+	);
 	assert.equal(res.ok, false);
 	assert.match(res.error ?? "", /boom/);
 });

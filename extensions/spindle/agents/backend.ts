@@ -31,9 +31,7 @@ export interface HerdrDialect {
  * reason, so a missing or broken binary degrades to headless rather than
  * breaking `agents.run`.
  */
-export async function probeHerdrDialect(
-	transport: HerdrTransport = execFileTransport,
-): Promise<HerdrDialect> {
+export async function probeHerdrDialect(transport: HerdrTransport = execFileTransport): Promise<HerdrDialect> {
 	const start = await transport.run(["agent", "start", "--help"]);
 	if (!start.ok) {
 		return {
@@ -93,9 +91,7 @@ export class RunLauncher {
 	async run(requests: RunRequest[], context: RunContext): Promise<RunResult[]> {
 		const selection = await this.selection();
 		const backend =
-			selection.backend === "herdr"
-				? (this.#deps.herdr ?? runInHerdr)
-				: (this.#deps.headless ?? runHeadlessBatch);
+			selection.backend === "herdr" ? (this.#deps.herdr ?? runInHerdr) : (this.#deps.headless ?? runHeadlessBatch);
 		return backend(requests, context);
 	}
 

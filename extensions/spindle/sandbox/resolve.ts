@@ -19,64 +19,59 @@ import type { SandboxRequest } from "./protocol.ts";
 
 /** The `sandbox` block of `spindle.json`. */
 export interface SandboxSettings {
-  mode: SandboxMode;
-  allowWrite: string[];
-  denyWrite: string[];
-  denyRead: string[];
-  allowedDomains: string[];
-  deniedDomains: string[];
+	mode: SandboxMode;
+	allowWrite: string[];
+	denyWrite: string[];
+	denyRead: string[];
+	allowedDomains: string[];
+	deniedDomains: string[];
 }
 
 export interface EffectiveSandboxInput {
-  settings: SandboxSettings;
-  /** Last request from `/sandbox` or the event bus, if any. */
-  requested?: SandboxRequest | undefined;
-  /** Policy an active night run demands. Acts as a floor, never as a ceiling. */
-  night?: SandboxRequest | undefined;
+	settings: SandboxSettings;
+	/** Last request from `/sandbox` or the event bus, if any. */
+	requested?: SandboxRequest | undefined;
+	/** Policy an active night run demands. Acts as a floor, never as a ceiling. */
+	night?: SandboxRequest | undefined;
 }
 
 export interface EffectiveSandbox {
-  mode: SandboxMode;
-  allowWrite: string[];
-  denyWrite: string[];
-  denyRead: string[];
-  network: { allowedDomains: string[]; deniedDomains: string[] };
-  /** Where the mode came from. */
-  source: "config" | "request" | "night";
-  /**
-   * Set when a request asked for something looser than the night floor. The
-   * caller reports this, so a refused `/sandbox off` says so instead of silently
-   * appearing to work.
-   */
-  refused?: { asked: SandboxMode; enforced: SandboxMode };
+	mode: SandboxMode;
+	allowWrite: string[];
+	denyWrite: string[];
+	denyRead: string[];
+	network: { allowedDomains: string[]; deniedDomains: string[] };
+	/** Where the mode came from. */
+	source: "config" | "request" | "night";
+	/**
+	 * Set when a request asked for something looser than the night floor. The
+	 * caller reports this, so a refused `/sandbox off` says so instead of silently
+	 * appearing to work.
+	 */
+	refused?: { asked: SandboxMode; enforced: SandboxMode };
 }
 
-const dedupe = (values: string[]): string[] =>
-  [...new Set(values.map((value) => value.trim()).filter(Boolean))];
+const dedupe = (values: string[]): string[] => [...new Set(values.map((value) => value.trim()).filter(Boolean))];
 
 export function effectiveSandbox(input: EffectiveSandboxInput): EffectiveSandbox {
-  const { settings, requested, night } = input;
-  const asked = requested?.mode ?? settings.mode;
-  const mode = night ? tighterMode(asked, night.mode) : asked;
+	const { settings, requested, night } = input;
+	const asked = requested?.mode ?? settings.mode;
+	const mode = night ? tighterMode(asked, night.mode) : asked;
 
-  const source = night && mode === night.mode && mode !== asked ? "night" : requested ? "request" : "config";
+	const source = night && mode === night.mode && mode !== asked ? "night" : requested ? "request" : "config";
 
-  return {
-    mode,
-    // The night's roots are always present: a tightening request must not cut
-    // the run's own report or ledger out of the writable set.
-    allowWrite: dedupe([
-      ...settings.allowWrite,
-      ...(night?.allowWrite ?? []),
-      ...(requested?.allowWrite ?? []),
-    ]),
-    denyWrite: [...settings.denyWrite],
-    denyRead: [...settings.denyRead],
-    network: {
-      allowedDomains: [...settings.allowedDomains],
-      deniedDomains: [...settings.deniedDomains],
-    },
-    source,
-    ...(mode !== asked ? { refused: { asked, enforced: mode } } : {}),
-  };
+	return {
+		mode,
+		// The night's roots are always present: a tightening request must not cut
+		// the run's own report or ledger out of the writable set.
+		allowWrite: dedupe([...settings.allowWrite, ...(night?.allowWrite ?? []), ...(requested?.allowWrite ?? [])]),
+		denyWrite: [...settings.denyWrite],
+		denyRead: [...settings.denyRead],
+		network: {
+			allowedDomains: [...settings.allowedDomains],
+			deniedDomains: [...settings.deniedDomains],
+		},
+		source,
+		...(mode !== asked ? { refused: { asked, enforced: mode } } : {}),
+	};
 }

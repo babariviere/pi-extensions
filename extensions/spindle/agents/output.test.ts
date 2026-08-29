@@ -71,7 +71,10 @@ test("readLastAssistantText returns the last assistant message from the transcri
 		path,
 		[
 			sessionLine("user", [{ type: "text", text: "review the diff" }]),
-			sessionLine("assistant", [{ type: "thinking", thinking: "looking" }, { type: "text", text: "first pass" }]),
+			sessionLine("assistant", [
+				{ type: "thinking", thinking: "looking" },
+				{ type: "text", text: "first pass" },
+			]),
 			sessionLine("toolResult", [{ type: "text", text: "diff output" }]),
 			sessionLine("assistant", [
 				{ type: "thinking", thinking: "done" },

@@ -47,10 +47,7 @@ test("passes an explicit environment", async () => {
 
 test("a timeout kills the tree and reports timeout:<seconds>", async () => {
 	const startedAt = Date.now();
-	await assert.rejects(
-		supervisedSpawn({ command: "sleep 30", cwd, onData: () => {}, timeout: 1 }),
-		/timeout:1/,
-	);
+	await assert.rejects(supervisedSpawn({ command: "sleep 30", cwd, onData: () => {}, timeout: 1 }), /timeout:1/);
 	assert.ok(Date.now() - startedAt < 10_000, "the tree must die at the deadline, not be awaited");
 });
 

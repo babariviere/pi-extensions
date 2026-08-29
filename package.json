@@ -45,6 +45,7 @@
     "yaml": "^2.9.0"
   },
   "devDependencies": {
+    "@biomejs/biome": "2.5.11",
     "@types/node": "^26.0.0",
     "@types/ws": "^8.18.1",
     "@typescript/native-preview": "latest",
@@ -58,6 +59,8 @@
   },
   "scripts": {
     "test": "node --import tsx --test 'extensions/**/*.test.ts'",
-    "typecheck": "tsgo -p tsconfig.json"
+    "typecheck": "tsgo -p tsconfig.json",
+    "fmt": "biome format --write .",
+    "fmt:check": "biome format ."
   }
 }

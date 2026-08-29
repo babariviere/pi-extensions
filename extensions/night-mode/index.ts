@@ -20,18 +20,9 @@
  * State is per session, per pi instance. Emits `night-mode:state` on the bus.
  */
 
-import {
-	appendFileSync,
-	existsSync,
-	mkdirSync,
-	readFileSync,
-	writeFileSync,
-} from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import type {
-	ExtensionAPI,
-	ExtensionContext,
-} from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
 	FIVE_HOUR_LABEL,
 	findWindow,
@@ -76,25 +67,11 @@ import {
 	WEEKLY_RETRY_MS,
 	windowStartingAt,
 } from "./night-mode.ts";
-import {
-	clearActiveNightRun,
-	type NightSandboxRequest,
-	writeActiveNightRun,
-} from "./night-run.ts";
-import {
-	SANDBOX_REQUEST_EVENT,
-	type SandboxRequestEvent,
-} from "../spindle/sandbox/protocol.ts";
+import { clearActiveNightRun, type NightSandboxRequest, writeActiveNightRun } from "./night-run.ts";
+import { SANDBOX_REQUEST_EVENT, type SandboxRequestEvent } from "../spindle/sandbox/protocol.ts";
 import { agentWorkspacesRoot } from "./agent-workspace.ts";
-import {
-	createRunSandbox,
-	prepareWorkingCopy,
-	sandboxPathFor,
-} from "./sandbox-clone.ts";
-import {
-	WakeLock,
-	type WakeLockPreference,
-} from "./wake-lock.ts";
+import { createRunSandbox, prepareWorkingCopy, sandboxPathFor } from "./sandbox-clone.ts";
+import { WakeLock, type WakeLockPreference } from "./wake-lock.ts";
 import {
 	appendUnderHeading,
 	composeCarryOver,
@@ -210,8 +187,7 @@ export default function (pi: ExtensionAPI): void {
 		}
 	}
 
-	const noteTimeline = (text: string) =>
-		appendReport(timelineLine(new Date(), text));
+	const noteTimeline = (text: string) => appendReport(timelineLine(new Date(), text));
 
 	/**
 	 * Hand a message to the agent, picking the delivery mode from the session's
@@ -233,11 +209,7 @@ export default function (pi: ExtensionAPI): void {
 		if (!run) return;
 		try {
 			const body = readFileSync(run.reportPath, "utf-8");
-			writeFileSync(
-				run.reportPath,
-				appendUnderHeading(body, heading, text),
-				"utf-8",
-			);
+			writeFileSync(run.reportPath, appendUnderHeading(body, heading, text), "utf-8");
 		} catch {
 			appendReport(`\n## ${heading}\n\n${text}\n`);
 		}
@@ -275,17 +247,9 @@ export default function (pi: ExtensionAPI): void {
 		try {
 			const path = resolvePath(run.config.instructionsPath, process.cwd());
 			const existing = existsSync(path) ? readFileSync(path, "utf-8") : "";
-			const block = composeCarryOver(
-				run.startedAt,
-				formatUnresolved(open),
-				run.reportPath,
-			);
+			const block = composeCarryOver(run.startedAt, formatUnresolved(open), run.reportPath);
 			const separator = existing.trim() ? "\n\n" : "";
-			writeFileSync(
-				path,
-				`${existing.replace(/\s*$/, "")}${separator}${block}`,
-				"utf-8",
-			);
+			writeFileSync(path, `${existing.replace(/\s*$/, "")}${separator}${block}`, "utf-8");
 		} catch {
 			// Carry-over is a convenience; the report still lists what is open.
 		}
@@ -388,15 +352,11 @@ export default function (pi: ExtensionAPI): void {
 	 * Read the configured files, create the report, publish the handshake and
 	 * hand the composed prompt to the agent. Returns an error string on failure.
 	 */
-	async function startRun(
-		ctx: ExtensionContext,
-		windowLabel: string,
-	): Promise<string | undefined> {
+	async function startRun(ctx: ExtensionContext, windowLabel: string): Promise<string | undefined> {
 		const cwd = process.cwd();
 		const config = readNightConfig(cwd);
 		const promptPath = resolvePath(config.promptPath, cwd);
-		if (!existsSync(promptPath))
-			return `night-mode: prompt file not found at ${promptPath}`;
+		if (!existsSync(promptPath)) return `night-mode: prompt file not found at ${promptPath}`;
 
 		let prompt: string;
 		try {
@@ -409,8 +369,7 @@ export default function (pi: ExtensionAPI): void {
 		const instructionsPath = resolvePath(config.instructionsPath, cwd);
 		let instructions = "";
 		try {
-			if (existsSync(instructionsPath))
-				instructions = readFileSync(instructionsPath, "utf-8");
+			if (existsSync(instructionsPath)) instructions = readFileSync(instructionsPath, "utf-8");
 		} catch {
 			instructions = "";
 		}
@@ -420,11 +379,7 @@ export default function (pi: ExtensionAPI): void {
 		try {
 			mkdirSync(dirname(reportPath), { recursive: true });
 			if (!existsSync(reportPath)) {
-				writeFileSync(
-					reportPath,
-					composeReportHeader(startedAt, windowLabel, config.reportSections),
-					"utf-8",
-				);
+				writeFileSync(reportPath, composeReportHeader(startedAt, windowLabel, config.reportSections), "utf-8");
 			}
 		} catch (error) {
 			return `night-mode: cannot create report at ${reportPath}: ${String(error)}`;
@@ -450,9 +405,7 @@ export default function (pi: ExtensionAPI): void {
 			nudges: 0,
 			...(workspace ? { workspacePath: workspace } : {}),
 		};
-		pendingInstructionsClear = hasInstructions(instructions)
-			? instructionsPath
-			: undefined;
+		pendingInstructionsClear = hasInstructions(instructions) ? instructionsPath : undefined;
 
 		// Written before the request is emitted: subagent processes read the policy
 		// from this file, so it has to be on disk before any child can start.
@@ -523,16 +476,12 @@ export default function (pi: ExtensionAPI): void {
 				// Where each subagent's own jj workspace is created, once the run
 				// starts delegating. Granted up front because the policy is written
 				// once, at start, and child processes read it from that file.
-				...(input.workspacePath
-					? [agentWorkspacesRoot(input.workspacePath)]
-					: []),
+				...(input.workspacePath ? [agentWorkspacesRoot(input.workspacePath)] : []),
 				dirname(input.reportPath),
 				input.ledgerDir,
 				// Roots the run cannot derive: a second repository the night is
 				// expected to touch, a notes vault, and so on.
-				...input.config.sandboxAllowWrite.map((path) =>
-					resolvePath(path, input.cwd),
-				),
+				...input.config.sandboxAllowWrite.map((path) => resolvePath(path, input.cwd)),
 			],
 		};
 	}
@@ -560,15 +509,8 @@ export default function (pi: ExtensionAPI): void {
 		if (!config.sandboxRoot) return { notes: [], problems: [] };
 		try {
 			const root = resolvePath(config.sandboxRoot, cwd);
-			const destination = sandboxPathFor(
-				root,
-				cwd,
-				formatDateTimeStamp(startedAt),
-			);
-			ctx.ui.notify(
-				`night-mode: copying ${cwd} into a private working copy, this can take a moment...`,
-				"info",
-			);
+			const destination = sandboxPathFor(root, cwd, formatDateTimeStamp(startedAt));
+			ctx.ui.notify(`night-mode: copying ${cwd} into a private working copy, this can take a moment...`, "info");
 			const created = await createRunSandbox({
 				source: cwd,
 				destination,
@@ -588,10 +530,7 @@ export default function (pi: ExtensionAPI): void {
 				trust: config.sandboxTrust,
 			});
 			if (trusted.problems.length > 0) {
-				ctx.ui.notify(
-					`night-mode: working copy caveats - ${trusted.problems.join("; ")}`,
-					"warning",
-				);
+				ctx.ui.notify(`night-mode: working copy caveats - ${trusted.problems.join("; ")}`, "warning");
 			}
 			return {
 				path: created.path,
@@ -663,10 +602,7 @@ export default function (pi: ExtensionAPI): void {
 	/** `amphetamine (holding, 27m left)` / `caffeinate (off)`. */
 	function wakeLockLine(): string {
 		const state = lock().status();
-		const left =
-			state.expiresAt !== undefined
-				? `, ${formatDuration(state.expiresAt - Date.now())} left`
-				: "";
+		const left = state.expiresAt !== undefined ? `, ${formatDuration(state.expiresAt - Date.now())} left` : "";
 		if (state.configured === "none") return "off (unsupported or disabled)";
 		return `${state.configured} (${state.held ? `holding${left}` : "idle"})`;
 	}
@@ -679,9 +615,7 @@ export default function (pi: ExtensionAPI): void {
 			return `\u{1F319} paused (${label} ${Math.round(percentFor(pausedReason) ?? 100)}%) \u27F3 ${left}`;
 		}
 		const pct = usedPercent();
-		return pct === undefined
-			? "\u{1F319} night"
-			: `\u{1F319} night (5h ${Math.round(pct)}%)`;
+		return pct === undefined ? "\u{1F319} night" : `\u{1F319} night (5h ${Math.round(pct)}%)`;
 	}
 
 	function report(): void {
@@ -793,15 +727,8 @@ export default function (pi: ExtensionAPI): void {
 			usedPercent: percentFor(reason),
 		});
 		report();
-		noteTimeline(
-			reason === "week"
-				? "▶ resumed: weekly usage limit has room again"
-				: "▶ resumed: 5h window reset",
-		);
-		ctxRef?.ui.notify(
-			`night-mode: ${limitLabel(reason)} has room again, sending automated continue`,
-			"info",
-		);
+		noteTimeline(reason === "week" ? "▶ resumed: weekly usage limit has room again" : "▶ resumed: 5h window reset");
+		ctxRef?.ui.notify(`night-mode: ${limitLabel(reason)} has room again, sending automated continue`, "info");
 		deliver(
 			composeResumePrompt({
 				reason,
@@ -818,8 +745,7 @@ export default function (pi: ExtensionAPI): void {
 	 * `evaluate`, which is also what re-arms a bounded Amphetamine session.
 	 */
 	function syncWakeLock(): void {
-		if (shouldHoldCaffeinate({ enabled, inWindow, agentBusy, paused }))
-			startCaffeinate();
+		if (shouldHoldCaffeinate({ enabled, inWindow, agentBusy, paused })) startCaffeinate();
 		else stopCaffeinate();
 	}
 
@@ -850,9 +776,7 @@ export default function (pi: ExtensionAPI): void {
 			for (let i = entries.length - 1; i >= 0; i--) {
 				const entry = entries[i];
 				if (entry?.customType !== PAUSE_ENTRY) continue;
-				const data = entry.data as
-					| { status?: string; resumeAt?: number; reason?: string; at?: string }
-					| undefined;
+				const data = entry.data as { status?: string; resumeAt?: number; reason?: string; at?: string } | undefined;
 				if (data?.status === "paused") {
 					paused = true;
 					pausedReason = data.reason === "week" ? "week" : "5h";
@@ -932,8 +856,7 @@ export default function (pi: ExtensionAPI): void {
 	});
 
 	pi.registerCommand("night", {
-		description:
-			"Night mode: wake lock + Claude 5h budget guard (status | start | report | on | off | resume)",
+		description: "Night mode: wake lock + Claude 5h budget guard (status | start | report | on | off | resume)",
 		getArgumentCompletions: (prefix) =>
 			["status", "start", "report", "on", "off", "resume"]
 				.filter((v) => v.startsWith(prefix))
@@ -966,10 +889,7 @@ export default function (pi: ExtensionAPI): void {
 
 			if (action === "report") {
 				if (!run) {
-					ctx.ui.notify(
-						"night-mode: no run in flight, no report for this session",
-						"info",
-					);
+					ctx.ui.notify("night-mode: no run in flight, no report for this session", "info");
 					return;
 				}
 				let body = "";
@@ -1000,10 +920,7 @@ export default function (pi: ExtensionAPI): void {
 					windowOverride = undefined;
 				}
 				evaluate();
-				ctx.ui.notify(
-					`night-mode: ${enabled ? "enabled" : "disabled"}`,
-					"info",
-				);
+				ctx.ui.notify(`night-mode: ${enabled ? "enabled" : "disabled"}`, "info");
 				return;
 			}
 

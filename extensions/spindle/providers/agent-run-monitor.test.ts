@@ -22,8 +22,7 @@ function fixture() {
 	return { registry, updates, monitor };
 }
 
-const byName = (registry: SpindleAgentRunRegistry, name: string) =>
-	registry.list().find((run) => run.name === name);
+const byName = (registry: SpindleAgentRunRegistry, name: string) => registry.list().find((run) => run.name === name);
 
 test("start seeds one queued registry row per request, tagged with the parent tool call", () => {
 	const { registry, monitor, updates } = fixture();

@@ -27,7 +27,18 @@ const STATE_LABEL: Record<RunState, string> = {
 };
 
 /** Braille spinner frames for active rows; advanced by the caller each tick. */
-export const SPINNER_FRAMES = ["\u280b", "\u2819", "\u2839", "\u2838", "\u283c", "\u2834", "\u2826", "\u2827", "\u2807", "\u280f"];
+export const SPINNER_FRAMES = [
+	"\u280b",
+	"\u2819",
+	"\u2839",
+	"\u2838",
+	"\u283c",
+	"\u2834",
+	"\u2826",
+	"\u2827",
+	"\u2807",
+	"\u280f",
+];
 const ANSI = { green: "\u001b[32m", red: "\u001b[31m", orange: "\u001b[38;5;208m", reset: "\u001b[0m" };
 
 /** Status glyph for a row: spinner while active, check/cross when terminal. */
@@ -61,16 +72,16 @@ export function renderProgress(
 	const frame = opts.frame ?? 0;
 	const active = model.filter((m) => m.state === "spawning" || m.state === "running").length;
 	const noun = model.length === 1 ? "subagent" : "subagents";
-	const header = active > 0
-		? `Running ${model.length} ${noun} (${active} active):`
-		: `Subagents (${model.length}):`;
+	const header = active > 0 ? `Running ${model.length} ${noun} (${active} active):` : `Subagents (${model.length}):`;
 	const lines = [header];
 	for (const m of model) {
 		const elapsed = formatElapsed((m.endedAt ?? now) - m.startedAt);
 		const parts = [`[${STATE_LABEL[m.state]}]`, elapsed];
 		if (m.paneId) parts.push(`pane ${m.paneId}`);
 		if (m.outputPath) parts.push(`output: ${m.outputPath}`);
-		lines.push(`- ${colorGlyph(stateGlyph(m.state, frame), m.state, opts.color)} ${m.name} ${parts.join(" \u00b7 ")}`);
+		lines.push(
+			`- ${colorGlyph(stateGlyph(m.state, frame), m.state, opts.color)} ${m.name} ${parts.join(" \u00b7 ")}`,
+		);
 	}
 	return lines.join("\n");
 }

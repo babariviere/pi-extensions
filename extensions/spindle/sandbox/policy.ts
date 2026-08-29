@@ -29,39 +29,39 @@ export const SANDBOX_MODES = ["off", "read-only", "workspace-write", "full"] as 
 export type SandboxMode = (typeof SANDBOX_MODES)[number];
 
 export interface SandboxNetworkPolicy {
-  /** Domain patterns allowed through the sandbox proxy. `*` means unrestricted. */
-  allowedDomains: string[];
-  deniedDomains: string[];
+	/** Domain patterns allowed through the sandbox proxy. `*` means unrestricted. */
+	allowedDomains: string[];
+	deniedDomains: string[];
 }
 
 export interface SandboxPolicy {
-  mode: SandboxMode;
-  /** Absolute directories writes are permitted under. */
-  allowWrite: string[];
-  /** Glob patterns denied even inside `allowWrite` (matched on basename, or on the full path when the pattern contains a slash). */
-  denyWrite: string[];
-  /** Absolute directories reads are denied under (enforced by the OS sandbox on `bash`). */
-  denyRead: string[];
-  network: SandboxNetworkPolicy;
+	mode: SandboxMode;
+	/** Absolute directories writes are permitted under. */
+	allowWrite: string[];
+	/** Glob patterns denied even inside `allowWrite` (matched on basename, or on the full path when the pattern contains a slash). */
+	denyWrite: string[];
+	/** Absolute directories reads are denied under (enforced by the OS sandbox on `bash`). */
+	denyRead: string[];
+	network: SandboxNetworkPolicy;
 }
 
 export interface SandboxPolicyInput {
-  mode?: SandboxMode;
-  /** Extra roots to make writable. `~` is expanded; relative paths resolve against cwd. */
-  allowWrite?: string[];
-  denyWrite?: string[];
-  denyRead?: string[];
-  network?: Partial<SandboxNetworkPolicy>;
+	mode?: SandboxMode;
+	/** Extra roots to make writable. `~` is expanded; relative paths resolve against cwd. */
+	allowWrite?: string[];
+	denyWrite?: string[];
+	denyRead?: string[];
+	network?: Partial<SandboxNetworkPolicy>;
 }
 
 export interface PolicyEnvironment {
-  /** The run's working directory: the writable root in `workspace-write`. */
-  cwd: string;
-  home: string;
-  platform: NodeJS.Platform;
-  env: Record<string, string | undefined>;
-  /** Value of `os.tmpdir()`. */
-  tmp: string;
+	/** The run's working directory: the writable root in `workspace-write`. */
+	cwd: string;
+	home: string;
+	platform: NodeJS.Platform;
+	env: Record<string, string | undefined>;
+	/** Value of `os.tmpdir()`. */
+	tmp: string;
 }
 
 /**
@@ -72,15 +72,7 @@ export interface PolicyEnvironment {
 export const DEFAULT_DENY_READ = ["~/.ssh", "~/.gnupg"];
 
 /** Secrets that stay unwritable even inside the workspace. */
-export const DEFAULT_DENY_WRITE = [
-  ".env",
-  ".env.*",
-  "*.pem",
-  "*.key",
-  "*.p12",
-  "id_rsa",
-  "id_ed25519",
-];
+export const DEFAULT_DENY_WRITE = [".env", ".env.*", "*.pem", "*.key", "*.p12", "id_rsa", "id_ed25519"];
 
 export const DEFAULT_SANDBOX_MODE: SandboxMode = "workspace-write";
 
@@ -88,7 +80,7 @@ export const DEFAULT_SANDBOX_MODE: SandboxMode = "workspace-write";
 const DEFAULT_NETWORK: SandboxNetworkPolicy = { allowedDomains: ["*"], deniedDomains: [] };
 
 export function isSandboxMode(value: unknown): value is SandboxMode {
-  return typeof value === "string" && (SANDBOX_MODES as readonly string[]).includes(value);
+	return typeof value === "string" && (SANDBOX_MODES as readonly string[]).includes(value);
 }
 
 /**
@@ -96,52 +88,49 @@ export function isSandboxMode(value: unknown): value is SandboxMode {
  * enforce nothing, so they rank equal at the bottom; `read-only` is the tightest.
  */
 export function modeRestrictiveness(mode: SandboxMode): number {
-  if (mode === "read-only") return 2;
-  if (mode === "workspace-write") return 1;
-  return 0;
+	if (mode === "read-only") return 2;
+	if (mode === "workspace-write") return 1;
+	return 0;
 }
 
 /** The tighter of two modes. Ties keep `a`. */
 export function tighterMode(a: SandboxMode, b: SandboxMode): SandboxMode {
-  return modeRestrictiveness(b) > modeRestrictiveness(a) ? b : a;
+	return modeRestrictiveness(b) > modeRestrictiveness(a) ? b : a;
 }
 
 /** True when the policy actually restricts anything. */
 export function isEnforcing(policy: SandboxPolicy): boolean {
-  return policy.mode === "read-only" || policy.mode === "workspace-write";
+	return policy.mode === "read-only" || policy.mode === "workspace-write";
 }
 
 /** Expand a leading `~`, then resolve relative paths against `base`. */
 export function expandPath(path: string, home: string, base: string): string {
-  const trimmed = path.trim();
-  if (!trimmed) return "";
-  const expanded =
-    trimmed === "~" ? home : trimmed.startsWith("~/") ? join(home, trimmed.slice(2)) : trimmed;
-  return isAbsolute(expanded) ? expanded : join(base, expanded);
+	const trimmed = path.trim();
+	if (!trimmed) return "";
+	const expanded = trimmed === "~" ? home : trimmed.startsWith("~/") ? join(home, trimmed.slice(2)) : trimmed;
+	return isAbsolute(expanded) ? expanded : join(base, expanded);
 }
 
 /** True when `candidate` is `root` or lives under it. */
 export function isInside(root: string, candidate: string): boolean {
-  const rel = relative(root, candidate);
-  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+	const rel = relative(root, candidate);
+	return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
 }
 
 const globToRegExp = (pattern: string): RegExp => {
-  let source = "";
-  for (const char of pattern) {
-    if (char === "*") source += "[^/]*";
-    else if (char === "?") source += "[^/]";
-    else source += char.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  }
-  return new RegExp(`^${source}$`);
+	let source = "";
+	for (const char of pattern) {
+		if (char === "*") source += "[^/]*";
+		else if (char === "?") source += "[^/]";
+		else source += char.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+	}
+	return new RegExp(`^${source}$`);
 };
 
 /** Match a deny pattern: full path when it contains a slash, else basename. */
 export function matchesPattern(pattern: string, absolutePath: string): boolean {
-  const target = pattern.includes("/")
-    ? absolutePath
-    : (absolutePath.split(/[\\/]/).pop() ?? absolutePath);
-  return globToRegExp(pattern).test(target);
+	const target = pattern.includes("/") ? absolutePath : (absolutePath.split(/[\\/]/).pop() ?? absolutePath);
+	return globToRegExp(pattern).test(target);
 }
 
 /**
@@ -150,34 +139,33 @@ export function matchesPattern(pattern: string, absolutePath: string): boolean {
  * only writable path is the repo spends the night failing on cache writes.
  */
 export function toolCacheRoots(environment: PolicyEnvironment): string[] {
-  const { env, home, platform, tmp } = environment;
-  const platformCacheHome =
-    platform === "darwin" ? join(home, "Library", "Caches") : join(home, ".cache");
-  const goPath = env.GOPATH || join(home, "go");
-  const candidates = [
-    tmp,
-    "/tmp",
-    "/private/tmp",
-    "/var/tmp",
-    // Both, not either: Go and friends resolve the platform cache dir through
-    // the OS API and ignore XDG_CACHE_HOME, so a machine that sets XDG would
-    // otherwise lose its build cache.
-    platformCacheHome,
-    env.XDG_CACHE_HOME,
-    env.GOCACHE,
-    env.GOMODCACHE || join(goPath, "pkg", "mod"),
-    env.npm_config_cache,
-    env.CARGO_HOME,
-    // mise writes tool installs under its data dir and trust/tracked-config
-    // records under its state dir. A night task that installs a toolchain, or
-    // trusts a config it just generated, needs both. This does mean a sandboxed
-    // agent can record trust for a config, which is within the threat model:
-    // the point is that it cannot delete the home directory.
-    env.MISE_DATA_DIR || join(home, ".local", "share", "mise"),
-    env.MISE_STATE_DIR || join(home, ".local", "state", "mise"),
-    env.MISE_CACHE_DIR,
-  ];
-  return dedupe(candidates.filter((value): value is string => !!value && isAbsolute(value)));
+	const { env, home, platform, tmp } = environment;
+	const platformCacheHome = platform === "darwin" ? join(home, "Library", "Caches") : join(home, ".cache");
+	const goPath = env.GOPATH || join(home, "go");
+	const candidates = [
+		tmp,
+		"/tmp",
+		"/private/tmp",
+		"/var/tmp",
+		// Both, not either: Go and friends resolve the platform cache dir through
+		// the OS API and ignore XDG_CACHE_HOME, so a machine that sets XDG would
+		// otherwise lose its build cache.
+		platformCacheHome,
+		env.XDG_CACHE_HOME,
+		env.GOCACHE,
+		env.GOMODCACHE || join(goPath, "pkg", "mod"),
+		env.npm_config_cache,
+		env.CARGO_HOME,
+		// mise writes tool installs under its data dir and trust/tracked-config
+		// records under its state dir. A night task that installs a toolchain, or
+		// trusts a config it just generated, needs both. This does mean a sandboxed
+		// agent can record trust for a config, which is within the threat model:
+		// the point is that it cannot delete the home directory.
+		env.MISE_DATA_DIR || join(home, ".local", "share", "mise"),
+		env.MISE_STATE_DIR || join(home, ".local", "state", "mise"),
+		env.MISE_CACHE_DIR,
+	];
+	return dedupe(candidates.filter((value): value is string => !!value && isAbsolute(value)));
 }
 
 const dedupe = (values: string[]): string[] => [...new Set(values)];
@@ -189,60 +177,52 @@ const dedupe = (values: string[]): string[] => [...new Set(values)];
  * grants only the temp dirs, since a compiler that cannot write a temp file is
  * not a sandbox but a brick. `off` and `full` enforce nothing.
  */
-export function resolveSandboxPolicy(
-  input: SandboxPolicyInput,
-  environment: PolicyEnvironment,
-): SandboxPolicy {
-  const mode = input.mode ?? DEFAULT_SANDBOX_MODE;
-  const expand = (path: string) => expandPath(path, environment.home, environment.cwd);
-  const extra = (input.allowWrite ?? []).map(expand).filter(Boolean);
-  const caches = toolCacheRoots(environment);
+export function resolveSandboxPolicy(input: SandboxPolicyInput, environment: PolicyEnvironment): SandboxPolicy {
+	const mode = input.mode ?? DEFAULT_SANDBOX_MODE;
+	const expand = (path: string) => expandPath(path, environment.home, environment.cwd);
+	const extra = (input.allowWrite ?? []).map(expand).filter(Boolean);
+	const caches = toolCacheRoots(environment);
 
-  let allowWrite: string[];
-  if (mode === "workspace-write") allowWrite = dedupe([environment.cwd, ...extra, ...caches]);
-  else if (mode === "read-only") allowWrite = dedupe([...extra, environment.tmp, "/tmp"]);
-  else allowWrite = [];
+	let allowWrite: string[];
+	if (mode === "workspace-write") allowWrite = dedupe([environment.cwd, ...extra, ...caches]);
+	else if (mode === "read-only") allowWrite = dedupe([...extra, environment.tmp, "/tmp"]);
+	else allowWrite = [];
 
-  return {
-    mode,
-    allowWrite,
-    denyWrite: dedupe(input.denyWrite ?? DEFAULT_DENY_WRITE),
-    denyRead: dedupe((input.denyRead ?? DEFAULT_DENY_READ).map(expand).filter(Boolean)),
-    network: {
-      allowedDomains: input.network?.allowedDomains ?? DEFAULT_NETWORK.allowedDomains,
-      deniedDomains: input.network?.deniedDomains ?? DEFAULT_NETWORK.deniedDomains,
-    },
-  };
+	return {
+		mode,
+		allowWrite,
+		denyWrite: dedupe(input.denyWrite ?? DEFAULT_DENY_WRITE),
+		denyRead: dedupe((input.denyRead ?? DEFAULT_DENY_READ).map(expand).filter(Boolean)),
+		network: {
+			allowedDomains: input.network?.allowedDomains ?? DEFAULT_NETWORK.allowedDomains,
+			deniedDomains: input.network?.deniedDomains ?? DEFAULT_NETWORK.deniedDomains,
+		},
+	};
 }
 
 /** Build a policy from the ambient process environment. */
-export function policyEnvironment(
-  cwd: string,
-  overrides: Partial<PolicyEnvironment> = {},
-): PolicyEnvironment {
-  return {
-    cwd,
-    home: overrides.home ?? process.env.HOME ?? "",
-    platform: overrides.platform ?? process.platform,
-    env: overrides.env ?? process.env,
-    tmp: overrides.tmp ?? "/tmp",
-  };
+export function policyEnvironment(cwd: string, overrides: Partial<PolicyEnvironment> = {}): PolicyEnvironment {
+	return {
+		cwd,
+		home: overrides.home ?? process.env.HOME ?? "",
+		platform: overrides.platform ?? process.platform,
+		env: overrides.env ?? process.env,
+		tmp: overrides.tmp ?? "/tmp",
+	};
 }
 
 /** Decide whether a write to `absolutePath` is permitted. */
 export function isWriteAllowed(policy: SandboxPolicy, absolutePath: string): boolean {
-  if (!isEnforcing(policy)) return true;
-  if (policy.denyWrite.some((pattern) => matchesPattern(pattern, absolutePath))) return false;
-  return policy.allowWrite.some((root) => isInside(root, absolutePath));
+	if (!isEnforcing(policy)) return true;
+	if (policy.denyWrite.some((pattern) => matchesPattern(pattern, absolutePath))) return false;
+	return policy.allowWrite.some((root) => isInside(root, absolutePath));
 }
 
 /** Throw a caller-facing error when a write is outside the policy. */
 export function assertWriteAllowed(policy: SandboxPolicy, absolutePath: string): void {
-  if (isWriteAllowed(policy, absolutePath)) return;
-  const roots = policy.allowWrite.length ? policy.allowWrite.join(", ") : "(none)";
-  throw new Error(
-    `sandbox: write to ${absolutePath} denied by mode '${policy.mode}'. Writable roots: ${roots}`,
-  );
+	if (isWriteAllowed(policy, absolutePath)) return;
+	const roots = policy.allowWrite.length ? policy.allowWrite.join(", ") : "(none)";
+	throw new Error(`sandbox: write to ${absolutePath} denied by mode '${policy.mode}'. Writable roots: ${roots}`);
 }
 
 /**
@@ -253,35 +233,35 @@ export function assertWriteAllowed(policy: SandboxPolicy, absolutePath: string):
  * channel `bash` is allowed to reach.
  */
 export function isReadDenied(policy: SandboxPolicy, absolutePath: string): boolean {
-  if (!isEnforcing(policy)) return false;
-  return policy.denyRead.some((root) => isInside(root, absolutePath));
+	if (!isEnforcing(policy)) return false;
+	return policy.denyRead.some((root) => isInside(root, absolutePath));
 }
 
 /** Throw a caller-facing error when a read is under a denied root. */
 export function assertReadAllowed(policy: SandboxPolicy, absolutePath: string): void {
-  if (!isReadDenied(policy, absolutePath)) return;
-  throw new Error(
-    `sandbox: read of ${absolutePath} denied by mode '${policy.mode}'. Denied read roots: ${policy.denyRead.join(", ")}`,
-  );
+	if (!isReadDenied(policy, absolutePath)) return;
+	throw new Error(
+		`sandbox: read of ${absolutePath} denied by mode '${policy.mode}'. Denied read roots: ${policy.denyRead.join(", ")}`,
+	);
 }
 
 /** The config object `@anthropic-ai/sandbox-runtime` expects. */
 export function toSandboxRuntimeConfig(policy: SandboxPolicy): {
-  network: SandboxNetworkPolicy;
-  filesystem: { allowWrite: string[]; denyWrite: string[]; denyRead: string[] };
+	network: SandboxNetworkPolicy;
+	filesystem: { allowWrite: string[]; denyWrite: string[]; denyRead: string[] };
 } {
-  return {
-    network: policy.network,
-    filesystem: {
-      allowWrite: policy.allowWrite,
-      denyWrite: policy.denyWrite,
-      denyRead: policy.denyRead,
-    },
-  };
+	return {
+		network: policy.network,
+		filesystem: {
+			allowWrite: policy.allowWrite,
+			denyWrite: policy.denyWrite,
+			denyRead: policy.denyRead,
+		},
+	};
 }
 
 /** One-line summary for status output. */
 export function describeSandbox(policy: SandboxPolicy): string {
-  if (!isEnforcing(policy)) return `sandbox ${policy.mode} (no enforcement)`;
-  return `sandbox ${policy.mode}: ${policy.allowWrite.length} writable root(s), ${policy.denyRead.length} denied read path(s)`;
+	if (!isEnforcing(policy)) return `sandbox ${policy.mode} (no enforcement)`;
+	return `sandbox ${policy.mode}: ${policy.allowWrite.length} writable root(s), ${policy.denyRead.length} denied read path(s)`;
 }

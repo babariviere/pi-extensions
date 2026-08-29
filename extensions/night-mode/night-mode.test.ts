@@ -144,14 +144,8 @@ describe("pauseReasonFor", () => {
 	});
 
 	it("honours custom thresholds", () => {
-		assert.equal(
-			pauseReasonFor({ weekPercent: 80 }, { week: 75 }),
-			"week",
-		);
-		assert.equal(
-			pauseReasonFor({ fiveHourPercent: 96 }, { fiveHour: 99 }),
-			undefined,
-		);
+		assert.equal(pauseReasonFor({ weekPercent: 80 }, { week: 75 }), "week");
+		assert.equal(pauseReasonFor({ fiveHourPercent: 96 }, { fiveHour: 99 }), undefined);
 	});
 });
 

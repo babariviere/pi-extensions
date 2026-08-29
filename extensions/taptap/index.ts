@@ -139,8 +139,7 @@ export default function taptap(pi: ExtensionAPI): void {
 		const hint = makeHint(ctx);
 		const isIdle = () => ctx.isIdle();
 		ctx.ui.setEditorComponent(
-			(tui, theme, keybindings) =>
-				new DoubleEscapeEditor(tui, theme, keybindings, hint, isIdle),
+			(tui, theme, keybindings) => new DoubleEscapeEditor(tui, theme, keybindings, hint, isIdle),
 		);
 	});
 }

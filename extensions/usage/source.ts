@@ -51,11 +51,10 @@ export function loadClaudeToken(): string | undefined {
 	}
 
 	try {
-		const keychainData = execFileSync(
-			"security",
-			["find-generic-password", "-s", "Claude Code-credentials", "-w"],
-			{ encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] },
-		).trim();
+		const keychainData = execFileSync("security", ["find-generic-password", "-s", "Claude Code-credentials", "-w"], {
+			encoding: "utf-8",
+			stdio: ["ignore", "pipe", "ignore"],
+		}).trim();
 		if (keychainData) {
 			const parsed = JSON.parse(keychainData);
 			const scopes = parsed.claudeAiOauth?.scopes || [];

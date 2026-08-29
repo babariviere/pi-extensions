@@ -124,11 +124,7 @@ export type RunResult =
  * a failed write is folded into `error`. Reporting the intended path
  * unconditionally made the tool claim a file existed when it did not.
  */
-export function baseResult(
-	req: RunRequest,
-	resolved: ResolvedOutput,
-	error?: string,
-): RunResultBase {
+export function baseResult(req: RunRequest, resolved: ResolvedOutput, error?: string): RunResultBase {
 	const reason = [error, resolved.writeError].filter((v): v is string => !!v).join("; ");
 	return {
 		agent: req.agent.config.name,
@@ -192,7 +188,12 @@ export function prepareChildRun(
 		includeTask: opts.includeTask,
 	});
 
-	return { dir: paths.dir, outputPath, sessionPath: paths.sessionPath, promptPath: paths.promptPath, hasPrompt, childArgs };
+	return {
+		dir: paths.dir,
+		outputPath,
+		sessionPath: paths.sessionPath,
+		promptPath: paths.promptPath,
+		hasPrompt,
+		childArgs,
+	};
 }
-
-

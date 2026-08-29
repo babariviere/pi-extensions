@@ -67,9 +67,7 @@ export function indexOutputOverride(override: string, index: number): string {
  * keeps its override verbatim, preserving stable destinations like
  * `.pi/goal/plan.md`. The returned array is aligned by index with the input.
  */
-export function planBatchOutputs(
-	rawOverrides: readonly (string | undefined)[],
-): (string | undefined)[] {
+export function planBatchOutputs(rawOverrides: readonly (string | undefined)[]): (string | undefined)[] {
 	const normalized = rawOverrides.map(normalizeOutputOverride);
 	if (normalized.length <= 1) return normalized;
 	return normalized.map((value, index) => (value ? indexOutputOverride(value, index) : value));
@@ -199,7 +197,7 @@ export async function resolveRunOutput(
 	const writeError = output === undefined ? undefined : persistResult(outputPath, output);
 	const ok = output !== undefined && source.finishedCleanly;
 	return {
-		output: output ?? (source.placeholder ?? "(no output produced)"),
+		output: output ?? source.placeholder ?? "(no output produced)",
 		ok,
 		...(output !== undefined && !writeError ? { outputPath } : {}),
 		...(writeError ? { writeError } : {}),

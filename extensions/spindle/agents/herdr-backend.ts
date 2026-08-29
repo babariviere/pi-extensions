@@ -44,14 +44,7 @@ import { formatTaskMessage } from "./pi-args.ts";
 import { readDefaultProvider } from "./settings.ts";
 import { resolveRunOutput } from "./output.ts";
 import { outcomeError, type RunOutcome, waitForRunCompletion } from "./herdr-completion.ts";
-import {
-	baseResult,
-	prepareChildRun,
-	runCwd,
-	type RunContext,
-	type RunRequest,
-	type RunResult,
-} from "./run.ts";
+import { baseResult, prepareChildRun, runCwd, type RunContext, type RunRequest, type RunResult } from "./run.ts";
 
 export const SUBAGENTS_TAB_LABEL = "subagents";
 
@@ -103,8 +96,7 @@ async function buildGrid(prepared: PreparedRun[], rootPaneId: string, ctx: RunCo
 	// A pane's working directory is fixed when it is split, so each split uses the
 	// cwd of the run that will land in the new pane rather than one cwd for the
 	// whole grid: night subagents each have their own workspace.
-	const cwdAt = (index: number): string =>
-		index < prepared.length ? runCwd(prepared[index].req, ctx) : ctx.cwd;
+	const cwdAt = (index: number): string => (index < prepared.length ? runCwd(prepared[index].req, ctx) : ctx.cwd);
 	const firstRowOf = (col: number): number => {
 		let start = 0;
 		for (let c = 0; c < col; c++) start += rowsPerCol[c];
@@ -202,7 +194,13 @@ function agentName(index: number): string {
 async function launchRun(p: PreparedRun, ctx: RunContext): Promise<SpawnedRun> {
 	if (p.error || !p.paneId) {
 		ctx.onStatus?.(p.req.index, { state: "failed", paneId: p.paneId, outputPath: p.outputPath });
-		return { req: p.req, outputPath: p.outputPath, sessionPath: p.sessionPath, paneId: p.paneId, error: p.error ?? "no pane" };
+		return {
+			req: p.req,
+			outputPath: p.outputPath,
+			sessionPath: p.sessionPath,
+			paneId: p.paneId,
+			error: p.error ?? "no pane",
+		};
 	}
 
 	// Start pi before anything else touches the pane so it is still an idle shell.
@@ -213,7 +211,13 @@ async function launchRun(p: PreparedRun, ctx: RunContext): Promise<SpawnedRun> {
 	});
 	if (!started.ok) {
 		ctx.onStatus?.(p.req.index, { state: "failed", paneId: p.paneId, outputPath: p.outputPath });
-		return { req: p.req, outputPath: p.outputPath, sessionPath: p.sessionPath, paneId: p.paneId, error: started.error };
+		return {
+			req: p.req,
+			outputPath: p.outputPath,
+			sessionPath: p.sessionPath,
+			paneId: p.paneId,
+			error: started.error,
+		};
 	}
 
 	// Label the pane with the task so a watcher can tell panes apart, then submit
@@ -252,7 +256,9 @@ async function settleRun(s: SpawnedRun, ctx: RunContext): Promise<RunResult> {
 	// AbortController tears down the lingering `herdr wait` once the run settles.
 	const paneId = s.paneId;
 	const ac = new AbortController();
-	const agentSignal = paneId ? waitForAgentFinish(herdr.statusProbe(paneId), ctx.timeoutMs, { signal: ac.signal }) : undefined;
+	const agentSignal = paneId
+		? waitForAgentFinish(herdr.statusProbe(paneId), ctx.timeoutMs, { signal: ac.signal })
+		: undefined;
 
 	let outcome: RunOutcome;
 	try {

@@ -16,9 +16,9 @@ export const SANDBOX_REQUEST_EVENT = "spindle:sandbox-request";
 export const SANDBOX_STATE_EVENT = "spindle:sandbox-state";
 
 export interface SandboxRequest {
-  mode: SandboxMode;
-  /** Extra writable roots. `~` is expanded; relative paths resolve against cwd. */
-  allowWrite?: string[];
+	mode: SandboxMode;
+	/** Extra writable roots. `~` is expanded; relative paths resolve against cwd. */
+	allowWrite?: string[];
 }
 
 /**
@@ -27,42 +27,42 @@ export interface SandboxRequest {
  * it ends.
  */
 export interface SandboxRequestEvent {
-  policy: SandboxRequest | null;
-  /** Shown in the notification, so the user knows what changed the mode. */
-  reason?: string;
+	policy: SandboxRequest | null;
+	/** Shown in the notification, so the user knows what changed the mode. */
+	reason?: string;
 }
 
 /** Published after every applied request, and once at session start. */
 export interface SandboxStateEvent {
-  mode: SandboxMode;
-  /** True when the policy restricts anything. */
-  enforcing: boolean;
-  /** True when `bash` is bounded by the kernel rather than only by path checks. */
-  osEnforced: boolean;
-  writableRoots: number;
-  /** Where the active policy came from. */
-  source: "config" | "request";
-  degradedReason?: string;
+	mode: SandboxMode;
+	/** True when the policy restricts anything. */
+	enforcing: boolean;
+	/** True when `bash` is bounded by the kernel rather than only by path checks. */
+	osEnforced: boolean;
+	writableRoots: number;
+	/** Where the active policy came from. */
+	source: "config" | "request";
+	degradedReason?: string;
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null && !Array.isArray(value);
+	typeof value === "object" && value !== null && !Array.isArray(value);
 
 /** Validate an untrusted bus payload into a request. */
 export function parseSandboxRequestEvent(value: unknown): SandboxRequestEvent | undefined {
-  if (!isRecord(value)) return undefined;
-  const reason = typeof value.reason === "string" ? value.reason : undefined;
-  if (value.policy === null || value.policy === undefined) {
-    return { policy: null, ...(reason ? { reason } : {}) };
-  }
-  if (!isRecord(value.policy)) return undefined;
-  const { mode, allowWrite } = value.policy;
-  if (!isSandboxMode(mode)) return undefined;
-  const roots = Array.isArray(allowWrite)
-    ? allowWrite.filter((entry): entry is string => typeof entry === "string" && !!entry.trim())
-    : undefined;
-  return {
-    policy: { mode, ...(roots?.length ? { allowWrite: roots } : {}) },
-    ...(reason ? { reason } : {}),
-  };
+	if (!isRecord(value)) return undefined;
+	const reason = typeof value.reason === "string" ? value.reason : undefined;
+	if (value.policy === null || value.policy === undefined) {
+		return { policy: null, ...(reason ? { reason } : {}) };
+	}
+	if (!isRecord(value.policy)) return undefined;
+	const { mode, allowWrite } = value.policy;
+	if (!isSandboxMode(mode)) return undefined;
+	const roots = Array.isArray(allowWrite)
+		? allowWrite.filter((entry): entry is string => typeof entry === "string" && !!entry.trim())
+		: undefined;
+	return {
+		policy: { mode, ...(roots?.length ? { allowWrite: roots } : {}) },
+		...(reason ? { reason } : {}),
+	};
 }

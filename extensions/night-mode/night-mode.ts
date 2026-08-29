@@ -79,10 +79,7 @@ export function shouldHoldCaffeinate(state: {
 }
 
 /** True when the 5h window has reached the safety threshold. */
-export function shouldPause(
-	usedPercent: number | undefined,
-	threshold: number = DEFAULT_THRESHOLD_PERCENT,
-): boolean {
+export function shouldPause(usedPercent: number | undefined, threshold: number = DEFAULT_THRESHOLD_PERCENT): boolean {
 	if (typeof usedPercent !== "number" || !Number.isFinite(usedPercent)) return false;
 	return usedPercent >= threshold;
 }
@@ -104,10 +101,8 @@ export function pauseReasonFor(
 	usage: { fiveHourPercent?: number; weekPercent?: number },
 	thresholds: PauseThresholds = {},
 ): PauseReason | undefined {
-	if (shouldPause(usage.weekPercent, thresholds.week ?? DEFAULT_WEEKLY_THRESHOLD_PERCENT))
-		return "week";
-	if (shouldPause(usage.fiveHourPercent, thresholds.fiveHour ?? DEFAULT_THRESHOLD_PERCENT))
-		return "5h";
+	if (shouldPause(usage.weekPercent, thresholds.week ?? DEFAULT_WEEKLY_THRESHOLD_PERCENT)) return "week";
+	if (shouldPause(usage.fiveHourPercent, thresholds.fiveHour ?? DEFAULT_THRESHOLD_PERCENT)) return "5h";
 	return undefined;
 }
 
@@ -140,15 +135,7 @@ export function computeResumeDelayMs(
 	return untilReset + bufferMs + Math.floor(random() * jitterMs);
 }
 
-const WEEKDAYS = [
-	"Sunday",
-	"Monday",
-	"Tuesday",
-	"Wednesday",
-	"Thursday",
-	"Friday",
-	"Saturday",
-];
+const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
 /**
  * "Monday 2026-08-29 03:12", the stamp handed to a resuming agent.

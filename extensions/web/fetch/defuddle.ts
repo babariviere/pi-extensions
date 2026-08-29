@@ -127,8 +127,7 @@ export function assertSafeUrl(input: string): void {
 
 function createSafeFetch(signal: AbortSignal): typeof globalThis.fetch {
 	return async (input, init) => {
-		let target =
-			typeof input === "string" ? input : input instanceof URL ? input.href : (input as Request).url;
+		let target = typeof input === "string" ? input : input instanceof URL ? input.href : (input as Request).url;
 
 		for (let hop = 0; ; hop++) {
 			assertSafeUrl(target);

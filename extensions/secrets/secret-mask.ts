@@ -109,12 +109,7 @@ interface SecretPattern {
  *
  * Returns `mask` alone when the token is too short to be meaningfully partial.
  */
-export function partialMask(
-	token: string,
-	showStart: number,
-	showEnd: number,
-	mask = "****",
-): string {
+export function partialMask(token: string, showStart: number, showEnd: number, mask = "****"): string {
 	const minLength = showStart + showEnd + mask.length + 2;
 	if (token.length < minLength) return mask;
 	// token.slice(-0) === token.slice(0) (the whole token), so guard showEnd=0.
@@ -498,8 +493,7 @@ export function shouldMaskEnvVarValue(name: string, value: string): boolean {
  * Group 4: value (no newlines or quotes)
  * \3: closing quote (backreference)
  */
-const ENV_ASSIGN_RE =
-	/^([ \t]*(?:export[ \t]+)?)([A-Za-z_][A-Za-z0-9_]*)=("?)([^\n"]*)\3/gm;
+const ENV_ASSIGN_RE = /^([ \t]*(?:export[ \t]+)?)([A-Za-z_][A-Za-z0-9_]*)=("?)([^\n"]*)\3/gm;
 
 /**
  * Scan text for `NAME=VALUE` assignments (including `export NAME=VALUE`).
@@ -591,7 +585,6 @@ export function maskFnoxSecret(value: string, name: string): string {
 	const showStart = Math.min(prefixLen + 2, 8);
 	return `[${name}: ${partialMask(value, showStart, 2)}]`;
 }
-
 
 // ---------------------------------------------------------------------------
 // Orchestrator

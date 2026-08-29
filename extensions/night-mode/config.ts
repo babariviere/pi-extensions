@@ -70,21 +70,11 @@ export interface NightConfig {
  * keeps their prompts in a notes vault points `nightMode` at it instead.
  */
 function defaultNightDir(): string {
-	return join(
-		process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent"),
-		"night",
-	);
+	return join(process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent"), "night");
 }
 
 /** Sections seeded into a fresh report. Override per workflow. */
-export const DEFAULT_REPORT_SECTIONS = [
-	"Summary",
-	"Needs you",
-	"Work",
-	"Findings",
-	"Skipped / failed",
-	"Timeline",
-];
+export const DEFAULT_REPORT_SECTIONS = ["Summary", "Needs you", "Work", "Findings", "Skipped / failed", "Timeline"];
 
 /** Heading the extension writes blockers and leftovers under. */
 export const NEEDS_HUMAN_HEADING = DEFAULT_REPORT_SECTIONS[1];
@@ -92,11 +82,7 @@ export const NEEDS_HUMAN_HEADING = DEFAULT_REPORT_SECTIONS[1];
 export const DEFAULT_NIGHT_CONFIG: NightConfig = {
 	promptPath: join(defaultNightDir(), "prompt.md"),
 	instructionsPath: join(defaultNightDir(), "instructions.md"),
-	reportPathTemplate: join(
-		defaultNightDir(),
-		"reports",
-		"{datetime} - report.md",
-	),
+	reportPathTemplate: join(defaultNightDir(), "reports", "{datetime} - report.md"),
 	archiveDir: join(defaultNightDir(), "archive"),
 	sandboxRoot: join(defaultNightDir(), "sandboxes"),
 	sandboxCopyFiles: ["mise.local.toml"],
@@ -148,18 +134,11 @@ export function applyPathTemplate(template: string, date: Date): string {
 		date: formatDateStamp(date),
 		time: formatTimeStamp(date),
 	};
-	return template.replace(
-		/[{<](datetime|date|time)[}>]/g,
-		(_match, key: string) => values[key],
-	);
+	return template.replace(/[{<](datetime|date|time)[}>]/g, (_match, key: string) => values[key]);
 }
 
 /** Absolute report path for a run started at `date`. */
-export function reportPathFor(
-	config: NightConfig,
-	date: Date,
-	base: string,
-): string {
+export function reportPathFor(config: NightConfig, date: Date, base: string): string {
 	return resolvePath(applyPathTemplate(config.reportPathTemplate, date), base);
 }
 
@@ -173,9 +152,7 @@ function readJson(path: string): Record<string, unknown> | undefined {
 	try {
 		if (!existsSync(path)) return undefined;
 		const parsed = JSON.parse(readFileSync(path, "utf-8"));
-		return parsed && typeof parsed === "object"
-			? (parsed as Record<string, unknown>)
-			: undefined;
+		return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : undefined;
 	} catch {
 		return undefined;
 	}
@@ -186,29 +163,19 @@ const NIGHT_SANDBOX_MODES = ["off", "read-only", "workspace-write", "full"] as c
 
 /** Narrow an untrusted settings value to a sandbox mode. */
 function isNightSandboxMode(value: unknown): value is NightConfig["sandboxMode"] {
-	return (
-		typeof value === "string" &&
-		(NIGHT_SANDBOX_MODES as readonly string[]).includes(value)
-	);
+	return typeof value === "string" && (NIGHT_SANDBOX_MODES as readonly string[]).includes(value);
 }
 
-export function mergeNightConfig(
-	raw: unknown,
-	base: NightConfig = DEFAULT_NIGHT_CONFIG,
-): NightConfig {
+export function mergeNightConfig(raw: unknown, base: NightConfig = DEFAULT_NIGHT_CONFIG): NightConfig {
 	const record =
-		typeof raw === "object" && raw !== null && !Array.isArray(raw)
-			? (raw as Record<string, unknown>)
-			: {};
+		typeof raw === "object" && raw !== null && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
 	const str = (key: keyof NightConfig, fallback: string): string => {
 		const value = record[key];
 		return typeof value === "string" && value.trim() ? value.trim() : fallback;
 	};
 	const maxPullRequests = record.maxPullRequests;
 	const copyFiles = Array.isArray(record.sandboxCopyFiles)
-		? record.sandboxCopyFiles.filter(
-				(v): v is string => typeof v === "string" && v.trim().length > 0,
-			)
+		? record.sandboxCopyFiles.filter((v): v is string => typeof v === "string" && v.trim().length > 0)
 		: undefined;
 	// An empty array is meaningful here ("no extra roots"), so it is kept rather
 	// than falling back to the base like the lists whose default is non-empty.
@@ -219,39 +186,22 @@ export function mergeNightConfig(
 		: undefined;
 	const sections = Array.isArray(record.reportSections)
 		? record.reportSections
-				.filter(
-					(v): v is string => typeof v === "string" && v.trim().length > 0,
-				)
+				.filter((v): v is string => typeof v === "string" && v.trim().length > 0)
 				.map((v) => v.trim())
 		: undefined;
 	return {
 		promptPath: str("promptPath", base.promptPath),
 		instructionsPath: str("instructionsPath", base.instructionsPath),
 		reportPathTemplate: str("reportPathTemplate", base.reportPathTemplate),
-		archiveDir:
-			typeof record.archiveDir === "string"
-				? record.archiveDir.trim()
-				: base.archiveDir,
-		sandboxRoot:
-			typeof record.sandboxRoot === "string"
-				? record.sandboxRoot.trim()
-				: base.sandboxRoot,
+		archiveDir: typeof record.archiveDir === "string" ? record.archiveDir.trim() : base.archiveDir,
+		sandboxRoot: typeof record.sandboxRoot === "string" ? record.sandboxRoot.trim() : base.sandboxRoot,
 		sandboxCopyFiles: copyFiles ?? base.sandboxCopyFiles,
-		sandboxMode: isNightSandboxMode(record.sandboxMode)
-			? record.sandboxMode
-			: base.sandboxMode,
+		sandboxMode: isNightSandboxMode(record.sandboxMode) ? record.sandboxMode : base.sandboxMode,
 		sandboxAllowWrite: allowWrite ?? base.sandboxAllowWrite,
-		sandboxTrust:
-			typeof record.sandboxTrust === "boolean"
-				? record.sandboxTrust
-				: base.sandboxTrust,
-		wakeLock: isWakeLockPreference(record.wakeLock)
-			? record.wakeLock
-			: base.wakeLock,
+		sandboxTrust: typeof record.sandboxTrust === "boolean" ? record.sandboxTrust : base.sandboxTrust,
+		wakeLock: isWakeLockPreference(record.wakeLock) ? record.wakeLock : base.wakeLock,
 		maxPullRequests:
-			typeof maxPullRequests === "number" &&
-			Number.isFinite(maxPullRequests) &&
-			maxPullRequests > 0
+			typeof maxPullRequests === "number" && Number.isFinite(maxPullRequests) && maxPullRequests > 0
 				? Math.floor(maxPullRequests)
 				: base.maxPullRequests,
 		reportSections: sections?.length ? sections : base.reportSections,

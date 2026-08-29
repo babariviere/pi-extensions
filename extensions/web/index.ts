@@ -33,10 +33,7 @@ export default function (pi: ExtensionAPI) {
 		handler: async (_args, ctx) => {
 			const token = getKagiToken();
 			if (!token) {
-				ctx.ui.notify(
-					"No Kagi token found. Set KAGI_SESSION_TOKEN via env or ~/.pi/agent/secrets.json.",
-					"error",
-				);
+				ctx.ui.notify("No Kagi token found. Set KAGI_SESSION_TOKEN via env or ~/.pi/agent/secrets.json.", "error");
 				return;
 			}
 

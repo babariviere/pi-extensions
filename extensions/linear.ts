@@ -119,7 +119,10 @@ async function linearGraphQL<T>(apiKey: string, query: string, variables: Record
 }
 
 function parseIdentifier(input: string): { teamKey: string; number: number } | null {
-	const m = input.trim().toUpperCase().match(/^([A-Z][A-Z0-9]*)-(\d+)$/);
+	const m = input
+		.trim()
+		.toUpperCase()
+		.match(/^([A-Z][A-Z0-9]*)-(\d+)$/);
 	if (!m) return null;
 	return { teamKey: m[1], number: Number(m[2]) };
 }
@@ -424,10 +427,7 @@ export default function (pi: ExtensionAPI): void {
 
 			const apiKey = getLinearApiKey();
 			if (!apiKey) {
-				ctx.ui.notify(
-					"No Linear API key. Set LINEAR_API_KEY via env or ~/.pi/agent/secrets.json.",
-					"error",
-				);
+				ctx.ui.notify("No Linear API key. Set LINEAR_API_KEY via env or ~/.pi/agent/secrets.json.", "error");
 				return;
 			}
 

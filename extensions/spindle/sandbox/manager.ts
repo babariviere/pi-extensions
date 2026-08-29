@@ -20,30 +20,30 @@ const RUNTIME_MODULE = "@anthropic-ai/sandbox-runtime";
 
 /** The slice of `srt`'s SandboxManager this module uses. */
 export interface SandboxRuntime {
-  initialize(config: unknown): Promise<void>;
-  wrapWithSandbox(command: string): Promise<string>;
-  reset(): Promise<void>;
+	initialize(config: unknown): Promise<void>;
+	wrapWithSandbox(command: string): Promise<string>;
+	reset(): Promise<void>;
 }
 
 /** Platforms `srt` can enforce on. Everything else gets path guards only. */
 const OS_SUPPORTED: ReadonlySet<string> = new Set(["darwin", "linux"]);
 
 async function loadRuntime(): Promise<{ runtime?: SandboxRuntime; error?: string }> {
-  try {
-    const specifier = RUNTIME_MODULE;
-    const loaded = (await import(specifier)) as { SandboxManager?: SandboxRuntime };
-    if (!loaded?.SandboxManager) return { error: `${RUNTIME_MODULE} exports no SandboxManager` };
-    return { runtime: loaded.SandboxManager };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    return { error: `${RUNTIME_MODULE} unavailable (${message})` };
-  }
+	try {
+		const specifier = RUNTIME_MODULE;
+		const loaded = (await import(specifier)) as { SandboxManager?: SandboxRuntime };
+		if (!loaded?.SandboxManager) return { error: `${RUNTIME_MODULE} exports no SandboxManager` };
+		return { runtime: loaded.SandboxManager };
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		return { error: `${RUNTIME_MODULE} unavailable (${message})` };
+	}
 }
 
 export interface RuntimeAttempt {
-  runtime?: SandboxRuntime;
-  /** Why the OS sandbox is not active. Undefined when it is. */
-  degradedReason?: string;
+	runtime?: SandboxRuntime;
+	/** Why the OS sandbox is not active. Undefined when it is. */
+	degradedReason?: string;
 }
 
 /**
@@ -52,18 +52,18 @@ export interface RuntimeAttempt {
  * back to path guards on `write`/`edit`.
  */
 export async function initializeSandboxRuntime(policy: SandboxPolicy): Promise<RuntimeAttempt> {
-  if (!OS_SUPPORTED.has(process.platform)) {
-    return { degradedReason: `no OS sandbox on ${process.platform}; write/edit path guards only` };
-  }
-  const { runtime, error } = await loadRuntime();
-  if (!runtime) return { degradedReason: error };
-  try {
-    await runtime.initialize(toSandboxRuntimeConfig(policy));
-    return { runtime };
-  } catch (initError) {
-    const message = initError instanceof Error ? initError.message : String(initError);
-    return { degradedReason: `sandbox init failed (${message})` };
-  }
+	if (!OS_SUPPORTED.has(process.platform)) {
+		return { degradedReason: `no OS sandbox on ${process.platform}; write/edit path guards only` };
+	}
+	const { runtime, error } = await loadRuntime();
+	if (!runtime) return { degradedReason: error };
+	try {
+		await runtime.initialize(toSandboxRuntimeConfig(policy));
+		return { runtime };
+	} catch (initError) {
+		const message = initError instanceof Error ? initError.message : String(initError);
+		return { degradedReason: `sandbox init failed (${message})` };
+	}
 }
 
 /**
@@ -77,26 +77,23 @@ export async function initializeSandboxRuntime(policy: SandboxPolicy): Promise<R
  * process group and the timeout/abort kill-tree. `timeout` is in seconds,
  * matching pi's bash tool contract.
  */
-export function lateBoundBashOperations(
-  current: () => SandboxRuntime | undefined,
-  shellPath?: string,
-): BashOperations {
-  const local = createLocalBashOperations(shellPath ? { shellPath } : undefined);
-  return {
-    async exec(command, cwd, options) {
-      const runtime = current();
-      if (!runtime) return local.exec(command, cwd, options);
+export function lateBoundBashOperations(current: () => SandboxRuntime | undefined, shellPath?: string): BashOperations {
+	const local = createLocalBashOperations(shellPath ? { shellPath } : undefined);
+	return {
+		async exec(command, cwd, options) {
+			const runtime = current();
+			if (!runtime) return local.exec(command, cwd, options);
 
-      const { onData, signal, timeout, env } = options;
-      const wrapped = await runtime.wrapWithSandbox(command);
-      return supervisedSpawn({
-        command: wrapped,
-        cwd,
-        onData,
-        ...(signal ? { signal } : {}),
-        ...(timeout !== undefined ? { timeout } : {}),
-        ...(env ? { env } : {}),
-      });
-    },
-  };
+			const { onData, signal, timeout, env } = options;
+			const wrapped = await runtime.wrapWithSandbox(command);
+			return supervisedSpawn({
+				command: wrapped,
+				cwd,
+				onData,
+				...(signal ? { signal } : {}),
+				...(timeout !== undefined ? { timeout } : {}),
+				...(env ? { env } : {}),
+			});
+		},
+	};
 }

@@ -145,7 +145,12 @@ interface WorkspaceEntry {
 }
 
 /** List jj workspaces for the repo. */
-async function listWorkspaces(pi: ExtensionAPI, cfg: WorkspaceConfig, repo: RepoInfo, cwd: string): Promise<WorkspaceEntry[]> {
+async function listWorkspaces(
+	pi: ExtensionAPI,
+	cfg: WorkspaceConfig,
+	repo: RepoInfo,
+	cwd: string,
+): Promise<WorkspaceEntry[]> {
 	const out = await jj(pi, ["workspace", "list"], cwd);
 	const currentName = repo.workspaceRoot === repo.mainRoot ? "default" : basename(repo.workspaceRoot);
 	const entries: WorkspaceEntry[] = [];
@@ -207,7 +212,11 @@ function herdrRequest(method: string, params: Record<string, unknown>): Promise<
 				buf = buf.slice(nl + 1);
 				if (!line) continue;
 				try {
-					const msg = JSON.parse(line) as { id?: string; result?: Record<string, unknown>; error?: { message?: string } };
+					const msg = JSON.parse(line) as {
+						id?: string;
+						result?: Record<string, unknown>;
+						error?: { message?: string };
+					};
 					if (msg.id !== id) continue;
 					clearTimeout(timer);
 					if (msg.error) finish({ ok: false, error: msg.error.message || "herdr error" });
@@ -268,7 +277,11 @@ async function herdrFindByCwd(dir: string): Promise<{ available: boolean; worksp
 // ---------------------------------------------------------------------------
 
 /** Copy configured gitignored files from the source into a new workspace. */
-function copyConfiguredFiles(cfg: WorkspaceConfig, srcRoot: string, destRoot: string): { copied: string[]; skipped: string[] } {
+function copyConfiguredFiles(
+	cfg: WorkspaceConfig,
+	srcRoot: string,
+	destRoot: string,
+): { copied: string[]; skipped: string[] } {
 	const copied: string[] = [];
 	const skipped: string[] = [];
 	for (const rel of cfg.copyFiles) {
@@ -293,12 +306,19 @@ function copyConfiguredFiles(cfg: WorkspaceConfig, srcRoot: string, destRoot: st
 // UI: single-select picker (cancellable)
 // ---------------------------------------------------------------------------
 
-async function pickWorkspace(ctx: ExtensionCommandContext, title: string, entries: WorkspaceEntry[]): Promise<WorkspaceEntry | null> {
+async function pickWorkspace(
+	ctx: ExtensionCommandContext,
+	title: string,
+	entries: WorkspaceEntry[],
+): Promise<WorkspaceEntry | null> {
 	if (entries.length === 0) return null;
 	if (ctx.mode !== "tui") return null;
 
 	return ctx.ui.custom<WorkspaceEntry | null>((tui, theme, _kb, done) => {
-		let index = Math.max(0, entries.findIndex((e) => !e.current));
+		let index = Math.max(
+			0,
+			entries.findIndex((e) => !e.current),
+		);
 		if (index < 0) index = 0;
 		let cachedLines: string[] | undefined;
 		const refresh = () => {
@@ -391,15 +411,28 @@ async function openInHerdr(ctx: ExtensionCommandContext, entry: WorkspaceEntry) 
 	}
 	if (found.workspace) {
 		const res = await herdrRequest("workspace.focus", { workspace_id: found.workspace.id });
-		ctx.ui.notify(res.ok ? `Focused herdr workspace '${entry.name}'` : `herdr focus failed: ${res.error}`, res.ok ? "info" : "error");
+		ctx.ui.notify(
+			res.ok ? `Focused herdr workspace '${entry.name}'` : `herdr focus failed: ${res.error}`,
+			res.ok ? "info" : "error",
+		);
 	} else {
 		const res = await herdrRequest("workspace.create", { cwd: entry.dir, label: entry.name });
-		ctx.ui.notify(res.ok ? `Opened herdr workspace '${entry.name}'` : `herdr open failed: ${res.error}`, res.ok ? "info" : "error");
+		ctx.ui.notify(
+			res.ok ? `Opened herdr workspace '${entry.name}'` : `herdr open failed: ${res.error}`,
+			res.ok ? "info" : "error",
+		);
 	}
 }
 
 /** Create a jj workspace, copy configured files, and open it in herdr. */
-async function createWorkspace(pi: ExtensionAPI, ctx: ExtensionCommandContext, cfg: WorkspaceConfig, repo: RepoInfo, name: string, rev?: string) {
+async function createWorkspace(
+	pi: ExtensionAPI,
+	ctx: ExtensionCommandContext,
+	cfg: WorkspaceConfig,
+	repo: RepoInfo,
+	name: string,
+	rev?: string,
+) {
 	if (!name) throw new Error("usage: /workspace create <name> [revision]");
 	if (!isValidName(name)) throw new Error(`invalid workspace name '${name}' (allowed: letters, digits, . _ -)`);
 	if (name === "default") throw new Error("'default' is reserved");
@@ -425,7 +458,13 @@ async function createWorkspace(pi: ExtensionAPI, ctx: ExtensionCommandContext, c
 }
 
 /** Forget one or more jj workspaces, remove managed dirs, and close them in herdr. */
-async function deleteWorkspaces(pi: ExtensionAPI, ctx: ExtensionCommandContext, cfg: WorkspaceConfig, repo: RepoInfo, targets: WorkspaceEntry[]) {
+async function deleteWorkspaces(
+	pi: ExtensionAPI,
+	ctx: ExtensionCommandContext,
+	cfg: WorkspaceConfig,
+	repo: RepoInfo,
+	targets: WorkspaceEntry[],
+) {
 	const managedPrefix = join(cfg.root, repo.repoName);
 	const summary: string[] = [];
 	for (const t of targets) {
@@ -518,7 +557,11 @@ type MenuAction =
 	| { kind: "create" }
 	| { kind: "delete"; entries: WorkspaceEntry[] };
 
-async function workspaceMenu(ctx: ExtensionCommandContext, entries: WorkspaceEntry[], openDirs: Set<string>): Promise<MenuAction | null> {
+async function workspaceMenu(
+	ctx: ExtensionCommandContext,
+	entries: WorkspaceEntry[],
+	openDirs: Set<string>,
+): Promise<MenuAction | null> {
 	if (ctx.mode !== "tui") return null;
 
 	return ctx.ui.custom<MenuAction | null>((tui, theme, _kb, done) => {

@@ -8,7 +8,13 @@
  * - current context window usage + session totals (tokens/cost)
  */
 
-import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext, Theme, ToolResultEvent } from "@earendil-works/pi-coding-agent";
+import type {
+	ExtensionAPI,
+	ExtensionCommandContext,
+	ExtensionContext,
+	Theme,
+	ToolResultEvent,
+} from "@earendil-works/pi-coding-agent";
 import { DynamicBorder } from "@earendil-works/pi-coding-agent";
 import { Container, Key, Text, matchesKey, type Component, type TUI } from "@earendil-works/pi-tui";
 import os from "node:os";
@@ -260,21 +266,19 @@ function joinCommaStyled(items: string[], renderItem: (item: string) => string, 
 }
 
 type ContextViewData = {
-	usage:
-		| {
-			// message-based context usage estimate from ctx.getContextUsage()
-			messageTokens: number;
-			contextWindow: number;
-			// effective usage incl. a rough tool-definition estimate
-			effectiveTokens: number;
-			percent: number;
-			remainingTokens: number;
-			systemPromptTokens: number;
-			agentTokens: number;
-			toolsTokens: number;
-			activeTools: number;
-		}
-		| null;
+	usage: {
+		// message-based context usage estimate from ctx.getContextUsage()
+		messageTokens: number;
+		contextWindow: number;
+		// effective usage incl. a rough tool-definition estimate
+		effectiveTokens: number;
+		percent: number;
+		remainingTokens: number;
+		systemPromptTokens: number;
+		agentTokens: number;
+		toolsTokens: number;
+		activeTools: number;
+	} | null;
 	agentFiles: string[];
 	extensions: string[];
 	skills: string[];
@@ -300,11 +304,7 @@ class ContextView implements Component {
 		this.container = new Container();
 		this.container.addChild(new DynamicBorder((s) => theme.fg("accent", s)));
 		this.container.addChild(
-			new Text(
-				theme.fg("accent", theme.bold("Context")) + theme.fg("dim", "  (Esc/q/Enter to close)"),
-				1,
-				0,
-			),
+			new Text(theme.fg("accent", theme.bold("Context")) + theme.fg("dim", "  (Esc/q/Enter to close)"), 1, 0),
 		);
 		this.container.addChild(new Text("", 1, 0));
 
@@ -377,15 +377,19 @@ class ContextView implements Component {
 					muted(` (AGENTS ~${u.agentTokens.toLocaleString()})`),
 			);
 			lines.push(
-				muted("Tools: ") +
-					text(`~${u.toolsTokens.toLocaleString()} tok`) +
-					muted(` (${u.activeTools} active)`),
+				muted("Tools: ") + text(`~${u.toolsTokens.toLocaleString()} tok`) + muted(` (${u.activeTools} active)`),
 			);
 		}
 
-		lines.push(muted(`AGENTS (${this.data.agentFiles.length}): `) + text(this.data.agentFiles.length ? joinComma(this.data.agentFiles) : "(none)"));
+		lines.push(
+			muted(`AGENTS (${this.data.agentFiles.length}): `) +
+				text(this.data.agentFiles.length ? joinComma(this.data.agentFiles) : "(none)"),
+		);
 		lines.push("");
-		lines.push(muted(`Extensions (${this.data.extensions.length}): `) + text(this.data.extensions.length ? joinComma(this.data.extensions) : "(none)"));
+		lines.push(
+			muted(`Extensions (${this.data.extensions.length}): `) +
+				text(this.data.extensions.length ? joinComma(this.data.extensions) : "(none)"),
+		);
 
 		const loaded = new Set(this.data.loadedSkills);
 		const skillsRendered = this.data.skills.length
@@ -498,9 +502,7 @@ export default function contextExtension(pi: ExtensionAPI) {
 				.map((p) => (p === "<unknown>" ? p : path.basename(p)))
 				.sort((a, b) => a.localeCompare(b));
 
-			const skills = skillCmds
-				.map((c) => normalizeSkillName(c.name))
-				.sort((a, b) => a.localeCompare(b));
+			const skills = skillCmds.map((c) => normalizeSkillName(c.name)).sort((a, b) => a.localeCompare(b));
 
 			const agentFiles = await loadProjectContextFiles(ctx.cwd);
 			const agentFilePaths = agentFiles.map((f) => shortenPath(f.path, ctx.cwd));
@@ -546,9 +548,13 @@ export default function contextExtension(pi: ExtensionAPI) {
 				lines.push(`System: ~${systemPromptTokens.toLocaleString()} tok (AGENTS ~${agentTokens.toLocaleString()})`);
 				lines.push(`Tools: ~${toolsTokens.toLocaleString()} tok (${activeToolNames.length} active)`);
 				lines.push(`AGENTS: ${agentFilePaths.length ? joinComma(agentFilePaths) : "(none)"}`);
-				lines.push(`Extensions (${extensionFiles.length}): ${extensionFiles.length ? joinComma(extensionFiles) : "(none)"}`);
+				lines.push(
+					`Extensions (${extensionFiles.length}): ${extensionFiles.length ? joinComma(extensionFiles) : "(none)"}`,
+				);
 				lines.push(`Skills (${skills.length}): ${skills.length ? joinComma(skills) : "(none)"}`);
-				lines.push(`Session: ${sessionUsage.totalTokens.toLocaleString()} tokens · ${formatUsd(sessionUsage.totalCost)}`);
+				lines.push(
+					`Session: ${sessionUsage.totalTokens.toLocaleString()} tokens · ${formatUsd(sessionUsage.totalCost)}`,
+				);
 				return lines.join("\n");
 			};
 
@@ -562,16 +568,16 @@ export default function contextExtension(pi: ExtensionAPI) {
 			const viewData: ContextViewData = {
 				usage: usage
 					? {
-						messageTokens,
-						contextWindow: ctxWindow,
-						effectiveTokens,
-						percent,
-						remainingTokens,
-						systemPromptTokens,
-						agentTokens,
-						toolsTokens,
-						activeTools: activeToolNames.length,
-					}
+							messageTokens,
+							contextWindow: ctxWindow,
+							effectiveTokens,
+							percent,
+							remainingTokens,
+							systemPromptTokens,
+							agentTokens,
+							toolsTokens,
+							activeTools: activeToolNames.length,
+						}
 					: null,
 				agentFiles: agentFilePaths,
 				extensions: extensionFiles,

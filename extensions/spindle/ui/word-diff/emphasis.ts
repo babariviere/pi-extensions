@@ -9,75 +9,69 @@ import { wordEmphasisTokens, type WordEmphasisToken } from "./tokens.ts";
 export type { ConfidentWordChangeRanges, WordChangeConfidence, WordChangeRanges } from "./types.ts";
 
 export function shouldEmphasizeChangedPair(
-  ranges: ConfidentWordChangeRanges,
-  lineConfidence: WordChangeConfidence,
+	ranges: ConfidentWordChangeRanges,
+	lineConfidence: WordChangeConfidence,
 ): boolean {
-  if (ranges.removed.length === 0 && ranges.added.length === 0) return false;
-  if (lineConfidence === "low") return false;
-  if (ranges.confidence === "low" && lineConfidence !== "high") return false;
-  return true;
+	if (ranges.removed.length === 0 && ranges.added.length === 0) return false;
+	if (lineConfidence === "low") return false;
+	if (ranges.confidence === "low" && lineConfidence !== "high") return false;
+	return true;
 }
 
-export function changedRanges(
-  before: string,
-  after: string,
-  wordEmphasis: DiffWordEmphasis,
-): WordChangeRanges {
-  return stripWordChangeConfidence(changedRangesWithConfidence(before, after, wordEmphasis));
+export function changedRanges(before: string, after: string, wordEmphasis: DiffWordEmphasis): WordChangeRanges {
+	return stripWordChangeConfidence(changedRangesWithConfidence(before, after, wordEmphasis));
 }
 
 export function changedRangesWithConfidence(
-  before: string,
-  after: string,
-  wordEmphasis: DiffWordEmphasis,
+	before: string,
+	after: string,
+	wordEmphasis: DiffWordEmphasis,
 ): ConfidentWordChangeRanges {
-  if (wordEmphasis === "off") return emptyWordChangeRanges();
-  return changedRangesForTokensWithConfidence(
-    before,
-    after,
-    wordEmphasisTokens(before),
-    wordEmphasisTokens(after),
-    wordEmphasis,
-  );
+	if (wordEmphasis === "off") return emptyWordChangeRanges();
+	return changedRangesForTokensWithConfidence(
+		before,
+		after,
+		wordEmphasisTokens(before),
+		wordEmphasisTokens(after),
+		wordEmphasis,
+	);
 }
 
 export function changedRangesForTokensWithConfidence(
-  before: string,
-  after: string,
-  beforeTokens: WordEmphasisToken[],
-  afterTokens: WordEmphasisToken[],
-  wordEmphasis: DiffWordEmphasis,
+	before: string,
+	after: string,
+	beforeTokens: WordEmphasisToken[],
+	afterTokens: WordEmphasisToken[],
+	wordEmphasis: DiffWordEmphasis,
 ): ConfidentWordChangeRanges {
-  if (wordEmphasis === "off") return emptyWordChangeRanges();
+	if (wordEmphasis === "off") return emptyWordChangeRanges();
 
-  const gaps: ChangedTokenGap[] = [];
-  const alignmentConfidence = collectChangedTokenGaps(
-    beforeTokens,
-    0,
-    beforeTokens.length,
-    afterTokens,
-    0,
-    afterTokens.length,
-    gaps,
-  );
-  const ranges = refinedRangesForChangedTokens(before, beforeTokens, after, afterTokens, gaps);
-  const confidence: WordChangeConfidence = hasWordChangeRanges(ranges)
-    ? alignmentConfidence
-    : "low";
-  if (wordEmphasis !== "smart") return { ...ranges, confidence };
+	const gaps: ChangedTokenGap[] = [];
+	const alignmentConfidence = collectChangedTokenGaps(
+		beforeTokens,
+		0,
+		beforeTokens.length,
+		afterTokens,
+		0,
+		afterTokens.length,
+		gaps,
+	);
+	const ranges = refinedRangesForChangedTokens(before, beforeTokens, after, afterTokens, gaps);
+	const confidence: WordChangeConfidence = hasWordChangeRanges(ranges) ? alignmentConfidence : "low";
+	if (wordEmphasis !== "smart") return { ...ranges, confidence };
 
-  const filtered = filterLowSignalWordEmphasis(before, after, ranges);
-  return { ...filtered, confidence: hasWordChangeRanges(filtered) ? confidence : "low" };
+	const filtered = filterLowSignalWordEmphasis(before, after, ranges);
+	return { ...filtered, confidence: hasWordChangeRanges(filtered) ? confidence : "low" };
 }
 
 function stripWordChangeConfidence(ranges: ConfidentWordChangeRanges): WordChangeRanges {
-  return { removed: ranges.removed, added: ranges.added };
+	return { removed: ranges.removed, added: ranges.added };
 }
 
 function hasWordChangeRanges(ranges: WordChangeRanges): boolean {
-  return ranges.removed.length > 0 || ranges.added.length > 0;
+	return ranges.removed.length > 0 || ranges.added.length > 0;
 }
 
 function emptyWordChangeRanges(): ConfidentWordChangeRanges {
-  return { removed: [], added: [], confidence: "low" };
+	return { removed: [], added: [], confidence: "low" };
 }

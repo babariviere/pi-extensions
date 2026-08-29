@@ -43,9 +43,7 @@ export interface LedgerItem {
 export function todosDir(cwd: string): string {
 	const fromEnv = process.env.PI_TODO_PATH;
 	if (fromEnv?.trim()) {
-		const expanded = fromEnv.startsWith("~/")
-			? join(homedir(), fromEnv.slice(2))
-			: fromEnv;
+		const expanded = fromEnv.startsWith("~/") ? join(homedir(), fromEnv.slice(2)) : fromEnv;
 		return resolve(expanded);
 	}
 	return resolve(cwd, ".pi", "todos");
@@ -82,33 +80,21 @@ function splitTodo(content: string): { frontMatter: string; body: string } {
 
 /** First non-empty `Label: value` line in a body, case insensitive. */
 export function readField(body: string, label: string): string | undefined {
-	const pattern = new RegExp(
-		`^\\s*(?:[-*]\\s*)?(?:\\*\\*)?${label}(?:\\*\\*)?\\s*:\\s*(.+)$`,
-		"im",
-	);
+	const pattern = new RegExp(`^\\s*(?:[-*]\\s*)?(?:\\*\\*)?${label}(?:\\*\\*)?\\s*:\\s*(.+)$`, "im");
 	const match = pattern.exec(body);
 	const value = match?.[1]?.trim();
 	return value ? value : undefined;
 }
 
 const CLOSED_STATUSES = ["closed", "done", "completed"];
-const SKIPPED_STATUSES = [
-	"skipped",
-	"blocked",
-	"wontfix",
-	"cancelled",
-	"canceled",
-];
+const SKIPPED_STATUSES = ["skipped", "blocked", "wontfix", "cancelled", "canceled"];
 
 /**
  * Where an item really stands. Closed needs `Evidence:`, skipped needs
  * `Reason:`; anything else that claims to be resolved is `unverified` and keeps
  * counting against the run.
  */
-export function classify(
-	status: string,
-	body: string,
-): { state: LedgerState; evidence?: string; reason?: string } {
+export function classify(status: string, body: string): { state: LedgerState; evidence?: string; reason?: string } {
 	const normalized = status.trim().toLowerCase();
 	const evidence = readField(body, "evidence");
 	const reason = readField(body, "reason");
@@ -123,10 +109,7 @@ export function classify(
 }
 
 /** Parse one todo file into a ledger item, or undefined when it is not a night item. */
-export function parseLedgerItem(
-	id: string,
-	content: string,
-): LedgerItem | undefined {
+export function parseLedgerItem(id: string, content: string): LedgerItem | undefined {
 	const { frontMatter, body } = splitTodo(content);
 	let parsed: Record<string, unknown>;
 	try {
@@ -134,13 +117,10 @@ export function parseLedgerItem(
 	} catch {
 		return undefined;
 	}
-	const tags = Array.isArray(parsed.tags)
-		? parsed.tags.filter((t): t is string => typeof t === "string")
-		: [];
+	const tags = Array.isArray(parsed.tags) ? parsed.tags.filter((t): t is string => typeof t === "string") : [];
 	if (!tags.some((tag) => tag.toLowerCase() === NIGHT_TAG)) return undefined;
 
-	const status =
-		typeof parsed.status === "string" && parsed.status ? parsed.status : "open";
+	const status = typeof parsed.status === "string" && parsed.status ? parsed.status : "open";
 	const { state, evidence, reason } = classify(status, body);
 	return {
 		id: typeof parsed.id === "string" && parsed.id ? parsed.id : id,
@@ -160,10 +140,7 @@ export function readLedger(dir: string): LedgerItem[] {
 		for (const file of readdirSync(dir)) {
 			if (!file.endsWith(".md")) continue;
 			try {
-				const item = parseLedgerItem(
-					file.replace(/\.md$/, ""),
-					readFileSync(join(dir, file), "utf-8"),
-				);
+				const item = parseLedgerItem(file.replace(/\.md$/, ""), readFileSync(join(dir, file), "utf-8"));
 				if (item) items.push(item);
 			} catch {
 				// Unreadable todo: ignore it rather than losing the whole ledger.
@@ -177,9 +154,7 @@ export function readLedger(dir: string): LedgerItem[] {
 
 /** Items that still owe work: genuinely pending, or resolved without proof. */
 export function unresolved(items: LedgerItem[]): LedgerItem[] {
-	return items.filter(
-		(item) => item.state === "pending" || item.state === "unverified",
-	);
+	return items.filter((item) => item.state === "pending" || item.state === "unverified");
 }
 
 /**
@@ -187,22 +162,14 @@ export function unresolved(items: LedgerItem[]): LedgerItem[] {
  * fingerprint mean the nudge achieved nothing, which is a stall, not slowness.
  */
 export function fingerprint(items: LedgerItem[]): string {
-	return items
-		.map(
-			(item) =>
-				`${item.id}:${item.state}:${item.evidence ?? item.reason ?? ""}`,
-		)
-		.join("|");
+	return items.map((item) => `${item.id}:${item.state}:${item.evidence ?? item.reason ?? ""}`).join("|");
 }
 
 /** `- ab12 Fix the flaky login test (claimed done, no evidence)` lines for a prompt. */
 export function formatUnresolved(items: LedgerItem[]): string {
 	return unresolved(items)
 		.map((item) => {
-			const note =
-				item.state === "unverified"
-					? ` (marked '${item.status}' but has no Evidence:/Reason: line)`
-					: "";
+			const note = item.state === "unverified" ? ` (marked '${item.status}' but has no Evidence:/Reason: line)` : "";
 			return `- ${item.id} ${item.title}${note}`;
 		})
 		.join("\n");
@@ -217,8 +184,7 @@ export interface LedgerCounts {
 }
 
 export function counts(items: LedgerItem[]): LedgerCounts {
-	const by = (state: LedgerState) =>
-		items.filter((item) => item.state === state).length;
+	const by = (state: LedgerState) => items.filter((item) => item.state === state).length;
 	return {
 		total: items.length,
 		done: by("done"),

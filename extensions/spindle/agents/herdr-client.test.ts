@@ -9,18 +9,17 @@ import type { HerdrTransport } from "./herdr-transport.ts";
  * the fake-`herdr`-on-PATH hack, so the client's arg building and retry logic
  * are unit-testable without spawning anything.
  */
-function scriptedTransport(
-	responses: HerdrCliResult[] | ((args: string[], call: number) => HerdrCliResult),
-): { transport: HerdrTransport; calls: string[][] } {
+function scriptedTransport(responses: HerdrCliResult[] | ((args: string[], call: number) => HerdrCliResult)): {
+	transport: HerdrTransport;
+	calls: string[][];
+} {
 	const calls: string[][] = [];
 	let call = 0;
 	const transport: HerdrTransport = {
 		run(args: string[]) {
 			calls.push(args);
 			const res =
-				typeof responses === "function"
-					? responses(args, call)
-					: responses[Math.min(call, responses.length - 1)];
+				typeof responses === "function" ? responses(args, call) : responses[Math.min(call, responses.length - 1)];
 			call++;
 			return Promise.resolve(res);
 		},
@@ -30,9 +29,7 @@ function scriptedTransport(
 
 test("startAgent retries while the pane is busy, then succeeds", async () => {
 	const { transport, calls } = scriptedTransport((_, call) =>
-		call < 2
-			? { ok: false, error: "agent target pane wA:p1 is not an available shell" }
-			: { ok: true, result: {} },
+		call < 2 ? { ok: false, error: "agent target pane wA:p1 is not an available shell" } : { ok: true, result: {} },
 	);
 	const res = await new HerdrClient(transport).startAgent("sub-0-abc", "pi", "wA:p1", ["--flag"], 60000, {
 		pollMs: 1,
@@ -43,9 +40,7 @@ test("startAgent retries while the pane is busy, then succeeds", async () => {
 });
 
 test("startAgent times out with a clear error when the pane stays busy", async () => {
-	const { transport } = scriptedTransport([
-		{ ok: false, error: "agent target pane wA:p1 is not an available shell" },
-	]);
+	const { transport } = scriptedTransport([{ ok: false, error: "agent target pane wA:p1 is not an available shell" }]);
 	const res = await new HerdrClient(transport).startAgent("sub-0-abc", "pi", "wA:p1", ["--flag"], 60000, {
 		pollMs: 1,
 		readyTimeoutMs: 30,
@@ -57,9 +52,7 @@ test("startAgent times out with a clear error when the pane stays busy", async (
 });
 
 test("startAgent fails fast on a non-busy error without retrying", async () => {
-	const { transport, calls } = scriptedTransport([
-		{ ok: false, error: "unsupported interactive agent kind foo" },
-	]);
+	const { transport, calls } = scriptedTransport([{ ok: false, error: "unsupported interactive agent kind foo" }]);
 	const res = await new HerdrClient(transport).startAgent("sub-0-abc", "foo", "wA:p1", ["--flag"], 60000, {
 		pollMs: 1,
 		readyTimeoutMs: 5000,
@@ -74,7 +67,16 @@ test("splitPane sends the right args and returns the new pane id", async () => {
 	const res = await new HerdrClient(transport).splitPane("wA:p1", "right", 0.5, "/repo");
 	assert.deepEqual(res, { ok: true, paneId: "wA:p2" });
 	assert.deepEqual(calls[0], [
-		"pane", "split", "wA:p1", "--direction", "right", "--ratio", "0.5000", "--no-focus", "--cwd", "/repo",
+		"pane",
+		"split",
+		"wA:p1",
+		"--direction",
+		"right",
+		"--ratio",
+		"0.5000",
+		"--no-focus",
+		"--cwd",
+		"/repo",
 	]);
 });
 

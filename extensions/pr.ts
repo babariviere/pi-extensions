@@ -88,13 +88,7 @@ async function resolvePr(pi: ExtensionAPI): Promise<PrInfo> {
 }
 
 async function fetchChecks(pi: ExtensionAPI, bookmark: string): Promise<Check[] | null> {
-	const res = await sh(pi, "gh", [
-		"pr",
-		"checks",
-		bookmark,
-		"--json",
-		"name,state,bucket,link,workflow",
-	]);
+	const res = await sh(pi, "gh", ["pr", "checks", bookmark, "--json", "name,state,bucket,link,workflow"]);
 	if (!res.stdout.trim()) return null; // no checks reported yet
 	try {
 		return JSON.parse(res.stdout) as Check[];

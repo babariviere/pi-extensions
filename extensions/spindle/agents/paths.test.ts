@@ -3,13 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, statSync, utimesSync } from "node:f
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
-import {
-	cleanupOldRuns,
-	injectOutputInstruction,
-	runPaths,
-	runRootDir,
-	runsBaseDir,
-} from "./paths.ts";
+import { cleanupOldRuns, injectOutputInstruction, runPaths, runRootDir, runsBaseDir } from "./paths.ts";
 
 function tmpRoot(): string {
 	return mkdtempSync(join(tmpdir(), "paths-test-"));

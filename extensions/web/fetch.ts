@@ -131,9 +131,7 @@ function formatFetchCall(args: { url?: string; timeout?: number }, theme: any): 
 	const url = typeof args?.url === "string" ? args.url.trim() : null;
 	const invalidArg = theme.fg("error", "[invalid arg]");
 	return (
-		theme.fg("toolTitle", theme.bold("fetch content")) +
-		" " +
-		(url === null ? invalidArg : theme.fg("accent", url))
+		theme.fg("toolTitle", theme.bold("fetch content")) + " " + (url === null ? invalidArg : theme.fg("accent", url))
 	);
 }
 

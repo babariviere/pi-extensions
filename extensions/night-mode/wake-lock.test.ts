@@ -121,15 +121,9 @@ describe("shouldRenew", () => {
 
 describe("isPermanentFailure", () => {
 	it("detects automation denial and a missing app", () => {
-		assert.equal(
-			isPermanentFailure("execution error: Not authorized to send Apple events"),
-			true,
-		);
+		assert.equal(isPermanentFailure("execution error: Not authorized to send Apple events"), true);
 		assert.equal(isPermanentFailure("error -1743"), true);
-		assert.equal(
-			isPermanentFailure("Can\u2019t find application \u201cAmphetamine\u201d"),
-			true,
-		);
+		assert.equal(isPermanentFailure("Can\u2019t find application \u201cAmphetamine\u201d"), true);
 	});
 
 	it("treats a transient error as retryable", () => {
@@ -155,11 +149,9 @@ interface Harness {
 	advance: (ms: number) => void;
 }
 
-function harness(options: {
-	platform?: string;
-	installed?: boolean;
-	result?: (script: string) => ScriptResult;
-} = {}): Harness {
+function harness(
+	options: { platform?: string; installed?: boolean; result?: (script: string) => ScriptResult } = {},
+): Harness {
 	const scripts: string[] = [];
 	const children: FakeChild[] = [];
 	const warnings: string[] = [];
@@ -192,8 +184,7 @@ function harness(options: {
 }
 
 /** How many sessions were started. */
-const starts = (h: Harness): number =>
-	h.scripts.filter((s) => s.includes("start new session")).length;
+const starts = (h: Harness): number => h.scripts.filter((s) => s.includes("start new session")).length;
 
 describe("WakeLock with amphetamine", () => {
 	it("starts one bounded session and reports it", async () => {
@@ -223,7 +214,7 @@ describe("WakeLock with amphetamine", () => {
 		const h = harness();
 		const lock = new WakeLock("auto", h.deps);
 		await lock.acquire();
-		h.advance((SESSION_MINUTES * 60_000) - RENEW_MARGIN_MS);
+		h.advance(SESSION_MINUTES * 60_000 - RENEW_MARGIN_MS);
 		await lock.acquire();
 		assert.equal(starts(h), 2);
 	});
@@ -270,11 +261,7 @@ describe("WakeLock with amphetamine", () => {
 		assert.equal(h.scripts.at(-1), END_SESSION_SCRIPT);
 		assert.equal(lock.status().held, false);
 		await lock.release();
-		assert.equal(
-			h.scripts.filter((s) => s === END_SESSION_SCRIPT).length,
-			1,
-			"release is idempotent",
-		);
+		assert.equal(h.scripts.filter((s) => s === END_SESSION_SCRIPT).length, 1, "release is idempotent");
 	});
 
 	it("falls back to caffeinate when automation is denied", async () => {
@@ -346,8 +333,7 @@ describe("WakeLock disabled", () => {
 
 describe("isWakeLockPreference", () => {
 	it("accepts the four spellings and nothing else", () => {
-		for (const value of ["auto", "amphetamine", "caffeinate", "off"])
-			assert.equal(isWakeLockPreference(value), true);
+		for (const value of ["auto", "amphetamine", "caffeinate", "off"]) assert.equal(isWakeLockPreference(value), true);
 		assert.equal(isWakeLockPreference("Amphetamine"), false);
 		assert.equal(isWakeLockPreference(undefined), false);
 		assert.equal(isWakeLockPreference(1), false);

@@ -20,13 +20,11 @@ import type { SandboxRequest } from "./protocol.ts";
  * `spindle.json`.
  */
 export function activeNightSandboxRequest(): SandboxRequest | undefined {
-  const run = readActiveNightRun();
-  const requested = run?.sandbox;
-  if (!requested || !isSandboxMode(requested.mode)) return undefined;
-  const roots = Array.isArray(requested.allowWrite)
-    ? requested.allowWrite.filter(
-        (entry): entry is string => typeof entry === "string" && !!entry.trim(),
-      )
-    : [];
-  return { mode: requested.mode, ...(roots.length ? { allowWrite: roots } : {}) };
+	const run = readActiveNightRun();
+	const requested = run?.sandbox;
+	if (!requested || !isSandboxMode(requested.mode)) return undefined;
+	const roots = Array.isArray(requested.allowWrite)
+		? requested.allowWrite.filter((entry): entry is string => typeof entry === "string" && !!entry.trim())
+		: [];
+	return { mode: requested.mode, ...(roots.length ? { allowWrite: roots } : {}) };
 }

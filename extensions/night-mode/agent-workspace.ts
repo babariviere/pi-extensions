@@ -57,11 +57,7 @@ export function agentWorkspaceName(runId: string, index: number): string {
 }
 
 /** Injected for tests. Throws or rejects on failure. */
-export type WorkspaceExec = (
-	command: string,
-	args: string[],
-	cwd: string,
-) => void | Promise<void>;
+export type WorkspaceExec = (command: string, args: string[], cwd: string) => void | Promise<void>;
 
 const defaultExec: WorkspaceExec = async (command, args, cwd) => {
 	await execFileAsync(command, args, { cwd });
@@ -85,9 +81,7 @@ export interface AcquireInput {
  * not a jj repository or the command fails: the caller then falls back to the
  * clone itself, which is the previous behaviour rather than a dead run.
  */
-export async function acquireAgentWorkspace(
-	input: AcquireInput,
-): Promise<AgentWorkspace | undefined> {
+export async function acquireAgentWorkspace(input: AcquireInput): Promise<AgentWorkspace | undefined> {
 	if (!existsSync(join(input.base, ".jj"))) return undefined;
 	const exec = input.exec ?? defaultExec;
 	const path = join(input.root, input.name);
@@ -146,10 +140,7 @@ export async function releaseAgentWorkspace(
  * from the handshake and the copy/trust preferences from the night config.
  * Undefined when no run is active or the run has no clone.
  */
-export async function acquireNightAgentWorkspace(
-	name: string,
-	cwd: string,
-): Promise<AgentWorkspace | undefined> {
+export async function acquireNightAgentWorkspace(name: string, cwd: string): Promise<AgentWorkspace | undefined> {
 	const base = readActiveNightRun()?.workspacePath;
 	if (!base) return undefined;
 	const config = readNightConfig(cwd);
