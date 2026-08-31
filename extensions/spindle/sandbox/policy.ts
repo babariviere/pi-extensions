@@ -83,6 +83,15 @@ export const DEFAULT_SANDBOX_MODE: SandboxMode = "workspace-write";
  */
 export const UNRESTRICTED_DOMAIN = "*";
 
+/**
+ * The host handed to `srt` in place of `*`, so the allowlist it receives is
+ * never empty. `.invalid` is reserved (RFC 2606) and can never match a real
+ * request, so the placeholder only ever changes whether `srt` starts its proxy.
+ * See `toSandboxRuntimeConfig` for why an empty allowlist is not the same as
+ * "allow everything".
+ */
+export const UNRESTRICTED_PROXY_DOMAIN = "unrestricted.sandbox.invalid";
+
 /** Unrestricted egress: the filesystem is what this guardrail is about. */
 const DEFAULT_NETWORK: SandboxNetworkPolicy = { allowedDomains: [UNRESTRICTED_DOMAIN], deniedDomains: [] };
 
@@ -265,15 +274,27 @@ export function assertReadAllowed(policy: SandboxPolicy, absolutePath: string): 
  * over turns "unrestricted" into "every CONNECT refused with a 403". The
  * allow-any intent is carried by the permission hook instead, see
  * `sandboxAskCallback` in `manager.ts`.
+ *
+ * Dropping it must not leave the list empty, though. `srt`'s `wrapWithSandbox`
+ * decides two things from the same field, separately: it restricts the network
+ * whenever `allowedDomains` is *defined*, but it only starts its proxy, and
+ * only exports `HTTP_PROXY`/`ALL_PROXY` into the child, when the list is
+ * *non-empty*. An empty allowlist therefore yields a seatbelt profile that
+ * denies every socket including UDP 53, with no proxy to fall back to: DNS
+ * fails with "Operation not permitted" before any HTTP policy applies, and the
+ * permission hook is never consulted because nothing can reach the proxy that
+ * calls it. So unrestricted egress keeps the list non-empty with a single
+ * unroutable placeholder host, which keeps the proxy up and the hook reachable.
  */
 export function toSandboxRuntimeConfig(policy: SandboxPolicy): {
 	network: SandboxNetworkPolicy;
 	filesystem: { allowWrite: string[]; denyWrite: string[]; denyRead: string[] };
 } {
+	const named = policy.network.allowedDomains.filter((domain) => domain !== UNRESTRICTED_DOMAIN);
 	return {
 		network: {
 			...policy.network,
-			allowedDomains: policy.network.allowedDomains.filter((domain) => domain !== UNRESTRICTED_DOMAIN),
+			allowedDomains: hasUnrestrictedEgress(policy) && named.length === 0 ? [UNRESTRICTED_PROXY_DOMAIN] : named,
 		},
 		filesystem: {
 			allowWrite: policy.allowWrite,

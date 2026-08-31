@@ -91,12 +91,22 @@ test("a narrowed allowlist is widened by the night run's domains", () => {
 	assert.deepEqual(effective.network.allowedDomains, ["registry.npmjs.org", "github.com"]);
 });
 
-test("an unrestricted allowlist is left alone", () => {
+test("an unrestricted allowlist still keeps the night's concrete domains", () => {
+	// `*` never reaches srt, so a caller allowlist dropped here becomes an empty
+	// allowlist at the runtime, which denies every socket instead of allowing all.
 	const effective = effectiveSandbox({
 		settings: settings("workspace-write"),
+		night: { mode: "workspace-write", network: { allowedDomains: ["github.com", "*.github.com"] } },
+	});
+	assert.deepEqual(effective.network.allowedDomains, ["*", "github.com", "*.github.com"]);
+});
+
+test("merging the night's domains never duplicates one the settings already name", () => {
+	const effective = effectiveSandbox({
+		settings: { ...settings("workspace-write"), allowedDomains: ["*", "github.com"] },
 		night: { mode: "workspace-write", network: { allowedDomains: ["github.com"] } },
 	});
-	assert.deepEqual(effective.network.allowedDomains, ["*"]);
+	assert.deepEqual(effective.network.allowedDomains, ["*", "github.com"]);
 });
 
 test("a request cannot widen the allowlist, only a night run can", () => {

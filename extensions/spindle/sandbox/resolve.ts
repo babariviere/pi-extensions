@@ -75,10 +75,11 @@ export function effectiveSandbox(input: EffectiveSandboxInput): EffectiveSandbox
 		denyWrite: [...settings.denyWrite],
 		denyRead: [...settings.denyRead],
 		network: {
-			// `*` is already unrestricted, so there is nothing to widen.
-			allowedDomains: settings.allowedDomains.includes("*")
-				? [...settings.allowedDomains]
-				: dedupe([...settings.allowedDomains, ...(night?.network?.allowedDomains ?? [])]),
+			// Merged even when the settings already say `*`. `*` is spindle's own
+			// spelling for "any host" and never reaches the runtime, so keeping it
+			// *instead* of the night's concrete domains handed `srt` an empty
+			// allowlist and denied all egress (see `toSandboxRuntimeConfig`).
+			allowedDomains: dedupe([...settings.allowedDomains, ...(night?.network?.allowedDomains ?? [])]),
 			deniedDomains: [...settings.deniedDomains],
 		},
 		source,

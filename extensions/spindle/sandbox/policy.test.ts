@@ -17,6 +17,7 @@ import {
 	resolveSandboxPolicy,
 	toolCacheRoots,
 	toSandboxRuntimeConfig,
+	UNRESTRICTED_PROXY_DOMAIN,
 } from "./policy.ts";
 
 const environment = (overrides: Partial<PolicyEnvironment> = {}): PolicyEnvironment => ({
@@ -162,7 +163,19 @@ test("toSandboxRuntimeConfig never hands '*' to the runtime", () => {
 	// permission hook instead (see manager.ts).
 	const policy = resolveSandboxPolicy({ network: { allowedDomains: ["*", "github.com"] } }, environment());
 	assert.deepEqual(toSandboxRuntimeConfig(policy).network.allowedDomains, ["github.com"]);
-	assert.deepEqual(toSandboxRuntimeConfig(resolveSandboxPolicy({}, environment())).network.allowedDomains, []);
+});
+
+test("unrestricted egress still hands the runtime a non-empty allowlist", () => {
+	// An empty allowlist makes srt restrict the network without starting its
+	// proxy, which denies DNS outright and leaves the permission hook unreachable.
+	assert.deepEqual(toSandboxRuntimeConfig(resolveSandboxPolicy({}, environment())).network.allowedDomains, [
+		UNRESTRICTED_PROXY_DOMAIN,
+	]);
+});
+
+test("an explicitly empty allowlist stays empty: no egress is a real policy", () => {
+	const policy = resolveSandboxPolicy({ network: { allowedDomains: [] } }, environment());
+	assert.deepEqual(toSandboxRuntimeConfig(policy).network.allowedDomains, []);
 });
 
 test("toSandboxRuntimeConfig mirrors the policy", () => {
