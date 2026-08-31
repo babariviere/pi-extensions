@@ -24,6 +24,7 @@ import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { browserFetch } from "./fetch/browser.ts";
 import { defuddleFetch, DefuddleError, type DefuddleResult } from "./fetch/defuddle.ts";
+import { isSoftNotFound, shouldEscalateToBrowser } from "./fetch/status.ts";
 import { renderFoldableResult } from "./render.ts";
 import { DEFAULT_SETTINGS, type WebSettings } from "./settings.ts";
 import { cloneCachePath, type GitHubRepoRef, isRawGitHubUrl, parseGitHubRepoUrl, readTextCapped } from "./utils.ts";
@@ -143,20 +144,17 @@ async function fetchViaDefuddle(
 	settings: WebSettings,
 	signal?: AbortSignal,
 ): Promise<TextResult> {
+	let result: DefuddleResult;
 	try {
-		const result = await defuddleFetch(url, { timeout, signal });
-		// Direct fetch reached the page but got nothing extractable (e.g. a
-		// JS-rendered shell): try the browser before giving up.
-		if (!result.markdown && settings.browserFallback) {
-			const viaBrowser = await escalateToBrowser(url, settings, signal);
-			if (viaBrowser?.markdown) return renderDefuddle(viaBrowser, "browser");
-		}
-		return renderDefuddle(result, "defuddle");
+		result = await defuddleFetch(url, { timeout, signal });
 	} catch (err) {
-		// Direct fetch was blocked (e.g. Cloudflare 403): try the browser.
-		if (settings.browserFallback) {
+		// Retry through the browser only when the failure looks like bot protection
+		// or a transient error. A 404 is conclusive, and rendering it in Chrome
+		// would return the site's error page as if it were content.
+		const status = err instanceof DefuddleError ? err.status : undefined;
+		if (settings.browserFallback && shouldEscalateToBrowser(status)) {
 			const viaBrowser = await escalateToBrowser(url, settings, signal);
-			if (viaBrowser?.markdown) return renderDefuddle(viaBrowser, "browser");
+			if (viaBrowser?.markdown) return renderFetched(url, viaBrowser, "browser");
 		}
 		const message =
 			err instanceof DefuddleError
@@ -164,6 +162,32 @@ async function fetchViaDefuddle(
 				: `fetch_content failed: ${err instanceof Error ? err.message : String(err)}`;
 		return text(message);
 	}
+
+	// Direct fetch reached the page but got nothing extractable (e.g. a
+	// JS-rendered shell): try the browser before giving up.
+	if (!result.markdown && settings.browserFallback) {
+		const viaBrowser = await escalateToBrowser(url, settings, signal);
+		if (viaBrowser?.markdown) return renderFetched(url, viaBrowser, "browser");
+	}
+	return renderFetched(url, result, "defuddle");
+}
+
+/**
+ * Turn a fetched page into a tool result, reporting missing pages as failures
+ * instead of handing their error page to the model as content.
+ */
+function renderFetched(url: string, result: DefuddleResult, source: FetchSource): TextResult {
+	if (result.status !== undefined && result.status >= 400) {
+		return text(`Failed to fetch ${url}: HTTP ${result.status}`);
+	}
+	if (isSoftNotFound(result)) {
+		const titled = result.title ? ` (title: "${result.title}")` : "";
+		return text(
+			`${url} returned HTTP ${result.status ?? 200} but the page is a "not found" placeholder${titled}. ` +
+				`The URL is likely wrong or the page has been removed.`,
+		);
+	}
+	return renderDefuddle(result, source);
 }
 
 function renderDefuddle(result: DefuddleResult, source: FetchSource): TextResult {

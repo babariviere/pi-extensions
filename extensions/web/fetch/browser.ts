@@ -32,13 +32,14 @@ export async function browserFetch(url: string, options: BrowserFetchOptions): P
 
 	try {
 		const browserWs = await ensureBrowser(options.port, controller.signal);
-		const { html, title } = await renderPage(browserWs, options.port, url, controller.signal);
+		const { html, title, status } = await renderPage(browserWs, options.port, url, controller.signal);
 		const extracted = await extractMarkdown(html, url);
 		return {
 			title: extracted.title || title || undefined,
 			date: extracted.date,
 			markdown: extracted.markdown,
 			contentType: "text/html (browser)",
+			status,
 		};
 	} finally {
 		clearTimeout(timer);
@@ -134,12 +135,29 @@ function linuxChromeExecutable(): string | null {
 
 // --- page rendering ---------------------------------------------------------
 
+/** A `Network.responseReceived` event for a document (main frame or iframe). */
+export interface DocumentResponse {
+	frameId?: string;
+	status?: number;
+}
+
+/**
+ * Pick the status of the top-level document. Chrome reports document responses
+ * for iframes too, so prefer the frame the navigation was issued on and fall
+ * back to the first document seen.
+ */
+export function mainDocumentStatus(documents: DocumentResponse[], mainFrameId?: string): number | undefined {
+	const forMainFrame = mainFrameId ? documents.filter((d) => d.frameId === mainFrameId) : [];
+	const candidates = forMainFrame.length > 0 ? forMainFrame : documents;
+	return candidates[0]?.status;
+}
+
 async function renderPage(
 	browserWsUrl: string,
 	port: number,
 	url: string,
 	signal: AbortSignal,
-): Promise<{ html: string; title: string }> {
+): Promise<{ html: string; title: string; status?: number }> {
 	const browser = new Cdp(browserWsUrl, signal);
 	await browser.connect();
 	let targetId: string;
@@ -159,6 +177,16 @@ async function renderPage(
 	try {
 		await page.call("Page.enable");
 		await page.call("Runtime.enable");
+		// Needed to observe the HTTP status: CDP navigation itself reports none, so
+		// without this a 404 page renders and passes for real content.
+		await page.call("Network.enable");
+
+		const documents: DocumentResponse[] = [];
+		page.on("Network.responseReceived", (params) => {
+			if (params?.type !== "Document") return;
+			documents.push({ frameId: params.frameId, status: params.response?.status });
+		});
+
 		// Keep the backgrounded page from throttling its JS so the challenge runs.
 		await page.call("Emulation.setFocusEmulationEnabled", { enabled: true });
 		await page.call("Emulation.setDeviceMetricsOverride", {
@@ -167,11 +195,15 @@ async function renderPage(
 			deviceScaleFactor: 1,
 			mobile: false,
 		});
-		await page.call("Page.navigate", { url });
+		const nav = await page.call("Page.navigate", { url });
+		// ERR_ABORTED is expected for navigations Chrome hands off (downloads, etc.).
+		if (nav?.errorText && nav.errorText !== "net::ERR_ABORTED") {
+			throw new DefuddleError(`Browser navigation failed: ${nav.errorText}`);
+		}
 		await waitReady(page, signal);
 		const html = await evalString(page, "document.documentElement.outerHTML");
 		const title = await evalString(page, "document.title");
-		return { html, title };
+		return { html, title, status: mainDocumentStatus(documents, nav?.frameId) };
 	} finally {
 		page.close();
 		await fetch(`http://127.0.0.1:${port}/json/close/${encodeURIComponent(targetId)}`).catch(() => {});
@@ -229,6 +261,8 @@ class Cdp {
 	private ws!: WebSocket;
 	private id = 1;
 	private pending = new Map<number, Pending>();
+	// biome-ignore lint/suspicious/noExplicitAny: CDP event payloads are untyped
+	private handlers = new Map<string, (params: any) => void>();
 	private readonly onAbort = () => this.fail(new DefuddleError("Browser operation aborted"));
 
 	constructor(
@@ -260,9 +294,17 @@ class Cdp {
 					this.pending.delete(msg.id);
 					if (msg.error) p.reject(new DefuddleError(msg.error.message ?? "CDP error"));
 					else p.resolve(msg.result);
+					return;
 				}
+				if (typeof msg.method === "string") this.handlers.get(msg.method)?.(msg.params);
 			});
 		});
+	}
+
+	/** Subscribe to a CDP event. One handler per method; last call wins. */
+	// biome-ignore lint/suspicious/noExplicitAny: CDP event payloads are untyped
+	on(method: string, handler: (params: any) => void): void {
+		this.handlers.set(method, handler);
 	}
 
 	call(method: string, params: Record<string, unknown> = {}): Promise<any> {

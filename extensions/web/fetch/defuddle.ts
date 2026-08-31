@@ -21,12 +21,18 @@ export interface DefuddleResult {
 	markdown: string;
 	/** Reported content type of the fetched page, when available. */
 	contentType?: string;
+	/** HTTP status of the main document, when the transport exposes one. */
+	status?: number;
 }
 
 export class DefuddleError extends Error {
-	constructor(message: string) {
+	/** HTTP status of the response, when the failure was an HTTP error. */
+	readonly status?: number;
+
+	constructor(message: string, status?: number) {
 		super(message);
 		this.name = "DefuddleError";
+		this.status = status;
 	}
 }
 
@@ -58,7 +64,7 @@ export async function defuddleFetch(targetUrl: string, options: DefuddleOptions)
 
 		const contentType = res.headers.get("content-type") ?? undefined;
 		if (!res.ok) {
-			throw new DefuddleError(`Failed to fetch ${targetUrl}: HTTP ${res.status}`);
+			throw new DefuddleError(`Failed to fetch ${targetUrl}: HTTP ${res.status}`, res.status);
 		}
 
 		const body = await readTextCapped(res);
@@ -66,11 +72,11 @@ export async function defuddleFetch(targetUrl: string, options: DefuddleOptions)
 		// Non-HTML payloads (plain text, markdown, JSON, ...) have no main
 		// content to extract; return them verbatim.
 		if (contentType && !/html/i.test(contentType)) {
-			return { markdown: body.trim(), contentType };
+			return { markdown: body.trim(), contentType, status: res.status };
 		}
 
 		const extracted = await extractMarkdown(body, targetUrl, safeFetch);
-		return { ...extracted, contentType };
+		return { ...extracted, contentType, status: res.status };
 	} catch (err) {
 		if (err instanceof DefuddleError) throw err;
 		if (err instanceof Error && err.name === "AbortError") {

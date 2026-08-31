@@ -20,14 +20,26 @@ test("extractMarkdown pulls title and markdown body from HTML (offline)", async 
 	assert.match(r.markdown, /first paragraph/);
 });
 
-test("defuddleFetch maps HTTP errors to DefuddleError", async () => {
+test("defuddleFetch maps HTTP errors to DefuddleError carrying the status", async () => {
 	const orig = globalThis.fetch;
 	globalThis.fetch = async () => new Response("forbidden", { status: 403 });
 	try {
 		await assert.rejects(
 			() => defuddleFetch("https://example.com/x", { timeout: 5000 }),
-			(e) => e instanceof DefuddleError && /HTTP 403/.test(e.message),
+			(e) => e instanceof DefuddleError && /HTTP 403/.test(e.message) && e.status === 403,
 		);
+	} finally {
+		globalThis.fetch = orig;
+	}
+});
+
+test("defuddleFetch reports the status of successful responses", async () => {
+	const orig = globalThis.fetch;
+	globalThis.fetch = async () =>
+		new Response(FIXTURE_HTML, { status: 200, headers: { "content-type": "text/html" } });
+	try {
+		const r = await defuddleFetch("https://example.com/post", { timeout: 5000 });
+		assert.equal(r.status, 200);
 	} finally {
 		globalThis.fetch = orig;
 	}
