@@ -64,6 +64,15 @@ describe("mergeNightConfig", () => {
 		assert.equal(mergeNightConfig({ archiveDir: "" }).archiveDir, "");
 	});
 
+	it("defaults the ledger store to the night directory", () => {
+		assert.match(mergeNightConfig({}).todoPath, /night\/todos$/);
+	});
+
+	it("takes a custom ledger store, and lets an empty one restore the cwd-derived store", () => {
+		assert.equal(mergeNightConfig({ todoPath: " ~/notes/night-todos " }).todoPath, "~/notes/night-todos");
+		assert.equal(mergeNightConfig({ todoPath: "" }).todoPath, "");
+	});
+
 	it("takes extra writable roots, ignoring junk entries", () => {
 		const merged = mergeNightConfig({
 			sandboxAllowWrite: [" ~/src/other ", "", 7],

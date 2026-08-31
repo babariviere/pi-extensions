@@ -43,11 +43,12 @@ import {
 } from "./config.ts";
 import {
 	fingerprint,
+	formatLedger,
 	formatUnresolved,
 	type LedgerItem,
 	counts as ledgerCounts,
+	ledgerDir as resolveLedgerDir,
 	readLedger,
-	todosDir,
 	unresolved,
 } from "./ledger.ts";
 import {
@@ -176,6 +177,11 @@ export default function (pi: ExtensionAPI): void {
 		| undefined;
 	/** Instructions file waiting to be archived once the agent settles. */
 	let pendingInstructionsClear: string | undefined;
+	/**
+	 * `PI_TODO_PATH` as it was before the run pointed it at the night ledger.
+	 * `undefined` means it was unset, which is not the same as empty.
+	 */
+	let previousTodoPath: string | undefined;
 
 	/** Append a line to tonight's report, if there is one. Never throws. */
 	function appendReport(text: string): void {
@@ -275,6 +281,10 @@ export default function (pi: ExtensionAPI): void {
 		}
 		consumeInstructions();
 		seedCarryOver(open);
+		// Hand the session's todo store back before dropping the handshake.
+		if (previousTodoPath === undefined) delete process.env.PI_TODO_PATH;
+		else process.env.PI_TODO_PATH = previousTodoPath;
+		previousTodoPath = undefined;
 		clearActiveNightRun();
 		// Release the sandbox: the session goes back to whatever spindle.json says,
 		// so an interactive morning is not stuck inside the night's policy.
@@ -394,18 +404,34 @@ export default function (pi: ExtensionAPI): void {
 		// inherits it: without it the first jj command in the clone fails with
 		// "Failed to determine the secure config for a repo", and no child can commit.
 		if (prepared.configHome) process.env.XDG_CONFIG_HOME = prepared.configHome;
+		// Created up front: the todo tool writes into a store, it does not create the
+		// dedicated directory the run points it at, and a missing one would make the
+		// first ledger write fail at 2am.
+		const ledgerPath = resolveLedgerDir(config, cwd);
+		try {
+			mkdirSync(ledgerPath, { recursive: true });
+		} catch (error) {
+			return `night-mode: cannot create ledger store at ${ledgerPath}: ${String(error)}`;
+		}
+		// Set on this process, like XDG_CONFIG_HOME below: this is what makes the
+		// coordinator's own todo tool write the ledger to the night store, and every
+		// child spawned from here inherits it. Restored when the run ends, so a
+		// morning `/todos` is back on the project's own store.
+		previousTodoPath = process.env.PI_TODO_PATH;
+		process.env.PI_TODO_PATH = ledgerPath;
+
 		const sandbox = composeSandboxRequest({
 			config,
 			workspacePath: workspace,
 			cwd,
 			reportPath,
-			ledgerDir: todosDir(cwd),
+			ledgerDir: ledgerPath,
 		});
 		run = {
 			config,
 			reportPath,
 			startedAt,
-			ledgerDir: todosDir(cwd),
+			ledgerDir: ledgerPath,
 			nudges: 0,
 			...(workspace ? { workspacePath: workspace } : {}),
 		};
@@ -417,6 +443,7 @@ export default function (pi: ExtensionAPI): void {
 			startedAt: startedAt.getTime(),
 			reportPath,
 			maxPullRequests: config.maxPullRequests,
+			ledgerDir: ledgerPath,
 			...(sessionId ? { sessionId } : {}),
 			...(workspace ? { workspacePath: workspace } : {}),
 			...(sandbox ? { sandbox } : {}),
@@ -873,9 +900,10 @@ export default function (pi: ExtensionAPI): void {
 	});
 
 	pi.registerCommand("night", {
-		description: "Night mode: wake lock + Claude 5h budget guard (status | start | report | on | off | resume)",
+		description:
+			"Night mode: wake lock + Claude 5h budget guard (status | start | report | todos | on | off | resume)",
 		getArgumentCompletions: (prefix) =>
-			["status", "start", "report", "on", "off", "resume"]
+			["status", "start", "report", "todos", "on", "off", "resume"]
 				.filter((v) => v.startsWith(prefix))
 				.map((value) => ({ value, label: value })),
 		handler: async (args, ctx) => {
@@ -921,6 +949,28 @@ export default function (pi: ExtensionAPI): void {
 						`note: [[${noteNameFor(run.reportPath)}]]`,
 						`size: ${body.length} chars, started ${formatDateTimeStamp(run.startedAt)}`,
 						ledgerSummary(),
+					].join("\n"),
+					"info",
+				);
+				return;
+			}
+
+			if (action === "todos") {
+				// Deliberately works with no run in flight, unlike the other subcommands:
+				// reading the ledger is how you queue work for tonight, and the store is
+				// configured rather than derived from the run.
+				const cwd = process.cwd();
+				const dir = run?.ledgerDir ?? resolveLedgerDir(readNightConfig(cwd), cwd);
+				const items = readLedger(dir);
+				const tally = ledgerCounts(items);
+				ctx.ui.notify(
+					[
+						`night-mode ledger: ${dir}`,
+						run
+							? ledgerSummary()
+							: `${tally.total} item(s): ${tally.done} done, ${tally.skipped} skipped, ` +
+								`${tally.pending} pending, ${tally.unverified} unverified (no run in flight)`,
+						...(items.length > 0 ? ["", formatLedger(items)] : []),
 					].join("\n"),
 					"info",
 				);

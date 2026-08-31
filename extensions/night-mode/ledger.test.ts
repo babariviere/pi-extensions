@@ -1,13 +1,21 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { DEFAULT_NIGHT_CONFIG, type NightConfig } from "./config.ts";
 import {
 	classify,
 	counts,
 	fingerprint,
+	formatLedger,
 	formatUnresolved,
 	type LedgerItem,
+	ledgerDir,
 	parseLedgerItem,
 	readField,
+	readLedger,
+	todosDir,
 	unresolved,
 } from "./ledger.ts";
 import { appendUnderHeading, composeCarryOver, composeNudge } from "./prompt.ts";
@@ -132,5 +140,76 @@ describe("continuation and carry-over prompts", () => {
 		const text = composeCarryOver(new Date(2026, 7, 29, 21, 30), "- 1 a", "/tmp/r.md");
 		assert.match(text, /Carried over from the night of 2026-08-29 2130/);
 		assert.match(text, /- 1 a/);
+	});
+});
+
+describe("ledgerDir", () => {
+	const withTodoPath = (todoPath: string): NightConfig => ({ ...DEFAULT_NIGHT_CONFIG, todoPath });
+
+	it("resolves the configured store", () => {
+		assert.equal(ledgerDir(withTodoPath("/srv/night/todos"), "/repo"), "/srv/night/todos");
+		assert.equal(ledgerDir(withTodoPath("night-todos"), "/repo"), "/repo/night-todos");
+	});
+
+	it("falls back to the cwd-derived store when the path is empty", () => {
+		assert.equal(ledgerDir(withTodoPath(""), "/repo"), todosDir("/repo"));
+	});
+
+	// The regression this store exists for: a run rewrites cwd for its clone and
+	// again for every subagent workspace, so a cwd-derived ledger forks and the
+	// evidence a child writes is invisible to the coordinator.
+	it("is the same directory from the coordinator, the clone and a subagent workspace", () => {
+		const config = withTodoPath("/srv/night/todos");
+		const coordinator = ledgerDir(config, "/repo");
+		const clone = ledgerDir(config, "/srv/night/sandboxes/repo/2026-08-29 2130");
+		const workspace = ledgerDir(config, "/srv/night/sandboxes/repo/2026-08-29 2130.agents/agent-ab12-0");
+		assert.equal(clone, coordinator);
+		assert.equal(workspace, coordinator);
+		// And the cwd-derived store is what would have broken.
+		assert.notEqual(todosDir("/srv/night/sandboxes/repo/2026-08-29 2130.agents/agent-ab12-0"), todosDir("/repo"));
+	});
+
+	it("reads back an item a subagent wrote from its own workspace", () => {
+		const store = mkdtempSync(join(tmpdir(), "night-ledger-"));
+		const config = withTodoPath(store);
+		writeFileSync(
+			join(ledgerDir(config, "/workspace/agent-ab12-0"), "a1.md"),
+			todoFile({ id: "a1", title: "flaky-login", tags: ["night"], status: "done" }, "Evidence: https://x/1"),
+		);
+		const items = readLedger(ledgerDir(config, "/repo"));
+		assert.equal(items.length, 1);
+		assert.equal(items[0]?.state, "done");
+		assert.equal(unresolved(items).length, 0);
+	});
+});
+
+describe("formatLedger", () => {
+	const item = (over: Partial<LedgerItem>): LedgerItem => ({
+		id: "a1",
+		title: "t",
+		status: "open",
+		state: "pending",
+		...over,
+	});
+
+	it("marks each state, and shows why a resolved item counts", () => {
+		const lines = formatLedger([
+			item({ id: "a1", title: "triage CI", status: "in-progress" }),
+			item({ id: "a2", title: "flaky login", status: "done", state: "done", evidence: "https://x/1" }),
+			item({ id: "a3", title: "upgrade node", status: "skipped", state: "skipped", reason: "needs a call" }),
+			item({ id: "a4", title: "lint", status: "done", state: "unverified" }),
+		]).split("\n");
+		assert.equal(lines[0], "- [ ] a1 triage CI - in-progress");
+		assert.equal(lines[1], "- [?] a4 lint - marked 'done', no Evidence:/Reason:");
+		assert.equal(lines[2], "- [x] a2 flaky login - evidence: https://x/1");
+		assert.equal(lines[3], "- [-] a3 upgrade node - reason: needs a call");
+	});
+
+	it("omits a pending item's status when it is the default", () => {
+		assert.equal(formatLedger([item({ title: "triage CI" })]), "- [ ] a1 triage CI");
+	});
+
+	it("is empty for an empty ledger", () => {
+		assert.equal(formatLedger([]), "");
 	});
 });

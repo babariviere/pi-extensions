@@ -22,6 +22,19 @@ export interface NightConfig {
 	/** Where consumed instruction files are moved. Empty string disables archiving. */
 	archiveDir: string;
 	/**
+	 * Todo store backing the night ledger.
+	 *
+	 * Absolute and cwd-invariant on purpose. A night run rewrites the working
+	 * directory twice (once for the night's clone, once per subagent workspace), so
+	 * a store derived from the cwd forks: the child writes its `Evidence:` line
+	 * into a workspace that is deleted at teardown and the coordinator never sees
+	 * it, which reads exactly like an agent that lied about finishing.
+	 *
+	 * Empty string restores the old behaviour (`PI_TODO_PATH`, else
+	 * `<cwd>/.pi/todos`).
+	 */
+	todoPath: string;
+	/**
 	 * Root for per-run working copies. `/night start` clones the cwd under
 	 * `<sandboxRoot>/<repo>/<datetime>` and points the run at it, so the agent
 	 * never touches the checkout you left open. Empty string disables cloning.
@@ -98,6 +111,7 @@ export const DEFAULT_NIGHT_CONFIG: NightConfig = {
 	instructionsPath: join(defaultNightDir(), "instructions.md"),
 	reportPathTemplate: join(defaultNightDir(), "reports", "{datetime} - report.md"),
 	archiveDir: join(defaultNightDir(), "archive"),
+	todoPath: join(defaultNightDir(), "todos"),
 	sandboxRoot: join(defaultNightDir(), "sandboxes"),
 	sandboxCopyFiles: ["mise.local.toml"],
 	sandboxMode: "workspace-write",
@@ -214,6 +228,9 @@ export function mergeNightConfig(raw: unknown, base: NightConfig = DEFAULT_NIGHT
 		instructionsPath: str("instructionsPath", base.instructionsPath),
 		reportPathTemplate: str("reportPathTemplate", base.reportPathTemplate),
 		archiveDir: typeof record.archiveDir === "string" ? record.archiveDir.trim() : base.archiveDir,
+		// Not `str()`: an empty string is meaningful here ("keep the cwd-derived
+		// store"), so it must not fall back to the default.
+		todoPath: typeof record.todoPath === "string" ? record.todoPath.trim() : base.todoPath,
 		sandboxRoot: typeof record.sandboxRoot === "string" ? record.sandboxRoot.trim() : base.sandboxRoot,
 		sandboxCopyFiles: copyFiles ?? base.sandboxCopyFiles,
 		sandboxMode: isNightSandboxMode(record.sandboxMode) ? record.sandboxMode : base.sandboxMode,

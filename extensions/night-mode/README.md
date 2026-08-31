@@ -206,7 +206,7 @@ drift out of sync with it:
 
 - the night's working copy (or the cwd, when cloning is off),
 - the report directory,
-- the todo store backing the ledger,
+- the ledger store (`todoPath`),
 - temp dirs and the tool caches (`GOCACHE`, `GOMODCACHE`, the platform cache home),
 - anything listed in `sandboxAllowWrite`.
 
@@ -276,9 +276,23 @@ unattended run, and prompt wording does not fix it. So the run's task list is
 explicit and machine-readable, and the extension, not the agent, decides when the
 night is over.
 
-The ledger is **not a new store**: it is the `todos` extension's store
-(`PI_TODO_PATH`, else `<cwd>/.pi/todos`), filtered to items tagged `night`. The
-agent manages it with the todo tool it already has, and `/todos` shows it live.
+The ledger is not a new *format*: the items are `todos` extension files tagged
+`night`, so the agent manages them with the todo tool it already has. What is
+dedicated is the **store**: `todoPath`, default `~/.pi/agent/night/todos`.
+`/night todos` shows it, during a run or before one.
+
+The store cannot be derived from the working directory, which is what an earlier
+version did (`<cwd>/.pi/todos`). A run rewrites the cwd twice, once for the
+night's clone and again for every subagent workspace, and `.pi/` is gitignored so
+`jj workspace add` gives each child an empty store that is deleted at teardown.
+A subagent that correctly wrote `Evidence:` wrote it into a directory that no
+longer exists, the coordinator read the item as still open, and the run ended as
+"stalled": indistinguishable from the lazy agent the ledger exists to catch.
+
+So the store is absolute, and every participant is pointed at it: the coordinator
+and its children through `PI_TODO_PATH`, and panes the spawn path cannot hand an
+environment to through `active.json`. Set `todoPath: ""` to go back to one ledger
+per repository.
 
 Classification is deliberately suspicious, because marking everything done is the
 cheapest way for an agent to end its night:
@@ -355,6 +369,7 @@ and every path is configurable. Defaults keep the night files under
 | `instructionsPath` | `~/.pi/agent/night/instructions.md` | One-off asks, cleared after the run |
 | `reportPathTemplate` | `~/.pi/agent/night/reports/{datetime} - report.md` | `{datetime}`, `{date}`, `{time}` placeholders |
 | `archiveDir` | `~/.pi/agent/night/archive` | Where consumed instructions go; `""` disables archiving |
+| `todoPath` | `~/.pi/agent/night/todos` | Todo store backing the ledger; `""` uses `<cwd>/.pi/todos` |
 | `sandboxRoot` | `~/.pi/agent/night/sandboxes` | Root for the night's private working copy; `""` disables cloning |
 | `sandboxCopyFiles` | `["mise.local.toml"]` | Gitignored, repo-relative files copied into a fresh working copy |
 | `sandboxMode` | `workspace-write` | Filesystem sandbox requested for the run: `off`, `read-only`, `workspace-write`, `full` |
@@ -389,6 +404,7 @@ follows.
 | `/night` or `/night status` | Window state, wake lock state, 5h and weekly usage, reset countdown, pause state, active run |
 | `/night start` | Start a night run now: moves the window start to the current hour, composes the prompt, creates the report |
 | `/night report` | Path, wiki-link and size of tonight's report |
+| `/night todos` | The ledger: every item, its state and its evidence. Works outside a run |
 | `/night on` / `/night off` | Enable or disable the whole thing for this session |
 | `/night resume` | Clear a pause immediately and send the continue prompt |
 

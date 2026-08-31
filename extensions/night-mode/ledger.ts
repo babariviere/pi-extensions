@@ -2,10 +2,11 @@
  * The night ledger: the machine-readable list of what tonight is supposed to
  * cover, so the run can be told it is not finished yet.
  *
- * It is not a new store. It is the `todos` extension's store (`PI_TODO_PATH` or
- * `<cwd>/.pi/todos`), filtered to items tagged `night`. The agent manipulates it
- * with the todo tool it already has, `/todos` shows it live, and this module
- * only reads and classifies.
+ * Not a new file format: these are `todos` extension files, tagged `night`, so
+ * the agent manages them with the todo tool it already has and this module only
+ * reads and classifies. What is dedicated is the *store*: `nightMode.todoPath`,
+ * default `~/.pi/agent/night/todos`. See `ledgerDir` for why it cannot be
+ * derived from the cwd.
  *
  * Classification is deliberately suspicious: an item claiming to be done without
  * evidence, or skipped without a reason, counts as still pending. Otherwise the
@@ -15,6 +16,7 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
+import { type NightConfig, resolvePath } from "./config.ts";
 
 /** Tag that opts a todo into the night ledger. */
 export const NIGHT_TAG = "night";
@@ -47,6 +49,24 @@ export function todosDir(cwd: string): string {
 		return resolve(expanded);
 	}
 	return resolve(cwd, ".pi", "todos");
+}
+
+/**
+ * Where a run's ledger lives.
+ *
+ * The ledger is run-scoped, but a cwd-derived store is not: `/night start`
+ * clones the checkout and every `night: true` subagent gets its own jj workspace,
+ * so `<cwd>/.pi/todos` resolves to a different directory in the coordinator, in
+ * the clone, and in each child. The child's store is untracked (`.pi/` is
+ * gitignored, and `jj workspace add` checks out tracked files only) and its
+ * directory is removed at teardown, so evidence written there is lost and the
+ * coordinator concludes the item is still open.
+ *
+ * So the configured path wins, and it is absolute. `todoPath: ""` opts back into
+ * the cwd-derived store for anyone who wants one ledger per repository.
+ */
+export function ledgerDir(config: NightConfig, cwd: string): string {
+	return config.todoPath ? resolvePath(config.todoPath, cwd) : todosDir(cwd);
 }
 
 /** Extract the JSON front matter object and the markdown body of a todo file. */
@@ -173,6 +193,38 @@ export function formatUnresolved(items: LedgerItem[]): string {
 			return `- ${item.id} ${item.title}${note}`;
 		})
 		.join("\n");
+}
+
+/** Checkbox marker per ledger state. `[?]` is the one that matters: it looks resolved and is not. */
+const STATE_MARKER: Record<LedgerState, string> = {
+	pending: "[ ]",
+	done: "[x]",
+	skipped: "[-]",
+	unverified: "[?]",
+};
+
+/** One `- [x] ab12 Title - evidence: ...` line. */
+function formatItem(item: LedgerItem): string {
+	const marker = STATE_MARKER[item.state];
+	const head = `- ${marker} ${item.id} ${item.title}`;
+	if (item.state === "unverified") return `${head} - marked '${item.status}', no Evidence:/Reason:`;
+	if (item.state === "done" && item.evidence) return `${head} - evidence: ${item.evidence}`;
+	if (item.state === "skipped" && item.reason) return `${head} - reason: ${item.reason}`;
+	// A pending item's raw status carries the only extra signal there is
+	// (`in-progress` vs never started), and only when it is not the default.
+	if (item.state === "pending" && item.status && item.status !== "open") return `${head} - ${item.status}`;
+	return head;
+}
+
+/**
+ * Every item, for `/night todos`. Unresolved first: someone reading this at 2am
+ * wants what is left, not twenty done items with the remaining two underneath.
+ */
+export function formatLedger(items: LedgerItem[]): string {
+	const open = unresolved(items);
+	const openIds = new Set(open.map((item) => item.id));
+	const closed = items.filter((item) => !openIds.has(item.id));
+	return [...open, ...closed].map(formatItem).join("\n");
 }
 
 export interface LedgerCounts {

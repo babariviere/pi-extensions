@@ -10,7 +10,7 @@
  */
 
 import { spawn } from "node:child_process";
-import { NIGHT_RUN_ENV } from "../../night-mode/night-run.ts";
+import { NIGHT_RUN_ENV, readActiveNightRun } from "../../night-mode/night-run.ts";
 import { readDefaultProvider } from "./settings.ts";
 import { resolveRunOutput } from "./output.ts";
 import { DEFAULT_KILL_GRACE_MS, terminateProcessTree, type TerminateHandle } from "./process-tree.ts";
@@ -25,6 +25,20 @@ const CANCELLED_RUN_ERROR = "cancelled by the parent session";
  * DEFAULT_KILL_GRACE_MS, so this only covers the pathological case.
  */
 const CLOSE_FALLBACK_MS = DEFAULT_KILL_GRACE_MS + 1_000;
+
+/**
+ * Environment for a `night: true` child: the participation marker, plus the
+ * run's ledger store so the child's todo tool resolves the coordinator's ledger
+ * instead of one derived from its own throwaway workspace.
+ */
+function nightEnv(): NodeJS.ProcessEnv {
+	const ledgerDir = readActiveNightRun()?.ledgerDir;
+	return {
+		...process.env,
+		[NIGHT_RUN_ENV]: "1",
+		...(ledgerDir ? { PI_TODO_PATH: ledgerDir } : {}),
+	};
+}
 
 export function runHeadlessBatch(reqs: RunRequest[], ctx: RunContext): Promise<RunResult[]> {
 	const defaultProvider = readDefaultProvider(ctx.cwd);
@@ -42,11 +56,16 @@ function runHeadless(req: RunRequest, ctx: RunContext, defaultProvider: string |
 
 		// The night marker travels in the environment: the child's own spindle reads
 		// it to decide whether to inherit the run's sandbox (`sandbox/night-bridge.ts`).
+		//
+		// So does the ledger store. The child runs in its own jj workspace, so a todo
+		// store resolved from its cwd would be an empty directory that is deleted at
+		// teardown: every `Evidence:` line it wrote would vanish and the coordinator
+		// would read the item as still open.
 		const child = spawn("pi", childArgs, {
 			cwd: runCwd(req, ctx),
 			// Own process group, so teardown reaches the child's own subprocesses.
 			detached: true,
-			...(req.night ? { env: { ...process.env, [NIGHT_RUN_ENV]: "1" } } : {}),
+			...(req.night ? { env: nightEnv() } : {}),
 		});
 		ctx.onStatus?.(req.index, { state: "running", outputPath });
 

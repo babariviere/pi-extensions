@@ -45,6 +45,14 @@ export interface ActiveNightRun {
 	 */
 	workspacePath?: string;
 	/**
+	 * Todo store backing the night ledger. Published here because the run rewrites
+	 * `cwd` for its clone and again for every subagent workspace, so a child that
+	 * resolved the store from its own cwd would write into a throwaway directory.
+	 * Children normally receive it as `PI_TODO_PATH`; this field is what the ones
+	 * that cannot be handed an environment (herdr panes) read instead.
+	 */
+	ledgerDir?: string;
+	/**
 	 * Filesystem sandbox the run asks for. Spindle reads this to sandbox the
 	 * coordinator and every subagent process for the duration of the night; see
 	 * `spindle/sandbox/night-bridge.ts`. Structural on purpose: night-mode does

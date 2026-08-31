@@ -47,6 +47,7 @@ import path from "node:path";
 import fs from "node:fs/promises";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import crypto from "node:crypto";
+import { isNightRunParticipant, readActiveNightRun } from "./night-mode/night-run.ts";
 import {
 	Container,
 	type Focusable,
@@ -683,11 +684,29 @@ class TodoDetailOverlayComponent {
 	}
 }
 
+/**
+ * Ledger store of an active night run, when this process is one of its
+ * participants and was not handed `PI_TODO_PATH`.
+ *
+ * Night runs point every participant at one store (see `night-mode/ledger.ts`),
+ * normally through the environment. Panes started by the herdr backend cannot be
+ * given an environment, so they qualify by running inside the run's working copy
+ * instead. A session you open in your own checkout while a run is in flight is
+ * not a participant and keeps its own store.
+ */
+function nightLedgerDir(cwd: string): string | undefined {
+	const run = readActiveNightRun();
+	if (!run?.ledgerDir) return undefined;
+	return isNightRunParticipant(run, { cwd }) ? run.ledgerDir : undefined;
+}
+
 function getTodosDir(cwd: string): string {
 	const overridePath = process.env[TODO_PATH_ENV];
 	if (overridePath && overridePath.trim()) {
 		return path.resolve(cwd, overridePath.trim());
 	}
+	const ledger = nightLedgerDir(cwd);
+	if (ledger) return path.resolve(ledger);
 	return path.resolve(cwd, TODO_DIR_NAME);
 }
 
@@ -696,6 +715,8 @@ function getTodosDirLabel(cwd: string): string {
 	if (overridePath && overridePath.trim()) {
 		return path.resolve(cwd, overridePath.trim());
 	}
+	const ledger = nightLedgerDir(cwd);
+	if (ledger) return path.resolve(ledger);
 	return TODO_DIR_NAME;
 }
 
