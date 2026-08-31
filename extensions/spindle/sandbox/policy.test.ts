@@ -10,6 +10,7 @@ import {
 	isInside,
 	isReadDenied,
 	isSandboxMode,
+	hasUnrestrictedEgress,
 	isWriteAllowed,
 	matchesPattern,
 	type PolicyEnvironment,
@@ -145,6 +146,23 @@ test("assertWriteAllowed reports the mode and the writable roots", () => {
 		() => assertWriteAllowed(policy, "/home/dev/.zshrc"),
 		/sandbox: write to \/home\/dev\/\.zshrc denied by mode 'workspace-write'\. Writable roots: \/work\/repo/,
 	);
+});
+
+test("hasUnrestrictedEgress only for the '*' pattern", () => {
+	assert.equal(hasUnrestrictedEgress(resolveSandboxPolicy({}, environment())), true);
+	assert.equal(
+		hasUnrestrictedEgress(resolveSandboxPolicy({ network: { allowedDomains: ["github.com"] } }, environment())),
+		false,
+	);
+});
+
+test("toSandboxRuntimeConfig never hands '*' to the runtime", () => {
+	// srt matches an exact host or `*.example.com` only, so a bare `*` would match
+	// nothing and deny every request. Unrestricted egress travels as the
+	// permission hook instead (see manager.ts).
+	const policy = resolveSandboxPolicy({ network: { allowedDomains: ["*", "github.com"] } }, environment());
+	assert.deepEqual(toSandboxRuntimeConfig(policy).network.allowedDomains, ["github.com"]);
+	assert.deepEqual(toSandboxRuntimeConfig(resolveSandboxPolicy({}, environment())).network.allowedDomains, []);
 });
 
 test("toSandboxRuntimeConfig mirrors the policy", () => {

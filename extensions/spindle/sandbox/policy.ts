@@ -76,8 +76,20 @@ export const DEFAULT_DENY_WRITE = [".env", ".env.*", "*.pem", "*.key", "*.p12", 
 
 export const DEFAULT_SANDBOX_MODE: SandboxMode = "workspace-write";
 
+/**
+ * The pattern this module spells "any host". It is spindle's own vocabulary:
+ * `srt` has no way to express it, so it never reaches the runtime (see
+ * `toSandboxRuntimeConfig`).
+ */
+export const UNRESTRICTED_DOMAIN = "*";
+
 /** Unrestricted egress: the filesystem is what this guardrail is about. */
-const DEFAULT_NETWORK: SandboxNetworkPolicy = { allowedDomains: ["*"], deniedDomains: [] };
+const DEFAULT_NETWORK: SandboxNetworkPolicy = { allowedDomains: [UNRESTRICTED_DOMAIN], deniedDomains: [] };
+
+/** True when the policy asks for egress to any host. */
+export function hasUnrestrictedEgress(policy: SandboxPolicy): boolean {
+	return policy.network.allowedDomains.includes(UNRESTRICTED_DOMAIN);
+}
 
 export function isSandboxMode(value: unknown): value is SandboxMode {
 	return typeof value === "string" && (SANDBOX_MODES as readonly string[]).includes(value);
@@ -245,13 +257,24 @@ export function assertReadAllowed(policy: SandboxPolicy, absolutePath: string): 
 	);
 }
 
-/** The config object `@anthropic-ai/sandbox-runtime` expects. */
+/**
+ * The config object `@anthropic-ai/sandbox-runtime` expects.
+ *
+ * `*` is dropped from `allowedDomains`: `srt`'s matcher only understands an
+ * exact host or `*.example.com`, so a bare `*` matches nothing and handing it
+ * over turns "unrestricted" into "every CONNECT refused with a 403". The
+ * allow-any intent is carried by the permission hook instead, see
+ * `sandboxAskCallback` in `manager.ts`.
+ */
 export function toSandboxRuntimeConfig(policy: SandboxPolicy): {
 	network: SandboxNetworkPolicy;
 	filesystem: { allowWrite: string[]; denyWrite: string[]; denyRead: string[] };
 } {
 	return {
-		network: policy.network,
+		network: {
+			...policy.network,
+			allowedDomains: policy.network.allowedDomains.filter((domain) => domain !== UNRESTRICTED_DOMAIN),
+		},
 		filesystem: {
 			allowWrite: policy.allowWrite,
 			denyWrite: policy.denyWrite,

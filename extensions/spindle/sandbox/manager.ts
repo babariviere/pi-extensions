@@ -13,16 +13,38 @@
 
 import type { BashOperations } from "@earendil-works/pi-coding-agent";
 import { createLocalBashOperations } from "@earendil-works/pi-coding-agent";
-import { type SandboxPolicy, toSandboxRuntimeConfig } from "./policy.ts";
+import { hasUnrestrictedEgress, type SandboxPolicy, toSandboxRuntimeConfig } from "./policy.ts";
 import { supervisedSpawn } from "./supervised-spawn.ts";
 
 const RUNTIME_MODULE = "@anthropic-ai/sandbox-runtime";
 
+/**
+ * `srt`'s network permission hook. It is called for a host no allow or deny
+ * rule matched, and a missing hook means "deny".
+ */
+export type SandboxAskCallback = (request: { host: string; port: number }) => Promise<boolean>;
+
 /** The slice of `srt`'s SandboxManager this module uses. */
 export interface SandboxRuntime {
-	initialize(config: unknown): Promise<void>;
+	initialize(config: unknown, ask?: SandboxAskCallback): Promise<void>;
 	wrapWithSandbox(command: string): Promise<string>;
 	reset(): Promise<void>;
+}
+
+/**
+ * The permission hook a policy needs, or undefined when the allowlist already
+ * names every host it wants.
+ *
+ * `srt` is allow-only and its patterns are an exact host or `*.example.com`:
+ * there is no spelling for "any host", and its own config schema rejects a bare
+ * `*` as too broad. So spindle's `*` cannot be passed through, and passing it
+ * anyway denied *all* egress, including hosts a night run had explicitly
+ * allowlisted (the proxy answered 403 to every CONNECT). Unrestricted egress is
+ * expressed as a hook that approves whatever no rule matched instead.
+ * `deniedDomains` is checked before the hook, so the kill switch still wins.
+ */
+export function sandboxAskCallback(policy: SandboxPolicy): SandboxAskCallback | undefined {
+	return hasUnrestrictedEgress(policy) ? async () => true : undefined;
 }
 
 /** Platforms `srt` can enforce on. Everything else gets path guards only. */
@@ -58,7 +80,7 @@ export async function initializeSandboxRuntime(policy: SandboxPolicy): Promise<R
 	const { runtime, error } = await loadRuntime();
 	if (!runtime) return { degradedReason: error };
 	try {
-		await runtime.initialize(toSandboxRuntimeConfig(policy));
+		await runtime.initialize(toSandboxRuntimeConfig(policy), sandboxAskCallback(policy));
 		return { runtime };
 	} catch (initError) {
 		const message = initError instanceof Error ? initError.message : String(initError);
