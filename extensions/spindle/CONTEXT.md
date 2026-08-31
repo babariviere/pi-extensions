@@ -188,13 +188,13 @@ fd -e ts . extensions/spindle -x perl -pi -e 's{(from\s+")(\.\.?/[^"]*)\.js(")}{
 | *(whole tree)* | Relative import specifiers rewritten `.js` → `.ts` |
 | `index.ts` | **Rewritten.** Dropped the actor host-event observers, upstream's slash command, prewalk handoff `message_end` boundary, compaction hook, ESC halt-the-world gate, `resources_discover` bundled-skills contribution, and all `publishHostLifecycle` / `dispatchHostEvent` / `noteMainActivity` wiring. Kept code-preview settings, the capture install, tool ownership/lifecycle, the `tool_result` + `context` skill-dir expansion, the `before_agent_start` guidance (rewritten for the surviving namespaces), and `session_start` / `session_shutdown`. Added the throttled `cleanupOldRuns()` sweep inherited from the deleted `extensions/subagents/index.ts`. |
 | `spindle-state.ts` | **Rewritten.** Now holds only config, `ActionRegistry`, the four providers, `SpindleExecutionService`, `SpindleActivityStore`, the subagent run registry, and the parent `SessionRef`. |
-| `execution-service.ts` | Trimmed: no Node-process runtime, no schema-enforce branches, no `agents.handoff` deferral, no `authorizer` plumbing. Upstream's `$models` case dropped. **All `spindle.$*` host-call cases live in the `host-calls.ts` table**, not here: the service builds one `HostCallContext` per execution and dispatches through `hostCallTable`. The six discovery entries (`spindle.$providers` / `$catalog` / `$list` / `$search` / `$describe` / `$call`) are spindle-local, not upstream, and back the guest `tools` namespace (see `runtime/guest-host-refs.test.ts` for the contract). `spindle.$timer` is satisfied inside `runtime/quickjs-runtime.ts` and never reaches this switch. `spindle.$progress` currently has no guest producer (host-side `context.update` drives progress instead) but is kept callable. `guardAgentCall` now guards `agents.run` / `agents.runAll`. The type-check failure path reports the first errors verbatim (activity + trace message), and the emitted source map is forwarded to the runtime so guest stack positions map back to the program. Added a local `UsageWithReasoning` type because the installed `@earendil-works/pi-ai` `Usage` has no `reasoning` field. |
+| `execution-service.ts` | Trimmed: no Node-process runtime, no schema-enforce branches, no `agents.handoff` deferral, no `authorizer` plumbing. Upstream's `$models` case dropped. **All `spindle.$*` host-call cases live in the `host-calls.ts` table**, not here: the service builds one `HostCallContext` per execution and dispatches through `hostCallTable`. The six discovery entries (`spindle.$providers` / `$catalog` / `$list` / `$search` / `$describe` / `$call`) are spindle-local, not upstream, and back the guest `tools` namespace (see `runtime/guest-host-refs.test.ts` for the contract). `spindle.$timer` is satisfied inside `runtime/quickjs-runtime.ts` and never reaches this switch. `spindle.$progress` currently has no guest producer (host-side `context.update` drives progress instead) but is kept callable. `guardAgentCall` guards the launching refs only (`isAgentBudgetRef`: `agents.run` / `agents.runAll` / `agents.start`; waiting, listing and cancelling are free). The orchestration deadline is `max(executor.timeoutMs, agents.timeoutMs) + BLOCKING_HOST_CALL_SLACK_MS`, and a blocking agent ref extends it by the same slack, so an agent call always reports its own outcome instead of the sandbox killing the program that waits for it. The type-check failure path reports the first errors verbatim (activity + trace message), and the emitted source map is forwarded to the runtime so guest stack positions map back to the program. Added a local `UsageWithReasoning` type because the installed `@earendil-works/pi-ai` `Usage` has no `reasoning` field. |
 | `spindle-exec-tool.ts` | Tool renamed to `spindle_exec`; `label` is `Spindle`. `description`, `promptSnippet` and the `code` parameter description rewritten for the surviving namespaces. `tokenBudget` parameter and the prewalk handoff block removed; `agentBudget` kept (maps to `maxAgentCalls`). `renderCall` / `renderResult` bodies are otherwise unchanged, except type-check failures: `details.typeErrors` (persisted via `audit/details.ts`) renders as one red `Line L:C: message` row per error with an expand hint, so the TUI shows why the program never ran instead of a bare failure. Exported factory is `createSpindleExecTool`. |
-| `config.ts` | Trimmed: removed `mesh`, `memory`, `schema`, `compaction`, `retention`, `mcp` (upstream's own MCP client block) and `prewalk`. `executor.runtime` narrowed to the literal `"quickjs"`. `agents` repurposed to `{ maxPerExecution, timeoutMs, defaultModel?, defaultThinking? }`. `capture.keepVisible` default is `["spindle_exec"]`. **Config file renamed to `spindle.json`** (`<agentDir>/spindle.json`, `<cwd>/.pi/spindle.json`) so spindle never reads or writes pi-fabric's user config; the env override is `PI_SPINDLE_FULL_CODE_MODE`. Upstream's compaction-engine env side effect is gone. |
+| `config.ts` | Trimmed: removed `mesh`, `memory`, `schema`, `compaction`, `retention`, `mcp` (upstream's own MCP client block) and `prewalk`. `executor.runtime` narrowed to the literal `"quickjs"`. `agents` repurposed to `{ maxPerExecution, timeoutMs, waitMs, defaultModel?, defaultThinking? }` (`timeoutMs` caps a child's lifetime, `waitMs` caps how long a caller blocks before the run detaches). `capture.keepVisible` default is `["spindle_exec"]`. **Config file renamed to `spindle.json`** (`<agentDir>/spindle.json`, `<cwd>/.pi/spindle.json`) so spindle never reads or writes pi-fabric's user config; the env override is `PI_SPINDLE_FULL_CODE_MODE`. Upstream's compaction-engine env side effect is gone. |
 | `config-migrations.ts` | Untouched. Its legacy `subagents` → `agents` migration is inert for a fresh `spindle.json`; it still provides the `configVersion` guard. |
-| `runtime/quickjs-runtime.ts` | `GUEST_SETUP` trimmed: removed `globalThis.{mesh,memory,state,schema,compact,council,rlm,agent,budget}`, `__createActor`, `__handoff`, `__handoffFacts`/`__successfulCalls`, `__workflowAgent`, `__budgetedRun`, `__recordAgentUsage`, `__workflowBudgetTotal`/`__workflowSpentTokens`, `workflow.agent`, `workflow.budget`. **A local `tools` global was added back** (discovery + generic dispatch, upstream's `__toolsBase` shape is gone; core-tool names raise an actionable error pointing at `pi.<name>`). `globalThis.agents` reduced to `{ list, run, runAll }`. `globalThis.mcp` retargeted at `mcp.$list` / `$search` / `$describe` / `$call`, keeping the nested `mcp.<server>.<tool>` Proxy sugar. `SpindleSandboxOptions.tokenBudget` and the token-budget guest global removed. Setup eval filename is `spindle-setup.js`. Local additions beyond the trim: the frozen `process` shim (injected via `options.process`), `pi.bash` extras (`cwd` / `env` / `stdin`, alias-normalized in `__piArgAliases`), `spindle.$timer` host-call short-circuit, and source-mapped error reporting: the transpiled program carries a source map (`options.sourceMap` or the self-transpiled one) and guest stack positions are rewritten to `program.ts:line:column` via `runtime/source-map.ts`; dumped guest errors render as `Name: message` + frames instead of a JSON blob. |
-| `runtime/guest-types.ts` | Trimmed to match `GUEST_SETUP` exactly. Removed every interface for dropped subsystems. Upstream's agents API interface replaced with spindle's three-method contract plus `SpindleAgentDefinition` / `SpindleAgentRequest` / `SpindleAgentResult`. Upstream's MCP API interface replaced with the bridge surface plus the Proxy sugar index signature. `FULL_CODE_GLOBAL_DECLARATIONS` gating for `pi` / `extensions` kept verbatim. Local additions beyond the trim: the `tools` (`SpindleToolsApi`) declaration, the `process` shim declaration, `SpindleBashOptions` (`cwd` / `env` / `stdin` + `workdir` aliases) on `pi.bash`, and `type-checker.ts` importing these declarations in its own tests. |
-| `runtime/orchestration.ts` | `BLOCKING_ORCHESTRATION_REFS` and the static-detection regex reduced to `agents.run` / `agents.runAll`. |
+| `runtime/quickjs-runtime.ts` | `GUEST_SETUP` trimmed: removed `globalThis.{mesh,memory,state,schema,compact,council,rlm,agent,budget}`, `__createActor`, `__handoff`, `__handoffFacts`/`__successfulCalls`, `__workflowAgent`, `__budgetedRun`, `__recordAgentUsage`, `__workflowBudgetTotal`/`__workflowSpentTokens`, `workflow.agent`, `workflow.budget`. **A local `tools` global was added back** (discovery + generic dispatch, upstream's `__toolsBase` shape is gone; core-tool names raise an actionable error pointing at `pi.<name>`). `globalThis.agents` is `{ list, run, runAll, start, wait, status, cancel }` (string sugar: `agents.wait('runId')`, `agents.cancel('runId')`). `globalThis.mcp` retargeted at `mcp.$list` / `$search` / `$describe` / `$call`, keeping the nested `mcp.<server>.<tool>` Proxy sugar. `SpindleSandboxOptions.tokenBudget` and the token-budget guest global removed. Setup eval filename is `spindle-setup.js`. Local additions beyond the trim: the frozen `process` shim (injected via `options.process`), `pi.bash` extras (`cwd` / `env` / `stdin`, alias-normalized in `__piArgAliases`), `spindle.$timer` host-call short-circuit, and source-mapped error reporting: the transpiled program carries a source map (`options.sourceMap` or the self-transpiled one) and guest stack positions are rewritten to `program.ts:line:column` via `runtime/source-map.ts`; dumped guest errors render as `Name: message` + frames instead of a JSON blob. |
+| `runtime/guest-types.ts` | Trimmed to match `GUEST_SETUP` exactly. Removed every interface for dropped subsystems. Upstream's agents API interface replaced with spindle's run-book contract (`list` / `run` / `runAll` / `start` / `wait` / `status` / `cancel`) plus `SpindleAgentDefinition` / `SpindleAgentRequest` / `SpindleAgentResult` / `SpindleAgentHandle` / `SpindleAgentWait` / `SpindleAgentStatus`. Upstream's MCP API interface replaced with the bridge surface plus the Proxy sugar index signature. `FULL_CODE_GLOBAL_DECLARATIONS` gating for `pi` / `extensions` kept verbatim. Local additions beyond the trim: the `tools` (`SpindleToolsApi`) declaration, the `process` shim declaration, `SpindleBashOptions` (`cwd` / `env` / `stdin` + `workdir` aliases) on `pi.bash`, and `type-checker.ts` importing these declarations in its own tests. |
+| `runtime/orchestration.ts` | `BLOCKING_ORCHESTRATION_REFS` and the static-detection regex cover `agents.run` / `agents.runAll` / `agents.wait`; `AGENT_BUDGET_REFS` (`isAgentBudgetRef`) is the separate set that consumes the per-execution agent budget. `requestedBlockingTimeoutMs` reads `max(waitMs, timeoutMs)` for those refs. |
 | `core/tool-ownership.ts` | `SPINDLE_TOOL_NAME` is `"spindle_exec"`. Removed upstream's top-level tool authorizer and `#authorizeTopLevel` (schema-enforce-only), so `SpindleToolLifecycle` takes just `ownsSpindleTool` and `toolCall` is synchronous. |
 | `core/action-registry.ts`, `core/skill-prompt.ts`, `core/skill-references.ts`, `audit/details.ts`, `providers/pi-tools-provider.ts`, `ui/transcript-parser.ts` | Tool name is `spindle_exec` in comments and strings. In `ui/transcript-parser.ts` this is functional: it matches the running outer tool call by name. |
 | `protocol.ts` | Removed `SpindleInvocationContext.deferHandoff` (handoff is gone). |
@@ -238,7 +238,8 @@ risk/approval hunks by hand.
 | File | Purpose |
 |---|---|
 | `providers/mcp-bridge-provider.ts` | `mcp.*` → the `pi-mcp-adapter` `mcp` gateway tool. **Upstream has a file with the same provider name (`mcp`) that is deliberately not vendored.** |
-| `providers/agents-provider.ts` | `agents.*` → the absorbed subagents code. Its `#run` reduces to a pipeline (`#resolveRequests` → start monitor → invoke the run launcher → format results). **Upstream also ships `src/providers/agents-provider.ts`, fronting its own RLM/handoff agent runtime; that file is NOT vendored, and this file is unrelated to it.** |
+| `providers/agents-provider.ts` | `agents.*` → the absorbed subagents code. `#launch` is the pipeline (`#resolveRequests` → start monitor → own `AbortController` → invoke the run launcher → register in the run book); every action then either waits on the book or queries it. **Upstream also ships `src/providers/agents-provider.ts`, fronting its own RLM/handoff agent runtime; that file is NOT vendored, and this file is unrelated to it.** |
+| `providers/agent-run-book.ts` | New. The live book of batches: bounded waits, detachment, the completion sink, and cancellation (see "Run lifetime and cancellation"). |
 | `providers/agent-run-monitor.ts` | The widget-facing projection: `SpindleAgentRunRegistry` (the widget's data source) and `RunProgressMonitor`, which turns backend status updates into registry rows + the one-line ticker behind a `start`/`onStatus`/`stop` interface. |
 | `ui/transcript-types.ts` | `SpindleLogLine`, copied from upstream `src/agents/types.ts`, so the transcript parser does not import a dropped subsystem. |
 | `agents/` | The absorbed `extensions/subagents` code (see below). |
@@ -415,7 +416,7 @@ Moved verbatim (no import edits needed — all relative imports were siblings):
 below.)
 
 Not moved: `index.ts` and `tool.ts` (they defined the standalone extension and
-tool). `SessionRef`, `DEFAULT_RUN_TIMEOUT_MS` and the `buildRunRequests`
+tool). `SessionRef` and the `buildRunRequests`
 orchestration were salvaged into `providers/agents-provider.ts`; the ticker and
 `PROGRESS_TICK_MS` into `RunProgressMonitor` (`providers/agent-run-monitor.ts`);
 the throttled `cleanupOldRuns()` sweep into `index.ts`.
@@ -511,6 +512,45 @@ assistant message, not a tool, so no result-channel tool needs a carve-out.
 Scope: the allowlist gates `pi.*` and `extensions.*` only. `mcp.*`, `agents.*`
 and `workflow.*` are not tools in that sense and stay available.
 
+### Run lifetime and cancellation
+
+A subagent run used to be tied to the `spindle_exec` program that started it,
+with a single 30-minute deadline on both sides. Two failure modes came out of
+that: a long run was killed as `Execution timed out` with its result discarded,
+and a cancelled parent left its children running. Three pieces fix it.
+
+**Bounded waits (`providers/agent-run-book.ts`).** Every launch is registered in
+`AgentRunBook`, keyed by the batch `runId`. `agents.run` / `agents.runAll` /
+`agents.wait` block for `waitMs` only; an expired window is a normal outcome that
+returns `state: "running"` plus the `runId`, and marks the batch **detached**.
+The deadlines are now independent: `waitMs` bounds the caller, `timeoutMs` bounds
+the child, and `execution-service.ts` keeps the sandbox deadline one
+`BLOCKING_HOST_CALL_SLACK_MS` past every agent deadline it can wait on
+(`executor.timeoutMs`, `agents.timeoutMs`, `agents.waitMs`, and any explicitly
+requested `waitMs`/`timeoutMs`), so the inner call always reports first.
+
+**Unclaimed results are announced.** A batch that settles with nobody attached
+(after `ANNOUNCE_DELAY_MS`, so a waiter mid-race still claims it) goes to the
+completion sink. `spindle-state.ts` binds that sink to
+`pi.sendMessage({ customType: "spindle.agent_result" }, { deliverAs: "followUp",
+triggerTurn: true })`, so a background run wakes the parent with its result
+instead of requiring a poll. A cancelled batch is never announced.
+
+**Cancellation reaches the children.** Each batch owns an `AbortController`. An
+attached launch links the invocation signal into it (cancelling the turn kills
+the children); the link is dropped on detach so the end of a turn does not kill a
+background run. `SpindleState.shutdown()` resets the book, cancelling everything
+still live. The abort then has to actually land:
+
+- headless (`agents/headless.ts` + `agents/process-tree.ts`): children are
+  spawned `detached: true` and torn down group-wide, SIGTERM (so the child can
+  flush its transcript) then SIGKILL after `DEFAULT_KILL_GRACE_MS`. Signalling
+  only the direct `pi` process left its own bash/test/migration subprocesses
+  running against the working copy.
+- herdr (`agents/herdr-backend.ts`): aborting used to tear down only the local
+  waits, leaving the panes alive. The batch now closes its tab on abort (and in a
+  `finally`), which removes every pane and the `pi` processes inside them.
+
 ### subagents domain vocabulary
 
 (Merged from the deleted `extensions/subagents/CONTEXT.md`. Keep names in code
@@ -534,7 +574,14 @@ and docs aligned with these.)
   leak as bare optionals into the shared type; `run.ts`'s `baseResult` builds the
   shared fields both adapters populate.
 - **run context** (`RunContext`): the ambient inputs a backend needs for a batch
-  (session id/file, runId, cwd, timeout, abort signal, status callback).
+  (session id/file, runId, cwd, timeout, abort signal, status callback). The
+  signal is the *batch's* own `AbortController`, not the invocation signal, so a
+  batch can outlive the program that launched it (see "Run lifetime and
+  cancellation").
+- **wait window** (`waitMs`): how long a caller blocks on a batch. Distinct from
+  the batch's `timeoutMs`, which is how long its children may live.
+- **detached batch**: a live batch nobody is blocked on. Its result is announced
+  through the completion sink instead of being returned to a caller.
 - **output resolution**: the rule that decides a run's final output text and
   whether it succeeded, from the child session transcript (the agent's last
   assistant message), then a backend-specific fallback source. The parent

@@ -67,19 +67,50 @@ export async function runInHerdr(reqs: RunRequest[], ctx: RunContext): Promise<R
 		return reqs.map((req) => failResult(req, "could not create the herdr 'subagents' tab"));
 	}
 
-	// Build an evenly-sized grid so panes get usable rectangles instead of thin
-	// stacked strips. Cells are filled column-major (left-to-right, top-to-bottom).
-	await buildGrid(prepared, tab.rootPaneId, ctx);
+	// Cancelling the parent has to reach the children: closing the tab removes
+	// every pane and kills the pi processes inside them. Armed before the grid is
+	// built, because launching a pane can take tens of seconds (`agent start`
+	// waits for a ready shell) and an abort in that window must not be lost.
+	let closed = false;
+	const spawnedRuns: SpawnedRun[] = [];
+	const closeTab = async (): Promise<void> => {
+		if (closed) return;
+		closed = true;
+		await herdr.closeTab(tab.tabId);
+	};
+	const teardown = async (): Promise<void> => {
+		// Scrollback is the fallback output of a run with no transcript, and it dies
+		// with the pane, so capture it before the tab goes away.
+		await Promise.all(
+			spawnedRuns.map(async (run) => {
+				if (!run.paneId || run.scrollback !== undefined) return;
+				run.scrollback = await herdr.readPane(run.paneId);
+			}),
+		);
+		await closeTab();
+	};
+	const onAbort = (): void => {
+		void teardown().catch(() => {});
+	};
+	ctx.signal?.addEventListener("abort", onAbort, { once: true });
 
-	// Launch pi in every pane now that the geometry is settled.
-	const spawned = await Promise.all(prepared.map((p) => launchRun(p, ctx)));
+	try {
+		// Build an evenly-sized grid so panes get usable rectangles instead of thin
+		// stacked strips. Cells are filled column-major (left-to-right, top-to-bottom).
+		await buildGrid(prepared, tab.rootPaneId, ctx);
 
-	const results = await Promise.all(spawned.map((s) => settleRun(s, ctx)));
+		// Launch pi in every pane now that the geometry is settled.
+		const spawned = await Promise.all(prepared.map((p) => launchRun(p, ctx)));
+		spawnedRuns.push(...spawned);
+		// An already-aborted signal never fires the listener.
+		if (ctx.signal?.aborted) await teardown();
 
-	// All runs settled and their output has been read: tear down the tab.
-	await herdr.closeTab(tab.tabId);
-
-	return results;
+		return await Promise.all(spawned.map((s) => settleRun(s, ctx)));
+	} finally {
+		// All runs settled and their output has been read: tear down the tab.
+		ctx.signal?.removeEventListener("abort", onAbort);
+		await closeTab();
+	}
 }
 
 /**
@@ -170,6 +201,12 @@ interface SpawnedRun {
 	sessionPath: string;
 	paneId?: string;
 	error?: string;
+	/**
+	 * Pane scrollback captured before an aborted batch's tab was closed. It is
+	 * the fallback output source for a run whose transcript never landed, and it
+	 * has to be read while the pane still exists.
+	 */
+	scrollback?: string;
 }
 
 /** Write the per-run files and args; no herdr calls yet. */
@@ -273,7 +310,7 @@ async function settleRun(s: SpawnedRun, ctx: RunContext): Promise<RunResult> {
 	// (`stable` = transcript settled; `finished` = went idle). A `gone`/`timeout`
 	// outcome stays failed even if the pane-scrollback fallback yielded text.
 	const resolved = await resolveRunOutput(s.outputPath, s.sessionPath, {
-		fallback: () => (paneId ? herdr.readPane(paneId) : undefined),
+		fallback: () => s.scrollback ?? (paneId ? herdr.readPane(paneId) : undefined),
 		finishedCleanly: outcome === "stable" || outcome === "finished",
 		placeholder: "(no output produced before the pane finished or was terminated)",
 	});

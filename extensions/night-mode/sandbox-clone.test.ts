@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, test } from "node:test";
@@ -10,6 +10,7 @@ import {
 	detectSharedStateWarnings,
 	type PrepareCommand,
 	prepareCommands,
+	prepareConfigHome,
 	prepareWorkingCopy,
 	sandboxPathFor,
 	strategyOrder,
@@ -223,4 +224,38 @@ test("createRunSandbox really clones, and brings ignored files along", async () 
 	// The clone is independent: writing in it leaves the source untouched.
 	writeFileSync(join(result.path, "src", "a.txt"), "changed");
 	assert.equal(readFileSync(join(source, "src", "a.txt"), "utf-8"), "tracked");
+});
+
+test("prepareConfigHome copies the dirs that get written to and links the rest", () => {
+	const source = join(dir, "config");
+	mkdirSync(join(source, "jj"), { recursive: true });
+	mkdirSync(join(source, "gh"), { recursive: true });
+	writeFileSync(join(source, "jj", "config.toml"), "[user]\nname = 'dev'\n");
+	writeFileSync(join(source, "gh", "hosts.yml"), "github.com:\n");
+
+	const destination = join(dir, "sandbox.agents", "xdg");
+	const prepared = prepareConfigHome(destination, { source });
+
+	assert.equal(prepared.path, destination);
+	assert.deepEqual(prepared.problems, []);
+	// jj is a real copy: it is the directory jj writes its per-repo record into,
+	// and writing through a link would land outside the run's writable roots.
+	assert.equal(lstatSync(join(destination, "jj")).isSymbolicLink(), false);
+	assert.match(readFileSync(join(destination, "jj", "config.toml"), "utf-8"), /name = 'dev'/);
+	// Everything else keeps working, without becoming writable.
+	assert.equal(lstatSync(join(destination, "gh")).isSymbolicLink(), true);
+	assert.match(readFileSync(join(destination, "gh", "hosts.yml"), "utf-8"), /github.com/);
+
+	// The copy is independent of the real config home.
+	writeFileSync(join(destination, "jj", "config.toml"), "changed");
+	assert.match(readFileSync(join(source, "jj", "config.toml"), "utf-8"), /name = 'dev'/);
+});
+
+test("prepareConfigHome does nothing when the tool it exists for is unconfigured", () => {
+	const source = join(dir, "empty-config");
+	mkdirSync(source, { recursive: true });
+	const prepared = prepareConfigHome(join(dir, "xdg"), { source });
+	assert.equal(prepared.path, undefined);
+	assert.deepEqual(prepared.problems, []);
+	assert.equal(existsSync(join(dir, "xdg")), false);
 });

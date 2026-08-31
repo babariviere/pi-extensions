@@ -35,10 +35,19 @@ interface SpindleExecutorConfig {
 	resultFormat: SpindleResultFormat;
 }
 
-/** Bounds and defaults for `agents.run` / `agents.runAll`. */
+/** Bounds and defaults for the `agents.*` actions. */
 export interface SpindleAgentConfig {
 	maxPerExecution: number;
+	/** Hard cap on a child run's own lifetime; the child is killed past it. */
 	timeoutMs: number;
+	/**
+	 * How long `agents.run` / `agents.runAll` block before handing control back.
+	 * Past it the run keeps going in the background: the caller gets a `runId` to
+	 * poll with `agents.wait`, and an unclaimed result is injected into the parent
+	 * session as a follow-up message. Shorter than `timeoutMs` on purpose, so a
+	 * long run never holds a turn hostage.
+	 */
+	waitMs: number;
 	defaultModel?: string;
 	defaultThinking?: string;
 }
@@ -88,7 +97,11 @@ export interface SpindleConfig {
 }
 
 export const MIN_AGENT_TIMEOUT_MS = 1_000;
-const DEFAULT_AGENT_TIMEOUT_MS = 30 * 60_000;
+// A child may run long because waiting on it is bounded (`waitMs`) and
+// detachable, so the parent is never blocked for this whole window. It stays a
+// hard cap so a wedged run cannot live forever.
+const DEFAULT_AGENT_TIMEOUT_MS = 2 * 60 * 60_000;
+const DEFAULT_AGENT_WAIT_MS = 10 * 60_000;
 export const MAX_AGENT_TIMEOUT_MS = 24 * 3_600_000;
 export const QUICKJS_MAX_MEMORY_LIMIT_BYTES = 0xffff_ffff;
 export const MAX_EXECUTOR_MEMORY_LIMIT_BYTES = Math.max(
@@ -112,6 +125,7 @@ export const DEFAULT_SPINDLE_CONFIG: SpindleConfig = {
 	agents: {
 		maxPerExecution: 100,
 		timeoutMs: DEFAULT_AGENT_TIMEOUT_MS,
+		waitMs: DEFAULT_AGENT_WAIT_MS,
 	},
 	sandbox: {
 		mode: "off",
@@ -251,6 +265,12 @@ export const normalizeSpindleConfig = (input: Record<string, unknown>): SpindleC
 			timeoutMs: boundedInteger(
 				agents.timeoutMs,
 				DEFAULT_SPINDLE_CONFIG.agents.timeoutMs,
+				MIN_AGENT_TIMEOUT_MS,
+				MAX_AGENT_TIMEOUT_MS,
+			),
+			waitMs: boundedInteger(
+				agents.waitMs,
+				DEFAULT_SPINDLE_CONFIG.agents.waitMs,
 				MIN_AGENT_TIMEOUT_MS,
 				MAX_AGENT_TIMEOUT_MS,
 			),

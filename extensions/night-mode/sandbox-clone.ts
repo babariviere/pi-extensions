@@ -30,7 +30,19 @@
  */
 
 import { execFile } from "node:child_process";
-import { accessSync, constants, copyFileSync, existsSync, mkdirSync, rmSync, statSync } from "node:fs";
+import {
+	accessSync,
+	constants,
+	copyFileSync,
+	cpSync,
+	existsSync,
+	mkdirSync,
+	readdirSync,
+	rmSync,
+	statSync,
+	symlinkSync,
+} from "node:fs";
+import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { promisify } from "node:util";
 
@@ -314,4 +326,68 @@ export function copyLocalFiles(source: string, destination: string, files: strin
 			// Best effort: a missing local config is a degraded run, not a failed one.
 		}
 	}
+}
+
+/**
+ * A private XDG config home, because jj needs to write to its own config dir.
+ *
+ * jj keeps a per-repository "secure config" record under
+ * `$XDG_CONFIG_HOME/jj/repos/<hash>` and writes it on the first command in a
+ * working copy it has not seen before. The night clone is always such a copy,
+ * and the real config home sits outside the run's writable roots, so every jj
+ * command in a sandboxed run dies before doing anything:
+ *
+ *   Internal error: Failed to determine the secure config for a repo
+ *   1: Cannot access /Users/dev/.config/jj/repos/de2afa274e343353f30c
+ *   2: Operation not permitted (os error 1)
+ *
+ * The hash is per workspace, so this hits again for every subagent workspace.
+ * Redirecting `XDG_CONFIG_HOME` at a copy is the fix, and it belongs here rather
+ * than in a task string every child has to be handed.
+ *
+ * `jj` is a real copy (it is the directory that gets written to); every sibling
+ * entry is symlinked, so tools that read some other directory under
+ * `XDG_CONFIG_HOME` keep their configuration, while a write through one of those
+ * links still resolves outside the writable roots and is still refused.
+ */
+export const CONFIG_HOME_COPY_DIRS = ["jj"];
+
+export interface PreparedConfigHome {
+	/** The new config home, or undefined when there was nothing to prepare. */
+	path?: string;
+	/** Why it is not usable, if it is not. */
+	problems: string[];
+}
+
+/**
+ * Build `destination` as a config home mirroring `source` (the real
+ * `XDG_CONFIG_HOME`, or `~/.config`). Never throws: a run without it is the
+ * previous behaviour, a run with it can commit.
+ */
+export function prepareConfigHome(
+	destination: string,
+	opts: { source?: string; copyDirs?: string[] } = {},
+): PreparedConfigHome {
+	const source = opts.source ?? process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config");
+	const copyDirs = opts.copyDirs ?? CONFIG_HOME_COPY_DIRS;
+	// Nothing to work around when the tool that needs it is not configured here.
+	if (!copyDirs.some((dir) => existsSync(join(source, dir)))) return { problems: [] };
+
+	const problems: string[] = [];
+	try {
+		mkdirSync(destination, { recursive: true });
+		for (const entry of readdirSync(source)) {
+			const to = join(destination, entry);
+			if (existsSync(to)) continue;
+			try {
+				if (copyDirs.includes(entry)) cpSync(join(source, entry), to, { recursive: true, dereference: true });
+				else symlinkSync(join(source, entry), to);
+			} catch (error) {
+				problems.push(`config home: ${entry}: ${String(error).split("\n")[0]}`);
+			}
+		}
+	} catch (error) {
+		return { problems: [`config home: ${String(error).split("\n")[0]}`] };
+	}
+	return { path: destination, problems };
 }

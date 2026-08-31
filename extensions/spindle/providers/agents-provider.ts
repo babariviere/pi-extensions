@@ -8,10 +8,19 @@
  * directory is the absorbed `extensions/subagents` code and is unrelated to
  * upstream's dropped `src/agents/`.
  *
- * Surface (exactly three actions):
+ * Surface:
  *   agents.list()                    → discovered markdown agent definitions
- *   agents.run({ task, agent?, … })  → one run, blocks until it finishes
+ *   agents.run({ task, agent?, … })  → one run, blocks for the wait window
  *   agents.runAll({ tasks: [ … ] })  → batch of runs in parallel
+ *   agents.start({ task, … })        → launch without blocking, returns a runId
+ *   agents.wait({ runId, waitMs? })  → resume waiting on a launched batch
+ *   agents.status()                  → live and recent batches
+ *   agents.cancel({ runId? })        → tear a batch (or all of them) down
+ *
+ * Every launch is registered in the run book (`agent-run-book.ts`), which owns
+ * waiting, detachment and cancellation. Timing is per *batch*, not per task:
+ * `waitMs` bounds how long the caller blocks, `timeoutMs` how long the children
+ * may live (clamped to the configured cap).
  *
  * Progress does NOT go out as `progress.ts`'s ANSI block: each row is mirrored
  * into the spindle widget through the run registry, and `renderProgress` is
@@ -25,12 +34,14 @@ import { newRunId } from "../agents/paths.ts";
 import { buildRunRequests, type NormalizedItem } from "../agents/request.ts";
 import { allocateNightWorkspaces, releaseNightWorkspaces } from "../agents/night-workspace.ts";
 import type { RunContext, RunRequest, RunResult } from "../agents/run.ts";
+import { DEFAULT_SPINDLE_CONFIG, MAX_AGENT_TIMEOUT_MS, MIN_AGENT_TIMEOUT_MS } from "../config.ts";
 import type {
 	SpindleActionDescriptor,
 	SpindleInvocationContext,
 	SpindleProvider,
 	SpindleProviderListRequest,
 } from "../protocol.ts";
+import { AgentRunBook, type AgentWaitOutcome, type SpindleAgentResult } from "./agent-run-book.ts";
 import { RunProgressMonitor, SpindleAgentRunRegistry } from "./agent-run-monitor.ts";
 
 /** Parent session the child runs are attributed to. */
@@ -40,14 +51,19 @@ export interface SessionRef {
 	cwd: string;
 }
 
-export const DEFAULT_RUN_TIMEOUT_MS = 30 * 60 * 1000;
+/** What the caller is told when a wait window expires on a live batch. */
+const PENDING_NOTE =
+	"still running in the background: resume waiting with agents.wait({ runId }), or stop it with agents.cancel({ runId }). " +
+	"Its result is delivered to this session as a follow-up message if nobody claims it.";
 
 export interface SpindleAgentRuntimeConfig {
 	timeoutMs: number;
+	waitMs: number;
 	defaultModel?: string;
 	defaultThinking?: string;
 }
 
+/** One task in a batch. Timing lives on the batch, not here. */
 const taskItemSchema = {
 	type: "object",
 	properties: {
@@ -63,6 +79,41 @@ const taskItemSchema = {
 	additionalProperties: false,
 };
 
+const waitMsProperty = {
+	type: "number",
+	minimum: 0,
+	description:
+		"How long to block before returning a `running` handle. 0 returns immediately. Defaults to the configured wait window.",
+};
+
+const timeoutMsProperty = {
+	type: "number",
+	minimum: 0,
+	description:
+		"Hard cap on the children's own lifetime; past it they are killed. Clamped to (and defaulting to) the configured timeout.",
+};
+
+/** The single-run form: one task plus the batch's timing. */
+const runItemSchema = {
+	...taskItemSchema,
+	properties: { ...taskItemSchema.properties, waitMs: waitMsProperty, timeoutMs: timeoutMsProperty },
+};
+
+/**
+ * `start` accepts either the single-task form or `{ tasks }`, so neither `task`
+ * nor `tasks` can be required by the schema; `tasksOf` rejects a call that
+ * carries neither.
+ */
+const startSchema = {
+	type: "object",
+	properties: {
+		...taskItemSchema.properties,
+		tasks: { type: "array", items: taskItemSchema },
+		timeoutMs: timeoutMsProperty,
+	},
+	additionalProperties: false,
+};
+
 const descriptors: SpindleActionDescriptor[] = [
 	{
 		name: "list",
@@ -72,17 +123,54 @@ const descriptors: SpindleActionDescriptor[] = [
 	{
 		name: "run",
 		description:
-			"Run a subagent on a task and wait for its result. `agent` is optional: omit it to run a generic subagent that inherits the parent model, tools, skills and project context. Optional per-run model/thinking overrides, an `output` path for the submitted result, `reads` for read-first context files, and `night: true` to inherit the night-mode contract of an unattended overnight run.",
-		inputSchema: taskItemSchema,
+			"Run a subagent on a task and wait for its result. `agent` is optional: omit it to run a generic subagent that inherits the parent model, tools, skills and project context. Optional per-run model/thinking overrides, an `output` path for the submitted result, `reads` for read-first context files, and `night: true` to inherit the night-mode contract of an unattended overnight run. Blocks for at most `waitMs`; if the run is still going the result carries `state: 'running'` and a `runId` to resume with agents.wait.",
+		inputSchema: runItemSchema,
 	},
 	{
 		name: "runAll",
 		description:
-			"Run several subagents in parallel and wait for all of them to finish. Each item's `agent` is optional.",
+			"Run several subagents in parallel and wait for all of them. Each item's `agent` is optional. `waitMs` and `timeoutMs` apply to the whole batch. Same bounded wait as agents.run: results may come back with `state: 'running'` and a shared `runId`.",
 		inputSchema: {
 			type: "object",
-			properties: { tasks: { type: "array", items: taskItemSchema } },
+			properties: {
+				tasks: { type: "array", items: taskItemSchema },
+				waitMs: waitMsProperty,
+				timeoutMs: timeoutMsProperty,
+			},
 			required: ["tasks"],
+			additionalProperties: false,
+		},
+	},
+	{
+		name: "start",
+		description:
+			"Launch one subagent (or a batch, with `tasks`) without blocking. Returns a `runId` to poll with agents.wait. The run is not tied to this turn: it survives until it finishes, is cancelled, or the session ends.",
+		inputSchema: startSchema,
+	},
+	{
+		name: "wait",
+		description:
+			"Resume waiting on a launched batch for at most `waitMs`. Returns `{ state: 'running' }` when the window expires again (not an error), or the settled results.",
+		inputSchema: {
+			type: "object",
+			properties: { runId: { type: "string" }, waitMs: waitMsProperty },
+			required: ["runId"],
+			additionalProperties: false,
+		},
+	},
+	{
+		name: "status",
+		description:
+			"List live and recently finished subagent batches with their runId, state and elapsed time. Outputs are not included: read them with agents.wait({ runId }).",
+		inputSchema: { type: "object", properties: {}, additionalProperties: false },
+	},
+	{
+		name: "cancel",
+		description:
+			"Cancel a batch by `runId`, or every live batch when omitted. Headless children are torn down process-group wide; a herdr batch has its pane tab closed.",
+		inputSchema: {
+			type: "object",
+			properties: { runId: { type: "string" } },
 			additionalProperties: false,
 		},
 	},
@@ -93,6 +181,12 @@ const stringOrUndefined = (value: unknown): string | undefined =>
 
 const stringArrayOrUndefined = (value: unknown): string[] | undefined =>
 	Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : undefined;
+
+/** Clamp a caller-supplied duration, falling back when it is absent or unusable. */
+const boundedMs = (value: unknown, fallback: number, minimum: number, maximum: number): number => {
+	if (typeof value !== "number" || !Number.isFinite(value)) return Math.min(fallback, maximum);
+	return Math.max(minimum, Math.min(Math.floor(value), maximum));
+};
 
 const normalizedItem = (value: unknown): NormalizedItem => {
 	const record =
@@ -113,40 +207,59 @@ const normalizedItem = (value: unknown): NormalizedItem => {
 	};
 };
 
-/** Structured value returned to the sandbox for a single run. */
-export interface SpindleAgentResult {
-	agent: string;
-	ok: boolean;
-	output: string;
-	/** Where the result was persisted. Absent when nothing landed on disk. */
-	outputPath?: string;
-	exitCode?: number;
-	paneId?: string;
-	error?: string;
-}
-
-const agentResult = (result: RunResult): SpindleAgentResult => ({
+const agentResult = (result: RunResult, runId: string): SpindleAgentResult => ({
 	agent: result.agent,
 	ok: result.ok,
 	output: result.output,
+	state: result.ok ? "done" : "failed",
+	runId,
 	...(result.outputPath ? { outputPath: result.outputPath } : {}),
 	...(result.backend === "headless" && result.exitCode !== undefined ? { exitCode: result.exitCode } : {}),
 	...(result.backend === "herdr" && result.paneId ? { paneId: result.paneId } : {}),
 	...(result.error ? { error: result.error } : {}),
 });
 
+/** The placeholder result a still-running run reports. */
+const pendingResult = (agent: string, runId: string, elapsedMs: number): SpindleAgentResult => ({
+	agent,
+	ok: false,
+	state: "running",
+	runId,
+	output: `(${agent} has been running for ${Math.round(elapsedMs / 1000)}s and ${PENDING_NOTE})`,
+});
+
+/** A launched batch, before anyone waits on it. */
+interface LaunchedBatch {
+	runId: string;
+	agents: string[];
+}
+
+/**
+ * The tasks a call carries: `{ tasks }` when present, else the single-task form.
+ * Rejects a call with no usable task rather than launching a child with an empty
+ * prompt (the schema cannot require `task` for the actions that accept both
+ * forms).
+ */
+const tasksOf = (args: Record<string, unknown>, action: string): NormalizedItem[] => {
+	const raw = Array.isArray(args.tasks) ? args.tasks : [args];
+	const items = raw.map(normalizedItem).filter((item) => item.task.trim().length > 0);
+	if (items.length === 0) throw new Error(`${action} requires at least one non-empty task`);
+	return items;
+};
+
 export class SpindleAgentsProvider implements SpindleProvider {
 	readonly name = "agents";
 	readonly description =
 		"Custom markdown agents discovered on disk, run as child Pi sessions (headless, or live herdr panes)";
 
-	/** Adapter selection and herdr drift containment (see agents/backend.ts). */
-	readonly #launcher = new RunLauncher();
-
 	constructor(
 		readonly session: () => SessionRef,
 		readonly registry: SpindleAgentRunRegistry,
 		readonly runtimeConfig: () => SpindleAgentRuntimeConfig,
+		/** Live batches, so a run can outlive the program that started it. */
+		readonly runs: AgentRunBook = new AgentRunBook(),
+		/** Adapter selection and herdr drift containment (see agents/backend.ts). */
+		readonly launcher: RunLauncher = new RunLauncher(),
 	) {}
 
 	async list(
@@ -169,6 +282,8 @@ export class SpindleAgentsProvider implements SpindleProvider {
 		context: SpindleInvocationContext,
 	): Promise<unknown> {
 		const ref = this.session();
+		const runtime = this.runtimeConfig();
+		const waitMs = (): number => boundedMs(args.waitMs, runtime.waitMs, 0, MAX_AGENT_TIMEOUT_MS);
 		switch (actionName) {
 			case "list":
 				return discoverAgentsForCwd(ref.cwd).map((agent) => ({
@@ -177,19 +292,53 @@ export class SpindleAgentsProvider implements SpindleProvider {
 					...(agent.config.description ? { description: agent.config.description } : {}),
 				}));
 			case "run": {
-				const results = await this.#run([normalizedItem(args)], context);
-				const first = results[0];
+				const batch = await this.#launch(tasksOf(args, "agents.run"), args, context, { attach: true });
+				const outcome = await this.runs.wait(batch.runId, waitMs());
+				const first = this.#resultsOf(batch, outcome)[0];
 				if (!first) throw new Error("agents.run produced no result");
 				return first;
 			}
 			case "runAll": {
-				const tasks = Array.isArray(args.tasks) ? args.tasks : [];
-				if (tasks.length === 0) throw new Error("agents.runAll requires a non-empty tasks array");
-				return this.#run(tasks.map(normalizedItem), context);
+				if (!Array.isArray(args.tasks) || args.tasks.length === 0) {
+					throw new Error("agents.runAll requires a non-empty tasks array");
+				}
+				const batch = await this.#launch(tasksOf(args, "agents.runAll"), args, context, { attach: true });
+				const outcome = await this.runs.wait(batch.runId, waitMs());
+				return this.#resultsOf(batch, outcome);
 			}
+			case "start": {
+				// Detached on purpose: no link to this turn's abort signal, so the run
+				// survives the program that launched it.
+				const batch = await this.#launch(tasksOf(args, "agents.start"), args, context, { attach: false });
+				return { runId: batch.runId, agents: batch.agents, state: "running" as const };
+			}
+			case "wait": {
+				const runId = stringOrUndefined(args.runId);
+				if (!runId) throw new Error("agents.wait requires a runId");
+				const outcome = await this.runs.wait(runId, waitMs());
+				return {
+					runId,
+					state: outcome.state,
+					elapsedMs: outcome.snapshot.elapsedMs,
+					agents: outcome.snapshot.agents,
+					results:
+						outcome.results ??
+						outcome.snapshot.agents.map((agent) => pendingResult(agent, runId, outcome.snapshot.elapsedMs)),
+				};
+			}
+			case "status":
+				return this.runs.list();
+			case "cancel":
+				return { cancelled: this.runs.cancel(stringOrUndefined(args.runId)) };
 			default:
 				throw new Error(`Unknown agents action: agents.${actionName}`);
 		}
+	}
+
+	/** Settled results, or one pending placeholder per agent still running. */
+	#resultsOf(batch: LaunchedBatch, outcome: AgentWaitOutcome): SpindleAgentResult[] {
+		if (outcome.results) return outcome.results;
+		return batch.agents.map((agent) => pendingResult(agent, batch.runId, outcome.snapshot.elapsedMs));
 	}
 
 	/**
@@ -211,7 +360,22 @@ export class SpindleAgentsProvider implements SpindleProvider {
 		return built.requests;
 	}
 
-	async #run(items: NormalizedItem[], context: SpindleInvocationContext): Promise<SpindleAgentResult[]> {
+	/**
+	 * Spawn a batch and register it in the run book, without waiting for it.
+	 *
+	 * The batch owns its abort controller so it can outlive this invocation. An
+	 * attached launch routes the invocation's abort through `runs.cancel`, which
+	 * kills the children *and* marks the batch cancelled, so a caller that was
+	 * abandoned mid-wait cannot leave a settled result addressed to nobody. The
+	 * link is dropped once the batch detaches (its wait window expired), which is
+	 * what keeps a background run alive past the turn that started it.
+	 */
+	async #launch(
+		items: NormalizedItem[],
+		args: Record<string, unknown>,
+		context: SpindleInvocationContext,
+		options: { attach: boolean },
+	): Promise<LaunchedBatch> {
 		const ref = this.session();
 		const runtimeConfig = this.runtimeConfig();
 		const requests = this.#resolveRequests(items, ref, runtimeConfig);
@@ -225,7 +389,7 @@ export class SpindleAgentsProvider implements SpindleProvider {
 
 		// One selection per process (the herdr dialect probe runs at most once):
 		// a drifted herdr CLI degrades to headless instead of failing the batch.
-		const selection = await this.#launcher.selection();
+		const selection = await this.launcher.selection();
 		const note = selection.degradedReason
 			? `herdr CLI drifted (${selection.degradedReason}); running headless`
 			: undefined;
@@ -236,22 +400,55 @@ export class SpindleAgentsProvider implements SpindleProvider {
 		);
 		monitor.start();
 
+		const controller = new AbortController();
+		const parentSignal = options.attach ? context.signal : undefined;
+		const onParentAbort = (): void => {
+			this.runs.cancel(runId);
+		};
+		const unlink = (): void => parentSignal?.removeEventListener("abort", onParentAbort);
+
+		const configuredTimeoutMs = runtimeConfig.timeoutMs || DEFAULT_SPINDLE_CONFIG.agents.timeoutMs;
 		const runContext: RunContext = {
 			sessionId: ref.sessionId,
 			sessionFile: ref.sessionFile,
 			runId,
 			cwd: ref.cwd,
-			timeoutMs: runtimeConfig.timeoutMs || DEFAULT_RUN_TIMEOUT_MS,
-			...(context.signal ? { signal: context.signal } : {}),
+			// The configured timeout is a cap, not a default a caller can raise.
+			timeoutMs: boundedMs(args.timeoutMs, configuredTimeoutMs, MIN_AGENT_TIMEOUT_MS, configuredTimeoutMs),
+			signal: controller.signal,
 			onStatus: monitor.onStatus,
 		};
 
-		try {
-			const results = await this.#launcher.run(requests, runContext);
-			return results.map(agentResult);
-		} finally {
-			monitor.stop();
-			await releaseNightWorkspaces(workspaces);
-		}
+		const promise = (async (): Promise<SpindleAgentResult[]> => {
+			try {
+				const results = await this.launcher.run(requests, runContext);
+				return results.map((result) => agentResult(result, runId));
+			} finally {
+				unlink();
+				monitor.stop();
+				await releaseNightWorkspaces(workspaces);
+			}
+		})();
+
+		const agents = requests.map((request) => request.agent.config.name);
+		this.runs.register({
+			runId,
+			agents,
+			promise,
+			cancel: () => controller.abort(),
+			// Detaching drops the turn link and the ticker; the widget rows keep
+			// updating from the backend's status callback.
+			onDetach: () => {
+				unlink();
+				monitor.stop();
+			},
+		});
+
+		// The batch is registered before the link is armed, so the cancel path
+		// always finds it. No await separates the two.
+		if (parentSignal?.aborted) this.runs.cancel(runId);
+		else parentSignal?.addEventListener("abort", onParentAbort, { once: true });
+
+		return { runId, agents };
 	}
 }

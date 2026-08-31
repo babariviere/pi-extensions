@@ -17,6 +17,7 @@ import { redactRecordedArgs } from "./core/arg-redaction.ts";
 import { spindleProcessSnapshot } from "./env-snapshot.ts";
 import {
 	codeUsesOrchestration,
+	isAgentBudgetRef,
 	isBlockingHostTimeoutRef,
 	isBlockingOrchestrationRef,
 	requestedBlockingTimeoutMs,
@@ -151,7 +152,7 @@ export class SpindleExecutionService {
 			Math.min(options.maxAgentCalls ?? this.config.agents.maxPerExecution, this.config.agents.maxPerExecution),
 		);
 		const guardAgentCall = (ref: string): void => {
-			if (ref !== "agents.run" && ref !== "agents.runAll") return;
+			if (!isAgentBudgetRef(ref)) return;
 			agentCalls++;
 			if (agentCalls > maxAgentCalls) {
 				throw new Error(`Spindle agent budget exhausted (${maxAgentCalls} per execution)`);
@@ -230,7 +231,13 @@ export class SpindleExecutionService {
 		// Start known orchestration programs with the longer deadline. Calls
 		// reached through generic or computed refs are classified again at the
 		// host bridge and can extend the active sandbox deadline before they run.
-		const orchestrationTimeoutMs = Math.max(this.config.executor.timeoutMs, this.config.agents.timeoutMs);
+		// The sandbox deadline of an orchestration program sits one slack window past
+		// every agent deadline it can wait on (the child cap and the wait window), so
+		// the inner call always reports its own outcome before the executor kills the
+		// program waiting for it.
+		const orchestrationTimeoutMs =
+			Math.max(this.config.executor.timeoutMs, this.config.agents.timeoutMs, this.config.agents.waitMs) +
+			BLOCKING_HOST_CALL_SLACK_MS;
 		const effectiveTimeoutMs = codeUsesOrchestration(options.code)
 			? orchestrationTimeoutMs
 			: this.config.executor.timeoutMs;
@@ -241,7 +248,7 @@ export class SpindleExecutionService {
 					requested > 0
 						? Math.max(MIN_AGENT_TIMEOUT_MS, Math.min(Math.floor(requested), MAX_AGENT_TIMEOUT_MS))
 						: 0;
-				return Math.max(orchestrationTimeoutMs, requestedTimeoutMs);
+				return Math.max(orchestrationTimeoutMs, requestedTimeoutMs + BLOCKING_HOST_CALL_SLACK_MS);
 			}
 			// A blocking host call with an explicit timeout (pi.bash) owns its own
 			// deadline: extend the sandbox past it, plus slack, so the call reports

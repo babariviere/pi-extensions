@@ -247,6 +247,11 @@ globalThis.agents = Object.freeze({
   list: () => __call("agents.list", {}),
   run: (args) => __call("agents.run", args),
   runAll: (args) => __call("agents.runAll", Array.isArray(args) ? { tasks: args } : args),
+  start: (args) => __call("agents.start", Array.isArray(args) ? { tasks: args } : args),
+  wait: (args) => __call("agents.wait", typeof args === "string" ? { runId: args } : args),
+  status: () => __call("agents.status", {}),
+  cancel: (args) =>
+    __call("agents.cancel", typeof args === "string" ? { runId: args } : (args || {})),
 });
 // mcp.<server>.<tool>(args) is pure sugar for mcp.call({ server, tool, args });
 // every route lands on the pi-mcp-adapter gateway, which connects lazily.

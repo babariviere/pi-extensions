@@ -82,7 +82,7 @@ Spindle does not embed an MCP client; `mcp.*` forwards to the `mcp` gateway tool
 
 ## `agents` — custom markdown subagents
 
-`agents.list()` / `agents.run({agent, task})` / `agents.runAll({tasks})`. These run agent definitions discovered on disk (`~/.pi/agent/agents/**`, `<cwd>/.pi/agents/**`) as child Pi sessions. See `<skill-dir>/references/agents.md`.
+`agents.list()` / `agents.run({agent, task})` / `agents.runAll({tasks})` / `agents.start({agent, task})` / `agents.wait({runId})` / `agents.status()` / `agents.cancel({runId})`. These run agent definitions discovered on disk (`~/.pi/agent/agents/**`, `<cwd>/.pi/agents/**`) as child Pi sessions. `run`/`runAll` block for a bounded wait window: a result with `state: "running"` means the child is still working, keep its `runId` and resume with `agents.wait` (or let the finished result arrive as a follow-up message). See `<skill-dir>/references/agents.md`.
 
 ## `workflow` — fan-out, staged transforms, concurrency control
 

@@ -21,6 +21,7 @@ import { SpindleToolGate } from "./core/tool-allowlist.ts";
 import { ALLOWED_TOOLS_FLAG } from "./agents/constants.ts";
 import { SpindleExecutionService } from "./execution-service.ts";
 import { SpindleAgentRunRegistry } from "./providers/agent-run-monitor.ts";
+import { AgentRunBook, type AgentCompletionEvent } from "./providers/agent-run-book.ts";
 import { SpindleAgentsProvider, type SessionRef } from "./providers/agents-provider.ts";
 import { CapturedToolsProvider } from "./providers/captured-tools-provider.ts";
 import { McpBridgeProvider } from "./providers/mcp-bridge-provider.ts";
@@ -39,6 +40,9 @@ import {
 import { SPINDLE_PROVIDER_DISCOVER_EVENT, type SpindleProvider, type SpindleProviderDiscovery } from "./protocol.ts";
 
 const RESERVED_PROVIDER_NAMES = ["pi", "mcp", "agents", "extensions", "spindle"];
+
+/** How long session teardown waits for cancelled subagent children to die. */
+const AGENT_DRAIN_TIMEOUT_MS = 5_000;
 
 export class SpindleState {
 	#registry: ActionRegistry | undefined;
@@ -64,6 +68,13 @@ export class SpindleState {
 	readonly #externalProviders = new Map<string, SpindleProvider>();
 	readonly activity = new SpindleActivityStore();
 	readonly agentRuns = new SpindleAgentRunRegistry();
+	/**
+	 * Live subagent batches. Lives on the state (not the provider) because it
+	 * outlives a single `spindle_exec` program: a detached run is cancelled at
+	 * session teardown, and a result nobody claimed is injected back into this
+	 * session through the completion sink below.
+	 */
+	readonly agentRunBook = new AgentRunBook();
 	readonly #sessionRef: SessionRef = {
 		sessionId: undefined,
 		sessionFile: undefined,
@@ -118,6 +129,9 @@ export class SpindleState {
 		this.agentRuns.reset();
 		this.#cwd = context.cwd;
 		this.#gate = SpindleToolGate.fromArgv(ALLOWED_TOOLS_FLAG);
+		// A new session must not inherit the previous one's children.
+		this.agentRunBook.reset();
+		this.agentRunBook.setSink((event) => this.#announceAgentCompletion(event));
 		const projectTrusted = context.isProjectTrusted();
 		this.#config = loadSpindleConfig({
 			cwd: context.cwd,
@@ -161,9 +175,11 @@ export class SpindleState {
 				this.agentRuns,
 				() => ({
 					timeoutMs: this.config.agents.timeoutMs,
+					waitMs: this.config.agents.waitMs,
 					...(this.config.agents.defaultModel ? { defaultModel: this.config.agents.defaultModel } : {}),
 					...(this.config.agents.defaultThinking ? { defaultThinking: this.config.agents.defaultThinking } : {}),
 				}),
+				this.agentRunBook,
 			),
 		);
 		for (const provider of this.#externalProviders.values()) {
@@ -203,6 +219,11 @@ export class SpindleState {
 	}
 
 	async shutdown(): Promise<void> {
+		// Cancelling the parent cancels its children, and waits for them: the kill
+		// escalates SIGTERM -> SIGKILL on a timer, so exiting immediately would leave
+		// a child that ignores SIGTERM behind as an orphan.
+		this.agentRunBook.setSink(undefined);
+		await this.agentRunBook.drain(AGENT_DRAIN_TIMEOUT_MS);
 		await this.#registry?.close();
 		this.#registry = undefined;
 		this.#config = undefined;
@@ -322,6 +343,53 @@ export class SpindleState {
 	/** One-line sandbox status, for `/sandbox` output. */
 	sandboxStatus(): string {
 		return this.#sandbox ? this.#sandbox.describe() : "sandbox off (no enforcement)";
+	}
+
+	/**
+	 * Deliver a subagent result nobody was waiting for.
+	 *
+	 * A run whose wait window expired keeps going with no caller attached, so its
+	 * result would otherwise land nowhere. Injecting it as a follow-up message
+	 * wakes the parent with the outcome instead of requiring it to guess when to
+	 * poll. Best-effort: a host that refuses the injection must not break the run
+	 * book.
+	 */
+	#announceAgentCompletion(event: AgentCompletionEvent): void {
+		const elapsed = `${Math.round(event.elapsedMs / 1000)}s`;
+		const header = `Subagent batch ${event.runId} finished after ${elapsed} (${event.agents.join(", ")}).`;
+		const body = event.results
+			.map((result) => {
+				const status = result.ok ? "ok" : `failed${result.error ? `: ${result.error}` : ""}`;
+				const where = result.outputPath ? `\nresult file: ${result.outputPath}` : "";
+				return `## ${result.agent} (${status})${where}\n\n${result.output}`;
+			})
+			.join("\n\n");
+		try {
+			this.pi.sendMessage(
+				{
+					customType: "spindle.agent_result",
+					content: `${header}\n\n${body}`,
+					display: true,
+					// Outputs are already in `content`; the details carry the handles only,
+					// so an announcement is not persisted twice.
+					details: {
+						runId: event.runId,
+						agents: event.agents,
+						elapsedMs: event.elapsedMs,
+						runs: event.results.map((result) => ({
+							agent: result.agent,
+							ok: result.ok,
+							state: result.state,
+							...(result.outputPath ? { outputPath: result.outputPath } : {}),
+							...(result.error ? { error: result.error } : {}),
+						})),
+					},
+				},
+				{ deliverAs: "followUp", triggerTurn: true },
+			);
+		} catch {
+			// No session to deliver into (shutting down, or a host without injection).
+		}
 	}
 
 	async #closeInternal(): Promise<void> {

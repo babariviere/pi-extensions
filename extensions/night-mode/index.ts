@@ -70,7 +70,7 @@ import {
 import { clearActiveNightRun, type NightSandboxRequest, writeActiveNightRun } from "./night-run.ts";
 import { SANDBOX_REQUEST_EVENT, type SandboxRequestEvent } from "../spindle/sandbox/protocol.ts";
 import { agentWorkspacesRoot } from "./agent-workspace.ts";
-import { createRunSandbox, prepareWorkingCopy, sandboxPathFor } from "./sandbox-clone.ts";
+import { createRunSandbox, prepareConfigHome, prepareWorkingCopy, sandboxPathFor } from "./sandbox-clone.ts";
 import { WakeLock, type WakeLockPreference } from "./wake-lock.ts";
 import {
 	appendUnderHeading,
@@ -390,6 +390,10 @@ export default function (pi: ExtensionAPI): void {
 		// synchronously would freeze the UI for the whole copy.
 		const prepared = await prepareWorkspace(config, cwd, startedAt, ctx);
 		const workspace = prepared.path;
+		// Set on this process, so every shell and every subagent `pi` the run spawns
+		// inherits it: without it the first jj command in the clone fails with
+		// "Failed to determine the secure config for a repo", and no child can commit.
+		if (prepared.configHome) process.env.XDG_CONFIG_HOME = prepared.configHome;
 		const sandbox = composeSandboxRequest({
 			config,
 			workspacePath: workspace,
@@ -510,7 +514,7 @@ export default function (pi: ExtensionAPI): void {
 		cwd: string,
 		startedAt: Date,
 		ctx: ExtensionContext,
-	): Promise<{ path?: string; notes: string[]; problems: string[] }> {
+	): Promise<{ path?: string; configHome?: string; notes: string[]; problems: string[] }> {
 		if (!config.sandboxRoot) return { notes: [], problems: [] };
 		try {
 			const root = resolvePath(config.sandboxRoot, cwd);
@@ -537,10 +541,18 @@ export default function (pi: ExtensionAPI): void {
 			if (trusted.problems.length > 0) {
 				ctx.ui.notify(`night-mode: working copy caveats - ${trusted.problems.join("; ")}`, "warning");
 			}
+			// jj writes a per-repository record under its config dir, which is not
+			// writable during a run, so the run gets its own copy of it. Placed under
+			// the workspaces root, which is already in the sandbox's writable set.
+			const configHome = prepareConfigHome(join(agentWorkspacesRoot(created.path), "xdg"));
 			return {
 				path: created.path,
-				notes: trusted.ran.length ? [`working copy prepared (${trusted.ran.join(", ")})`] : [],
-				problems: trusted.problems,
+				...(configHome.path ? { configHome: configHome.path } : {}),
+				notes: [
+					...(trusted.ran.length ? [`working copy prepared (${trusted.ran.join(", ")})`] : []),
+					...(configHome.path ? [`config home ${configHome.path} (jj writes its per-repo record there)`] : []),
+				],
+				problems: [...trusted.problems, ...configHome.problems],
 			};
 		} catch (error) {
 			ctx.ui.notify(

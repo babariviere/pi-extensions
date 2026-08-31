@@ -5,6 +5,8 @@ import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 
 import { HOST_CALLS } from "../host-calls.ts";
+import { SpindleAgentRunRegistry } from "../providers/agent-run-monitor.ts";
+import { SpindleAgentsProvider } from "../providers/agents-provider.ts";
 import { QuickJsRuntime } from "./quickjs-runtime.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -44,6 +46,7 @@ const probeCode = [
 	"await mcp.list(); await mcp.search({ query: 'x' }); await mcp.describe({ tool: 'x' });",
 	"await mcp.call('s', 't', {}); await mcp.connect('s'); await mcp.srv.tool(); await mcp.srv();",
 	"await agents.list(); await agents.run({ agent: 'a', task: 't' }); await agents.runAll({ tasks: [] });",
+	"await agents.start({ task: 't' }); await agents.wait({ runId: 'r' }); await agents.status(); await agents.cancel();",
 	"await workflow.phase('p'); await workflow.item({ label: 'x' }); await workflow.event({ message: 'x' });",
 	"await workflow.configure({ name: 'x' });",
 	"await workflow.parallel([1], (x) => x);",
@@ -54,6 +57,18 @@ const probeCode = [
 
 test("the host-call table has exactly one entry per ref", () => {
 	assert.equal(serviceCaseRefs.size, HOST_CALLS.length);
+});
+
+test("the guest agents namespace matches the provider's descriptors", async () => {
+	const provider = new SpindleAgentsProvider(
+		() => ({ sessionId: undefined, sessionFile: undefined, cwd: process.cwd() }),
+		new SpindleAgentRunRegistry(),
+		() => ({ timeoutMs: 1_000, waitMs: 1_000 }),
+	);
+	const descriptors = await provider.list({}, {} as never);
+	const implemented = new Set(descriptors.map((descriptor) => `agents.${descriptor.name}`));
+	const guestAgentRefs = new Set([...guestStaticRefs].filter((ref) => ref.startsWith("agents.")));
+	assert.deepEqual([...guestAgentRefs].sort(), [...implemented].sort());
 });
 
 test("every static ref GUEST_SETUP can emit is exercised by the probe", async () => {
