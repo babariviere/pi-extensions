@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DEFAULT_NIGHT_CONFIG, type NightConfig } from "./config.ts";
 import {
+	carryOver,
 	classify,
 	counts,
 	fingerprint,
@@ -15,8 +16,11 @@ import {
 	parseLedgerItem,
 	readField,
 	readLedger,
+	runIdFor,
+	runTag,
 	todosDir,
 	unresolved,
+	verifyLedger,
 } from "./ledger.ts";
 import { appendUnderHeading, composeCarryOver, composeNudge } from "./prompt.ts";
 
@@ -91,6 +95,7 @@ describe("ledger tallies", () => {
 			skipped: 1,
 			pending: 1,
 			unverified: 1,
+			needsReview: 0,
 		});
 	});
 
@@ -103,6 +108,135 @@ describe("ledger tallies", () => {
 		assert.equal(fingerprint(items), fingerprint(same));
 		same[0].state = "done";
 		assert.notEqual(fingerprint(items), fingerprint(same));
+	});
+});
+
+describe("verifyLedger", () => {
+	const item = (evidence: string): LedgerItem[] => {
+		const parsed = parseLedgerItem("a1", todoFile({ id: "a1", title: "t", tags: ["night"], status: "done" }, evidence));
+		return parsed ? [parsed] : [];
+	};
+
+	it("keeps a claim that checks out", () => {
+		const [checked] = verifyLedger(item("Evidence: pr https://github.com/o/r/pull/3"));
+		assert.equal(checked.state, "done");
+		assert.equal(checked.verification?.ok, true);
+	});
+
+	// The 2026-08-31 failure: a deliverable deleted with its workspace, reported
+	// as done because an `Evidence:` line existed.
+	it("flips a claim that does not to needs-review, and keeps counting it as open", () => {
+		const items = verifyLedger(item("Evidence: file /nope/gone.md"));
+		assert.equal(items[0].state, "needs-review");
+		assert.match(items[0].verification?.detail ?? "", /does not exist/);
+		assert.deepEqual(
+			unresolved(items).map((entry) => entry.id),
+			["a1"],
+		);
+		assert.equal(counts(items).needsReview, 1);
+		assert.match(formatUnresolved(items), /evidence failed/);
+	});
+
+	it("leaves an item that is not claiming to be done alone", () => {
+		const open = parseLedgerItem("b2", todoFile({ id: "b2", title: "t", tags: ["night"], status: "open" }));
+		assert.ok(open);
+		assert.equal(verifyLedger([open])[0].verification, undefined);
+	});
+
+	it("checks a commit in the repo the evidence names", () => {
+		const calls: string[] = [];
+		const opts = {
+			resolveCommit: (revision: string, repo: string) => {
+				calls.push(`${revision}@${repo}`);
+				return revision === "abc1234";
+			},
+		};
+		assert.equal(verifyLedger(item("Evidence: commit abc1234 (repo: /src/x)"), opts)[0].state, "done");
+		assert.equal(verifyLedger(item("Evidence: commit dead999 (repo: /src/x)"), opts)[0].state, "needs-review");
+		assert.deepEqual(calls, ["abc1234@/src/x", "dead999@/src/x"]);
+	});
+});
+
+describe("run scope", () => {
+	it("derives a sortable run id from the run start", () => {
+		assert.equal(runIdFor(new Date(2026, 7, 31, 19, 7)), "2026-08-31-1907");
+		assert.equal(runTag("2026-08-31-1907"), "run:2026-08-31-1907");
+	});
+
+	it("reads the run tag back off a todo", () => {
+		const parsed = parseLedgerItem(
+			"a1",
+			todoFile({ id: "a1", title: "t", tags: ["night", "run:2026-08-31-1907"], status: "open" }),
+		);
+		assert.equal(parsed?.runId, "2026-08-31-1907");
+	});
+});
+
+describe("carryOver", () => {
+	const open = (id: string, title: string, runId?: string): LedgerItem => ({
+		id,
+		title,
+		status: "open",
+		state: "pending",
+		...(runId ? { runId } : {}),
+	});
+
+	it("carries only the run that is ending", () => {
+		const result = carryOver(
+			[
+				open("1", "Old CI triage", "2026-08-28-1659"),
+				open("2", "Auto-improvement pass", "2026-08-31-1907"),
+				{ id: "3", title: "Shipped", status: "done", state: "done", runId: "2026-08-31-1907", evidence: "x" },
+			],
+			{ currentRunId: "2026-08-31-1907" },
+		);
+		assert.deepEqual(
+			result.items.map((entry) => entry.id),
+			["2"],
+		);
+		assert.equal(result.fromRunId, "2026-08-31-1907");
+		assert.deepEqual(
+			result.stale.map((entry) => entry.id),
+			["1"],
+		);
+	});
+
+	// Three of nine carried-over items on 2026-08-31 were duplicates of each other.
+	it("dedupes by normalised title", () => {
+		const result = carryOver(
+			[
+				open("1", "Obsidian daily note pass", "r1"),
+				open("2", "obsidian  daily-note pass.", "r1"),
+				open("3", "Insights pass", "r1"),
+			],
+			{ currentRunId: "r1" },
+		);
+		assert.deepEqual(
+			result.items.map((entry) => entry.id),
+			["1", "3"],
+		);
+		assert.deepEqual(
+			result.duplicates.map((entry) => entry.id),
+			["2"],
+		);
+	});
+
+	it("falls back to the newest run when the current one has nothing open", () => {
+		const result = carryOver([open("1", "a", "r1"), open("2", "b", "r2")], { currentRunId: "r3" });
+		assert.equal(result.fromRunId, "r2");
+		assert.deepEqual(
+			result.items.map((entry) => entry.id),
+			["2"],
+		);
+	});
+
+	it("still works on a store written before run tags existed", () => {
+		const result = carryOver([open("1", "a"), open("2", "a"), open("3", "b")]);
+		assert.equal(result.fromRunId, undefined);
+		assert.deepEqual(
+			result.items.map((entry) => entry.id),
+			["1", "3"],
+		);
 	});
 });
 

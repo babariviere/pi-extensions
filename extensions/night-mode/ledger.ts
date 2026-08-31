@@ -17,9 +17,41 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { type NightConfig, resolvePath } from "./config.ts";
+import {
+	CLOSED_STATUSES,
+	type Evidence,
+	parseEvidence,
+	readField,
+	SKIPPED_STATUSES,
+	type Verification,
+	type VerifyOptions,
+	verifyEvidence,
+} from "./evidence.ts";
+
+export { readField } from "./evidence.ts";
 
 /** Tag that opts a todo into the night ledger. */
 export const NIGHT_TAG = "night";
+
+/** Tag prefix that binds a ledger item to one run: `run:2026-08-31-1907`. */
+export const RUN_TAG_PREFIX = "run:";
+
+/** The tag a run's items carry. */
+export function runTag(runId: string): string {
+	return `${RUN_TAG_PREFIX}${runId}`;
+}
+
+/**
+ * Run id for a night, derived from its start. Sortable as a string, which is
+ * what makes "the previous run" a `max` over the ids that are not this one.
+ */
+export function runIdFor(startedAt: Date): string {
+	const pad = (value: number) => String(value).padStart(2, "0");
+	return (
+		`${startedAt.getFullYear()}-${pad(startedAt.getMonth() + 1)}-${pad(startedAt.getDate())}` +
+		`-${pad(startedAt.getHours())}${pad(startedAt.getMinutes())}`
+	);
+}
 
 export type LedgerState =
 	/** Not started, or in flight. */
@@ -29,7 +61,9 @@ export type LedgerState =
 	/** Deliberately not done, with a reason. */
 	| "skipped"
 	/** Claims to be resolved but carries no evidence/reason: treated as pending. */
-	| "unverified";
+	| "unverified"
+	/** Closed with evidence that failed its check: a human has to look. */
+	| "needs-review";
 
 export interface LedgerItem {
 	id: string;
@@ -39,6 +73,12 @@ export interface LedgerItem {
 	state: LedgerState;
 	evidence?: string;
 	reason?: string;
+	/** Parsed form of `evidence`, when the item claims to be done. */
+	evidenceRecord?: Evidence;
+	/** Result of checking `evidenceRecord`, once the item has been verified. */
+	verification?: Verification;
+	/** Run the item belongs to, from its `run:<id>` tag. Absent on legacy items. */
+	runId?: string;
 }
 
 /** Same resolution as `todos.ts`, so both see one store. */
@@ -98,32 +138,26 @@ function splitTodo(content: string): { frontMatter: string; body: string } {
 	return { frontMatter: "", body: content };
 }
 
-/** First non-empty `Label: value` line in a body, case insensitive. */
-export function readField(body: string, label: string): string | undefined {
-	const pattern = new RegExp(`^\\s*(?:[-*]\\s*)?(?:\\*\\*)?${label}(?:\\*\\*)?\\s*:\\s*(.+)$`, "im");
-	const match = pattern.exec(body);
-	const value = match?.[1]?.trim();
-	return value ? value : undefined;
-}
-
-const CLOSED_STATUSES = ["closed", "done", "completed"];
-const SKIPPED_STATUSES = ["skipped", "blocked", "wontfix", "cancelled", "canceled"];
-
 /**
  * Where an item really stands. Closed needs `Evidence:`, skipped needs
  * `Reason:`; anything else that claims to be resolved is `unverified` and keeps
  * counting against the run.
  */
-export function classify(status: string, body: string): { state: LedgerState; evidence?: string; reason?: string } {
+export function classify(
+	status: string,
+	body: string,
+): { state: LedgerState; evidence?: string; reason?: string; evidenceRecord?: Evidence } {
 	const normalized = status.trim().toLowerCase();
-	const evidence = readField(body, "evidence");
+	const evidenceRecord = parseEvidence(body);
+	const evidence = evidenceRecord?.raw;
 	const reason = readField(body, "reason");
 
 	if (SKIPPED_STATUSES.includes(normalized)) {
 		return reason ? { state: "skipped", reason } : { state: "unverified" };
 	}
 	if (CLOSED_STATUSES.includes(normalized)) {
-		return evidence ? { state: "done", evidence } : { state: "unverified" };
+		if (!evidence || !evidenceRecord) return { state: "unverified" };
+		return { state: "done", evidence, evidenceRecord };
 	}
 	return { state: "pending" };
 }
@@ -141,7 +175,9 @@ export function parseLedgerItem(id: string, content: string): LedgerItem | undef
 	if (!tags.some((tag) => tag.toLowerCase() === NIGHT_TAG)) return undefined;
 
 	const status = typeof parsed.status === "string" && parsed.status ? parsed.status : "open";
-	const { state, evidence, reason } = classify(status, body);
+	const { state, evidence, reason, evidenceRecord } = classify(status, body);
+	const runTagValue = tags.find((tag) => tag.toLowerCase().startsWith(RUN_TAG_PREFIX));
+	const runId = runTagValue?.slice(RUN_TAG_PREFIX.length).trim();
 	return {
 		id: typeof parsed.id === "string" && parsed.id ? parsed.id : id,
 		title: typeof parsed.title === "string" ? parsed.title : "",
@@ -149,7 +185,29 @@ export function parseLedgerItem(id: string, content: string): LedgerItem | undef
 		state,
 		...(evidence ? { evidence } : {}),
 		...(reason ? { reason } : {}),
+		...(evidenceRecord ? { evidenceRecord } : {}),
+		...(runId ? { runId } : {}),
 	};
+}
+
+/**
+ * Check what a `done` item claims, and demote it when the claim does not hold.
+ *
+ * Nothing else in a night run distinguishes "the child wrote the file" from
+ * "the child said it wrote the file": the 2026-08-31 report cited a deliverable
+ * that had been deleted with its workspace, because the only check was that an
+ * `Evidence:` line existed. A failed check is not silently reopened either, it
+ * becomes `needs-review` so the failure is reported rather than re-attempted.
+ */
+export function verifyItem(item: LedgerItem, opts: VerifyOptions = {}): LedgerItem {
+	if (item.state !== "done" || !item.evidenceRecord) return item;
+	const verification = verifyEvidence(item.evidenceRecord, opts);
+	return { ...item, verification, ...(verification.ok ? {} : { state: "needs-review" as const }) };
+}
+
+/** `verifyItem` over a whole ledger. */
+export function verifyLedger(items: LedgerItem[], opts: VerifyOptions = {}): LedgerItem[] {
+	return items.map((item) => verifyItem(item, opts));
 }
 
 /** Every `night`-tagged todo in the store. Never throws. */
@@ -172,9 +230,71 @@ export function readLedger(dir: string): LedgerItem[] {
 	}
 }
 
-/** Items that still owe work: genuinely pending, or resolved without proof. */
+/** Items that still owe work: pending, resolved without proof, or proof that failed. */
 export function unresolved(items: LedgerItem[]): LedgerItem[] {
-	return items.filter((item) => item.state === "pending" || item.state === "unverified");
+	return items.filter(
+		(item) => item.state === "pending" || item.state === "unverified" || item.state === "needs-review",
+	);
+}
+
+/** Items whose evidence failed its check. */
+export function needsReview(items: LedgerItem[]): LedgerItem[] {
+	return items.filter((item) => item.state === "needs-review");
+}
+
+/**
+ * Titles compared for duplicate detection: case, punctuation and filler words
+ * differ between two nights writing down the same leftover, the work does not.
+ */
+export function normalizeTitle(title: string): string {
+	return title
+		.toLowerCase()
+		.replace(/[^a-z0-9]+/g, " ")
+		.trim();
+}
+
+export interface CarryOverResult {
+	/** What the next night should start with. */
+	items: LedgerItem[];
+	/** Run the carry-over was taken from, when the ledger is run-scoped. */
+	fromRunId?: string;
+	/** Items dropped as duplicates of one already in `items`. */
+	duplicates: LedgerItem[];
+	/** Unresolved items from older runs, deliberately not carried. */
+	stale: LedgerItem[];
+}
+
+/**
+ * What the next night inherits: the unresolved items of exactly one run.
+ *
+ * Without a run scope `readLedger` returns every `night` todo the store ever
+ * held (52 of them on 2026-08-31), so the carry-over block mixed nights and
+ * listed the same leftover twice under two ids. Scope first, then dedupe by
+ * normalised title, so "Obsidian daily note pass" cannot appear twice.
+ *
+ * `currentRunId` is excluded when given and the ledger has other runs: the
+ * caller is ending that run, and its own open items are the carry-over only
+ * when nothing older is in play. Items with no run tag are legacy; they are
+ * reported as `stale` rather than carried, so an old store cannot flood the
+ * next night.
+ */
+export function carryOver(items: LedgerItem[], opts: { currentRunId?: string } = {}): CarryOverResult {
+	const open = unresolved(items);
+	if (open.length === 0) return { items: [], duplicates: [], stale: [] };
+
+	const runIds = [...new Set(open.map((item) => item.runId).filter((id): id is string => Boolean(id)))].sort();
+	const fromRunId = opts.currentRunId && runIds.includes(opts.currentRunId) ? opts.currentRunId : runIds.at(-1);
+	const scoped = fromRunId ? open.filter((item) => item.runId === fromRunId) : open;
+	const stale = open.filter((item) => !scoped.includes(item));
+
+	const seen = new Map<string, LedgerItem>();
+	const duplicates: LedgerItem[] = [];
+	for (const item of scoped) {
+		const key = normalizeTitle(item.title) || item.id;
+		if (seen.has(key)) duplicates.push(item);
+		else seen.set(key, item);
+	}
+	return { items: [...seen.values()], ...(fromRunId ? { fromRunId } : {}), duplicates, stale };
 }
 
 /**
@@ -189,7 +309,12 @@ export function fingerprint(items: LedgerItem[]): string {
 export function formatUnresolved(items: LedgerItem[]): string {
 	return unresolved(items)
 		.map((item) => {
-			const note = item.state === "unverified" ? ` (marked '${item.status}' but has no Evidence:/Reason: line)` : "";
+			const note =
+				item.state === "unverified"
+					? ` (marked '${item.status}' but has no Evidence:/Reason: line)`
+					: item.state === "needs-review"
+						? ` (marked '${item.status}' but its evidence failed: ${item.verification?.detail ?? "unknown"})`
+						: "";
 			return `- ${item.id} ${item.title}${note}`;
 		})
 		.join("\n");
@@ -201,6 +326,7 @@ const STATE_MARKER: Record<LedgerState, string> = {
 	done: "[x]",
 	skipped: "[-]",
 	unverified: "[?]",
+	"needs-review": "[!]",
 };
 
 /** One `- [x] ab12 Title - evidence: ...` line. */
@@ -208,6 +334,7 @@ function formatItem(item: LedgerItem): string {
 	const marker = STATE_MARKER[item.state];
 	const head = `- ${marker} ${item.id} ${item.title}`;
 	if (item.state === "unverified") return `${head} - marked '${item.status}', no Evidence:/Reason:`;
+	if (item.state === "needs-review") return `${head} - evidence failed: ${item.verification?.detail ?? "unknown"}`;
 	if (item.state === "done" && item.evidence) return `${head} - evidence: ${item.evidence}`;
 	if (item.state === "skipped" && item.reason) return `${head} - reason: ${item.reason}`;
 	// A pending item's raw status carries the only extra signal there is
@@ -233,6 +360,7 @@ export interface LedgerCounts {
 	skipped: number;
 	pending: number;
 	unverified: number;
+	needsReview: number;
 }
 
 export function counts(items: LedgerItem[]): LedgerCounts {
@@ -243,5 +371,6 @@ export function counts(items: LedgerItem[]): LedgerCounts {
 		skipped: by("skipped"),
 		pending: by("pending"),
 		unverified: by("unverified"),
+		needsReview: by("needs-review"),
 	};
 }

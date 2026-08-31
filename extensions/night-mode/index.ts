@@ -42,14 +42,19 @@ import {
 	resolvePath,
 } from "./config.ts";
 import {
+	carryOver,
+	type CarryOverResult,
 	fingerprint,
 	formatLedger,
 	formatUnresolved,
-	type LedgerItem,
 	counts as ledgerCounts,
 	ledgerDir as resolveLedgerDir,
+	type LedgerItem,
+	needsReview,
 	readLedger,
+	runIdFor,
 	unresolved,
+	verifyLedger,
 } from "./ledger.ts";
 import {
 	computeResumeDelayMs,
@@ -167,6 +172,8 @@ export default function (pi: ExtensionAPI): void {
 				startedAt: Date;
 				/** Todo store backing the ledger, resolved once at start. */
 				ledgerDir: string;
+				/** Identity tonight's ledger items carry, so carry-over can be scoped. */
+				runId: string;
 				/** Per-run working copy, when one was cloned for tonight. */
 				workspacePath?: string;
 				/** Automated continuations sent so far. */
@@ -248,12 +255,12 @@ export default function (pi: ExtensionAPI): void {
 	 * Seed the (now empty) instructions file with what never got done, so the
 	 * next night starts on the leftovers instead of losing them at sunrise.
 	 */
-	function seedCarryOver(open: LedgerItem[]): void {
-		if (!run || open.length === 0 || !run.config.instructionsPath) return;
+	function seedCarryOver(carried: CarryOverResult): void {
+		if (!run || carried.items.length === 0 || !run.config.instructionsPath) return;
 		try {
 			const path = resolvePath(run.config.instructionsPath, process.cwd());
 			const existing = existsSync(path) ? readFileSync(path, "utf-8") : "";
-			const block = composeCarryOver(run.startedAt, formatUnresolved(open), run.reportPath);
+			const block = composeCarryOver(run.startedAt, formatUnresolved(carried.items), run.reportPath);
 			const separator = existing.trim() ? "\n\n" : "";
 			writeFileSync(path, `${existing.replace(/\s*$/, "")}${separator}${block}`, "utf-8");
 		} catch {
@@ -267,12 +274,21 @@ export default function (pi: ExtensionAPI): void {
 	 */
 	function endRun(reason: string): void {
 		if (!run) return;
-		const items = readLedger(run.ledgerDir);
+		const items = currentLedger();
 		const open = unresolved(items);
 		const tally = ledgerCounts(items);
 		noteTimeline(
-			`night-mode: run ended (${reason}) - ${tally.done} done, ${tally.skipped} skipped, ${open.length} open`,
+			`night-mode: run ended (${reason}) - ${tally.done} done, ${tally.skipped} skipped, ${open.length} open` +
+				(tally.needsReview ? `, ${tally.needsReview} with evidence that failed verification` : ""),
 		);
+		const failed = needsReview(items);
+		if (failed.length > 0) {
+			noteUnderHeading(
+				NEEDS_HUMAN_HEADING,
+				"Closed with evidence that does not check out, so the claim was not believed:\n" +
+					failed.map((item) => `- ${item.id} ${item.title}: ${item.verification?.detail ?? "unknown"}`).join("\n"),
+			);
+		}
 		if (open.length > 0) {
 			noteUnderHeading(
 				NEEDS_HUMAN_HEADING,
@@ -280,7 +296,14 @@ export default function (pi: ExtensionAPI): void {
 			);
 		}
 		consumeInstructions();
-		seedCarryOver(open);
+		const carried = carryOver(items, { currentRunId: run.runId });
+		if (carried.duplicates.length > 0 || carried.stale.length > 0) {
+			noteTimeline(
+				`night-mode: carry-over scoped to run ${carried.fromRunId ?? "(untagged)"} - ` +
+					`${carried.duplicates.length} duplicate(s) and ${carried.stale.length} item(s) from older runs dropped`,
+			);
+		}
+		seedCarryOver(carried);
 		// Hand the session's todo store back before dropping the handshake.
 		if (previousTodoPath === undefined) delete process.env.PI_TODO_PATH;
 		else process.env.PI_TODO_PATH = previousTodoPath;
@@ -292,14 +315,26 @@ export default function (pi: ExtensionAPI): void {
 		run = undefined;
 	}
 
+	/**
+	 * Tonight's ledger, with every `done` item's evidence checked.
+	 *
+	 * Read from disk on every call on purpose: subagents close their own items,
+	 * so a cached snapshot is how a run ends up reporting work that landed two
+	 * minutes ago as still open.
+	 */
+	function currentLedger(): LedgerItem[] {
+		if (!run) return [];
+		return verifyLedger(readLedger(run.ledgerDir), { cwd: run.workspacePath ?? process.cwd() });
+	}
+
 	/** One-line ledger tally for `/night status` and `/night report`. */
 	function ledgerSummary(): string {
 		if (!run) return "no run";
-		const tally = ledgerCounts(readLedger(run.ledgerDir));
+		const tally = ledgerCounts(currentLedger());
 		if (tally.total === 0) return "empty (no todo tagged 'night' yet)";
 		return (
 			`${tally.total} item(s): ${tally.done} done, ${tally.skipped} skipped, ` +
-			`${tally.pending} pending, ${tally.unverified} unverified` +
+			`${tally.pending} pending, ${tally.unverified} unverified, ${tally.needsReview} needs-review` +
 			` (continuations ${run.nudges}/${MAX_CONTINUATIONS})`
 		);
 	}
@@ -315,7 +350,7 @@ export default function (pi: ExtensionAPI): void {
 	function maybeContinue(): void {
 		if (!run || !enabled || !inWindow || paused) return;
 
-		const items = readLedger(run.ledgerDir);
+		const items = currentLedger();
 		const open = unresolved(items);
 		if (items.length > 0 && open.length === 0) {
 			endRun("every ledger item resolved");
@@ -432,6 +467,7 @@ export default function (pi: ExtensionAPI): void {
 			reportPath,
 			startedAt,
 			ledgerDir: ledgerPath,
+			runId: runIdFor(startedAt),
 			nudges: 0,
 			...(workspace ? { workspacePath: workspace } : {}),
 		};
@@ -966,7 +1002,7 @@ export default function (pi: ExtensionAPI): void {
 				// configured rather than derived from the run.
 				const cwd = process.cwd();
 				const dir = run?.ledgerDir ?? resolveLedgerDir(readNightConfig(cwd), cwd);
-				const items = readLedger(dir);
+				const items = verifyLedger(readLedger(dir), { cwd: run?.workspacePath ?? cwd });
 				const tally = ledgerCounts(items);
 				ctx.ui.notify(
 					[

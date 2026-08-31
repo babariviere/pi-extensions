@@ -347,10 +347,48 @@ cheapest way for an agent to end its night:
 | Todo status | Body | Counts as |
 |-------------|------|-----------|
 | `open`, `in-progress`, … | anything | open |
-| `done` / `closed` | has an `Evidence:` line | resolved |
+| `done` / `closed` | typed `Evidence:` line that checks out | resolved |
+| `done` / `closed` | typed evidence that fails its check | **open** (`needs-review`) |
 | `done` / `closed` | no evidence | **open** (`unverified`) |
 | `skipped` / `blocked` / … | has a `Reason:` line | resolved |
 | `skipped` / … | no reason | **open** (`unverified`) |
+
+### Evidence is typed, required, and checked
+
+An `Evidence:` line the model remembers to add is not a mechanism. Four nights in
+a row carried items that were finished and looked abandoned, purely because the
+line was missing, and one night put a file path into the report that had been
+deleted with the subagent's workspace. So closing a `night` todo now takes typed
+evidence, the todo tool **refuses the write** without it (`validateClosure` in
+`evidence.ts`, called from `todos.ts`), and the claim is checked before it is
+believed (`verifyEvidence`, called through `verifyLedger`):
+
+| Kind | Written as | Checked by |
+|------|------------|------------|
+| `file` | `Evidence: file /abs/path` | the path exists and is non-empty |
+| `commit` | `Evidence: commit <id> (repo: /abs/repo)` | `jj show` resolves it in that repo |
+| `pr` | `Evidence: pr https://…/pull/12` | well-formed pull request URL (never fetched) |
+| `url` | `Evidence: url https://…` | well-formed http(s) URL |
+| `none-with-reason` | `Evidence: none-with-reason <why>` | a real reason, not a placeholder |
+
+Nothing here touches the network: a night with no egress must still be able to
+close an item, and a change that only exists locally is still evidence.
+
+A claim that fails its check does not silently reopen. The item becomes
+`needs-review`, keeps counting against the run, and the failure detail is written
+into `## Needs you` and into the continuation, so the orchestrator sees *why* it
+was not believed instead of re-running work that may be done.
+
+Reading stays lenient. A todo written before the typed format still loads: its
+prose evidence is kept as `unstructured` and passed through unchecked rather than
+rewritten or reopened. Only new closures are held to the format.
+
+### Items belong to a run
+
+Every ledger item is tagged `run:<runId>` (`2026-08-31-1907`, derived from the run
+start) alongside `night`. Without it `readLedger` returns every `night` todo the
+store ever held (52 of them on 2026-08-31), so carry-over mixed nights and listed
+the same leftover twice under two ids.
 
 On `agent_settled`, if the ledger still has open items, night-mode sends an
 automated continuation listing exactly what is left. Two brakes stop it spinning:
@@ -370,6 +408,12 @@ shutdown), anything still open is:
 1. listed under `## Needs you` in the report,
 2. appended to the **instructions file** under `## Carried over from the night of
    <datetime>`, after tonight's instructions have been archived.
+
+`carryOver` in `ledger.ts` decides what "still open" means for step 2: the open
+items of **one** run (this one, or the newest one that has any), deduped by
+normalised title. Items from older runs are dropped rather than carried, and both
+counts go into the report timeline, so an old store cannot flood the next night
+and "Obsidian daily note pass" cannot appear twice.
 
 So unfinished work becomes the next night's top priority instead of evaporating
 at sunrise.

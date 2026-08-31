@@ -47,6 +47,8 @@ import path from "node:path";
 import fs from "node:fs/promises";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import crypto from "node:crypto";
+import { validateClosure } from "./night-mode/evidence.ts";
+import { NIGHT_TAG } from "./night-mode/ledger.ts";
 import { isNightRunParticipant, readActiveNightRun } from "./night-mode/night-run.ts";
 import {
 	Container,
@@ -156,6 +158,22 @@ function validateTodoId(id: string): { id: string } | { error: string } {
 
 function displayTodoId(id: string): string {
 	return formatTodoId(normalizeTodoId(id));
+}
+
+/**
+ * Why a night ledger item may not be written in this state, if it may not.
+ *
+ * Only `night`-tagged todos are held to this: a project todo stays a free-form
+ * note. The rule is enforced at the write rather than at the read, because the
+ * next night reads the store and cannot tell a finished item from an abandoned
+ * one without it. Four consecutive night reports carried items that were done
+ * and looked open, purely for a missing `Evidence:` line.
+ */
+function nightClosureError(todo: { tags?: string[]; status?: string; body?: string }): string | undefined {
+	const tags = todo.tags ?? [];
+	if (!tags.some((tag) => tag.toLowerCase() === NIGHT_TAG)) return undefined;
+	const check = validateClosure({ status: todo.status ?? "open", body: todo.body ?? "" });
+	return check.ok ? undefined : check.error;
 }
 
 function isTodoClosed(status: string): boolean {
@@ -1559,6 +1577,14 @@ export default function todosExtension(pi: ExtensionAPI) {
 						body: params.body ?? "",
 					};
 
+					const closureError = nightClosureError(todo);
+					if (closureError) {
+						return {
+							content: [{ type: "text", text: closureError }],
+							details: { action: "create", error: closureError },
+						};
+					}
+
 					const result = await withTodoLock(todosDir, id, ctx, async () => {
 						await writeTodoFile(filePath, todo);
 						return todo;
@@ -1610,6 +1636,8 @@ export default function todosExtension(pi: ExtensionAPI) {
 						if (params.tags !== undefined) existing.tags = params.tags;
 						if (params.body !== undefined) existing.body = params.body;
 						if (!existing.created_at) existing.created_at = new Date().toISOString();
+						const closureError = nightClosureError(existing);
+						if (closureError) return { error: closureError } as const;
 						clearAssignmentIfClosed(existing);
 
 						await writeTodoFile(filePath, existing);

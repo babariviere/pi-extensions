@@ -20,6 +20,8 @@ export interface NightPromptInput {
 	windowLabel: string;
 	/** Run start, used for the header stamp. */
 	startedAt: Date;
+	/** Identity of tonight's run: every ledger item is tagged with it. */
+	runId?: string;
 	/** Per-run working copy, when one was created for tonight. */
 	workspacePath?: string;
 }
@@ -75,11 +77,20 @@ export function composeNightPrompt(input: NightPromptInput): string {
 		"",
 		ORCHESTRATOR_CONTRACT,
 		"",
-		"Ledger: before doing any work, enumerate everything tonight covers as todos tagged `night`, one per unit of " +
-			"work. The ledger, not your judgement, decides when the night is over: settling with `night` todos still open " +
-			"triggers an automated continuation. Close an item with status `done` plus an `Evidence:` line in its body " +
-			"(a URL, a commit or change id, a file path), or drop it with status `skipped` plus a `Reason:` line. An item " +
-			"with neither still counts as open.",
+		"Ledger: before doing any work, enumerate everything tonight covers as todos tagged `night`" +
+			(input.runId ? ` and \`run:${input.runId}\`` : "") +
+			", one per unit of work. The ledger, not your judgement, decides when the night is over: settling with " +
+			"`night` todos still open triggers an automated continuation.",
+		"",
+		"Closing an item takes typed evidence, and the todo tool refuses the write without it:",
+		"",
+		"- `done` plus one of `Evidence: file /abs/path`, `Evidence: commit <id> (repo: /abs/repo)`, " +
+			"`Evidence: pr <url>`, `Evidence: url <url>`, `Evidence: none-with-reason <why there is nothing to point at>`,",
+		"- or `skipped` plus a `Reason:` line.",
+		"",
+		"The evidence is then checked: a `file` that does not exist or is empty, or a `commit` that does not resolve, " +
+			"flips the item to needs-review and it keeps counting as open. Do not claim an artifact you have not seen on " +
+			"disk, and require the same of every subagent.",
 		"",
 		"---",
 		"",
@@ -142,9 +153,10 @@ export function composeNudge(input: {
 		"",
 		input.unresolved,
 		"",
-		"Pick the next one and finish it. To close an item, set its status to `done` and put an `Evidence:` line in the " +
-			"todo body (a URL, a commit or change id, a file path). To drop one, set its status to `skipped` and put a " +
-			"`Reason:` line. An item with neither still counts as open.",
+		"Pick the next one and finish it. To close an item, set its status to `done` and put a typed `Evidence:` line " +
+			"in the todo body (`file /abs/path`, `commit <id> (repo: /abs/repo)`, `pr <url>`, `url <url>`, " +
+			"`none-with-reason <why>`). To drop one, set its status to `skipped` and put a `Reason:` line. The write is " +
+			"refused without one, and evidence that does not check out keeps the item open.",
 		"You are still the orchestrator: delegate the item to a subagent with `night: true` rather than implementing " +
 			"it yourself, and append to the report from what it hands back.",
 		`Keep appending to \`${input.reportPath}\` as you go.`,
