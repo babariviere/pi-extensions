@@ -86,12 +86,10 @@ describe("mergeNightConfig", () => {
 		assert.deepEqual(mergeNightConfig({ sandboxAllowWrite: [] }, base).sandboxAllowWrite, []);
 	});
 
-	it("defaults the requested domains to the GitHub hosts", () => {
-		assert.deepEqual(mergeNightConfig({}).sandboxAllowedDomains, [
-			"github.com",
-			"*.github.com",
-			"*.githubusercontent.com",
-		]);
+	it("defaults the requested domains to unrestricted egress", () => {
+		// A narrow allowlist failed closed overnight; the filesystem sandbox is the
+		// guardrail a night run actually needs. See DEFAULT_NIGHT_DOMAINS.
+		assert.deepEqual(mergeNightConfig({}).sandboxAllowedDomains, ["*"]);
 	});
 
 	it("takes custom requested domains, and lets an empty list clear them", () => {

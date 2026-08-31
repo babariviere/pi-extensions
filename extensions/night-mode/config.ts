@@ -94,11 +94,19 @@ function defaultNightDir(): string {
 }
 
 /**
- * Hosts a night needs for forge work: the API, the web host, and the raw/asset
- * hosts `gh` and release downloads use. Both `github.com` and `*.github.com`,
- * because the wildcard does not match the bare domain.
+ * Unrestricted egress for the night, on purpose.
+ *
+ * A host allowlist here was worth four nights of zero pull requests: the proxy
+ * layer failed closed (DNS itself stopped resolving), so even the forge hosts
+ * that were explicitly allowed were unreachable, with nobody awake to notice.
+ * The guardrail a night run needs is the filesystem one, and that is untouched;
+ * `*` routes through Spindle's allow-any permission hook instead of the domain
+ * matcher (see `hasUnrestrictedEgress` in `spindle/sandbox/manager.ts`).
+ *
+ * Narrow it per project if a run should only reach a forge, and note that
+ * `spindle.sandbox.deniedDomains` still wins either way.
  */
-export const DEFAULT_NIGHT_DOMAINS = ["github.com", "*.github.com", "*.githubusercontent.com"];
+export const DEFAULT_NIGHT_DOMAINS = ["*"];
 
 /** Sections seeded into a fresh report. Override per workflow. */
 export const DEFAULT_REPORT_SECTIONS = ["Summary", "Needs you", "Work", "Findings", "Skipped / failed", "Timeline"];

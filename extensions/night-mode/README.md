@@ -242,9 +242,13 @@ triage-only night.
 ### Network
 
 The run also asks for the domains it needs, unioned into whatever the session's
-own allowlist has. Defaults to the GitHub hosts, because a night that cannot reach
-the forge cannot open the pull request it was asked for, and nobody is awake to
-widen the list:
+own allowlist has. Defaults to `["*"]`, unrestricted egress, because a night that
+cannot reach the network cannot open the pull request it was asked for, and
+nobody is awake to widen the list. A narrow allowlist here also fails closed in
+the worst way: when the proxy layer breaks, even the allowed hosts stop
+resolving and the whole night is lost.
+
+Narrow it per project if a run should only reach a forge:
 
 ```json
 {
@@ -254,11 +258,10 @@ widen the list:
 }
 ```
 
-Spindle's default allowlist is `["*"]` (unrestricted), in which case this changes
-nothing. It matters when `spindle.sandbox.allowedDomains` is narrowed. Set it to
-`[]` to request nothing. This is the one thing a night run widens rather than
-tightens; `spindle.sandbox.deniedDomains` still wins, so denying a host there
-blocks it for the night too.
+Set it to `[]` to request nothing and inherit the session's allowlist as is. This
+is the one thing a night run widens rather than tightens; the filesystem sandbox
+is unaffected, and `spindle.sandbox.deniedDomains` still wins, so denying a host
+there blocks it for the night too.
 
 While the run is active the sandbox is a **floor**: `/sandbox off` is refused and
 reported, so nothing can un-sandbox the night mid-flight. Tightening it (say
