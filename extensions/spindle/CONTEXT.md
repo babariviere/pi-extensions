@@ -259,6 +259,8 @@ risk/approval hunks by hand.
 | `sandbox/protocol.ts` | Bus contract for changing the mode at runtime (`spindle:sandbox-request` / `spindle:sandbox-state`). |
 | `sandbox/night-bridge.ts` | Reads the night-mode handshake, so a subagent process inherits the run's policy without any IPC. Gated on participation, so a bystander session does not. |
 | `sandbox/resolve.ts` | Precedence: config, request, and the floor an active night run imposes. Pure. |
+| `mcp/read-only-policy.ts` | Read-only MCP guardrail: the declarative `mcp` config block, the built-in per-server profiles (slack, linear, datadog, metabase), the name-shape classifier, and `McpReadOnlyGate`, which owns the allow/deny decision for both dispatch points. Pure. |
+| `mcp/night-bridge.ts` | Reads `mcp.readOnly` from the night-mode handshake, so a subagent process inherits the guardrail with no IPC. Participation-gated, like `sandbox/night-bridge.ts`. |
 
 ### Filesystem sandbox
 

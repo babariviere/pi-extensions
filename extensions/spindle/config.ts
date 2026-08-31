@@ -16,6 +16,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { PI_CORE_TOOL_NAME_SET } from "./core/pi-tools.ts";
+import {
+	DEFAULT_MCP_READ_ONLY_CONFIG,
+	type McpReadOnlyConfig,
+	normalizeMcpReadOnlyConfig,
+} from "./mcp/read-only-policy.ts";
 import { isSandboxMode, type SandboxMode } from "./sandbox/policy.ts";
 import { CURRENT_SPINDLE_CONFIG_VERSION, migrateSpindleConfigDocument } from "./config-migrations.ts";
 export type SpindleUiWidgetMode = "auto" | "always" | "hidden";
@@ -92,6 +97,11 @@ export interface SpindleConfig {
 	executor: SpindleExecutorConfig;
 	agents: SpindleAgentConfig;
 	sandbox: SpindleSandboxConfig;
+	/**
+	 * Read-only guardrail for MCP tool calls. Unrelated to the upstream `mcp`
+	 * section removed above: this configures a policy, not an MCP client.
+	 */
+	mcp: McpReadOnlyConfig;
 	capture: SpindleToolCaptureConfig;
 	ui: SpindleUiConfig;
 }
@@ -135,6 +145,7 @@ export const DEFAULT_SPINDLE_CONFIG: SpindleConfig = {
 		allowedDomains: ["*"],
 		deniedDomains: [],
 	},
+	mcp: DEFAULT_MCP_READ_ONLY_CONFIG,
 	capture: {
 		enabled: true,
 		hideFromModel: true,
@@ -285,6 +296,7 @@ export const normalizeSpindleConfig = (input: Record<string, unknown>): SpindleC
 			allowedDomains: stringList(sandbox.allowedDomains, DEFAULT_SPINDLE_CONFIG.sandbox.allowedDomains),
 			deniedDomains: stringList(sandbox.deniedDomains),
 		},
+		mcp: normalizeMcpReadOnlyConfig(input.mcp),
 		capture: {
 			enabled: booleanValue(capture.enabled, DEFAULT_SPINDLE_CONFIG.capture.enabled),
 			hideFromModel: booleanValue(capture.hideFromModel, DEFAULT_SPINDLE_CONFIG.capture.hideFromModel),

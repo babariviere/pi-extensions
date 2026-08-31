@@ -15,6 +15,7 @@
  */
 
 import { runAbortable } from "../async-settlement.ts";
+import { McpReadOnlyGate } from "../mcp/read-only-policy.ts";
 import type { CapturedToolCatalog, CapturedToolEntry } from "../capture/catalog.ts";
 import type {
 	SpindleActionDescriptor,
@@ -139,7 +140,15 @@ export class McpBridgeProvider implements SpindleProvider {
 	readonly name = "mcp";
 	readonly description = "External MCP tools reached through the pi-mcp-adapter `mcp` gateway tool (lazy connect)";
 
-	constructor(readonly catalog: () => CapturedToolCatalog) {}
+	constructor(
+		readonly catalog: () => CapturedToolCatalog,
+		/**
+		 * Read-only guardrail, read per call so a night run that starts (or ends)
+		 * mid-session is picked up without re-registering the provider. An
+		 * unrestricted gate for a normal session.
+		 */
+		readonly readOnlyGate: () => McpReadOnlyGate = () => McpReadOnlyGate.unrestricted(),
+	) {}
 
 	async list(
 		_request: SpindleProviderListRequest,
@@ -164,6 +173,9 @@ export class McpBridgeProvider implements SpindleProvider {
 		switch (actionName) {
 			case "$call": {
 				const server = typeof args.server === "string" ? args.server : undefined;
+				// The one place a sandbox program can reach a write on an MCP server:
+				// refused here, before the gateway is even looked up.
+				this.readOnlyGate().assert(String(args.tool ?? ""), server);
 				return this.#gatewayCall(
 					{
 						tool: String(args.tool ?? ""),

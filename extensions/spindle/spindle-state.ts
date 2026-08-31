@@ -24,6 +24,8 @@ import { SpindleAgentRunRegistry } from "./providers/agent-run-monitor.ts";
 import { AgentRunBook, type AgentCompletionEvent } from "./providers/agent-run-book.ts";
 import { SpindleAgentsProvider, type SessionRef } from "./providers/agents-provider.ts";
 import { CapturedToolsProvider } from "./providers/captured-tools-provider.ts";
+import { activeNightMcpReadOnly } from "./mcp/night-bridge.ts";
+import { effectiveMcpReadOnlyConfig, McpReadOnlyGate } from "./mcp/read-only-policy.ts";
 import { McpBridgeProvider } from "./providers/mcp-bridge-provider.ts";
 import { PiToolsProvider } from "./providers/pi-tools-provider.ts";
 import { SandboxController } from "./sandbox/controller.ts";
@@ -152,7 +154,7 @@ export class SpindleState {
 		this.#registry = new ActionRegistry(new SpindleToolResultProxy(() => this.capturedTools.runner));
 		const capturedToolsProvider =
 			this.#config.fullCodeMode && this.#config.capture.enabled
-				? new CapturedToolsProvider(this.capturedTools, this.#gate)
+				? new CapturedToolsProvider(this.capturedTools, this.#gate, () => this.#mcpReadOnlyGate())
 				: undefined;
 		if (this.#config.fullCodeMode) {
 			this.#sandbox = await this.#createSandbox(context);
@@ -168,7 +170,7 @@ export class SpindleState {
 			);
 		}
 		if (capturedToolsProvider) this.#registry.register(capturedToolsProvider);
-		this.#registry.register(new McpBridgeProvider(() => this.capturedTools));
+		this.#registry.register(new McpBridgeProvider(() => this.capturedTools, () => this.#mcpReadOnlyGate()));
 		this.#registry.register(
 			new SpindleAgentsProvider(
 				() => this.#sessionRef,
@@ -263,6 +265,18 @@ export class SpindleState {
 			policyEnvironment(cwd),
 		);
 		return { policy, effective };
+	}
+
+	/**
+	 * Read-only MCP guardrail for this session: `spindle.json` plus the floor an
+	 * active night run imposes. Rebuilt per call, like `#resolveSandbox`, so a run
+	 * that starts mid-session (or a `/reload`) is picked up without touching the
+	 * providers, and so a subagent process inherits it just by starting up.
+	 */
+	#mcpReadOnlyGate(): McpReadOnlyGate {
+		const cwd = this.#cwd ?? this.#sessionRef.cwd;
+		const night = activeNightMcpReadOnly({ sessionId: this.#sessionRef.sessionId, cwd });
+		return McpReadOnlyGate.of(effectiveMcpReadOnlyConfig(this.config.mcp, night));
 	}
 
 	/**

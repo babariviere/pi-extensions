@@ -272,6 +272,50 @@ filesystem boundary entirely (a container can bind-mount `/`), and on macOS the
 backend is `sandbox-exec`, which Apple has deprecated. See
 `extensions/spindle/CONTEXT.md`.
 
+## Read-only MCP
+
+The prose contract says "never send a message, never comment, never change a
+ticket". Prose is not enforcement: one confused subagent can post to a customer
+channel. So `/night start` also asks Spindle to refuse write-shaped MCP calls for
+the whole run, for the coordinator and every subagent process, in code.
+
+A call is judged by name against a declarative policy (`spindle.json`, `mcp`
+block), never by the model's judgement at call time: the server's deny list of
+known write tools first, then its allow list of known read tools, then a
+name-shape heuristic (`create_`, `send_`, `save_`, `add_`, ...), then
+`unknownToolPolicy`, which defaults to `deny`. Built-in profiles ship for the
+servers configured here, written from their real tool catalogs. Slack is total:
+no message, draft, scheduled send, reaction, conversation or canvas write
+passes, and an unclassified Slack tool is refused too. Linear and Datadog keep
+their reads and lose their mutations.
+
+A refusal is a thrown error naming the tool, the server, the rule and the way to
+allow it, so the agent can report the intended change instead of failing
+silently. Set `mcpReadOnly: false` in `nightMode` to disable the request:
+
+```json
+{
+  "nightMode": { "mcpReadOnly": false }
+}
+```
+
+Outside a night run the same machinery is available through
+`spindle.json`:
+
+```json
+{
+  "mcp": {
+    "readOnly": true,
+    "unknownToolPolicy": "allow-reads",
+    "servers": { "slack": { "allow": ["slack_read_thread"] } }
+  }
+}
+```
+
+Like the filesystem sandbox, the night request is a floor: `readOnly: false` in
+`spindle.json` cannot turn it back off while the run is in flight.
+
+
 ## The ledger, and finishing
 
 An agent that decides it is done after two tickets is the main failure mode of an

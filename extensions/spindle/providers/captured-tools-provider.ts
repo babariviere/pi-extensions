@@ -3,6 +3,7 @@ import { runAbortable, throwIfAborted } from "../async-settlement.ts";
 import type { AgentToolResult, SourceInfo } from "@earendil-works/pi-coding-agent";
 import { CapturedToolCatalog, type CapturedToolEntry } from "../capture/catalog.ts";
 import { SpindleToolGate } from "../core/tool-allowlist.ts";
+import { assertMcpGatewayArguments, McpReadOnlyGate } from "../mcp/read-only-policy.ts";
 import type {
 	SpindleActionDescriptor,
 	SpindleInvocationContext,
@@ -90,6 +91,14 @@ export class CapturedToolsProvider implements SpindleProvider {
 		readonly catalog: CapturedToolCatalog,
 		/** Subagent `tools:` gate; an unrestricted gate for a normal session. */
 		readonly gate: SpindleToolGate = SpindleToolGate.of(undefined),
+		/**
+		 * Read-only MCP guardrail. Captured tools are the second way an MCP call can
+		 * leave the sandbox: pi-mcp-adapter registers its `mcp` gateway (and any
+		 * `directTools`) as ordinary pi tools, which show up here as
+		 * `extensions.*`. Without this check `mcp.call` would be guarded and
+		 * `extensions.mcp` would not.
+		 */
+		readonly mcpReadOnlyGate: () => McpReadOnlyGate = () => McpReadOnlyGate.unrestricted(),
 	) {}
 
 	async list(
@@ -137,9 +146,27 @@ export class CapturedToolsProvider implements SpindleProvider {
 	): Promise<CapturedToolInvocationResult> {
 		this.gate.assert(this.name, actionName);
 		const entry = this.catalog.require(actionName);
+		this.#assertMcpReadOnly(entry, args);
 		return this.#scheduler.run(entry.definition.executionMode, () =>
 			runAbortable(context.signal, () => this.#invokeCaptured(entry, args, context)),
 		);
+	}
+
+	/**
+	 * Apply the read-only MCP policy to a captured tool that came from
+	 * pi-mcp-adapter. The gateway carries the target in its arguments; a direct
+	 * tool is itself the MCP tool name.
+	 */
+	#assertMcpReadOnly(entry: CapturedToolEntry, args: Record<string, unknown>): void {
+		const fromAdapter = entry.name === "mcp" || entry.sourceInfo.path.includes("pi-mcp-adapter");
+		if (!fromAdapter) return;
+		const gate = this.mcpReadOnlyGate();
+		if (!gate.readOnly) return;
+		if (entry.name === "mcp") {
+			assertMcpGatewayArguments(gate, args);
+			return;
+		}
+		gate.assert(entry.name);
 	}
 
 	async #invokeCaptured(

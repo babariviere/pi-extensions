@@ -447,6 +447,10 @@ export default function (pi: ExtensionAPI): void {
 			...(sessionId ? { sessionId } : {}),
 			...(workspace ? { workspacePath: workspace } : {}),
 			...(sandbox ? { sandbox } : {}),
+			// Read-only MCP for the night, written before any child can start: a
+			// subagent reads the guardrail from this file, so it has to be on disk
+			// first (same reason as the sandbox above).
+			...(config.mcpReadOnly ? { mcp: { readOnly: true } } : {}),
 		});
 		if (sandbox) requestSandbox(sandbox, "night run started");
 
@@ -465,6 +469,7 @@ export default function (pi: ExtensionAPI): void {
 			noteTimeline(
 				`night-mode: sandbox ${sandbox.mode}, writable: ${(sandbox.allowWrite ?? []).join(", ") || "(defaults)"}`,
 			);
+		if (config.mcpReadOnly) noteTimeline("night-mode: MCP write tools refused for the night (read-only MCP mode)");
 		deliver(
 			composeNightPrompt({
 				prompt,

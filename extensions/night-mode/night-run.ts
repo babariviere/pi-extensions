@@ -30,6 +30,15 @@ export interface NightSandboxRequest {
 	network?: { allowedDomains?: string[] };
 }
 
+/**
+ * MCP guardrail a night run asks for. Plain shape rather than an import from
+ * spindle: night-mode must not depend on it.
+ */
+export interface NightMcpRequest {
+	/** Refuse write-shaped MCP tool calls for every participant of the run. */
+	readOnly: boolean;
+}
+
 export interface ActiveNightRun {
 	/** Epoch ms the run was started. */
 	startedAt: number;
@@ -59,6 +68,12 @@ export interface ActiveNightRun {
 	 * not import spindle.
 	 */
 	sandbox?: NightSandboxRequest;
+	/**
+	 * MCP guardrail the run asks for. Spindle reads this to refuse write-shaped
+	 * MCP calls for the coordinator and every subagent; see
+	 * `spindle/mcp/night-bridge.ts`. Structural on purpose, like `sandbox`.
+	 */
+	mcp?: NightMcpRequest;
 }
 
 /** Next to the default prompt/report files, so one feature owns one directory. */

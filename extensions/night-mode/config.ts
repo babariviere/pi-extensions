@@ -73,6 +73,13 @@ export interface NightConfig {
 	 */
 	sandboxTrust: boolean;
 	/**
+	 * Refuse write-shaped MCP tool calls for the whole run: no Slack message, no
+	 * Linear mutation, no Datadog monitor edit, enforced in code rather than in
+	 * the prose contract (see `spindle/mcp/read-only-policy.ts`). Applies to the
+	 * coordinator and to every subagent process.
+	 */
+	mcpReadOnly: boolean;
+	/**
 	 * How sleep is suppressed during a run. `auto` uses Amphetamine when it is
 	 * installed and falls back to `caffeinate`. Amphetamine is the only option
 	 * that survives closing the lid, and only when its "Allow system sleep when
@@ -126,6 +133,7 @@ export const DEFAULT_NIGHT_CONFIG: NightConfig = {
 	sandboxAllowWrite: [],
 	sandboxAllowedDomains: DEFAULT_NIGHT_DOMAINS,
 	sandboxTrust: true,
+	mcpReadOnly: true,
 	wakeLock: "auto",
 	maxPullRequests: 5,
 	reportSections: DEFAULT_REPORT_SECTIONS,
@@ -245,6 +253,7 @@ export function mergeNightConfig(raw: unknown, base: NightConfig = DEFAULT_NIGHT
 		sandboxAllowWrite: allowWrite ?? base.sandboxAllowWrite,
 		sandboxAllowedDomains: allowedDomains ?? base.sandboxAllowedDomains,
 		sandboxTrust: typeof record.sandboxTrust === "boolean" ? record.sandboxTrust : base.sandboxTrust,
+		mcpReadOnly: typeof record.mcpReadOnly === "boolean" ? record.mcpReadOnly : base.mcpReadOnly,
 		wakeLock: isWakeLockPreference(record.wakeLock) ? record.wakeLock : base.wakeLock,
 		maxPullRequests:
 			typeof maxPullRequests === "number" && Number.isFinite(maxPullRequests) && maxPullRequests > 0
