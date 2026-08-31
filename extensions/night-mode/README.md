@@ -230,8 +230,35 @@ Subagents are separate processes, so they pick the policy up from
 `~/.pi/agent/night/active.json` rather than from the parent's event bus. That also
 means it survives a `/reload`.
 
+That file is global, so only **participants** of the run read it: the coordinator
+session, children spawned with the run's environment marker, and anything running
+inside the run's working copy or the per-subagent workspaces beside it. A session
+you open at 2am while the night is running is untouched and keeps its normal
+policy.
+
 Set `sandboxMode: "off"` to disable the request, or pick `read-only` for a
 triage-only night.
+
+### Network
+
+The run also asks for the domains it needs, unioned into whatever the session's
+own allowlist has. Defaults to the GitHub hosts, because a night that cannot reach
+the forge cannot open the pull request it was asked for, and nobody is awake to
+widen the list:
+
+```json
+{
+  "nightMode": {
+    "sandboxAllowedDomains": ["github.com", "*.github.com", "*.githubusercontent.com"]
+  }
+}
+```
+
+Spindle's default allowlist is `["*"]` (unrestricted), in which case this changes
+nothing. It matters when `spindle.sandbox.allowedDomains` is narrowed. Set it to
+`[]` to request nothing. This is the one thing a night run widens rather than
+tightens; `spindle.sandbox.deniedDomains` still wins, so denying a host there
+blocks it for the night too.
 
 While the run is active the sandbox is a **floor**: `/sandbox off` is refused and
 reported, so nothing can un-sandbox the night mid-flight. Tightening it (say

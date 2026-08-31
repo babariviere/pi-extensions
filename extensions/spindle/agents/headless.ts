@@ -6,6 +6,7 @@
  */
 
 import { spawn } from "node:child_process";
+import { NIGHT_RUN_ENV } from "../../night-mode/night-run.ts";
 import { readDefaultProvider } from "./settings.ts";
 import { resolveRunOutput } from "./output.ts";
 import { baseResult, prepareChildRun, runCwd, type RunContext, type RunRequest, type RunResult } from "./run.ts";
@@ -24,7 +25,12 @@ function runHeadless(req: RunRequest, ctx: RunContext, defaultProvider: string |
 		let stderr = "";
 		let settled = false;
 
-		const child = spawn("pi", childArgs, { cwd: runCwd(req, ctx) });
+		// The night marker travels in the environment: the child's own spindle reads
+		// it to decide whether to inherit the run's sandbox (`sandbox/night-bridge.ts`).
+		const child = spawn("pi", childArgs, {
+			cwd: runCwd(req, ctx),
+			...(req.night ? { env: { ...process.env, [NIGHT_RUN_ENV]: "1" } } : {}),
+		});
 		ctx.onStatus?.(req.index, { state: "running", outputPath });
 
 		const finish = async (exitCode: number | null, error: string | undefined) => {

@@ -47,6 +47,13 @@ export interface NightConfig {
 	 */
 	sandboxAllowWrite: string[];
 	/**
+	 * Domains the run must be able to reach, unioned into the session's own
+	 * allowlist for the duration of the night. Defaults to the GitHub hosts, since
+	 * a run that cannot reach the forge cannot open the pull request it was asked
+	 * for, and nobody is awake to widen the list. An empty array requests nothing.
+	 */
+	sandboxAllowedDomains: string[];
+	/**
 	 * Run `mise trust` / `direnv allow` on a fresh working copy. Both tools trust
 	 * by path, so without this every `mise` command in the copy hard-fails with an
 	 * untrusted-config error.
@@ -73,6 +80,13 @@ function defaultNightDir(): string {
 	return join(process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent"), "night");
 }
 
+/**
+ * Hosts a night needs for forge work: the API, the web host, and the raw/asset
+ * hosts `gh` and release downloads use. Both `github.com` and `*.github.com`,
+ * because the wildcard does not match the bare domain.
+ */
+export const DEFAULT_NIGHT_DOMAINS = ["github.com", "*.github.com", "*.githubusercontent.com"];
+
 /** Sections seeded into a fresh report. Override per workflow. */
 export const DEFAULT_REPORT_SECTIONS = ["Summary", "Needs you", "Work", "Findings", "Skipped / failed", "Timeline"];
 
@@ -88,6 +102,7 @@ export const DEFAULT_NIGHT_CONFIG: NightConfig = {
 	sandboxCopyFiles: ["mise.local.toml"],
 	sandboxMode: "workspace-write",
 	sandboxAllowWrite: [],
+	sandboxAllowedDomains: DEFAULT_NIGHT_DOMAINS,
 	sandboxTrust: true,
 	wakeLock: "auto",
 	maxPullRequests: 5,
@@ -184,6 +199,11 @@ export function mergeNightConfig(raw: unknown, base: NightConfig = DEFAULT_NIGHT
 				.filter((v): v is string => typeof v === "string" && v.trim().length > 0)
 				.map((v) => v.trim())
 		: undefined;
+	const allowedDomains = Array.isArray(record.sandboxAllowedDomains)
+		? record.sandboxAllowedDomains
+				.filter((v): v is string => typeof v === "string" && v.trim().length > 0)
+				.map((v) => v.trim())
+		: undefined;
 	const sections = Array.isArray(record.reportSections)
 		? record.reportSections
 				.filter((v): v is string => typeof v === "string" && v.trim().length > 0)
@@ -198,6 +218,7 @@ export function mergeNightConfig(raw: unknown, base: NightConfig = DEFAULT_NIGHT
 		sandboxCopyFiles: copyFiles ?? base.sandboxCopyFiles,
 		sandboxMode: isNightSandboxMode(record.sandboxMode) ? record.sandboxMode : base.sandboxMode,
 		sandboxAllowWrite: allowWrite ?? base.sandboxAllowWrite,
+		sandboxAllowedDomains: allowedDomains ?? base.sandboxAllowedDomains,
 		sandboxTrust: typeof record.sandboxTrust === "boolean" ? record.sandboxTrust : base.sandboxTrust,
 		wakeLock: isWakeLockPreference(record.wakeLock) ? record.wakeLock : base.wakeLock,
 		maxPullRequests:

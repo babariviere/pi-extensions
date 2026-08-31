@@ -483,6 +483,11 @@ export default function (pi: ExtensionAPI): void {
 				// expected to touch, a notes vault, and so on.
 				...input.config.sandboxAllowWrite.map((path) => resolvePath(path, input.cwd)),
 			],
+			// Egress, unlike the writable set, is a widening: see the comment on
+			// `NightSandboxRequest.network`.
+			...(input.config.sandboxAllowedDomains.length
+				? { network: { allowedDomains: input.config.sandboxAllowedDomains } }
+				: {}),
 		};
 	}
 

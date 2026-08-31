@@ -256,7 +256,7 @@ risk/approval hunks by hand.
 | `sandbox/supervised-spawn.ts` | The one supervised process-tree spawn: detached process group, kill-tree on timeout/abort, stdin piping, and the `timeout:<seconds>` / `aborted` error contract, behind one small interface. Two adapters ride on it: the OS-sandbox wrap (`sandbox/manager.ts`) and the `pi.bash` stdin extras (`providers/spindle-bash-tool.ts`), which previously carried two private copies of these mechanics. |
 | `sandbox/controller.ts` | The session's live sandbox state. Hands out stable operations whose closures read the *current* policy, so the mode can change mid-session. `readGuard()` hands out the same shape of stable closure for the denyRead roots. |
 | `sandbox/protocol.ts` | Bus contract for changing the mode at runtime (`spindle:sandbox-request` / `spindle:sandbox-state`). |
-| `sandbox/night-bridge.ts` | Reads the night-mode handshake, so a subagent process inherits the run's policy without any IPC. |
+| `sandbox/night-bridge.ts` | Reads the night-mode handshake, so a subagent process inherits the run's policy without any IPC. Gated on participation, so a bystander session does not. |
 | `sandbox/resolve.ts` | Precedence: config, request, and the floor an active night run imposes. Pure. |
 
 ### Filesystem sandbox
@@ -329,6 +329,21 @@ Subagents are separate processes, so the parent's bus never reaches them; they
 already read that file for the report path and the hard rules. Reading it also
 means the policy survives a `/reload`.
 
+The handshake file is global, so reading it is gated on **participation**
+(`isNightRunParticipant`, night-mode). A session the user opens at 2am while a run
+is in flight is a bystander and keeps whatever `spindle.json` configures. Three
+ways to qualify:
+
+| Signal | Covers |
+|---|---|
+| `PI_NIGHT_RUN=1` in the environment | children spawned by the headless backend (`agents/headless.ts`) |
+| `sessionId` matches the run's | the coordinator session that ran `/night start` |
+| cwd inside the run's clone or `<clone>.agents/...` | children the spawn path cannot hand an environment to (herdr panes) |
+
+A run started with cloning disabled (`sandboxRoot: ""`) has no clone to key on, so
+herdr-launched children of such a run fall back to bystanders. The coordinator is
+still enforced through the bus.
+
 This is extension-level trust, not model-level: `pi.events` is not reachable from
 inside `spindle_exec`, so the agent cannot request its own sandbox. Payloads are
 still validated (`parseSandboxRequestEvent`) rather than trusted.
@@ -365,7 +380,16 @@ run is a **floor**, never a ceiling:
 
 The night's own writable roots (its working copy, the report, the ledger) are
 always unioned in, so a tightening request cannot cut the run off from the files
-it has to write. A refused request is surfaced as a warning rather than silently
+it has to write.
+
+Egress is the one place a night run **widens** instead of tightening: its
+`network.allowedDomains` are unioned into the configured allowlist (a config of
+`["*"]` is already unrestricted and is left alone). The reason is the failure
+mode, not convenience: a narrowed allowlist breaks an unattended run at 3am with
+nobody awake to widen it, and reaching a forge is not the destructive path this
+guardrail exists for. `deniedDomains` stays config-only and the runtime checks
+denials first, so `deniedDomains: ["github.com"]` is still an absolute kill
+switch. A `/sandbox` request carries no network at all. A refused request is surfaced as a warning rather than silently
 appearing to work, and it is not remembered: when the run ends, night-mode emits
 a revert that clears it.
 

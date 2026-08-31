@@ -9,7 +9,7 @@
 
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join, relative } from "node:path";
 
 /**
  * Filesystem sandbox a night run asks Spindle for. Deliberately a plain shape
@@ -19,6 +19,15 @@ export interface NightSandboxRequest {
 	mode: "off" | "read-only" | "workspace-write" | "full";
 	/** Extra writable roots on top of the run's working directory. */
 	allowWrite?: string[];
+	/**
+	 * Domains the run needs to reach, unioned into whatever the session's own
+	 * config allows. The only place a night run *widens* a policy instead of
+	 * tightening it: an overnight run that cannot reach the forge fails at 3am
+	 * with nobody awake to add a domain, and egress is not the destructive path
+	 * this sandbox is about. A domain in the config's `deniedDomains` still wins,
+	 * so the kill switch survives.
+	 */
+	network?: { allowedDomains?: string[] };
 }
 
 export interface ActiveNightRun {
@@ -80,6 +89,43 @@ export function clearActiveNightRun(): void {
 	} catch {
 		// already gone
 	}
+}
+
+/**
+ * Set on every `pi` child spawned for a night run, so the child knows it is a
+ * participant. The handshake file is global and readable by any process; an
+ * interactive session started at 2am must not inherit the run's sandbox just
+ * because a run happens to be in flight.
+ */
+export const NIGHT_RUN_ENV = "PI_NIGHT_RUN";
+
+/** True when `candidate` is `root` or lives under it. */
+function isInside(root: string, candidate: string): boolean {
+	const rel = relative(root, candidate);
+	return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+}
+
+/**
+ * Whether this process belongs to `run`, and so should inherit its policy.
+ *
+ * Three ways to qualify, because there is no single channel that reaches every
+ * participant:
+ *
+ *  - the `NIGHT_RUN_ENV` marker, set on children spawned by the run,
+ *  - being the coordinator session that started the run (`sessionId`),
+ *  - running inside the run's private working copy, or one of the per-subagent
+ *    workspaces beside it (`<clone>.agents/...`), which covers children the
+ *    spawn path could not hand an environment to (herdr panes).
+ *
+ * Anything else (a normal session in the user's own checkout) is not a
+ * participant and keeps whatever `spindle.json` configures.
+ */
+export function isNightRunParticipant(run: ActiveNightRun, ref: { sessionId?: string; cwd?: string }): boolean {
+	if (process.env[NIGHT_RUN_ENV] === "1") return true;
+	if (run.sessionId && ref.sessionId && run.sessionId === ref.sessionId) return true;
+	const clone = run.workspacePath;
+	if (!clone || !ref.cwd) return false;
+	return isInside(clone, ref.cwd) || isInside(`${clone}.agents`, ref.cwd);
 }
 
 /**

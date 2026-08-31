@@ -227,7 +227,9 @@ export class SpindleState {
 		const effective = effectiveSandbox({
 			settings: this.config.sandbox,
 			requested: this.#sandboxRequest,
-			night: activeNightSandboxRequest(),
+			// Session identity, so only participants of the run inherit its policy:
+			// the handshake file is global, and a session opened mid-run is a bystander.
+			night: activeNightSandboxRequest({ sessionId: this.#sessionRef.sessionId, cwd }),
 		});
 		const policy = resolveSandboxPolicy(
 			{
@@ -309,7 +311,12 @@ export class SpindleState {
 
 	/** True while an active night run pins the sandbox. */
 	sandboxHeldByNightRun(): boolean {
-		return activeNightSandboxRequest() !== undefined;
+		return (
+			activeNightSandboxRequest({
+				sessionId: this.#sessionRef.sessionId,
+				cwd: this.#cwd ?? this.#sessionRef.cwd,
+			}) !== undefined
+		);
 	}
 
 	/** One-line sandbox status, for `/sandbox` output. */

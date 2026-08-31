@@ -19,6 +19,12 @@ export interface SandboxRequest {
 	mode: SandboxMode;
 	/** Extra writable roots. `~` is expanded; relative paths resolve against cwd. */
 	allowWrite?: string[];
+	/**
+	 * Domains to add to the session's allowlist. Only honoured from a night run
+	 * (see `resolve.ts`), which is the one case where widening beats failing
+	 * unattended.
+	 */
+	network?: { allowedDomains?: string[] };
 }
 
 /**
@@ -56,13 +62,21 @@ export function parseSandboxRequestEvent(value: unknown): SandboxRequestEvent | 
 		return { policy: null, ...(reason ? { reason } : {}) };
 	}
 	if (!isRecord(value.policy)) return undefined;
-	const { mode, allowWrite } = value.policy;
+	const { mode, allowWrite, network } = value.policy;
 	if (!isSandboxMode(mode)) return undefined;
 	const roots = Array.isArray(allowWrite)
 		? allowWrite.filter((entry): entry is string => typeof entry === "string" && !!entry.trim())
 		: undefined;
+	const domains =
+		isRecord(network) && Array.isArray(network.allowedDomains)
+			? network.allowedDomains.filter((entry): entry is string => typeof entry === "string" && !!entry.trim())
+			: undefined;
 	return {
-		policy: { mode, ...(roots?.length ? { allowWrite: roots } : {}) },
+		policy: {
+			mode,
+			...(roots?.length ? { allowWrite: roots } : {}),
+			...(domains?.length ? { network: { allowedDomains: domains } } : {}),
+		},
 		...(reason ? { reason } : {}),
 	};
 }

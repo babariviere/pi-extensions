@@ -77,6 +77,21 @@ describe("mergeNightConfig", () => {
 		assert.deepEqual(mergeNightConfig({ sandboxAllowWrite: [] }, base).sandboxAllowWrite, []);
 	});
 
+	it("defaults the requested domains to the GitHub hosts", () => {
+		assert.deepEqual(mergeNightConfig({}).sandboxAllowedDomains, [
+			"github.com",
+			"*.github.com",
+			"*.githubusercontent.com",
+		]);
+	});
+
+	it("takes custom requested domains, and lets an empty list clear them", () => {
+		assert.deepEqual(mergeNightConfig({ sandboxAllowedDomains: [" gitlab.com ", "", 7] }).sandboxAllowedDomains, [
+			"gitlab.com",
+		]);
+		assert.deepEqual(mergeNightConfig({ sandboxAllowedDomains: [] }).sandboxAllowedDomains, []);
+	});
+
 	it("takes custom report sections, ignoring junk entries", () => {
 		const merged = mergeNightConfig({ reportSections: ["Tickets", "  ", 3] });
 		assert.deepEqual(merged.reportSections, ["Tickets"]);

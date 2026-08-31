@@ -82,3 +82,35 @@ test("a night run with no request still applies its own floor", () => {
 	assert.equal(effective.source, "night");
 	assert.deepEqual(effective.allowWrite, ["/sandboxes/run"]);
 });
+
+test("a narrowed allowlist is widened by the night run's domains", () => {
+	const effective = effectiveSandbox({
+		settings: { ...settings("workspace-write"), allowedDomains: ["registry.npmjs.org"] },
+		night: { mode: "workspace-write", network: { allowedDomains: ["github.com", "registry.npmjs.org"] } },
+	});
+	assert.deepEqual(effective.network.allowedDomains, ["registry.npmjs.org", "github.com"]);
+});
+
+test("an unrestricted allowlist is left alone", () => {
+	const effective = effectiveSandbox({
+		settings: settings("workspace-write"),
+		night: { mode: "workspace-write", network: { allowedDomains: ["github.com"] } },
+	});
+	assert.deepEqual(effective.network.allowedDomains, ["*"]);
+});
+
+test("a request cannot widen the allowlist, only a night run can", () => {
+	const effective = effectiveSandbox({
+		settings: { ...settings("workspace-write"), allowedDomains: ["registry.npmjs.org"] },
+		requested: { mode: "workspace-write", network: { allowedDomains: ["evil.example"] } },
+	});
+	assert.deepEqual(effective.network.allowedDomains, ["registry.npmjs.org"]);
+});
+
+test("denied domains stay config-only, so the kill switch survives", () => {
+	const effective = effectiveSandbox({
+		settings: { ...settings("workspace-write"), allowedDomains: [], deniedDomains: ["github.com"] },
+		night: { mode: "workspace-write", network: { allowedDomains: ["github.com"] } },
+	});
+	assert.deepEqual(effective.network.deniedDomains, ["github.com"]);
+});

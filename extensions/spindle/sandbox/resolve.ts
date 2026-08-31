@@ -11,6 +11,13 @@
  * report, the ledger) always stay in the set, so a tightening request cannot
  * accidentally break the run it is protecting.
  *
+ * Egress is the one exception, and only for a night run: its `allowedDomains` are
+ * unioned into the configured allowlist rather than intersected with it. A
+ * narrowed allowlist would otherwise break an overnight run at 3am, with nobody
+ * awake to widen it, and reaching a forge is not the destructive path this
+ * guardrail exists for. `deniedDomains` stays config-only, so a domain the user
+ * denied is still denied (the runtime checks denials first).
+ *
  * Pure, so the precedence rules are testable without a session.
  */
 
@@ -68,7 +75,10 @@ export function effectiveSandbox(input: EffectiveSandboxInput): EffectiveSandbox
 		denyWrite: [...settings.denyWrite],
 		denyRead: [...settings.denyRead],
 		network: {
-			allowedDomains: [...settings.allowedDomains],
+			// `*` is already unrestricted, so there is nothing to widen.
+			allowedDomains: settings.allowedDomains.includes("*")
+				? [...settings.allowedDomains]
+				: dedupe([...settings.allowedDomains, ...(night?.network?.allowedDomains ?? [])]),
 			deniedDomains: [...settings.deniedDomains],
 		},
 		source,
