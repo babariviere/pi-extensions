@@ -262,7 +262,12 @@ async function launchRun(p: PreparedRun, ctx: RunContext): Promise<SpawnedRun> {
 	await herdr.renamePane(p.paneId, paneLabel(p.req.agent.config.name, p.req.task));
 	const prompted = await herdr.promptAgent(
 		p.paneId,
-		formatTaskMessage(p.req.task, p.req.reads, p.req.night, p.req.cwd),
+		formatTaskMessage(p.req.task, {
+			...(p.req.reads ? { reads: p.req.reads } : {}),
+			...(p.req.night ? { night: p.req.night } : {}),
+			...(p.req.cwd ? { workspacePath: p.req.cwd } : {}),
+			...(p.req.artifactsDir ? { artifactsDir: p.req.artifactsDir } : {}),
+		}),
 	);
 
 	ctx.onStatus?.(p.req.index, {

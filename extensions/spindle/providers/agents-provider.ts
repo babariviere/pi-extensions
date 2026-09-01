@@ -32,7 +32,7 @@ import { RunLauncher } from "../agents/backend.ts";
 import { discoverAgentsForCwd } from "../agents/discovery.ts";
 import { newRunId } from "../agents/paths.ts";
 import { buildRunRequests, type NormalizedItem } from "../agents/request.ts";
-import { allocateNightWorkspaces, releaseNightWorkspaces } from "../agents/night-workspace.ts";
+import { allocateNightWorkspaces, relocateWorkspacePaths, releaseNightWorkspaces } from "../agents/night-workspace.ts";
 import type { RunContext, RunRequest, RunResult } from "../agents/run.ts";
 import { DEFAULT_SPINDLE_CONFIG, MAX_AGENT_TIMEOUT_MS, MIN_AGENT_TIMEOUT_MS } from "../config.ts";
 import type {
@@ -422,7 +422,10 @@ export class SpindleAgentsProvider implements SpindleProvider {
 		const promise = (async (): Promise<SpindleAgentResult[]> => {
 			try {
 				const results = await this.launcher.run(requests, runContext);
-				return results.map((result) => agentResult(result, runId));
+				// A night child names paths inside its workspace, which the release
+				// below deletes after copying its files out. Rewrite those paths to
+				// the surviving copies so the coordinator never reports a dead path.
+				return results.map((result) => agentResult(relocateWorkspacePaths(result, workspaces), runId));
 			} finally {
 				unlink();
 				monitor.stop();

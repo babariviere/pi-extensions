@@ -145,15 +145,41 @@ export function cleanupOldRuns(sessionFile: string | undefined, maxAgeDays = DEF
 	}
 }
 
-function formatOutputInstruction(): string {
-	return [
+export interface OutputInstructionOpts {
+	/**
+	 * Durable directory for files the child must hand back, when the host gave it
+	 * one. Its working copy does not survive the run, so a deliverable written
+	 * anywhere else is destroyed with it.
+	 */
+	artifactsDir?: string;
+}
+
+/**
+ * The rider appended to every task.
+ *
+ * Two rules that used to be one, and contradicted each other once children were
+ * handed a deliverable directory: the *result* travels in the final message and
+ * nowhere else, so a result path mentioned in a prompt is to be ignored; but a
+ * *deliverable* (a long write-up, a generated file) is a real file, and it has
+ * exactly one place it may be written.
+ */
+function formatOutputInstruction(opts: OutputInstructionOpts): string {
+	const lines = [
 		"When you are done, put your complete findings in your final message.",
 		"That final message is exactly what is returned to the caller, so make it self-contained: do not rely on a tool call, a written file, or printed output to carry the result.",
-		"Ignore any output filename or output path mentioned elsewhere, including in the base agent prompt or system prompt.",
-	].join("\n");
+		"Ignore any *result* filename or result path mentioned elsewhere, including in the base agent prompt or system prompt: the result is the final message, never a file.",
+	];
+	if (opts.artifactsDir) {
+		lines.push(
+			"",
+			`Deliverables directory: \`${opts.artifactsDir}\`. Anything that has to outlive this run - a long write-up, a report, a generated file - is written there, and that is the only path you may cite as \`Evidence: file ...\`.`,
+			"Your working directory is deleted when the run ends. Files left there are copied to the deliverables directory as a safety net, so cite the deliverables path rather than the working-copy path.",
+		);
+	}
+	return lines.join("\n");
 }
 
 /** Append the final-message result instruction to the task text. */
-export function injectOutputInstruction(task: string): string {
-	return `${task}\n\n---\n**Output:**\n${formatOutputInstruction()}`;
+export function injectOutputInstruction(task: string, opts: OutputInstructionOpts = {}): string {
+	return `${task}\n\n---\n**Output:**\n${formatOutputInstruction(opts)}`;
 }

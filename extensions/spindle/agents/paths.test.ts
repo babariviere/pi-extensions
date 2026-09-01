@@ -92,3 +92,17 @@ test("injectOutputInstruction tells the agent its final message is the result", 
 	assert.ok(!instruction.includes("submit_result"));
 	assert.ok(instruction.includes("returned to the caller"));
 });
+
+test("injectOutputInstruction names the deliverables directory when the host gave one", () => {
+	const instruction = injectOutputInstruction("do the thing", { artifactsDir: "/night/agents/agent-1.artifacts" });
+	assert.ok(instruction.includes("Deliverables directory: `/night/agents/agent-1.artifacts`"));
+	// The "ignore any path" rule is scoped to the *result*, so it cannot be read
+	// as permission to ignore the deliverables directory.
+	assert.ok(instruction.includes("Ignore any *result* filename"));
+	assert.ok(instruction.includes("working directory is deleted"));
+});
+
+test("injectOutputInstruction says nothing about deliverables when there is no directory", () => {
+	const instruction = injectOutputInstruction("do the thing");
+	assert.ok(!instruction.includes("Deliverables directory"));
+});

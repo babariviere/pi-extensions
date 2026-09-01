@@ -49,6 +49,12 @@ test("buildChildArgs always sets session and instructs the agent to answer in it
 	assert.ok(taskArg.includes("final message"));
 });
 
+test("buildChildArgs points the child at its deliverables directory when the host gave one", () => {
+	const args = buildChildArgs(agent(), "do the thing", { ...opts, artifactsDir: "/night/agents/worker-0.artifacts" });
+	const taskArg = args[args.length - 1];
+	assert.ok(taskArg.includes("Deliverables directory: `/night/agents/worker-0.artifacts`"));
+});
+
 test("buildChildArgs prepends a read-first instruction listing the context files", () => {
 	const args = buildChildArgs(agent(), "do the thing", { ...opts, reads: [".pi/goal/research.md", "src/x.ts"] });
 	const taskArg = args[args.length - 1];

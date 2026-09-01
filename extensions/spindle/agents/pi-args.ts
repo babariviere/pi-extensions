@@ -93,6 +93,12 @@ export interface ChildInvocationOpts {
 	 * night contract tells it about where to work.
 	 */
 	workspacePath?: string;
+	/**
+	 * Durable directory for the child's deliverables, when the host gave it one.
+	 * Named in the task message, because the working copy above is deleted when
+	 * the run ends.
+	 */
+	artifactsDir?: string;
 }
 
 /** Prepend a read-first instruction listing the context files, if any. */
@@ -113,9 +119,20 @@ function withNight(task: string, night: boolean | undefined, workspacePath?: str
 	return run ? `${buildNightContract(run, workspacePath)}\n${task}` : task;
 }
 
+/** What the task framing needs beyond the task itself. */
+export interface TaskFraming {
+	reads?: string[];
+	night?: boolean;
+	workspacePath?: string;
+	artifactsDir?: string;
+}
+
 /** The task framing given to the child agent, with the final-message rider. */
-export function formatTaskMessage(task: string, reads?: string[], night?: boolean, workspacePath?: string): string {
-	return withNight(`Task: ${injectOutputInstruction(withReads(task, reads))}`, night, workspacePath);
+export function formatTaskMessage(task: string, framing: TaskFraming = {}): string {
+	const body = injectOutputInstruction(withReads(task, framing.reads), {
+		...(framing.artifactsDir ? { artifactsDir: framing.artifactsDir } : {}),
+	});
+	return withNight(`Task: ${body}`, framing.night, framing.workspacePath);
 }
 
 /**
@@ -174,7 +191,14 @@ export function buildChildArgs(agent: DiscoveredAgent, task: string, opts: Child
 	// are safe). The herdr backend omits it here and submits it via `agent prompt`
 	// instead, since `agent start` cannot encode multi-line shell args.
 	if (opts.includeTask !== false) {
-		args.push(formatTaskMessage(task, opts.reads, opts.night, opts.workspacePath));
+		args.push(
+			formatTaskMessage(task, {
+				...(opts.reads ? { reads: opts.reads } : {}),
+				...(opts.night ? { night: opts.night } : {}),
+				...(opts.workspacePath ? { workspacePath: opts.workspacePath } : {}),
+				...(opts.artifactsDir ? { artifactsDir: opts.artifactsDir } : {}),
+			}),
+		);
 	}
 
 	return args;
