@@ -5,8 +5,11 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, test } from "node:test";
 import {
 	acquireAgentWorkspace,
+	agentArtifactsDir,
 	agentWorkspaceName,
 	agentWorkspacesRoot,
+	copyWorkspaceArtifacts,
+	parseChangedPaths,
 	releaseAgentWorkspace,
 } from "./agent-workspace.ts";
 
@@ -19,14 +22,40 @@ describe("agentWorkspacesRoot", () => {
 	});
 });
 
+describe("agentArtifactsDir", () => {
+	test("is a sibling of the workspace, so removing the workspace leaves it", () => {
+		const root = "/sandboxes/phishing/2026-08-29 2130.agents";
+		const artifacts = agentArtifactsDir(root, "agent-abc-0");
+		assert.equal(artifacts, join(root, "agent-abc-0.artifacts"));
+		assert.ok(!artifacts.startsWith(join(root, "agent-abc-0/")));
+	});
+});
+
 describe("agentWorkspaceName", () => {
 	test("keeps only what jj accepts and stays unique per index", () => {
-		assert.equal(agentWorkspaceName("01a0-48e1_fd33", 2), "agent-01a048e1-2");
+		assert.match(agentWorkspaceName("01a0-48e1_fd33", 2), /^agent-[0-9a-f]{8}-2$/);
 		assert.notEqual(agentWorkspaceName("abc", 0), agentWorkspaceName("abc", 1));
 	});
 
-	test("falls back to a literal when the id has nothing usable", () => {
-		assert.equal(agentWorkspaceName("---", 0), "agent-run-0");
+	test("is stable for one run id", () => {
+		assert.equal(agentWorkspaceName("run-1", 0), agentWorkspaceName("run-1", 0));
+	});
+
+	test("separates run ids that share a timestamp prefix", () => {
+		// Run ids start with the date, so slicing the id itself gave every subagent
+		// of a night the same workspace name.
+		const first = agentWorkspaceName("2026-09-01T18-22-04-001Z_a1b2c3", 0);
+		const second = agentWorkspaceName("2026-09-01T21-40-11-777Z_d4e5f6", 0);
+		assert.notEqual(first, second);
+	});
+});
+
+describe("parseChangedPaths", () => {
+	test("takes added, modified and copied paths and skips deletions and renames", () => {
+		const paths = parseChangedPaths(
+			["A notes/slack-pass.md", "M src/app.ts", "C copy.ts", "D gone.ts", "R {old => new}.ts", ""].join("\n"),
+		);
+		assert.deepEqual(paths, ["notes/slack-pass.md", "src/app.ts", "copy.ts"]);
 	});
 });
 
@@ -66,6 +95,24 @@ describe("acquireAgentWorkspace", () => {
 		assert.equal(existsSync(join(workspace.path, "absent.toml")), false);
 	});
 
+	test("creates the artifacts directory the child is pointed at", async () => {
+		const base = join(dir, "clone");
+		mkdirSync(join(base, ".jj"), { recursive: true });
+
+		const workspace = await acquireAgentWorkspace({
+			base,
+			root: agentWorkspacesRoot(base),
+			name: "agent-abc-0",
+			exec: (_command, args) => {
+				mkdirSync(args[args.length - 1], { recursive: true });
+			},
+		});
+
+		assert.ok(workspace);
+		assert.equal(workspace.artifactsDir, join(`${base}.agents`, "agent-abc-0.artifacts"));
+		assert.equal(existsSync(workspace.artifactsDir), true);
+	});
+
 	test("declines a clone that is not a jj repository", async () => {
 		const base = join(dir, "plain");
 		mkdirSync(base, { recursive: true });
@@ -93,39 +140,84 @@ describe("acquireAgentWorkspace", () => {
 	});
 });
 
+/** A workspace triple pointing inside the test's temp dir. */
+function fixture(root: string, name = "agent-abc-0") {
+	const workspace = {
+		name,
+		path: join(root, name),
+		base: join(dir, "clone"),
+		artifactsDir: agentArtifactsDir(root, name),
+	};
+	mkdirSync(workspace.path, { recursive: true });
+	mkdirSync(workspace.artifactsDir, { recursive: true });
+	return workspace;
+}
+
+describe("copyWorkspaceArtifacts", () => {
+	test("copies what the child changed, keeping the relative layout", async () => {
+		const workspace = fixture(join(dir, "clone.agents"));
+		mkdirSync(join(workspace.path, "notes"), { recursive: true });
+		writeFileSync(join(workspace.path, "notes/triage.md"), "long write-up");
+
+		const copied = await copyWorkspaceArtifacts(workspace, { capture: () => "A notes/triage.md\nD gone.md\n" });
+
+		assert.deepEqual(copied, ["notes/triage.md"]);
+		assert.equal(readFileSync(join(workspace.artifactsDir, "notes/triage.md"), "utf-8"), "long write-up");
+	});
+
+	test("leaves a file the child already wrote to the artifacts directory alone", async () => {
+		const workspace = fixture(join(dir, "clone.agents"));
+		writeFileSync(join(workspace.path, "report.md"), "workspace copy");
+		writeFileSync(join(workspace.artifactsDir, "report.md"), "deliverable");
+
+		await copyWorkspaceArtifacts(workspace, { capture: () => "M report.md\n" });
+
+		assert.equal(readFileSync(join(workspace.artifactsDir, "report.md"), "utf-8"), "deliverable");
+	});
+
+	test("gives up quietly when jj cannot report a diff", async () => {
+		const workspace = fixture(join(dir, "clone.agents"));
+		const copied = await copyWorkspaceArtifacts(workspace, {
+			capture: () => {
+				throw new Error("jj: broken");
+			},
+		});
+		assert.deepEqual(copied, []);
+	});
+});
+
 describe("releaseAgentWorkspace", () => {
-	test("snapshots, forgets, then removes the directory", async () => {
-		const base = join(dir, "clone");
-		const path = join(dir, "clone.agents", "agent-abc-0");
-		mkdirSync(path, { recursive: true });
+	test("snapshots, rescues the child's files, forgets, then removes the directory", async () => {
+		const workspace = fixture(join(dir, "clone.agents"));
+		writeFileSync(join(workspace.path, "slack-pass.md"), "1059 lines");
 		const calls: string[][] = [];
 
-		await releaseAgentWorkspace(
-			{ name: "agent-abc-0", path, base },
-			{ exec: (command, args, cwd) => void calls.push([command, ...args, cwd]) },
-		);
+		await releaseAgentWorkspace(workspace, {
+			exec: (command, args, cwd) => void calls.push([command, ...args, cwd]),
+			capture: () => "A slack-pass.md\n",
+		});
 
 		assert.deepEqual(calls, [
-			["jj", "status", path],
-			["jj", "workspace", "forget", "agent-abc-0", base],
+			["jj", "status", workspace.path],
+			["jj", "workspace", "forget", workspace.name, workspace.base],
 		]);
-		assert.equal(existsSync(path), false);
+		// The point of the whole mechanism: the workspace is gone, the file is not.
+		assert.equal(existsSync(workspace.path), false);
+		assert.equal(readFileSync(join(workspace.artifactsDir, "slack-pass.md"), "utf-8"), "1059 lines");
 	});
 
 	test("still removes the directory when jj fails", async () => {
-		const base = join(dir, "clone");
-		const path = join(dir, "clone.agents", "agent-abc-0");
-		mkdirSync(path, { recursive: true });
+		const workspace = fixture(join(dir, "clone.agents"));
 
-		await releaseAgentWorkspace(
-			{ name: "agent-abc-0", path, base },
-			{
-				exec: () => {
-					throw new Error("jj: broken");
-				},
+		await releaseAgentWorkspace(workspace, {
+			exec: () => {
+				throw new Error("jj: broken");
 			},
-		);
+			capture: () => {
+				throw new Error("jj: broken");
+			},
+		});
 
-		assert.equal(existsSync(path), false);
+		assert.equal(existsSync(workspace.path), false);
 	});
 });

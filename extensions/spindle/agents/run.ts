@@ -46,6 +46,14 @@ export interface RunRequest {
 	 * night run its own jj workspace.
 	 */
 	cwd?: string;
+	/**
+	 * Durable directory for the child's deliverables, when the host gave it one.
+	 *
+	 * Host-only, like `cwd`, and produced by the same allocator: a night child's
+	 * working copy is deleted at the end of the batch, so anything it must hand
+	 * back as a file goes here instead.
+	 */
+	artifactsDir?: string;
 }
 
 /** The directory a run's child process starts in. */
@@ -185,6 +193,7 @@ export function prepareChildRun(
 		reads: req.reads,
 		night: req.night,
 		...(req.cwd ? { workspacePath: req.cwd } : {}),
+		...(req.artifactsDir ? { artifactsDir: req.artifactsDir } : {}),
 		includeTask: opts.includeTask,
 	});
 
