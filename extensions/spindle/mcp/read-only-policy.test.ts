@@ -8,6 +8,7 @@ import {
 	decideMcpCall,
 	effectiveMcpReadOnlyConfig,
 	McpReadOnlyGate,
+	mcpToolNameVariants,
 	normalizeMcpReadOnlyConfig,
 } from "./read-only-policy.ts";
 
@@ -216,4 +217,62 @@ test("normalization ignores junk and keeps the defaults", () => {
 	assert.deepEqual(normalizeMcpReadOnlyConfig({ servers: { slack: { allow: ["a", 2, " b "], deny: null } } }).servers, {
 		slack: { allow: ["a", "b"] },
 	});
+});
+
+/**
+ * Regression: the subagent path. pi-mcp-adapter registers tools under
+ * server-prefixed names, so this is the name shape the guard really sees, and
+ * the shape that used to be refused wholesale.
+ */
+test("the built-in profiles apply to adapter-prefixed tool names", () => {
+	for (const [tool, server] of [
+		["slack_slack_read_channel", "slack"],
+		["slack_slack_read_thread", "slack"],
+		["slack_slack_search_public", "slack"],
+		["slack_slack_search_channels", "slack"],
+		["slack_slack_search_users", "slack"],
+		["slack_slack_read_user_profile", "slack"],
+		["slack_slack_get_reactions", "slack"],
+		["datadog_search_datadog_logs", "datadog"],
+		["datadog_search_datadog_metrics", "datadog"],
+		["datadog_analyze_datadog_logs", "datadog"],
+		["linear_list_issues", "linear"],
+		["linear_get_issue", "linear"],
+		["linear_list_teams", "linear"],
+		["metabase_GET_CARD_DATA", "metabase"],
+	] as const) {
+		assert.equal(allowed(tool, server), true, `${tool} must be allowed`);
+		// The server is recoverable from the prefix alone, so an unqualified call
+		// gets the same answer.
+		assert.equal(allowed(tool), true, `${tool} must be allowed without an explicit server`);
+	}
+});
+
+test("prefixing does not launder a write into a read", () => {
+	for (const [tool, server] of [
+		["slack_slack_send_message", "slack"],
+		["slack_slack_send_message_draft", "slack"],
+		["slack_slack_add_reaction", "slack"],
+		["slack_slack_create_canvas", "slack"],
+		["mcp__slack_slack_send_message", "slack"],
+		["linear_save_issue", "linear"],
+		["linear_save_comment", "linear"],
+		["datadog_update_datadog_monitor", "datadog"],
+		["metabase_EXECUTE_SQL_QUERY", "metabase"],
+		// Unclassified Slack tool, prefixed: still fails closed.
+		["slack_slack_invent_something", "slack"],
+	] as const) {
+		assert.equal(allowed(tool, server), false, `${tool} must be refused`);
+		assert.equal(allowed(tool), false, `${tool} must be refused without an explicit server`);
+	}
+});
+
+test("variants peel known server prefixes and stop there", () => {
+	assert.deepEqual(mcpToolNameVariants("slack_slack_read_channel", ["slack"]), [
+		"slack_slack_read_channel",
+		"slack_read_channel",
+		"read_channel",
+	]);
+	// An unknown server prefix is not peeled: nothing says what it means.
+	assert.deepEqual(mcpToolNameVariants("acme_send_message", ["slack"]), ["acme_send_message"]);
 });

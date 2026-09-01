@@ -107,3 +107,42 @@ test("a pi-mcp-adapter direct tool is gated by its own name", async () => {
 	await new CapturedToolsProvider(reader.catalog, undefined, nightGate).invoke("slack_read_thread", {}, context);
 	assert.equal(reader.calls.length, 1);
 });
+
+test("mcp.<server>.<tool> refs route to the gateway instead of Unknown Spindle action", async () => {
+	const spy = gatewayCatalog();
+	const provider = new McpBridgeProvider(() => spy.catalog, nightGate);
+	const descriptor = await provider.describe("slack.slack_read_channel", context);
+	assert.equal(descriptor?.name, "slack.slack_read_channel");
+	await provider.invoke("slack.slack_read_channel", { channel: "C1" }, context);
+	assert.deepEqual(spy.calls, [{ tool: "slack_read_channel", args: { channel: "C1" }, server: "slack" }]);
+	await assert.rejects(
+		() => provider.invoke("slack.slack_send_message", { text: "hi" }, context),
+		/MCP call slack\.slack_send_message is refused/,
+	);
+	assert.equal(spy.calls.length, 1, "a refused qualified call must never reach the gateway");
+});
+
+test("adapter-prefixed reads reach the gateway on the subagent path", async () => {
+	const spy = gatewayCatalog();
+	const provider = new McpBridgeProvider(() => spy.catalog, nightGate);
+	await provider.invoke("$call", { server: "slack", tool: "slack_slack_read_channel", args: {} }, context);
+	await provider.invoke("$call", { server: "datadog", tool: "datadog_search_datadog_logs", args: {} }, context);
+	await provider.invoke("$call", { server: "linear", tool: "linear_list_teams", args: {} }, context);
+	assert.equal(spy.calls.length, 3);
+	await assert.rejects(
+		() => provider.invoke("$call", { server: "slack", tool: "slack_slack_send_message", args: {} }, context),
+		/is refused/,
+	);
+});
+
+test("the mcp__<server> namespace proxy is gated like the gateway", async () => {
+	const spy = gatewayCatalog("mcp__slack");
+	const provider = new CapturedToolsProvider(spy.catalog, undefined, nightGate);
+	await provider.invoke("mcp__slack", { tool: "slack_read_channel", args: {} }, context);
+	assert.equal(spy.calls.length, 1);
+	await assert.rejects(
+		() => provider.invoke("mcp__slack", { tool: "slack_send_message", args: {} }, context),
+		/MCP call slack\.slack_send_message is refused/,
+	);
+	assert.equal(spy.calls.length, 1);
+});
