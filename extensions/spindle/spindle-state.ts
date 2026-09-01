@@ -30,6 +30,8 @@ import { McpBridgeProvider } from "./providers/mcp-bridge-provider.ts";
 import { PiToolsProvider } from "./providers/pi-tools-provider.ts";
 import { SandboxController } from "./sandbox/controller.ts";
 import { activeNightSandboxRequest } from "./sandbox/night-bridge.ts";
+import { runNightPreflight } from "./sandbox/preflight-bridge.ts";
+import { applyNightRunEnv } from "../night-mode/night-run.ts";
 import { policyEnvironment, resolveSandboxPolicy } from "./sandbox/policy.ts";
 import { effectiveSandbox } from "./sandbox/resolve.ts";
 import {
@@ -247,6 +249,11 @@ export class SpindleState {
 	 * by starting up, and it survives a `/reload`.
 	 */
 	#resolveSandbox(cwd: string) {
+		// Same reason, for the environment: a participant adopts the run's
+		// `XDG_CONFIG_HOME` and ledger store here, so every shell this process spawns
+		// inherits them. Without it a subagent that was not handed an environment
+		// runs `jj` against a config dir the sandbox refuses to write.
+		applyNightRunEnv({ sessionId: this.#sessionRef.sessionId, cwd });
 		const effective = effectiveSandbox({
 			settings: this.config.sandbox,
 			requested: this.#sandboxRequest,
@@ -326,6 +333,20 @@ export class SpindleState {
 		const { policy, effective } = this.#resolveSandbox(cwd);
 		const state = await controller.apply(policy, effective.source === "config" ? "config" : "request");
 		this.pi.events.emit(SANDBOX_STATE_EVENT, state);
+		// The policy is now in force, so this is the first moment the run can measure
+		// what it actually allows. Fire-and-forget: a probe is diagnostics, and the
+		// run must not wait on `curl` and `ssh` timing out.
+		void runNightPreflight({
+			wrap: (command: string) => controller.wrapCommand(command),
+			sessionId: this.#sessionRef.sessionId,
+			cwd,
+		})
+			.then((path) => {
+				if (path) context.ui.notify(`spindle: sandbox capabilities probed, see ${path}`, "info");
+			})
+			.catch(() => {
+				// Diagnostics only: a failed probe must never fail the run.
+			});
 		if (effective.refused) {
 			context.ui.notify(
 				`spindle: '${effective.refused.asked}' refused, an active night run holds the sandbox at ` +

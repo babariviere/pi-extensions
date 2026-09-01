@@ -175,6 +175,60 @@ count) and `direnv allow` when there is an `.envrc`. Both run from the extension
 not from a sandboxed shell, because the trust stores live outside the run's
 writable roots. `sandboxTrust: false` opts out.
 
+### jj, and the config home children inherit
+
+jj writes a per-repository "secure config" record under
+`$XDG_CONFIG_HOME/jj/repos/<hash>` the first time it sees a working copy. The
+night clone is always such a copy and the real config home is outside the run's
+writable roots, so a bare `jj` in the clone dies before doing anything:
+
+```
+Internal error: Failed to determine the secure config for a repo
+1: Cannot access /Users/dev/.config/jj/repos/de2afa274e343353f30c
+2: Operation not permitted (os error 1)
+```
+
+The run therefore gets its own config home at `<clone>.agents/xdg` (jj copied,
+every sibling entry symlinked). Setting `XDG_CONFIG_HOME` on the coordinator
+process is not enough: a subagent spawned through a pane, or a session that
+reloads, never sees that process's environment, and the failure comes back one
+layer down. So the path is published in the handshake file (`configHome`) and
+adopted from there: `nightChildEnv` composes it into every `night: true` child's
+environment, and `applyNightRunEnv` sets it on any participant process that
+started without it, so the shells *it* spawns inherit it too.
+
+### HTTPS remotes
+
+The copy inherits the source checkout's remote, which is usually
+`git@github.com:owner/repo.git`. In the sandbox that remote cannot work: raw DNS
+is denied at the socket layer, so `ssh -T git@github.com` fails with
+`Could not resolve hostname github.com: -65563` before authentication is
+attempted. HTTPS does work (it goes through the proxy) and the `gh` credential
+helper authenticates it. Every SSH remote of the copy is therefore rewritten to
+its HTTPS form right after the clone, for git and for jj when the repo is
+colocated. Only the throwaway copy is touched; your own checkout keeps its
+remote.
+
+### The capability probe
+
+What the sandbox allows changes between nights, and configuration does not say:
+the policy records what was *asked* for. A run that discovers the envelope by
+burning a subagent on it pays for the discovery again the next night. So once
+the sandbox policy is in force, the coordinator probes it in a shell wrapped
+exactly like a subagent's, and writes `<clone>.agents/sandbox-capabilities.md`:
+HTTPS egress, raw DNS, SSH to github.com, `gh auth status`, loopback TCP, and
+`jj` in the clone. The path is in the night prompt and in every subagent's
+contract.
+
+Probes live in `preflight.ts` (pure: specs, classification, report) and are
+executed by `spindle/sandbox/preflight-bridge.ts`, because only spindle can run
+a command through the same `srt` wrapper the children get. A probe run from the
+extension host would report an egress the children do not have.
+
+Not probed yet: one read call per configured MCP server, which would have caught
+the night the read-only gate denied every MCP read for subagents while the
+coordinator (the one process not subject to the gate) saw nothing wrong.
+
 ### When the copy is not actually independent
 
 A git linked worktree keeps `.git` as a pointer file, and a secondary jj

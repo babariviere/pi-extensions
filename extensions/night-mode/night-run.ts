@@ -62,6 +62,22 @@ export interface ActiveNightRun {
 	 */
 	ledgerDir?: string;
 	/**
+	 * Private `XDG_CONFIG_HOME` prepared for the run (see
+	 * `sandbox-clone.ts`). jj writes a per-repository record under its config
+	 * dir, and the real one is outside the run's writable roots, so every jj
+	 * command in the clone fails without this. Published here rather than left
+	 * in the coordinator's `process.env`: a subagent is a separate process, and
+	 * the ones that cannot be handed an environment (herdr panes, a session
+	 * restarted mid-run) read it back from this file.
+	 */
+	configHome?: string;
+	/**
+	 * Where the run's capability probe writes what the sandbox actually allows
+	 * (see `preflight.ts`). Published so a child can read the envelope instead
+	 * of rediscovering it by burning a run on it.
+	 */
+	preflightPath?: string;
+	/**
 	 * Filesystem sandbox the run asks for. Spindle reads this to sandbox the
 	 * coordinator and every subagent process for the duration of the night; see
 	 * `spindle/sandbox/night-bridge.ts`. Structural on purpose: night-mode does
@@ -122,6 +138,56 @@ export function clearActiveNightRun(): void {
  */
 export const NIGHT_RUN_ENV = "PI_NIGHT_RUN";
 
+/**
+ * The environment a participant process needs, derived from the handshake
+ * rather than from whatever the spawning process happens to carry.
+ *
+ * Inheriting `process.env` is not enough. The coordinator sets its own
+ * `XDG_CONFIG_HOME` when the run starts, so a child spawned directly from it
+ * inherits the value, but a child spawned through a pane, a session that
+ * reloads, or a shell started from anywhere else does not, and a bare `jj` in
+ * that shell dies with "Cannot access ~/.config/jj/repos/<hash>: Operation not
+ * permitted". Reading the values back from the handshake file makes the answer
+ * the same for every participant.
+ */
+export function nightChildEnv(
+	run: ActiveNightRun | undefined,
+	base: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+	if (!run) return { ...base };
+	return {
+		...base,
+		[NIGHT_RUN_ENV]: "1",
+		...(run.ledgerDir ? { PI_TODO_PATH: run.ledgerDir } : {}),
+		...(run.configHome ? { XDG_CONFIG_HOME: run.configHome } : {}),
+	};
+}
+
+/**
+ * Adopt the run's environment in *this* process, so every shell it spawns
+ * inherits it too. For participants the spawn path could not hand an
+ * environment to; a bystander session is left alone.
+ *
+ * Returns the variable names that were changed, for the caller to report.
+ */
+export function applyNightRunEnv(
+	ref: { sessionId?: string; cwd?: string },
+	env: NodeJS.ProcessEnv = process.env,
+): string[] {
+	const run = readActiveNightRun();
+	if (!run || !isNightRunParticipant(run, ref)) return [];
+	const applied: string[] = [];
+	if (run.configHome && env.XDG_CONFIG_HOME !== run.configHome) {
+		env.XDG_CONFIG_HOME = run.configHome;
+		applied.push("XDG_CONFIG_HOME");
+	}
+	if (run.ledgerDir && env.PI_TODO_PATH !== run.ledgerDir) {
+		env.PI_TODO_PATH = run.ledgerDir;
+		applied.push("PI_TODO_PATH");
+	}
+	return applied;
+}
+
 /** True when `candidate` is `root` or lives under it. */
 function isInside(root: string, candidate: string): boolean {
 	const rel = relative(root, candidate);
@@ -178,6 +244,13 @@ export function buildNightContract(run: ActiveNightRun, workspacePath?: string):
 		"- Every pull request you open is a draft.",
 		`- The whole night is capped at ${run.maxPullRequests} pull requests. Do not open one unless the coordinator asked you to.`,
 		"- No deploys, no manual migrations, no production data changes.",
+		...(run.preflightPath
+			? [
+					`- Sandbox capability probe: \`${run.preflightPath}\`. It records what this sandbox actually allows ` +
+						"tonight (HTTPS egress, DNS, SSH, `gh`, `jj`, loopback TCP). Read it before concluding something is " +
+						"impossible.",
+				]
+			: []),
 		`- Night report: \`${run.reportPath}\`. Read it if you need what happened earlier. Do not rewrite it; the coordinator owns it. Put anything worth reporting in your final message instead.`,
 		"",
 	].join("\n");

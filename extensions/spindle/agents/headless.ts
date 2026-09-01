@@ -10,7 +10,7 @@
  */
 
 import { spawn } from "node:child_process";
-import { NIGHT_RUN_ENV, readActiveNightRun } from "../../night-mode/night-run.ts";
+import { nightChildEnv, readActiveNightRun } from "../../night-mode/night-run.ts";
 import { readDefaultProvider } from "./settings.ts";
 import { resolveRunOutput } from "./output.ts";
 import { DEFAULT_KILL_GRACE_MS, terminateProcessTree, type TerminateHandle } from "./process-tree.ts";
@@ -27,17 +27,15 @@ const CANCELLED_RUN_ERROR = "cancelled by the parent session";
 const CLOSE_FALLBACK_MS = DEFAULT_KILL_GRACE_MS + 1_000;
 
 /**
- * Environment for a `night: true` child: the participation marker, plus the
- * run's ledger store so the child's todo tool resolves the coordinator's ledger
- * instead of one derived from its own throwaway workspace.
+ * Environment for a `night: true` child: the participation marker, the run's
+ * ledger store, and the run's private `XDG_CONFIG_HOME`. Composed from the
+ * handshake file (`nightChildEnv`) rather than from this process's own
+ * environment: the coordinator sets those variables on itself when the run
+ * starts, but a spawn from anywhere else would hand the child a shell where
+ * `jj` cannot write its per-repo record and every commit fails.
  */
 function nightEnv(): NodeJS.ProcessEnv {
-	const ledgerDir = readActiveNightRun()?.ledgerDir;
-	return {
-		...process.env,
-		[NIGHT_RUN_ENV]: "1",
-		...(ledgerDir ? { PI_TODO_PATH: ledgerDir } : {}),
-	};
+	return nightChildEnv(readActiveNightRun());
 }
 
 export function runHeadlessBatch(reqs: RunRequest[], ctx: RunContext): Promise<RunResult[]> {

@@ -24,6 +24,8 @@ export interface NightPromptInput {
 	runId?: string;
 	/** Per-run working copy, when one was created for tonight. */
 	workspacePath?: string;
+	/** Where the sandbox capability probe writes what tonight actually allows. */
+	preflightPath?: string;
 }
 
 /** True when a file body carries no actual instruction. */
@@ -72,6 +74,13 @@ export function composeNightPrompt(input: NightPromptInput): string {
 			? [
 					`Working copy: \`${input.workspacePath}\` - a private clone of the repo made for tonight. Work there, and ` +
 						"tell every subagent to do the same. The user's own checkout is off limits.",
+				]
+			: []),
+		...(input.preflightPath
+			? [
+					`Sandbox capabilities: \`${input.preflightPath}\` - written a few seconds into the run by a probe of this ` +
+						"sandbox (HTTPS egress, DNS, SSH, `gh`, `jj`, loopback TCP). Read it before planning, and point " +
+						"subagents at it instead of letting them rediscover the envelope one burnt run at a time.",
 				]
 			: []),
 		"",

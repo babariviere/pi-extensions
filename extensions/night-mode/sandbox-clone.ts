@@ -391,3 +391,147 @@ export function prepareConfigHome(
 	}
 	return { path: destination, problems };
 }
+
+/**
+ * HTTPS remotes, because the night sandbox has no SSH and no raw DNS.
+ *
+ * The clone inherits whatever remote the source checkout uses, which for a
+ * repository cloned by hand is almost always `git@github.com:owner/repo.git`.
+ * Inside the run that remote cannot work: DNS is denied at the socket layer, so
+ * `ssh -T git@github.com` fails with `Could not resolve hostname github.com:
+ * -65563` before authentication is even attempted. HTTPS does work (it goes
+ * through the sandbox proxy) and `~/.config/git/config` already carries
+ * `credential.helper = !gh auth git-credential` for `https://github.com`.
+ *
+ * So the fetch/push URL is rewritten at clone time, on the copy only. The
+ * user's own checkout is never touched: this rewrites the throwaway working
+ * copy the run was given, which is deleted in the morning.
+ */
+
+/** `git@host:owner/repo.git` and `ssh://git@host/owner/repo.git`. */
+const SCP_SSH_REMOTE = /^(?:ssh:\/\/)?(?:[^@/]+@)([^:/]+)[:/](.+)$/;
+
+/**
+ * The HTTPS form of an SSH remote, or undefined when there is nothing to do
+ * (already HTTPS, a local path, or a scheme we do not understand). Undefined
+ * rather than a guess: a remote we cannot parse is left exactly as it was.
+ */
+export function httpsRemoteUrl(url: string): string | undefined {
+	const trimmed = url.trim();
+	if (!trimmed || trimmed.startsWith("https://") || trimmed.startsWith("http://")) return undefined;
+	const match = SCP_SSH_REMOTE.exec(trimmed);
+	if (!match) return undefined;
+	const [, host, path] = match;
+	if (!host.includes(".")) return undefined;
+	return `https://${host}/${path.replace(/^\/+/, "")}`;
+}
+
+export interface RemoteRewrite {
+	remote: string;
+	from: string;
+	to: string;
+}
+
+/**
+ * How a remote is rewritten in a copy that may be a plain git repo, a jj repo,
+ * or both (a colocated repo has `.git` and `.jj`).
+ *
+ * Both commands are issued for a colocated repo rather than just one: jj keeps
+ * its own remote list in its store, and a repo where only one of the two was
+ * rewritten pushes over SSH again the moment the run reaches for the other CLI.
+ */
+export function remoteRewriteCommands(
+	path: string,
+	rewrite: RemoteRewrite,
+	present: { git: boolean; jj: boolean },
+): PrepareCommand[] {
+	const commands: PrepareCommand[] = [];
+	if (present.git) {
+		commands.push({
+			label: `git remote set-url ${rewrite.remote}`,
+			command: "git",
+			args: ["-C", path, "remote", "set-url", rewrite.remote, rewrite.to],
+		});
+	}
+	if (present.jj) {
+		commands.push({
+			label: `jj git remote set-url ${rewrite.remote}`,
+			command: "jj",
+			args: ["-R", path, "--ignore-working-copy", "git", "remote", "set-url", rewrite.remote, rewrite.to],
+		});
+	}
+	return commands;
+}
+
+/** Parse `git remote -v` into one entry per remote, fetch URL first. */
+export function parseGitRemotes(output: string): Array<{ remote: string; url: string }> {
+	const seen = new Map<string, string>();
+	for (const line of output.split("\n")) {
+		const match = /^(\S+)\s+(\S+)\s+\((fetch|push)\)$/.exec(line.trim());
+		if (!match) continue;
+		const [, remote, url, kind] = match;
+		if (kind === "fetch" || !seen.has(remote)) seen.set(remote, url);
+	}
+	return [...seen].map(([remote, url]) => ({ remote, url }));
+}
+
+export interface RewriteRemotesResult {
+	rewritten: RemoteRewrite[];
+	problems: string[];
+}
+
+/**
+ * Rewrite every SSH remote of the copy at `path` to its HTTPS form.
+ *
+ * Never throws: a repo with no remotes, no git, or a remote we cannot parse is
+ * a run that pushes the way it did before, not a failed clone.
+ */
+export async function rewriteRemotesToHttps(
+	path: string,
+	opts: {
+		list?: (path: string) => Promise<Array<{ remote: string; url: string }>>;
+		run?: (command: PrepareCommand) => void | Promise<void>;
+		present?: { git: boolean; jj: boolean };
+	} = {},
+): Promise<RewriteRemotesResult> {
+	const present = opts.present ?? { git: existsSync(join(path, ".git")), jj: existsSync(join(path, ".jj")) };
+	if (!present.git && !present.jj) return { rewritten: [], problems: [] };
+
+	const list = opts.list ?? defaultListRemotes;
+	const run =
+		opts.run ??
+		(async (command: PrepareCommand) => {
+			await execFileAsync(command.command, command.args, { cwd: path });
+		});
+
+	let remotes: Array<{ remote: string; url: string }>;
+	try {
+		remotes = await list(path);
+	} catch (error) {
+		return { rewritten: [], problems: [`remotes: ${String(error).split("\n")[0]}`] };
+	}
+
+	const rewritten: RemoteRewrite[] = [];
+	const problems: string[] = [];
+	for (const { remote, url } of remotes) {
+		const https = httpsRemoteUrl(url);
+		if (!https) continue;
+		const rewrite: RemoteRewrite = { remote, from: url, to: https };
+		let failed = false;
+		for (const command of remoteRewriteCommands(path, rewrite, present)) {
+			try {
+				await run(command);
+			} catch (error) {
+				failed = true;
+				problems.push(`${command.label}: ${String(error).split("\n")[0]}`);
+			}
+		}
+		if (!failed) rewritten.push(rewrite);
+	}
+	return { rewritten, problems };
+}
+
+const defaultListRemotes = async (path: string): Promise<Array<{ remote: string; url: string }>> => {
+	const { stdout } = await execFileAsync("git", ["-C", path, "remote", "-v"]);
+	return parseGitRemotes(stdout);
+};
