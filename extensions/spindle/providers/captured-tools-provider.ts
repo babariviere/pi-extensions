@@ -3,7 +3,7 @@ import { runAbortable, throwIfAborted } from "../async-settlement.ts";
 import type { AgentToolResult, SourceInfo } from "@earendil-works/pi-coding-agent";
 import { CapturedToolCatalog, type CapturedToolEntry } from "../capture/catalog.ts";
 import { SpindleToolGate } from "../core/tool-allowlist.ts";
-import { assertMcpGatewayArguments, McpReadOnlyGate } from "../mcp/read-only-policy.ts";
+import { assertMcpGatewayArguments, McpReadOnlyGate, mcpNamespaceProxyServer } from "../mcp/read-only-policy.ts";
 import type {
 	SpindleActionDescriptor,
 	SpindleInvocationContext,
@@ -164,6 +164,13 @@ export class CapturedToolsProvider implements SpindleProvider {
 		if (!gate.readOnly) return;
 		if (entry.name === "mcp") {
 			assertMcpGatewayArguments(gate, args);
+			return;
+		}
+		// A namespace proxy (`mcp__slack`) is a gateway for one server: the tool it
+		// forwards to is in its arguments, and the server is in its own name.
+		const proxied = mcpNamespaceProxyServer(entry.name);
+		if (proxied) {
+			assertMcpGatewayArguments(gate, args, proxied);
 			return;
 		}
 		gate.assert(entry.name);

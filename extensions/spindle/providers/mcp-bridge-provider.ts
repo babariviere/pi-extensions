@@ -133,6 +133,21 @@ const normalizeMcpResult = (result: unknown): unknown => {
 	};
 };
 
+/**
+ * `mcp.<server>.<tool>` reached as a ref rather than as guest sugar.
+ *
+ * In the sandbox `mcp.slack.slack_read_channel(args)` is rewritten to
+ * `mcp.$call`, but `tools.call({ ref: "mcp.slack.slack_read_channel" })` arrives
+ * here with the whole `slack.slack_read_channel` as the action name, and used to
+ * fail with "Unknown Spindle action". Both spellings must reach the same place,
+ * gate included.
+ */
+const parseQualifiedAction = (actionName: string): { server: string; tool: string } | undefined => {
+	const match = /^([A-Za-z0-9_-]+)\.([A-Za-z0-9_.-]+)$/.exec(actionName.trim());
+	if (!match?.[1] || !match[2]) return undefined;
+	return { server: match[1], tool: match[2] };
+};
+
 const objectArgs = (value: unknown): Record<string, unknown> =>
 	typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 
@@ -162,7 +177,16 @@ export class McpBridgeProvider implements SpindleProvider {
 		actionName: string,
 		_context: SpindleInvocationContext,
 	): Promise<SpindleActionDescriptor | undefined> {
-		return descriptors.find((descriptor) => descriptor.name === actionName);
+		const descriptor = descriptors.find((candidate) => candidate.name === actionName);
+		if (descriptor) return descriptor;
+		const qualified = parseQualifiedAction(actionName);
+		if (!qualified) return undefined;
+		return {
+			name: actionName,
+			description: `Call the MCP tool '${qualified.tool}' on server '${qualified.server}'`,
+			inputSchema: { type: "object", additionalProperties: true },
+			namespace: `mcp:${qualified.server}`,
+		};
 	}
 
 	async invoke(
@@ -205,8 +229,15 @@ export class McpBridgeProvider implements SpindleProvider {
 				return this.#gatewayCall({ describe: String(args.tool ?? "") }, context);
 			case "$connect":
 				return this.#gatewayCall({ connect: String(args.server ?? "") }, context);
-			default:
-				throw new Error(`Unknown mcp action: mcp.${actionName}`);
+			default: {
+				const qualified = parseQualifiedAction(actionName);
+				if (!qualified) throw new Error(`Unknown mcp action: mcp.${actionName}`);
+				this.readOnlyGate().assert(qualified.tool, qualified.server);
+				return this.#gatewayCall(
+					{ tool: qualified.tool, args: objectArgs(args.args ?? args), server: qualified.server },
+					context,
+				);
+			}
 		}
 	}
 
