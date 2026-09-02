@@ -253,3 +253,96 @@ test("a settled bash exit survives a rewritten error message", async () => {
 	);
 	assert.equal(result.value, "7|[redacted by middleware]|[redacted by middleware]");
 });
+
+/** Collect every batched item transition a program emits, in order. */
+const recordItems = async (code: string) => {
+	const spans: Array<Record<string, unknown>> = [];
+	const items: Array<Record<string, unknown>> = [];
+	const result = await new QuickJsRuntime().execute(
+		code,
+		async (ref, args) => {
+			const payload = (args ?? {}) as Record<string, unknown>;
+			if (ref === "spindle.$spanStart") spans.push(payload);
+			if (ref === "spindle.$items") {
+				for (const entry of payload.items as Array<Record<string, unknown>>) items.push(entry);
+			}
+			return {};
+		},
+		baseOptions,
+	);
+	return { result, spans, items };
+};
+
+test("mapLimit infers per-item progress and labels elements from their value", async () => {
+	const { result, spans, items } = await recordItems(
+		"return await mapLimit(['a.ts', 'b.ts', 'c.ts', 'd.ts'], (f) => f.toUpperCase(), 2);",
+	);
+	assert.equal(result.terminationReason, "completed");
+	assert.deepEqual(result.value, ["A.TS", "B.TS", "C.TS", "D.TS"]);
+	assert.equal(spans.length, 1);
+	assert.equal(spans[0]!.itemCount, 4);
+	assert.equal(spans[0]!.concurrency, 2);
+	// A string element is its own best label; the host was told nothing.
+	const completed = items.filter((item) => item.status === "completed");
+	assert.deepEqual(
+		completed.map((item) => item.label),
+		["a.ts", "b.ts", "c.ts", "d.ts"],
+	);
+	assert.deepEqual(new Set(completed.map((item) => item.total)), new Set([4]));
+});
+
+test("mapLimit labels object elements from a conventional key", async () => {
+	const { items } = await recordItems(
+		"return await mapLimit([{ path: '/x' }, { path: '/y' }, { path: '/z' }, { path: '/w' }], (o) => o.path);",
+	);
+	assert.deepEqual(
+		items.filter((item) => item.status === "completed").map((item) => item.label),
+		["/x", "/y", "/z", "/w"],
+	);
+});
+
+test("a failing element is reported as failed without masking the rejection", async () => {
+	const { result, items } = await recordItems(
+		[
+			"try {",
+			"  await mapLimit(['a', 'b', 'c', 'd'], (v) => { if (v === 'c') throw new Error('boom'); return v; });",
+		"} catch (error) {",
+		"  return 'caught: ' + error.message;",
+		"}",
+		"return 'not reached';",
+		].join("\n"),
+	);
+	assert.equal(result.terminationReason, "completed");
+	assert.equal(result.value, "caught: boom");
+	const failed = items.filter((item) => item.status === "failed");
+	assert.equal(failed.length, 1);
+	assert.equal(failed[0]!.label, "c");
+});
+
+test("a narrow fan-out emits no span and no item traffic", async () => {
+	const { result, spans, items } = await recordItems(
+		"return await Promise.all([1, 2, 3].map(async (n) => n * 2));",
+	);
+	assert.equal(result.terminationReason, "completed");
+	assert.deepEqual(result.value, [2, 4, 6]);
+	assert.equal(spans.length, 0);
+	assert.equal(items.length, 0);
+});
+
+test("a wide Promise.all reports progress without the program asking", async () => {
+	const { result, spans, items } = await recordItems(
+		"return await Promise.all([1, 2, 3, 4, 5].map(async (n) => n * 2));",
+	);
+	assert.equal(result.terminationReason, "completed");
+	assert.deepEqual(result.value, [2, 4, 6, 8, 10]);
+	assert.equal(spans.length, 1);
+	assert.equal(spans[0]!.itemCount, 5);
+	// Already-started promises carry nothing to name them with, so entries fall
+	// back to their position.
+	const completed = items.filter((item) => item.status === "completed");
+	assert.equal(completed.length, 5);
+	assert.deepEqual(
+		completed.map((item) => item.label),
+		["#1", "#2", "#3", "#4", "#5"],
+	);
+});

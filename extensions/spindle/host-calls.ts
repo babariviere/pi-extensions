@@ -16,6 +16,7 @@
  */
 
 import type {
+	SpindleActivityItemInput,
 	SpindleRunDisplay,
 } from "./activity/types.ts";
 import {
@@ -152,6 +153,30 @@ export const HOST_CALLS: readonly HostCall[] = [
 			ctx.traceAttempt("spindle.workflow.progress", args, signal, () =>
 				ctx.update(String(args.message ?? "Working")),
 			),
+	},
+	{
+		/**
+		 * Batched per-item progress for a fan-out span. Never called by a
+		 * model-facing API: the runtime derives these transitions inside
+		 * mapLimit and the instrumented Promise.all, because it already knows
+		 * the index, the total, and each element's outcome. The old
+		 * `workflow.item` asked the model to describe items the host could see
+		 * for itself, and was never called once in 11,054 recorded programs.
+		 */
+		ref: "spindle.$items",
+		handle: (args, ctx, signal) =>
+			ctx.traceAttempt("spindle.workflow.items", args, signal, () => {
+				const batch = Array.isArray(args.items) ? args.items : [];
+				let applied = 0;
+				for (const entry of batch) {
+					if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+					const input = entry as SpindleActivityItemInput;
+					if (typeof input.id !== "string" || typeof input.label !== "string") continue;
+					ctx.activity?.upsertItem(ctx.parentToolCallId, input);
+					applied += 1;
+				}
+				return { applied };
+			}),
 	},
 	{
 		ref: "spindle.$spanStart",

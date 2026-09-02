@@ -107,6 +107,19 @@ Globals inside `spindle_exec`:
   The removed `workflow.{pipeline,phase,item,event,log,configure}` members and
   the bare `parallel` / `pipeline` / `phase` / `log` aliases had 0-7 calls each
   across that same corpus.
+
+  Per-item progress survived the removal of `workflow.item`, but it is now
+  **inferred rather than declared**: `mapLimit` and the instrumented
+  `Promise.all` already know each element's index, total and outcome, so they
+  emit `spindle.$items` themselves and the program is asked for nothing. This
+  is the structural fix for why `workflow.item` was never called once: its
+  payoff (a nicer widget) was invisible to the model, whose only signal is the
+  returned value, so decorative instrumentation was pure cost. Transitions are
+  batched (32 entries or 120ms, plus a final flush) so a 200-item fan-out does
+  not cost 400 host round-trips, labels come from the element itself (a string,
+  or a conventional `path` / `file` / `id` / `name` key, else `#index`), and
+  fan-outs narrower than 4 emit nothing at all. Flush failures are swallowed:
+  progress must never mask the program's own outcome.
 - `process` — minimal shim built from `env-snapshot.ts`: allowlisted `process.env` (HOME, USER, LOGNAME, SHELL, PWD, PATH, LANG, LC_*, TERM, TMPDIR, XDG_*), `process.platform` / `process.arch`, `process.cwd()`. No secret ever enters the guest.
 - `print`, `console`, `π` (named payloads; the `payloads` argument, legacy alias `strings`), `setTimeout` / `setInterval` / `clearTimeout` / `clearInterval`
 

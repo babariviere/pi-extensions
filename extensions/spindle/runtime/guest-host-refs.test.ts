@@ -47,7 +47,7 @@ const probeCode = [
 	"await mcp.call('s', 't', {}); await mcp.connect('s');",
 	"await agents.list(); await agents.run({ agent: 'a', task: 't' }); await agents.runAll({ tasks: [] });",
 	"await agents.start({ task: 't' }); await agents.wait({ runId: 'r' }); await agents.status(); await agents.cancel();",
-	"await mapLimit([1], (x) => x);",
+	"await mapLimit([1, 2, 3, 4], (x) => x);",
 	"await Promise.all([1, 2, 3, 4].map(async (x) => x));",
 	"await new Promise((resolve) => setTimeout(resolve, 1));",
 	"print('hi');",
