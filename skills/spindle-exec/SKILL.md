@@ -2,7 +2,7 @@
 name: spindle-exec
 description: >-
   Reference for `spindle_exec` TypeScript programs: Pi core tool signatures,
-  extension/MCP/subagent namespaces, workflow helpers, named payloads, return
+  extension/MCP/subagent namespaces, `mapLimit` fan-out, named payloads, return
   shapes, and error recovery. Load before the first `spindle_exec` call or after an
   argument-shape error.
 ---
@@ -11,7 +11,7 @@ description: >-
 
 One type-checked TS program in a fresh isolated QuickJS sandbox. Only the `return` value reaches the model; `print()`/`console.log` go to the activity widget. `π` is not a tool.
 
-Available globals: `pi`, `extensions`, and `tools` (full code mode only), `mcp`, `agents`, `workflow`, `print`, `console`, `π`, `process`, and the bare aliases `parallel` / `pipeline` / `phase` / `log`. Nothing else exists — there is no `memory`, `state`, `schema`, `compact`, `mesh`, `council`, `rlm`, `agent()`, or `budget`.
+Available globals: `pi`, `extensions`, and `tools` (full code mode only), `mcp`, `agents`, `mapLimit`, `print`, `console`, `π`, `process`, and the timer family (`setTimeout` / `clearTimeout` / `setInterval` / `clearInterval`). Nothing else exists: there is no `memory`, `state`, `schema`, `compact`, `mesh`, `council`, `rlm`, `agent()`, `budget`, or `workflow` (and no bare `parallel` / `pipeline` / `phase` / `log` aliases).
 
 `process` is a minimal shim: `process.env` is an allowlisted host snapshot (HOME, USER, LOGNAME, SHELL, PWD, PATH, LANG, LC_*, TERM, TMPDIR, XDG_*), `process.platform`/`process.arch` are host facts, and `process.cwd()` returns the session working directory. Sensitive variables are never exposed; for secrets in bash use the `<\\secret:NAME>` reference path.
 
@@ -84,17 +84,16 @@ Spindle does not embed an MCP client; `mcp.*` forwards to the `mcp` gateway tool
 
 `agents.list()` / `agents.run({agent, task})` / `agents.runAll({tasks})` / `agents.start({agent, task})` / `agents.wait({runId})` / `agents.status()` / `agents.cancel({runId})`. These run agent definitions discovered on disk (`~/.pi/agent/agents/**`, `<cwd>/.pi/agents/**`) as child Pi sessions. `run`/`runAll` block for a bounded wait window: a result with `state: "running"` means the child is still working, keep its `runId` and resume with `agents.wait` (or let the finished result arrive as a follow-up message). See `<skill-dir>/references/agents.md`.
 
-## `workflow` — fan-out, staged transforms, concurrency control
+## `mapLimit` — bounded-concurrency fan-out
 
-Reach for these when the work scales, not just for long programs. Triggers: fanning out over many items (roughly >10), needing a concurrency cap so you don't hammer the host, or running each item through the same ordered stages.
+Reach for it when the work scales, not just for long programs. Triggers: fanning out over many items (roughly >10), or needing a concurrency cap so you don't hammer the host.
 
-- `workflow.parallel(items, mapper, concurrency?)` or `workflow.parallel(thunks, concurrency?)` → results in input order. Prefer this over `Promise.all` when the set is large or you want to cap concurrency (e.g. 200 files, 8 at a time). Use plain `Promise.all` for a handful of independent calls.
-- `workflow.pipeline(items, ...stages)` → each item passed through every stage. Use for repeated read->parse->validate->write flows instead of nested `.map`/`await` chains.
-- `workflow.phase(name, options?)` / `workflow.item(item)` / `workflow.event(event)` / `workflow.configure({name?, description?})` structure a long program.
-- `workflow.log(...values)` is `print`.
-- `parallel`, `pipeline`, `phase`, and `log` are also available as bare globals.
+- `mapLimit(items, mapper, concurrency?)` or `mapLimit(thunks, concurrency?)` → results in input order.
+- Prefer it over `Promise.all` when the set is large or you want to cap concurrency (e.g. 200 files, 8 at a time). `Promise.all` receives promises that have already started, so it cannot bound how many run at once.
+- Concurrency is unbounded when omitted; pass a number or `{ concurrency }`.
+- `Promise.all` is instrumented: called with 4 or more entries it reports per-item progress to the activity widget. Use it for a handful of independent calls.
 
-There is no `workflow.agent()` and no token budget: use `agents.run(...)` directly.
+There is no `workflow` namespace, no `pipeline` helper, no `phase`/`log` aliases, no `workflow.agent()`, and no token budget. For staged transforms, chain `mapLimit` calls or write a plain loop; for subagents use `agents.run(...)` directly.
 
 ## Error recovery: read the error, fix the shape, retry
 
@@ -102,4 +101,4 @@ The type checker runs before execution, so a shape mistake never executes. Read 
 
 ## Batching
 
-Batch independent operations in one program; keep dependent or conditional steps sequential. Use `Promise.all` for a few independent calls, `workflow.parallel(items, fn, N)` when fanning out over many items or capping concurrency, and `workflow.pipeline` for repeated staged transforms. Return only the compact final value — intermediate results stay in the sandbox and never enter the transcript.
+Batch independent operations in one program; keep dependent or conditional steps sequential. Use `Promise.all` for a few independent calls and `mapLimit(items, fn, N)` when fanning out over many items or capping concurrency. Return only the compact final value: intermediate results stay in the sandbox and never enter the transcript.
