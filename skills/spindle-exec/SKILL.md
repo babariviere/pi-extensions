@@ -11,7 +11,7 @@ description: >-
 
 One type-checked TS program in a fresh isolated QuickJS sandbox. Only the `return` value reaches the model; `print()`/`console.log` go to the activity widget. `π` is not a tool.
 
-Available globals: `pi`, `extensions`, and `tools` (full code mode only), `mcp`, `agents`, `mapLimit`, `print`, `console`, `π`, `process`, the timer family (`setTimeout` / `clearTimeout` / `setInterval` / `clearInterval`), and the host APIs listed below. Nothing else exists: there is no `memory`, `state`, `schema`, `compact`, `mesh`, `council`, `rlm`, `agent()`, `budget`, or `workflow` (and no bare `parallel` / `pipeline` / `phase` / `log` aliases).
+Available globals: `pi`, `extensions`, and `tools` (full code mode only), `mcp`, `agents`, `mapLimit`, `print`, `console`, `π`, `τ`, `process`, the timer family (`setTimeout` / `clearTimeout` / `setInterval` / `clearInterval`), and the host APIs listed below. Nothing else exists: there is no `memory`, `schema`, `compact`, `mesh`, `council`, `rlm`, `agent()`, `budget`, or `workflow` (and no bare `parallel` / `pipeline` / `phase` / `log` aliases).
 
 The language level is ES2025: `Object.groupBy`, `Map.groupBy`, `Promise.withResolvers`, `Promise.try`, the `Set` combinators (`union`, `intersection`, `difference`, `isSubsetOf`), the iterator helpers (`values().map(...).toArray()`), `RegExp.escape`, `Array.prototype.toSorted`/`with`/`toSpliced`, `Float16Array` and `Error.isError` are all available and typed. `Array.fromAsync`, `JSON.rawJSON`, `Symbol.dispose` and `Temporal` are not.
 
@@ -81,6 +81,40 @@ const prompt = `Objective:\n\n${π.task}`;
 ```
 
 Short single-line literals with no `${...}` are fine inline.
+
+## `τ` — session scratchpad shared across calls
+
+`π` is this call's read-only payloads; `τ` is JSON state that outlives the program and dies with the session. `τ = 2π`, which is the whole mnemonic.
+
+| Call | Returns |
+|------|---------|
+| `await τ.set(key, value)` | `{key, bytes, keys}` |
+| `await τ.get<T>(key)` | the value, or `undefined` when not held |
+| `await τ.keys()` | `[{key, bytes, updatedAt}]` |
+| `await τ.delete(key)` | `{key, deleted, keys}` |
+| `await τ.clear()` | `{cleared}` |
+
+Every member is async (each one is a host call). Keys held after a program runs are echoed in its result as a `τ keys: name (size)` line, so a later program never has to guess what is there.
+
+Reach for it when a large intermediate is needed by a *later* program but should never enter the transcript: a repo index, a parsed API response, an accumulator across a multi-step plan, a cache that survives a program that threw halfway. Do not reach for it when the value is small (return it), when one program can do the whole job (`mapLimit` / `Promise.all` in a single program is still the default), or when the data is big or wants to outlive the session (write a file under `process.env.TMPDIR`).
+
+Writes are methods rather than assignments because they can fail, and they fail loudly rather than evicting:
+
+- values must be JSON-serializable — no closures, sockets or handles survive, since the interpreter is torn down between programs, and a stored value is a snapshot, not a live reference;
+- keys match `[A-Za-z0-9][A-Za-z0-9_.:-]*`, up to 64 characters;
+- limits are 64 keys, 4 MB per value, 16 MB per session; over a limit the write throws and names what is held.
+
+```ts
+// program 1
+const index = JSON.parse(await pi.bash({ command: "…" }).then((r) => r.output));
+await τ.set("index", index);
+return { files: index.length };
+
+// program 2
+const index = (await τ.get<{ path: string }[]>("index")) ?? [];
+return index.filter((entry) => entry.path.endsWith(".ts")).length;
+```
+
 
 ## `extensions` — tools registered by sibling extensions (full code mode only)
 

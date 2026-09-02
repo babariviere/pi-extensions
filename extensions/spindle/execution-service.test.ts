@@ -199,7 +199,9 @@ test("a per-invocation timeout request raises the program deadline", async () =>
 });
 
 test("a per-invocation timeout request never lowers the configured deadline", async () => {
-	const service = serviceWith([], { executor: { ...configWith().executor, timeoutMs: 15_000, maxTimeoutMs: 900_000 } });
+	const service = serviceWith([], {
+		executor: { ...configWith().executor, timeoutMs: 15_000, maxTimeoutMs: 900_000 },
+	});
 	const result = await service.execute({
 		code: "await new Promise((resolve) => setTimeout(resolve, 1_200)); return 'done';",
 		signal: undefined,
@@ -209,4 +211,47 @@ test("a per-invocation timeout request never lowers the configured deadline", as
 		onPartial: () => {},
 	});
 	assert.equal(result.success, true, result.error ?? "");
+});
+
+test("τ state survives between programs and is echoed on the result", async () => {
+	const service = serviceWith([]);
+	const first = await execute(service, "await τ.set('index', { files: ['a.ts'] }); return await τ.keys();");
+	assert.equal(first.success, true, first.error ?? "");
+	assert.deepEqual(
+		(first.value as Array<{ key: string }>).map((entry) => entry.key),
+		["index"],
+	);
+	// The discoverability half of the contract: the result names what is held.
+	assert.deepEqual(
+		(first.stateKeys ?? []).map((entry) => entry.key),
+		["index"],
+	);
+
+	const second = await execute(service, "return await τ.get('index');", "test-call-2");
+	assert.equal(second.success, true, second.error ?? "");
+	assert.deepEqual(second.value, { files: ["a.ts"] });
+
+	const third = await execute(service, "await τ.delete('index'); return await τ.get('index');", "test-call-3");
+	assert.equal(third.success, true, third.error ?? "");
+	assert.equal(third.value, undefined);
+	assert.equal(third.stateKeys, undefined);
+});
+
+test("a τ write that cannot be honored fails the call, not silently", async () => {
+	const service = serviceWith([]);
+	const result = await execute(
+		service,
+		[
+			"const errors = [];",
+			"try { await τ.set('bad key', 1); } catch (error) { errors.push(String(error.message)); }",
+			"try { await τ.set('fn', () => 1); } catch (error) { errors.push(String(error.message)); }",
+			"return { errors, keys: await τ.keys() };",
+		].join("\n"),
+	);
+	assert.equal(result.success, true, result.error ?? "");
+	const value = result.value as { errors: string[]; keys: unknown[] };
+	assert.equal(value.errors.length, 2);
+	assert.match(value.errors[0]!, /is not allowed/);
+	assert.match(value.errors[1]!, /cannot store undefined or a function/);
+	assert.deepEqual(value.keys, []);
 });

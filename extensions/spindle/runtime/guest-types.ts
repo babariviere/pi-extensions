@@ -255,6 +255,26 @@ interface SpindleConsole {
 }
 declare const console: SpindleConsole;
 declare const π: Readonly<Record<string, string>>;
+// The session scratchpad: JSON values that outlive this program and die with
+// the session. τ = 2π, and the pairing is the point — π is this call's
+// read-only payloads, τ is state shared across calls. Use it for a large
+// intermediate the next program needs but the model should never read (a repo
+// index, a parsed API response); prefer returning small values outright, and a
+// file for anything big or long-lived. Writes are methods, not assignments,
+// because they can fail: a value must be JSON-serializable (no closures, no
+// handles), keys match [A-Za-z0-9][A-Za-z0-9_.:-]* and over a budget the write
+// throws instead of evicting. The held keys are echoed in every result.
+interface SpindleStateApi {
+  /** The stored value, or undefined when the key is not held. */
+  get<T = unknown>(key: string): Promise<T | undefined>;
+  /** Store a JSON-serializable value, replacing any previous entry. */
+  set(key: string, value: unknown): Promise<{ key: string; bytes: number; keys: string[] }>;
+  /** Held keys with their serialized sizes. */
+  keys(): Promise<Array<{ key: string; bytes: number; updatedAt: number }>>;
+  delete(key: string): Promise<{ key: string; deleted: boolean; keys: string[] }>;
+  clear(): Promise<{ cleared: number }>;
+}
+declare const τ: SpindleStateApi;
 // Allowlisted host env (HOME, USER, LOGNAME, SHELL, PWD, PATH, LANG, LC_*,
 // TERM, TMPDIR, XDG_*), platform facts, and the session working directory.
 // Sensitive variables are never exposed to the sandbox.

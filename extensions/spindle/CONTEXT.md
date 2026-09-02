@@ -183,9 +183,38 @@ Globals inside `spindle_exec`:
   `index.ts`. Keep the declarations wide and the guidance narrow.
 - `process` — minimal shim built from `env-snapshot.ts`: allowlisted `process.env` (HOME, USER, LOGNAME, SHELL, PWD, PATH, LANG, LC_*, TERM, TMPDIR, XDG_*), `process.platform` / `process.arch`, `process.cwd()`. No secret ever enters the guest.
 - `print`, `console`, `π` (named payloads; the `payloads` argument, legacy alias `strings`), `setTimeout` / `setInterval` / `clearTimeout` / `clearInterval`
+- `τ` — the session-scoped scratchpad (`session-store.ts`), reached through five
+  host calls (`spindle.$stateGet` / `$stateSet` / `$stateKeys` / `$stateDelete` /
+  `$stateClear`). `τ = 2π` is the mnemonic and the semantics are deliberately
+  *not* symmetric: `π` is per-call, read-only and infallible, `τ` is
+  cross-program, mutable and failable. That asymmetry is why it is a method API
+  (`τ.set(k, v)`) and not property assignment on a Proxy. A write that can be
+  refused (bad key, non-serializable value, budget) must not read like a local
+  assignment, and `delete` / `keys` / `clear` have nowhere natural to live on a
+  property surface.
+
+  Values are stored as JSON text, which enforces that nothing with identity
+  (closure, socket, handle) can appear to survive a context that is torn down
+  between programs, and makes the byte accounting exact. Over a budget the write
+  **throws and names the held keys** instead of evicting: silently dropping the
+  entry a later program depends on turns a limit into a nondeterministic bug.
+
+  The store is owned by `SpindleState`, for the same reason as the agent run
+  book: it has to outlive one `spindle_exec` program. It is reset on session
+  start and teardown and never persisted.
+
+  Discoverability is half the feature and does not live in the store: the model
+  cannot see state it did not write this turn, so `execution-service.ts` reads
+  `keys()` into `SpindleExecutionResult.stateKeys` and `spindle-exec-tool.ts`
+  appends a `τ keys: name (size)` line to every result. Without that echo the
+  namespace is a set of names the model has to remember, which is how a hidden
+  store becomes a source of guessed keys. The `$stateSet` trace records the key
+  only, never the value.
 
 Deliberately absent: `memory`, `state`, `schema`, `compact`, `mesh`,
 `council`, `rlm`, `agent()`, `budget`, `workflow.agent`, `workflow.budget`.
+(`state` there is upstream's mesh state layer, which stays dropped; the local
+`τ` scratchpad above is spindle's own and unrelated to it.)
 
 ## Vendored file manifest
 
@@ -402,10 +431,12 @@ risk/approval hunks by hand.
 | `agents/` | The absorbed `extensions/subagents` code (see below). |
 | `providers/spindle-bash-tool.ts` | Spindle's `pi.bash` definition: wraps pi's bash tool with per-call `cwd` / `env` / `stdin` extras (validated, then applied via per-call `BashOperations`); extras-free calls delegate to the base tool unchanged. The `stdin` path delegates to the shared supervised spawn (`sandbox/supervised-spawn.ts`) and routes through the OS-sandbox wrap. |
 | `env-snapshot.ts` | The allowlisted environment snapshot injected as the guest's `process` global; secrets never enter the sandbox. |
+| `session-store.ts` | The session-scoped JSON scratchpad behind the guest's `τ` namespace: key validation, per-value/total byte budgets, the held-key listing the result envelope echoes, and the `describe()` summary a limit error names. Owned by `SpindleState`, so it outlives one program; throws rather than evicting. |
+| `session-store.test.ts` | Round-tripping, snapshot semantics (a stored value is not a live reference), miss vs stored `null`, refused values (undefined, functions, cycles), key validation, and that each limit throws and names what is held. |
 | `core/arg-redaction.ts` | Redacts `pi.bash` `env` values and `stdin` from recorded surfaces (audits, previews, traces); the live call keeps raw values. |
 | `runtime/source-map.ts` | Minimal source-map consumer: decodes the transpile map and rewrites `pi-spindle-guest.js:L:C` stack positions to `program.ts:L:C` in the program the model wrote. |
 | `runtime/checker-backend.ts` | The type-checker backend seam: `check` / `transpile` behind one interface, with the stock `typescript` backend as default and runtime-installable alternatives (e.g. a native-compiler process) without touching the checker core. |
-| `host-calls.ts` | The host half of the guest/host call contract: one `HOST_CALLS` table entry per `spindle.$*` ref (discovery, workflow, spans), each owning its handler over a per-execution `HostCallContext`. The execution service dispatches through `hostCallTable` and holds no host-call cases of its own; `runtime/guest-host-refs.test.ts` drives the table from the guest side. |
+| `host-calls.ts` | The host half of the guest/host call contract: one `HOST_CALLS` table entry per `spindle.$*` ref (discovery, workflow, spans, `τ` state), each owning its handler over a per-execution `HostCallContext`. The execution service dispatches through `hostCallTable` and holds no host-call cases of its own; `runtime/guest-host-refs.test.ts` drives the table from the guest side. |
 | `runtime/guest-host-refs.test.ts` | The guest/host ref contract: runs a probe program through a real sandbox with a recording bridge, asserts every emitted ref is handled and every static `spindle.$*` table entry is reachable, and that no `fabric.$` names survive a port. |
 | `execution-service.test.ts` | Headless execution-service tests over a stub-provider registry: type errors, extension calls, discovery dispatch, phases, agent budget, and source-mapped runtime errors. |
 | `runtime/quickjs-runtime.test.ts` | Runtime integration tests: host-call marshalling and rejection, concurrency, logs and truncation, deadline, abort (pre-start and mid-host-call), memory limit, timers, `π` strings, `process` shim, and error-position mapping. |

@@ -29,6 +29,7 @@ import { effectiveMcpReadOnlyConfig, McpReadOnlyGate } from "./mcp/read-only-pol
 import { McpBridgeProvider } from "./providers/mcp-bridge-provider.ts";
 import { PiToolsProvider } from "./providers/pi-tools-provider.ts";
 import { SandboxController } from "./sandbox/controller.ts";
+import { SpindleSessionStore } from "./session-store.ts";
 import { activeNightSandboxRequest } from "./sandbox/night-bridge.ts";
 import { runNightPreflight } from "./sandbox/preflight-bridge.ts";
 import { applyNightRunEnv } from "../night-mode/night-run.ts";
@@ -79,6 +80,13 @@ export class SpindleState {
 	 * session through the completion sink below.
 	 */
 	readonly agentRunBook = new AgentRunBook();
+	/**
+	 * The session's `τ` scratchpad. Lives here for the same reason the run book
+	 * does: it has to outlive a single `spindle_exec` program, so one program can
+	 * hand a large intermediate to the next without routing it through the
+	 * model's context. Reset on every session, never persisted to disk.
+	 */
+	readonly sessionStore = new SpindleSessionStore();
 	readonly #sessionRef: SessionRef = {
 		sessionId: undefined,
 		sessionFile: undefined,
@@ -133,8 +141,9 @@ export class SpindleState {
 		this.agentRuns.reset();
 		this.#cwd = context.cwd;
 		this.#gate = SpindleToolGate.fromArgv(ALLOWED_TOOLS_FLAG);
-		// A new session must not inherit the previous one's children.
+		// A new session must not inherit the previous one's children, nor its state.
 		this.agentRunBook.reset();
+		this.sessionStore.reset();
 		this.agentRunBook.setSink((event) => this.#announceAgentCompletion(event));
 		const projectTrusted = context.isProjectTrusted();
 		this.#config = loadSpindleConfig({
@@ -172,7 +181,12 @@ export class SpindleState {
 			);
 		}
 		if (capturedToolsProvider) this.#registry.register(capturedToolsProvider);
-		this.#registry.register(new McpBridgeProvider(() => this.capturedTools, () => this.#mcpReadOnlyGate()));
+		this.#registry.register(
+			new McpBridgeProvider(
+				() => this.capturedTools,
+				() => this.#mcpReadOnlyGate(),
+			),
+		);
 		this.#registry.register(
 			new SpindleAgentsProvider(
 				() => this.#sessionRef,
@@ -189,7 +203,13 @@ export class SpindleState {
 		for (const provider of this.#externalProviders.values()) {
 			this.#registry.register(provider);
 		}
-		this.#execution = new SpindleExecutionService(this.#registry, this.#config, this.activity, this.#gate);
+		this.#execution = new SpindleExecutionService(
+			this.#registry,
+			this.#config,
+			this.activity,
+			this.#gate,
+			this.sessionStore,
+		);
 		const discovery: SpindleProviderDiscovery = {
 			version: 1,
 			register: (provider, options) => this.registerExternal(provider, options),
@@ -236,6 +256,7 @@ export class SpindleState {
 		this.#gate = SpindleToolGate.of(undefined);
 		this.activity.reset();
 		this.agentRuns.reset();
+		this.sessionStore.reset();
 		this.#widgetDismissedAt = 0;
 		this.#externalProviders.clear();
 	}

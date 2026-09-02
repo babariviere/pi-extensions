@@ -59,6 +59,7 @@ const SPINDLE_OWNED = new Set([
 	"setTimeout",
 	"tools",
 	"π",
+	"τ",
 ]);
 
 /** The engine's own `globalThis` inventory, as shipped by the pinned variant. */

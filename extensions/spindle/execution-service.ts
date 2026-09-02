@@ -15,6 +15,7 @@ import { ActionRegistry, type SpindleCallAudit, type SpindleRegistryActivityEven
 import type { SpindleToolGate } from "./core/tool-allowlist.ts";
 import { redactRecordedArgs } from "./core/arg-redaction.ts";
 import { spindleProcessSnapshot } from "./env-snapshot.ts";
+import { SpindleSessionStore, type SpindleSessionStoreKey } from "./session-store.ts";
 import {
 	codeUsesOrchestration,
 	isAgentBudgetRef,
@@ -34,9 +35,7 @@ let runtimeDependencies:
 			QuickJsRuntime: typeof import("./runtime/quickjs-runtime.ts").QuickJsRuntime;
 			typeCheckSpindleCode: typeof import("./runtime/type-checker.ts").typeCheckSpindleCode;
 			guestTypeDeclarations: typeof import("./runtime/guest-types.ts").guestTypeDeclarations;
-			buildDynamicGuestDeclarations: typeof import(
-				"./runtime/dynamic-guest-types.ts"
-			).buildDynamicGuestDeclarations;
+			buildDynamicGuestDeclarations: typeof import("./runtime/dynamic-guest-types.ts").buildDynamicGuestDeclarations;
 	  }>
 	| undefined;
 
@@ -83,6 +82,12 @@ export interface SpindleExecutionResult {
 	typeErrors?: SpindleTypeError[];
 	error?: string;
 	usage?: Usage;
+	/**
+	 * Keys the session scratchpad holds after the program ran (see
+	 * session-store.ts). Echoed to the model on every result: state it cannot
+	 * see is state it will guess at.
+	 */
+	stateKeys?: SpindleSessionStoreKey[];
 }
 
 interface SpindleExecutionPartial {
@@ -116,6 +121,12 @@ export class SpindleExecutionService {
 		readonly activity?: SpindleActivityStore,
 		/** Subagent `tools:` gate; an unrestricted gate for a normal session. */
 		readonly toolGate?: SpindleToolGate,
+		/**
+		 * The session-scoped scratchpad behind the guest's `τ` namespace. Owned by
+		 * `SpindleState` in a real session, so it outlives one program; a private
+		 * one keeps a standalone service (tests) self-contained.
+		 */
+		readonly store: SpindleSessionStore = new SpindleSessionStore(),
 	) {}
 
 	async execute(options: SpindleExecutionOptions): Promise<SpindleExecutionResult> {
@@ -352,6 +363,7 @@ export class SpindleExecutionService {
 			fullCodeMode: effectiveFullCodeMode,
 			phases,
 			workflowSpans,
+			store: this.store,
 			registryContext: (signal) => ({ ...baseContext, signal }),
 			update,
 			guardFullCodeRef,
@@ -405,6 +417,7 @@ export class SpindleExecutionService {
 			trace: traceRecorder.seal(runOutcome, phases, sandboxResult.error),
 			elapsedMs: performance.now() - startedAt,
 			...(sandboxResult.error ? { error: sandboxResult.error } : {}),
+			...(this.store.size > 0 ? { stateKeys: this.store.keys() } : {}),
 		};
 	}
 }

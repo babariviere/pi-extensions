@@ -53,6 +53,7 @@ import { normalizeRunDisplay } from "./run-display.ts";
 import { typeErrorRecoveryHint } from "./type-error-guidance.ts";
 import { formatFailureProgress } from "./failure-progress.ts";
 import { boundModelOutput, modelOutputBudget } from "./output-budget.ts";
+import { formatSessionStoreBytes } from "./session-store.ts";
 import { repairSpindleGuestCode } from "./runtime/guest-code-repair.ts";
 
 const RESULT_FORMATS = ["auto", "yaml", "json", "text"] as const;
@@ -99,7 +100,7 @@ export const createSpindleExecTool = (
 			parameters: Type.Object({
 				code: Type.String({
 					description:
-						"TypeScript function body. Top-level await and return are supported. Globals include `mcp`, `agents`, `mapLimit`, `print`, `π`, and `process` (allowlisted `process.env`, `process.cwd()`); full-code mode adds `pi` and `extensions`. `pi.bash` also takes `cwd`, `env`, and `stdin`. See session guidance / `spindle-exec` skill for exact signatures.",
+						"TypeScript function body. Top-level await and return are supported. Globals include `mcp`, `agents`, `mapLimit`, `print`, `π` (payloads), `τ` (session state), and `process` (allowlisted `process.env`, `process.cwd()`); full-code mode adds `pi` and `extensions`. `pi.bash` also takes `cwd`, `env`, and `stdin`. See session guidance / `spindle-exec` skill for exact signatures.",
 				}),
 				payloads: Type.Optional(
 					Type.Record(Type.String(), Type.String(), {
@@ -639,6 +640,14 @@ export const createSpindleExecTool = (
 				// A failed program still mutated whatever its successful calls touched;
 				// name them so the model inspects before repeating the work.
 				if (failureProgress) sections.push(failureProgress);
+				// The other half of the τ contract: state the model cannot see is state
+				// it will guess at, so every result names what the scratchpad holds.
+				if (result.stateKeys && result.stateKeys.length > 0) {
+					const held = result.stateKeys
+						.map((entry) => `${entry.key} (${formatSessionStoreBytes(entry.bytes)})`)
+						.join(", ");
+					sections.push(`τ keys: ${held}`);
+				}
 				const rawOutput = sections.join("\n\n");
 				const outputBudget = modelOutputBudget(state.config.executor.maxOutputChars, result.success);
 				const outputWillTruncate = rawOutput.length > outputBudget;

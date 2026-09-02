@@ -15,10 +15,7 @@
  * enumeration in the contract test to keep honest.
  */
 
-import type {
-	SpindleActivityItemInput,
-	SpindleRunDisplay,
-} from "./activity/types.ts";
+import type { SpindleActivityItemInput, SpindleRunDisplay } from "./activity/types.ts";
 import {
 	executionOutcomeFromError,
 	type SpindleExecutionFailureStageV1,
@@ -26,6 +23,7 @@ import {
 } from "./audit/trace.ts";
 import type { ActionRegistry } from "./core/action-registry.ts";
 import type { SpindleInvocationContext } from "./protocol.ts";
+import type { SpindleSessionStore } from "./session-store.ts";
 
 /** The providers only reachable in full code mode. */
 export const fullCodeProvider = (value: string): "pi" | "extensions" | undefined => {
@@ -60,6 +58,8 @@ export interface HostCallContext {
 	registryContext(signal: AbortSignal): SpindleInvocationContext & { signal: AbortSignal };
 	/** Progress line update (`spindle.$progress`, phase announcements). */
 	update(message: string): void;
+	/** Session-scoped scratchpad behind the guest's `τ` namespace. */
+	store: SpindleSessionStore;
 	/** Refuse pi/extensions refs when full-code mode is off. */
 	guardFullCodeRef(ref: string): void;
 	/** Trace one host call through its stages. */
@@ -164,6 +164,36 @@ export const HOST_CALLS: readonly HostCall[] = [
 			ctx.traceAttempt("spindle.workflow.progress", args, signal, () =>
 				ctx.update(String(args.message ?? "Working")),
 			),
+	},
+	/*
+	 * The `τ` namespace: the session-scoped scratchpad (see session-store.ts).
+	 *
+	 * Five refs rather than a property-access proxy, because every one of these
+	 * can fail (a bad key, a non-serializable value, a budget) and a failable
+	 * operation must not read like an assignment. They are traced like any other
+	 * host call, so a program that overruns a limit says so in the transcript.
+	 */
+	{
+		ref: "spindle.$stateGet",
+		handle: (args, ctx, signal) => ctx.traceAttempt("spindle.state.get", args, signal, () => ctx.store.get(args.key)),
+	},
+	{
+		ref: "spindle.$stateSet",
+		handle: (args, ctx, signal) =>
+			ctx.traceAttempt("spindle.state.set", { key: args.key }, signal, () => ctx.store.set(args.key, args.value)),
+	},
+	{
+		ref: "spindle.$stateKeys",
+		handle: (args, ctx, signal) => ctx.traceAttempt("spindle.state.keys", args, signal, () => ctx.store.keys()),
+	},
+	{
+		ref: "spindle.$stateDelete",
+		handle: (args, ctx, signal) =>
+			ctx.traceAttempt("spindle.state.delete", args, signal, () => ctx.store.delete(args.key)),
+	},
+	{
+		ref: "spindle.$stateClear",
+		handle: (args, ctx, signal) => ctx.traceAttempt("spindle.state.clear", args, signal, () => ctx.store.clear()),
 	},
 	{
 		/**

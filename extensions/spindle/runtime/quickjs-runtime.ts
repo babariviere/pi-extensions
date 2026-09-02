@@ -368,6 +368,22 @@ globalThis.mcp = Object.freeze({
   describe: (args) => __call("mcp.describe", typeof args === "string" ? { tool: args } : args),
   connect: (args) => __call("mcp.connect", typeof args === "string" ? { server: args } : args),
 });
+// The session-scoped scratchpad. τ = 2π, and the joke is load-bearing: π is
+// this program's read-only payloads, τ is the store that outlives it. Methods
+// rather than property access on purpose — every one of these can fail (bad
+// key, non-serializable value, budget), and a failable write must not look
+// like an assignment. The held keys are echoed in every spindle_exec result,
+// so a later program does not have to guess what is there.
+globalThis["τ"] = Object.freeze({
+  get: async (key) => {
+    const read = await __call("spindle.$stateGet", { key });
+    return read && read.found ? read.value : undefined;
+  },
+  set: (key, value) => __call("spindle.$stateSet", { key, value }),
+  keys: () => __call("spindle.$stateKeys", {}),
+  delete: (key) => __call("spindle.$stateDelete", { key }),
+  clear: () => __call("spindle.$stateClear", {}),
+});
 let __nextSpanId = 0;
 // Captured before the Promise.all instrumentation below, so the worker pool
 // and the wrapper never recurse through each other.
