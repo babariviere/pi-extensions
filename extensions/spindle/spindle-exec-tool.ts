@@ -54,6 +54,7 @@ import { typeErrorRecoveryHint } from "./type-error-guidance.ts";
 import { formatFailureProgress } from "./failure-progress.ts";
 import { boundModelOutput, modelOutputBudget } from "./output-budget.ts";
 import { formatSessionStoreBytes } from "./session-store.ts";
+import { renderPayloadInspector, renderStateInspector } from "./ui/inspect-preview.ts";
 import { repairSpindleGuestCode } from "./runtime/guest-code-repair.ts";
 
 const RESULT_FORMATS = ["auto", "yaml", "json", "text"] as const;
@@ -76,8 +77,388 @@ export const createSpindleExecTool = (
 	state: SpindleState,
 	codePreviewSettings: CodePreviewSettings,
 	decorateShell: SpindleToolShellDecorator = withCodePreviewShell,
-): ToolDefinition<any, any, any> =>
-	decorateShell(
+): ToolDefinition<any, any, any> => {
+	/**
+	 * The result body, extracted from `renderResult` so the inspector blocks can
+	 * be appended to whichever branch ran (there are five) without threading a
+	 * wrapper through each `return`.
+	 */
+	const renderResultBody = (
+		result: { content: Array<{ type: string; text?: string }>; details?: unknown },
+		{ expanded, isPartial }: { expanded: boolean; isPartial: boolean },
+		theme: any,
+		context: any,
+	): Component => {
+		const details = readSpindleExecutionRenderDetails(result.details);
+		let audits = restoreLegacyBashCommands(details.audits as SpindleRenderAudit[], context.args);
+		const rendererState = context.state as SpindleRendererState;
+		const spinner = updateSpinner((rendererState.spindleSpinner ??= {}), isPartial, context.invalidate);
+		const rowBalance = (rendererState.spindleResultRowBalance ??= {});
+		const trackRows = (component: Component): Component =>
+			observeResultRows(inheritComponentBackground(component), rowBalance, { expanded, isPartial });
+		if (isPartial) {
+			rendererState.spindleCoreToolPreviews = captureSpindleCoreToolPreviews(
+				audits,
+				rendererState.spindleCoreToolPreviews,
+			);
+			rendererState.spindleAgentPreviews = captureSpindleAgentPreviews(audits, rendererState.spindleAgentPreviews);
+			const headlinePreviews = captureSpindleCallHeadlinePreviews(audits);
+			if (headlinePreviews.length > 0) {
+				rendererState.spindleCallHeadlinePreviews = headlinePreviews;
+			}
+			const writePreviews = captureSpindleWritePreviews(audits);
+			if (writePreviews.length > 0) rendererState.spindleWritePreviews = writePreviews;
+		} else {
+			if (rendererState.spindleCoreToolPreviews) {
+				audits = restoreSpindleCoreToolPreviews(audits, rendererState.spindleCoreToolPreviews);
+			}
+			if (rendererState.spindleAgentPreviews) {
+				audits = restoreSpindleAgentPreviews(audits, rendererState.spindleAgentPreviews);
+			}
+			if (rendererState.spindleCallHeadlinePreviews) {
+				audits = restoreSpindleCallHeadlinePreviews(audits, rendererState.spindleCallHeadlinePreviews);
+			}
+			if (rendererState.spindleWritePreviews) {
+				audits = restoreSpindleWritePreviews(audits, rendererState.spindleWritePreviews);
+			}
+		}
+		const phases = details.phases;
+		const nl = "\n";
+		const allRowIndexes = (lines: string[], enabled: boolean): ReadonlySet<number> | undefined =>
+			enabled ? new Set(lines.map((_line, index) => index)) : undefined;
+		const corePreviewContext = { cwd: context.cwd, settings: codePreviewSettings };
+		const showNestedToolCalls = state.initialized
+			? state.config.ui.showNestedToolCalls
+			: DEFAULT_SPINDLE_CONFIG.ui.showNestedToolCalls;
+
+		const renderBody = (audit: SpindleRenderAudit, limit: number): { body: string; hidden: number } | null => {
+			const core = renderCoreToolBody(audit, theme, {
+				cwd: context.cwd,
+				settings: codePreviewSettings,
+				expanded,
+				maxLines: limit,
+				...(context?.invalidate ? { invalidate: context.invalidate } : {}),
+			});
+			if (core) return { body: core.lines.join(nl), hidden: core.hidden };
+			if (coreToolRendererEnabled(audit, codePreviewSettings)) return null;
+
+			const body = nestedCallBody(audit);
+			if (!body) return null;
+			const bodyLines = safeTerminalText(body).split(nl);
+			while (bodyLines.length > 0) {
+				const last = bodyLines[bodyLines.length - 1];
+				if (last === undefined || last.trim() === "") bodyLines.pop();
+				else break;
+			}
+			if (bodyLines.length === 0) return null;
+			const shown = bodyLines.slice(0, limit);
+			return {
+				body: shown.map((line) => theme.fg("toolOutput", line || " ")).join(nl),
+				hidden: bodyLines.length - shown.length,
+			};
+		};
+
+		if (isPartial) {
+			const progress = details.progress;
+			if (audits.length === 0) {
+				return trackRows(
+					new Text(theme.fg("warning", `◆ ${safeTerminalText(progress ?? "Running Spindle program…")}`), 0, 0),
+				);
+			}
+			if (audits.length === 1) {
+				const audit = audits[0]!;
+				const glyph =
+					audit.success === undefined
+						? theme.fg("warning", spinner)
+						: audit.success === false
+							? theme.fg("error", "✗")
+							: theme.fg("dim", "›");
+				let text = `${glyph} ${nestedCallTitle(audit, theme, context?.invalidate, corePreviewContext)}`;
+				const nested = renderNestedAgentToolLines(audit, theme, {
+					expanded,
+					showTools: showNestedToolCalls,
+					core: corePreviewContext,
+					...(context?.invalidate ? { invalidate: context.invalidate } : {}),
+				});
+				const progressLine = singleCallProgressLine(progress, nested);
+				if (audit.success === false && audit.error) {
+					text += nl + `  ${theme.fg("error", safeTerminalText(audit.error))}`;
+				} else {
+					const rendered = renderBody(
+						audit,
+						expanded || coreToolRendererEnabled(audit, codePreviewSettings) ? 200 : 10,
+					);
+					if (rendered) {
+						text += nl + rendered.body;
+						if (rendered.hidden > 0) {
+							text += nl + theme.fg("dim", `… ${countLabel(rendered.hidden, "line")}`);
+							if (!expanded) text += theme.fg("dim", " · ") + expandHint(theme);
+						}
+					} else if (isCoreToolAudit(audit) && !expanded && !coreToolPreviewEnabled(audit, codePreviewSettings)) {
+						text += nl + theme.fg("muted", "╰─ ") + expandHint(theme);
+					} else if (progressLine) {
+						text += nl + theme.fg("dim", progressLine);
+					}
+				}
+				if (audit.success !== false && nested[0]) {
+					const firstBreak = text.indexOf(nl);
+					if (firstBreak < 0) text += ` ${nested[0]}`;
+					else text = `${text.slice(0, firstBreak)} ${nested[0]}${text.slice(firstBreak)}`;
+					if (nested.length > 1) text += nl + nested.slice(1).join(nl);
+				}
+				const textLines = text.split(nl);
+				return trackRows(
+					renderBoundedLines(
+						textLines,
+						theme,
+						codePreviewSettings.diffIntensity,
+						allRowIndexes(textLines, nested.length > 0),
+					),
+				);
+			}
+			let preview: { auditIndex: number; body: string; hidden: number } | undefined;
+			for (let index = audits.length - 1; index >= 0; index--) {
+				const audit = audits[index]!;
+				if (audit.tool !== "write" || audit.success === false) continue;
+				const rendered = renderBody(audit, expanded ? 20 : 10);
+				if (rendered) {
+					preview = { auditIndex: index, ...rendered };
+					break;
+				}
+			}
+			return trackRows(
+				renderSpindleMulticallPartial(
+					{
+						audits,
+						phases,
+						progress,
+						expanded,
+						preview,
+						core: corePreviewContext,
+						showNestedToolCalls,
+						spinner,
+					},
+					theme,
+					context?.invalidate,
+				),
+			);
+		}
+
+		const output = result.content
+			.filter((part): part is { type: "text"; text: string } => part.type === "text")
+			.map((part) => part.text)
+			.join(nl);
+		const styleOutputLines = (lines: string[]): string[] => {
+			if (!details.outputFormat || lines.length === 0) {
+				return lines.map((line) => theme.fg("toolOutput", line || " "));
+			}
+			const highlightedStart = Math.min(lines.length, details.outputFormatStartLine ?? 0);
+			const highlightedCount = Math.min(lines.length - highlightedStart, details.outputFormatLines ?? lines.length);
+			const highlightedSource = lines.slice(highlightedStart, highlightedStart + highlightedCount);
+			const highlighted =
+				highlightedSource.length > 0
+					? highlightCode(highlightedSource.join(nl), details.outputFormat, context?.invalidate)
+					: [];
+			const styledPrefix =
+				highlighted?.map((line) => line || " ") ??
+				highlightedSource.map((line) => theme.fg("toolOutput", line || " "));
+			return [
+				...lines.slice(0, highlightedStart).map((line) => theme.fg("toolOutput", line || " ")),
+				...styledPrefix,
+				...lines.slice(highlightedStart + highlightedCount).map((line) => theme.fg("toolOutput", line || " ")),
+			];
+		};
+		const failed = details.success === false;
+
+		if (audits.length === 0) {
+			// Type-check failures are the one error class where the diagnosis is a
+			// list, not a sentence: render each error as its own red line so the
+			// user sees exactly why the program never ran (expand shows all).
+			const typeErrors = details.typeErrors;
+			if (failed && typeErrors !== undefined && typeErrors.length > 0) {
+				const limit = expanded ? typeErrors.length : Math.min(typeErrors.length, 6);
+				const shown = typeErrors.slice(0, limit);
+				let text = theme.fg(
+					"error",
+					`✗ Type errors; code was not executed (${countLabel(typeErrors.length, "error")})`,
+				);
+				for (const typeError of shown) {
+					const where = typeError.line > 0 ? `Line ${typeError.line}:${typeError.column}: ` : "";
+					text += nl + theme.fg("error", `  ${where}${safeTerminalText(typeError.message)}`);
+				}
+				const hidden = typeErrors.length - shown.length;
+				if (hidden > 0) {
+					text += nl + theme.fg("dim", `… ${countLabel(hidden, "error")} hidden`);
+					if (!expanded) text += theme.fg("dim", " · ") + expandHint(theme);
+				}
+				return trackRows(new Text(text, 0, 0));
+			}
+			if (failed && details.error) {
+				return trackRows(new Text(theme.fg("error", `✗ ${safeTerminalText(details.error)}`), 0, 0));
+			}
+			if (!output) return trackRows(new Text(theme.fg("dim", "✓ Spindle"), 0, 0));
+			const lines = safeTerminalText(output).split(nl);
+			const limit = expanded ? Math.min(lines.length, 200) : 12;
+			const shown = lines.slice(0, limit);
+			let text = styleOutputLines(shown).join(nl);
+			if (lines.length > shown.length) {
+				text += nl + theme.fg("dim", `… ${countLabel(lines.length - shown.length, "line")}`);
+				if (!expanded) text += theme.fg("dim", " · ") + expandHint(theme);
+			}
+			return trackRows(renderBoundedLines(text.split(nl), theme, codePreviewSettings.diffIntensity));
+		}
+
+		if (audits.length === 1) {
+			const audit = audits[0]!;
+			let text = nestedCallTitle(audit, theme, context?.invalidate, corePreviewContext);
+			const nested = renderNestedAgentToolLines(audit, theme, {
+				expanded,
+				showTools: showNestedToolCalls,
+				core: corePreviewContext,
+				...(context?.invalidate ? { invalidate: context.invalidate } : {}),
+			});
+			if (audit.success === false) {
+				if (audit.error) {
+					text += nl + theme.fg("error", safeTerminalText(audit.error));
+				}
+				return trackRows(new Text(text, 0, 0));
+			}
+			if (nested[0]) {
+				text += ` ${nested[0]}`;
+				if (nested.length > 1) text += nl + nested.slice(1).join(nl);
+			}
+			const limit = expanded || coreToolRendererEnabled(audit, codePreviewSettings) ? 200 : 12;
+			const rendered = nested.length > 0 ? null : renderBody(audit, limit);
+			if (rendered) {
+				text += nl + rendered.body;
+				if (rendered.hidden > 0) {
+					text += nl + theme.fg("dim", `… ${countLabel(rendered.hidden, "line")}`);
+					if (!expanded) text += theme.fg("dim", " · ") + expandHint(theme);
+				}
+				const readHint = modelReadHint(audits, output, theme);
+				if (readHint) text += nl + readHint;
+			} else if (isCoreToolAudit(audit) && !expanded && !coreToolPreviewEnabled(audit, codePreviewSettings)) {
+				text += nl + theme.fg("muted", "╰─ ") + expandHint(theme);
+			} else if (nested.length === 0 && output && !isCoreToolAudit(audit)) {
+				const lines = safeTerminalText(output).split(nl);
+				const outLimit = expanded ? Math.min(lines.length, 200) : 12;
+				const outShown = lines.slice(0, outLimit);
+				text += nl + styleOutputLines(outShown).join(nl);
+				if (lines.length > outShown.length) {
+					text += nl + theme.fg("dim", `… ${countLabel(lines.length - outShown.length, "line")}`);
+					if (!expanded) text += theme.fg("dim", " · ") + expandHint(theme);
+				}
+			}
+			const textLines = text.split(nl);
+			return trackRows(
+				renderBoundedLines(
+					textLines,
+					theme,
+					codePreviewSettings.diffIntensity,
+					allRowIndexes(textLines, nested.length > 0),
+				),
+			);
+		}
+
+		const failedCalls = audits.filter((audit) => audit.success === false).length;
+		const status = failed ? "failed" : "complete";
+		const statusColor = failed ? "error" : "success";
+		const metadata = [
+			countLabel(audits.length, "nested call"),
+			failedCalls > 0 ? `${failedCalls} failed` : undefined,
+			phases.length > 0 ? countLabel(phases.length, "phase") : undefined,
+		].filter((value): value is string => Boolean(value));
+		let text = theme.fg(statusColor, `${failed ? "✗" : "✓"} Spindle ${status}`);
+		if (metadata.length > 0) text += theme.fg("dim", ` · ${metadata.join(" · ")}`);
+		if (phases.length > 0) text += nl + theme.fg("dim", phases.map((phase) => `◆ ${phase}`).join("  "));
+
+		const callLimit = spindleMulticallCallLimit(expanded);
+		const callsShown = audits.slice(0, callLimit);
+		const callsHidden = audits.length - callsShown.length;
+		let collapsedPreview: { auditIndex: number; body: string; hidden: number } | undefined;
+		if (!expanded) {
+			for (let index = callsShown.length - 1; index >= 0; index--) {
+				const audit = callsShown[index]!;
+				if (audit.tool !== "write" || audit.success === false) continue;
+				const rendered = renderBody(audit, 10);
+				if (rendered) {
+					collapsedPreview = { auditIndex: index, ...rendered };
+					break;
+				}
+			}
+		}
+		let firstNested = true;
+		const textRows = text.split(nl);
+		const agentWrapLineIndexes = new Set<number>();
+		for (let index = 0; index < callsShown.length; index++) {
+			const audit = callsShown[index]!;
+			if (expanded && !firstNested) textRows.push("");
+			firstNested = false;
+			const glyph = audit.success === false ? theme.fg("error", "✗") : theme.fg("dim", "›");
+			const nested = renderNestedAgentToolLines(audit, theme, {
+				expanded,
+				compact: !expanded,
+				showTools: showNestedToolCalls,
+				core: corePreviewContext,
+				...(context?.invalidate ? { invalidate: context.invalidate } : {}),
+			});
+			let callRow = `${glyph} ${nestedCallTitle(audit, theme, context?.invalidate, corePreviewContext)}`;
+			if (nested[0] && audit.success !== false) {
+				callRow += ` ${nested[0]}`;
+				if (expanded) agentWrapLineIndexes.add(textRows.length);
+			}
+			textRows.push(callRow);
+			if (audit.success === false && audit.error) {
+				textRows.push(`  ${theme.fg("error", safeTerminalText(audit.error))}`);
+			} else {
+				if (nested.length > 1) {
+					for (const line of nested.slice(1)) {
+						agentWrapLineIndexes.add(textRows.length);
+						textRows.push(line);
+					}
+				}
+				const rendered = nested.length === 0 && expanded ? renderBody(audit, 40) : null;
+				if (rendered) {
+					textRows.push(...rendered.body.split(nl));
+					if (rendered.hidden > 0) {
+						textRows.push(theme.fg("dim", `… ${countLabel(rendered.hidden, "line")}`));
+					}
+				} else if (nested.length === 0 && collapsedPreview?.auditIndex === index) {
+					textRows.push(...collapsedPreview.body.split(nl).map((line) => `  ${line}`));
+					if (collapsedPreview.hidden > 0) {
+						textRows.push(theme.fg("dim", `  … ${countLabel(collapsedPreview.hidden, "line")}`));
+					}
+				}
+			}
+		}
+		text = textRows.join(nl);
+		if (callsHidden > 0) {
+			text += nl + theme.fg("dim", `… ${countLabel(callsHidden, "nested call")} hidden`);
+			if (!expanded) text += theme.fg("dim", " · ") + expandHint(theme);
+		}
+		const readHint = modelReadHint(audits, output, theme);
+		if (readHint) text += nl + readHint;
+
+		const showOutput = failed || expanded;
+		if (showOutput && output) {
+			const lines = safeTerminalText(output).split(nl);
+			const limit = expanded ? Math.min(lines.length, 200) : 6;
+			const shown = lines.slice(0, limit);
+			if (shown.length > 0) {
+				if (expanded) text += nl + theme.fg("dim", "↩ return");
+				text += nl + styleOutputLines(shown).join(nl);
+				if (lines.length > shown.length) {
+					text += nl + theme.fg("dim", `… ${countLabel(lines.length - shown.length, "line")} hidden`);
+					if (!expanded) text += theme.fg("dim", " · ") + expandHint(theme);
+				}
+			}
+		}
+		return trackRows(
+			renderBoundedLines(text.split(nl), theme, codePreviewSettings.diffIntensity, agentWrapLineIndexes),
+		);
+	};
+
+	return decorateShell(
 		defineTool({
 			name: "spindle_exec",
 			label: "Spindle",
@@ -197,397 +578,48 @@ export const createSpindleExecTool = (
 					return new Text(`${title}${preview ? `\n${preview}` : ""}${hiddenHint}`, 0, 0).render(width);
 				};
 				const codePreview = new HiddenRowBorrowingComponent(baseLimit, maxLimit, renderCodePreview, rowBalance);
-				if (!writePreview) return codePreview;
+				// `payloads` is where a program is told to put every awkward value, so
+				// the code preview alone shows `π.body` and never what `body` is. The
+				// write preview already renders payloads bound to a `pi.write` while the
+				// call composes; skip those so nothing is shown twice.
+				const payloadPreview = renderPayloadInspector({
+					payloads: resolveSpindleExecPayloads(params),
+					...(writePreview
+						? {
+								skipKeys: new Set(
+									(rendererState.spindleWriteBindings ?? []).map((binding) => binding.stringKey),
+								),
+							}
+						: {}),
+					expanded: context.expanded,
+					theme,
+				});
+				if (!writePreview && !payloadPreview) return codePreview;
 				const composite = new Container();
 				composite.addChild(codePreview);
-				composite.addChild(new Text("\n", 0, 0));
-				composite.addChild(writePreview);
+				if (payloadPreview) composite.addChild(payloadPreview);
+				if (writePreview) {
+					composite.addChild(new Text("\n", 0, 0));
+					composite.addChild(writePreview);
+				}
 				return composite;
 			},
-			renderResult(result, { expanded, isPartial }, theme, context) {
-				const details = readSpindleExecutionRenderDetails(result.details);
-				let audits = restoreLegacyBashCommands(details.audits as SpindleRenderAudit[], context.args);
-				const rendererState = context.state as SpindleRendererState;
-				const spinner = updateSpinner((rendererState.spindleSpinner ??= {}), isPartial, context.invalidate);
-				const rowBalance = (rendererState.spindleResultRowBalance ??= {});
-				const trackRows = (component: Component): Component =>
-					observeResultRows(inheritComponentBackground(component), rowBalance, { expanded, isPartial });
-				if (isPartial) {
-					rendererState.spindleCoreToolPreviews = captureSpindleCoreToolPreviews(
-						audits,
-						rendererState.spindleCoreToolPreviews,
-					);
-					rendererState.spindleAgentPreviews = captureSpindleAgentPreviews(
-						audits,
-						rendererState.spindleAgentPreviews,
-					);
-					const headlinePreviews = captureSpindleCallHeadlinePreviews(audits);
-					if (headlinePreviews.length > 0) {
-						rendererState.spindleCallHeadlinePreviews = headlinePreviews;
-					}
-					const writePreviews = captureSpindleWritePreviews(audits);
-					if (writePreviews.length > 0) rendererState.spindleWritePreviews = writePreviews;
-				} else {
-					if (rendererState.spindleCoreToolPreviews) {
-						audits = restoreSpindleCoreToolPreviews(audits, rendererState.spindleCoreToolPreviews);
-					}
-					if (rendererState.spindleAgentPreviews) {
-						audits = restoreSpindleAgentPreviews(audits, rendererState.spindleAgentPreviews);
-					}
-					if (rendererState.spindleCallHeadlinePreviews) {
-						audits = restoreSpindleCallHeadlinePreviews(audits, rendererState.spindleCallHeadlinePreviews);
-					}
-					if (rendererState.spindleWritePreviews) {
-						audits = restoreSpindleWritePreviews(audits, rendererState.spindleWritePreviews);
-					}
-				}
-				const phases = details.phases;
-				const nl = "\n";
-				const allRowIndexes = (lines: string[], enabled: boolean): ReadonlySet<number> | undefined =>
-					enabled ? new Set(lines.map((_line, index) => index)) : undefined;
-				const corePreviewContext = { cwd: context.cwd, settings: codePreviewSettings };
-				const showNestedToolCalls = state.initialized
-					? state.config.ui.showNestedToolCalls
-					: DEFAULT_SPINDLE_CONFIG.ui.showNestedToolCalls;
-
-				const renderBody = (audit: SpindleRenderAudit, limit: number): { body: string; hidden: number } | null => {
-					const core = renderCoreToolBody(audit, theme, {
-						cwd: context.cwd,
-						settings: codePreviewSettings,
-						expanded,
-						maxLines: limit,
-						...(context?.invalidate ? { invalidate: context.invalidate } : {}),
-					});
-					if (core) return { body: core.lines.join(nl), hidden: core.hidden };
-					if (coreToolRendererEnabled(audit, codePreviewSettings)) return null;
-
-					const body = nestedCallBody(audit);
-					if (!body) return null;
-					const bodyLines = safeTerminalText(body).split(nl);
-					while (bodyLines.length > 0) {
-						const last = bodyLines[bodyLines.length - 1];
-						if (last === undefined || last.trim() === "") bodyLines.pop();
-						else break;
-					}
-					if (bodyLines.length === 0) return null;
-					const shown = bodyLines.slice(0, limit);
-					return {
-						body: shown.map((line) => theme.fg("toolOutput", line || " ")).join(nl),
-						hidden: bodyLines.length - shown.length,
-					};
-				};
-
-				if (isPartial) {
-					const progress = details.progress;
-					if (audits.length === 0) {
-						return trackRows(
-							new Text(
-								theme.fg("warning", `◆ ${safeTerminalText(progress ?? "Running Spindle program…")}`),
-								0,
-								0,
-							),
-						);
-					}
-					if (audits.length === 1) {
-						const audit = audits[0]!;
-						const glyph =
-							audit.success === undefined
-								? theme.fg("warning", spinner)
-								: audit.success === false
-									? theme.fg("error", "✗")
-									: theme.fg("dim", "›");
-						let text = `${glyph} ${nestedCallTitle(audit, theme, context?.invalidate, corePreviewContext)}`;
-						const nested = renderNestedAgentToolLines(audit, theme, {
-							expanded,
-							showTools: showNestedToolCalls,
-							core: corePreviewContext,
-							...(context?.invalidate ? { invalidate: context.invalidate } : {}),
-						});
-						const progressLine = singleCallProgressLine(progress, nested);
-						if (audit.success === false && audit.error) {
-							text += nl + `  ${theme.fg("error", safeTerminalText(audit.error))}`;
-						} else {
-							const rendered = renderBody(
-								audit,
-								expanded || coreToolRendererEnabled(audit, codePreviewSettings) ? 200 : 10,
-							);
-							if (rendered) {
-								text += nl + rendered.body;
-								if (rendered.hidden > 0) {
-									text += nl + theme.fg("dim", `… ${countLabel(rendered.hidden, "line")}`);
-									if (!expanded) text += theme.fg("dim", " · ") + expandHint(theme);
-								}
-							} else if (
-								isCoreToolAudit(audit) &&
-								!expanded &&
-								!coreToolPreviewEnabled(audit, codePreviewSettings)
-							) {
-								text += nl + theme.fg("muted", "╰─ ") + expandHint(theme);
-							} else if (progressLine) {
-								text += nl + theme.fg("dim", progressLine);
-							}
-						}
-						if (audit.success !== false && nested[0]) {
-							const firstBreak = text.indexOf(nl);
-							if (firstBreak < 0) text += ` ${nested[0]}`;
-							else text = `${text.slice(0, firstBreak)} ${nested[0]}${text.slice(firstBreak)}`;
-							if (nested.length > 1) text += nl + nested.slice(1).join(nl);
-						}
-						const textLines = text.split(nl);
-						return trackRows(
-							renderBoundedLines(
-								textLines,
-								theme,
-								codePreviewSettings.diffIntensity,
-								allRowIndexes(textLines, nested.length > 0),
-							),
-						);
-					}
-					let preview: { auditIndex: number; body: string; hidden: number } | undefined;
-					for (let index = audits.length - 1; index >= 0; index--) {
-						const audit = audits[index]!;
-						if (audit.tool !== "write" || audit.success === false) continue;
-						const rendered = renderBody(audit, expanded ? 20 : 10);
-						if (rendered) {
-							preview = { auditIndex: index, ...rendered };
-							break;
-						}
-					}
-					return trackRows(
-						renderSpindleMulticallPartial(
-							{
-								audits,
-								phases,
-								progress,
-								expanded,
-								preview,
-								core: corePreviewContext,
-								showNestedToolCalls,
-								spinner,
-							},
-							theme,
-							context?.invalidate,
-						),
-					);
-				}
-
-				const output = result.content
-					.filter((part): part is { type: "text"; text: string } => part.type === "text")
-					.map((part) => part.text)
-					.join(nl);
-				const styleOutputLines = (lines: string[]): string[] => {
-					if (!details.outputFormat || lines.length === 0) {
-						return lines.map((line) => theme.fg("toolOutput", line || " "));
-					}
-					const highlightedStart = Math.min(lines.length, details.outputFormatStartLine ?? 0);
-					const highlightedCount = Math.min(
-						lines.length - highlightedStart,
-						details.outputFormatLines ?? lines.length,
-					);
-					const highlightedSource = lines.slice(highlightedStart, highlightedStart + highlightedCount);
-					const highlighted =
-						highlightedSource.length > 0
-							? highlightCode(highlightedSource.join(nl), details.outputFormat, context?.invalidate)
-							: [];
-					const styledPrefix =
-						highlighted?.map((line) => line || " ") ??
-						highlightedSource.map((line) => theme.fg("toolOutput", line || " "));
-					return [
-						...lines.slice(0, highlightedStart).map((line) => theme.fg("toolOutput", line || " ")),
-						...styledPrefix,
-						...lines
-							.slice(highlightedStart + highlightedCount)
-							.map((line) => theme.fg("toolOutput", line || " ")),
-					];
-				};
-				const failed = details.success === false;
-
-				if (audits.length === 0) {
-					// Type-check failures are the one error class where the diagnosis is a
-					// list, not a sentence: render each error as its own red line so the
-					// user sees exactly why the program never ran (expand shows all).
-					const typeErrors = details.typeErrors;
-					if (failed && typeErrors !== undefined && typeErrors.length > 0) {
-						const limit = expanded ? typeErrors.length : Math.min(typeErrors.length, 6);
-						const shown = typeErrors.slice(0, limit);
-						let text = theme.fg(
-							"error",
-							`✗ Type errors; code was not executed (${countLabel(typeErrors.length, "error")})`,
-						);
-						for (const typeError of shown) {
-							const where = typeError.line > 0 ? `Line ${typeError.line}:${typeError.column}: ` : "";
-							text += nl + theme.fg("error", `  ${where}${safeTerminalText(typeError.message)}`);
-						}
-						const hidden = typeErrors.length - shown.length;
-						if (hidden > 0) {
-							text += nl + theme.fg("dim", `… ${countLabel(hidden, "error")} hidden`);
-							if (!expanded) text += theme.fg("dim", " · ") + expandHint(theme);
-						}
-						return trackRows(new Text(text, 0, 0));
-					}
-					if (failed && details.error) {
-						return trackRows(new Text(theme.fg("error", `✗ ${safeTerminalText(details.error)}`), 0, 0));
-					}
-					if (!output) return trackRows(new Text(theme.fg("dim", "✓ Spindle"), 0, 0));
-					const lines = safeTerminalText(output).split(nl);
-					const limit = expanded ? Math.min(lines.length, 200) : 12;
-					const shown = lines.slice(0, limit);
-					let text = styleOutputLines(shown).join(nl);
-					if (lines.length > shown.length) {
-						text += nl + theme.fg("dim", `… ${countLabel(lines.length - shown.length, "line")}`);
-						if (!expanded) text += theme.fg("dim", " · ") + expandHint(theme);
-					}
-					return trackRows(renderBoundedLines(text.split(nl), theme, codePreviewSettings.diffIntensity));
-				}
-
-				if (audits.length === 1) {
-					const audit = audits[0]!;
-					let text = nestedCallTitle(audit, theme, context?.invalidate, corePreviewContext);
-					const nested = renderNestedAgentToolLines(audit, theme, {
-						expanded,
-						showTools: showNestedToolCalls,
-						core: corePreviewContext,
-						...(context?.invalidate ? { invalidate: context.invalidate } : {}),
-					});
-					if (audit.success === false) {
-						if (audit.error) {
-							text += nl + theme.fg("error", safeTerminalText(audit.error));
-						}
-						return trackRows(new Text(text, 0, 0));
-					}
-					if (nested[0]) {
-						text += ` ${nested[0]}`;
-						if (nested.length > 1) text += nl + nested.slice(1).join(nl);
-					}
-					const limit = expanded || coreToolRendererEnabled(audit, codePreviewSettings) ? 200 : 12;
-					const rendered = nested.length > 0 ? null : renderBody(audit, limit);
-					if (rendered) {
-						text += nl + rendered.body;
-						if (rendered.hidden > 0) {
-							text += nl + theme.fg("dim", `… ${countLabel(rendered.hidden, "line")}`);
-							if (!expanded) text += theme.fg("dim", " · ") + expandHint(theme);
-						}
-						const readHint = modelReadHint(audits, output, theme);
-						if (readHint) text += nl + readHint;
-					} else if (isCoreToolAudit(audit) && !expanded && !coreToolPreviewEnabled(audit, codePreviewSettings)) {
-						text += nl + theme.fg("muted", "╰─ ") + expandHint(theme);
-					} else if (nested.length === 0 && output && !isCoreToolAudit(audit)) {
-						const lines = safeTerminalText(output).split(nl);
-						const outLimit = expanded ? Math.min(lines.length, 200) : 12;
-						const outShown = lines.slice(0, outLimit);
-						text += nl + styleOutputLines(outShown).join(nl);
-						if (lines.length > outShown.length) {
-							text += nl + theme.fg("dim", `… ${countLabel(lines.length - outShown.length, "line")}`);
-							if (!expanded) text += theme.fg("dim", " · ") + expandHint(theme);
-						}
-					}
-					const textLines = text.split(nl);
-					return trackRows(
-						renderBoundedLines(
-							textLines,
-							theme,
-							codePreviewSettings.diffIntensity,
-							allRowIndexes(textLines, nested.length > 0),
-						),
-					);
-				}
-
-				const failedCalls = audits.filter((audit) => audit.success === false).length;
-				const status = failed ? "failed" : "complete";
-				const statusColor = failed ? "error" : "success";
-				const metadata = [
-					countLabel(audits.length, "nested call"),
-					failedCalls > 0 ? `${failedCalls} failed` : undefined,
-					phases.length > 0 ? countLabel(phases.length, "phase") : undefined,
-				].filter((value): value is string => Boolean(value));
-				let text = theme.fg(statusColor, `${failed ? "✗" : "✓"} Spindle ${status}`);
-				if (metadata.length > 0) text += theme.fg("dim", ` · ${metadata.join(" · ")}`);
-				if (phases.length > 0) text += nl + theme.fg("dim", phases.map((phase) => `◆ ${phase}`).join("  "));
-
-				const callLimit = spindleMulticallCallLimit(expanded);
-				const callsShown = audits.slice(0, callLimit);
-				const callsHidden = audits.length - callsShown.length;
-				let collapsedPreview: { auditIndex: number; body: string; hidden: number } | undefined;
-				if (!expanded) {
-					for (let index = callsShown.length - 1; index >= 0; index--) {
-						const audit = callsShown[index]!;
-						if (audit.tool !== "write" || audit.success === false) continue;
-						const rendered = renderBody(audit, 10);
-						if (rendered) {
-							collapsedPreview = { auditIndex: index, ...rendered };
-							break;
-						}
-					}
-				}
-				let firstNested = true;
-				const textRows = text.split(nl);
-				const agentWrapLineIndexes = new Set<number>();
-				for (let index = 0; index < callsShown.length; index++) {
-					const audit = callsShown[index]!;
-					if (expanded && !firstNested) textRows.push("");
-					firstNested = false;
-					const glyph = audit.success === false ? theme.fg("error", "✗") : theme.fg("dim", "›");
-					const nested = renderNestedAgentToolLines(audit, theme, {
-						expanded,
-						compact: !expanded,
-						showTools: showNestedToolCalls,
-						core: corePreviewContext,
-						...(context?.invalidate ? { invalidate: context.invalidate } : {}),
-					});
-					let callRow = `${glyph} ${nestedCallTitle(audit, theme, context?.invalidate, corePreviewContext)}`;
-					if (nested[0] && audit.success !== false) {
-						callRow += ` ${nested[0]}`;
-						if (expanded) agentWrapLineIndexes.add(textRows.length);
-					}
-					textRows.push(callRow);
-					if (audit.success === false && audit.error) {
-						textRows.push(`  ${theme.fg("error", safeTerminalText(audit.error))}`);
-					} else {
-						if (nested.length > 1) {
-							for (const line of nested.slice(1)) {
-								agentWrapLineIndexes.add(textRows.length);
-								textRows.push(line);
-							}
-						}
-						const rendered = nested.length === 0 && expanded ? renderBody(audit, 40) : null;
-						if (rendered) {
-							textRows.push(...rendered.body.split(nl));
-							if (rendered.hidden > 0) {
-								textRows.push(theme.fg("dim", `… ${countLabel(rendered.hidden, "line")}`));
-							}
-						} else if (nested.length === 0 && collapsedPreview?.auditIndex === index) {
-							textRows.push(...collapsedPreview.body.split(nl).map((line) => `  ${line}`));
-							if (collapsedPreview.hidden > 0) {
-								textRows.push(theme.fg("dim", `  … ${countLabel(collapsedPreview.hidden, "line")}`));
-							}
-						}
-					}
-				}
-				text = textRows.join(nl);
-				if (callsHidden > 0) {
-					text += nl + theme.fg("dim", `… ${countLabel(callsHidden, "nested call")} hidden`);
-					if (!expanded) text += theme.fg("dim", " · ") + expandHint(theme);
-				}
-				const readHint = modelReadHint(audits, output, theme);
-				if (readHint) text += nl + readHint;
-
-				const showOutput = failed || expanded;
-				if (showOutput && output) {
-					const lines = safeTerminalText(output).split(nl);
-					const limit = expanded ? Math.min(lines.length, 200) : 6;
-					const shown = lines.slice(0, limit);
-					if (shown.length > 0) {
-						if (expanded) text += nl + theme.fg("dim", "↩ return");
-						text += nl + styleOutputLines(shown).join(nl);
-						if (lines.length > shown.length) {
-							text += nl + theme.fg("dim", `… ${countLabel(lines.length - shown.length, "line")} hidden`);
-							if (!expanded) text += theme.fg("dim", " · ") + expandHint(theme);
-						}
-					}
-				}
-				return trackRows(
-					renderBoundedLines(text.split(nl), theme, codePreviewSettings.diffIntensity, agentWrapLineIndexes),
-				);
+			renderResult(result, meta, theme, context) {
+				const body = renderResultBody(result, meta, theme, context);
+				// τ is session state, not a call argument, so the result is the only
+				// honest place to show it. Partial renders are skipped: the store is
+				// still being written while the program runs.
+				if (meta.isPartial) return body;
+				const inspector = renderStateInspector({
+					entries: readSpindleExecutionRenderDetails(result.details).state,
+					expanded: meta.expanded,
+					theme,
+				});
+				if (!inspector) return body;
+				const composite = new Container();
+				composite.addChild(body);
+				composite.addChild(inspector);
+				return composite;
 			},
 			async execute(toolCallId, params, signal, onUpdate, context) {
 				await state.ensure(context);
@@ -658,6 +690,9 @@ export const createSpindleExecTool = (
 				const outputFormatStartLine = result.logs.length > 0 ? countNewlines(logPrefix) + 2 : 0;
 				const persistedDetails = createSpindlePersistedExecutionDetails({
 					...result,
+					// What τ holds after the run, so expanding an old transcript shows the
+					// state that program left behind and not the store's current contents.
+					...(result.stateKeys ? { state: result.stateKeys } : {}),
 					...(outputFormat ? { outputFormat, outputFormatStartLine } : {}),
 					...(outputFormat
 						? {
@@ -751,3 +786,4 @@ export const createSpindleExecTool = (
 			toolCallTiming: codePreviewSettings.toolCallTiming,
 		},
 	);
+};

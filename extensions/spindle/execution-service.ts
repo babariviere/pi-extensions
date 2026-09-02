@@ -417,7 +417,7 @@ export class SpindleExecutionService {
 			trace: traceRecorder.seal(runOutcome, phases, sandboxResult.error),
 			elapsedMs: performance.now() - startedAt,
 			...(sandboxResult.error ? { error: sandboxResult.error } : {}),
-			...(this.store.size > 0 ? { stateKeys: this.store.keys() } : {}),
+			...(this.store.size > 0 ? { stateKeys: this.store.snapshot() } : {}),
 		};
 	}
 }

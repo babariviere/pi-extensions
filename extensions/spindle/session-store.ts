@@ -56,6 +56,12 @@ export interface SpindleSessionStoreKey {
 	key: string;
 	bytes: number;
 	updatedAt: number;
+	/**
+	 * A bounded slice of the stored JSON, for the expand-to-inspect surface.
+	 * Present only on `snapshot()`: `keys()` answers the guest, which can read
+	 * the value itself and must not pay for a copy of it.
+	 */
+	preview?: string;
 }
 
 /** The outcome of a `τ.set`. */
@@ -201,6 +207,20 @@ export class SpindleSessionStore {
 			key,
 			bytes: entry.bytes,
 			updatedAt: entry.updatedAt,
+		}));
+	}
+
+	/**
+	 * Held keys with a bounded preview of each value, for the TUI. The preview
+	 * travels in the persisted details rather than being read at render time, so
+	 * an old transcript still renders what the run actually held.
+	 */
+	snapshot(previewChars = 200): SpindleSessionStoreKey[] {
+		return [...this.#entries.entries()].map(([key, entry]) => ({
+			key,
+			bytes: entry.bytes,
+			updatedAt: entry.updatedAt,
+			preview: entry.json.length > previewChars ? `${entry.json.slice(0, previewChars - 1)}\u2026` : entry.json,
 		}));
 	}
 

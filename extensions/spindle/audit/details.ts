@@ -15,6 +15,9 @@ export interface SpindleRenderTypeError {
 
 const MAX_PERSISTED_TYPE_ERRORS = 50;
 const MAX_TYPE_ERROR_MESSAGE_CHARS = 500;
+/** τ keys carried into the details, so an old transcript renders what it held. */
+const MAX_PERSISTED_STATE_KEYS = 16;
+const MAX_STATE_PREVIEW_CHARS = 200;
 
 export interface SpindlePersistedExecutionDetailsV1 {
 	success: boolean;
@@ -24,6 +27,15 @@ export interface SpindlePersistedExecutionDetailsV1 {
 	outputFormatLines?: number;
 	/** Present when the program failed type checking and was never executed. */
 	typeErrors?: SpindleRenderTypeError[];
+	/** What the session scratchpad (τ) held when the program finished. */
+	state?: SpindleRenderStateEntry[];
+}
+
+/** One τ key, with a bounded slice of its stored JSON. */
+export interface SpindleRenderStateEntry {
+	key: string;
+	bytes: number;
+	preview?: string;
 }
 
 export interface SpindleLegacyRenderAudit {
@@ -50,6 +62,7 @@ export interface SpindleExecutionRenderDetails {
 	phases: string[];
 	audits: SpindleLegacyRenderAudit[];
 	typeErrors?: SpindleRenderTypeError[];
+	state?: SpindleRenderStateEntry[];
 }
 
 const serializedBytes = (value: unknown): number => Buffer.byteLength(JSON.stringify(value), "utf8");
@@ -68,6 +81,7 @@ export const createSpindlePersistedExecutionDetails = (input: {
 	outputFormatStartLine?: number;
 	outputFormatLines?: number;
 	typeErrors?: SpindleRenderTypeError[];
+	state?: SpindleRenderStateEntry[];
 }): SpindlePersistedExecutionDetailsV1 => {
 	const details: SpindlePersistedExecutionDetailsV1 = {
 		success: input.success,
@@ -88,7 +102,24 @@ export const createSpindlePersistedExecutionDetails = (input: {
 					})),
 				}
 			: {}),
+		...(input.state !== undefined && input.state.length > 0
+			? {
+					state: input.state.slice(0, MAX_PERSISTED_STATE_KEYS).map((entry) => ({
+						key: entry.key,
+						bytes: Math.max(0, Math.floor(entry.bytes)),
+						...(entry.preview !== undefined ? { preview: entry.preview.slice(0, MAX_STATE_PREVIEW_CHARS) } : {}),
+					})),
+				}
+			: {}),
 	};
+	// State previews are a convenience, so they are the first thing dropped when
+	// the details object is over budget: the keys and sizes survive alone.
+	while (
+		serializedBytes(details) > SPINDLE_EXECUTION_DETAILS_MAX_BYTES &&
+		details.state?.some((entry) => entry.preview !== undefined)
+	) {
+		for (const entry of details.state) delete entry.preview;
+	}
 	while (serializedBytes(details) > SPINDLE_EXECUTION_DETAILS_MAX_BYTES && details.trace.operations.length > 0) {
 		details.trace.operations.pop();
 		details.trace.counts.droppedOperations++;
@@ -189,6 +220,19 @@ export const readSpindleExecutionRenderDetails = (value: unknown): SpindleExecut
 								typeof (error as SpindleRenderTypeError).message === "string",
 						)
 						.slice(0, MAX_PERSISTED_TYPE_ERRORS),
+				}
+			: {}),
+		...(Array.isArray(value.state)
+			? {
+					state: value.state
+						.filter(
+							(entry): entry is SpindleRenderStateEntry =>
+								isRecord(entry) &&
+								typeof entry.key === "string" &&
+								typeof entry.bytes === "number" &&
+								(entry.preview === undefined || typeof entry.preview === "string"),
+						)
+						.slice(0, MAX_PERSISTED_STATE_KEYS),
 				}
 			: {}),
 	};
