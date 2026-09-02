@@ -76,7 +76,14 @@ import {
 import { clearActiveNightRun, type NightSandboxRequest, writeActiveNightRun } from "./night-run.ts";
 import { SANDBOX_REQUEST_EVENT, type SandboxRequestEvent } from "../spindle/sandbox/protocol.ts";
 import { agentWorkspacesRoot } from "./agent-workspace.ts";
-import { createRunSandbox, prepareConfigHome, prepareWorkingCopy, sandboxPathFor } from "./sandbox-clone.ts";
+import {
+	createRunSandbox,
+	prepareConfigHome,
+	prepareWorkingCopy,
+	rewriteRemotesToHttps,
+	sandboxPathFor,
+} from "./sandbox-clone.ts";
+import { preflightPathFor } from "./preflight.ts";
 import { WakeLock, type WakeLockPreference } from "./wake-lock.ts";
 import {
 	appendUnderHeading,
@@ -438,6 +445,10 @@ export default function (pi: ExtensionAPI): void {
 		// Set on this process, so every shell and every subagent `pi` the run spawns
 		// inherits it: without it the first jj command in the clone fails with
 		// "Failed to determine the secure config for a repo", and no child can commit.
+		// Set here so the coordinator's own shells get it immediately; it also goes
+		// into the handshake below, which is what actually reaches the children (a
+		// subagent spawned through a pane, or a session that reloads, never sees this
+		// process's environment, and a bare `jj` in that shell dies on the config dir).
 		if (prepared.configHome) process.env.XDG_CONFIG_HOME = prepared.configHome;
 		// Created up front: the todo tool writes into a store, it does not create the
 		// dedicated directory the run points it at, and a missing one would make the
@@ -454,6 +465,11 @@ export default function (pi: ExtensionAPI): void {
 		// morning `/todos` is back on the project's own store.
 		previousTodoPath = process.env.PI_TODO_PATH;
 		process.env.PI_TODO_PATH = ledgerPath;
+
+		// Path only: the probe itself runs in the sandboxed shell once the policy is
+		// in force (see `spindle/sandbox/preflight-bridge.ts`), but the prompt and the
+		// child contract are composed now and have to be able to point at it.
+		const preflightPath = preflightPathFor({ reportPath, ...(workspace ? { workspacePath: workspace } : {}) });
 
 		const sandbox = composeSandboxRequest({
 			config,
@@ -480,6 +496,10 @@ export default function (pi: ExtensionAPI): void {
 			reportPath,
 			maxPullRequests: config.maxPullRequests,
 			ledgerDir: ledgerPath,
+			// Published rather than left in this process's environment: a child the
+			// spawn path cannot hand an env to reads these back from the file.
+			...(prepared.configHome ? { configHome: prepared.configHome } : {}),
+			preflightPath,
 			...(sessionId ? { sessionId } : {}),
 			...(workspace ? { workspacePath: workspace } : {}),
 			...(sandbox ? { sandbox } : {}),
@@ -515,6 +535,7 @@ export default function (pi: ExtensionAPI): void {
 				windowLabel,
 				startedAt,
 				...(workspace ? { workspacePath: workspace } : {}),
+				preflightPath,
 			}),
 			ctx,
 		);
@@ -613,14 +634,22 @@ export default function (pi: ExtensionAPI): void {
 			// writable during a run, so the run gets its own copy of it. Placed under
 			// the workspaces root, which is already in the sandbox's writable set.
 			const configHome = prepareConfigHome(join(agentWorkspacesRoot(created.path), "xdg"));
+			// The copy inherits the source checkout's remote, which is usually SSH.
+			// The sandbox has no SSH and no raw DNS, so an SSH remote means the run
+			// cannot push at all; HTTPS goes through the proxy and authenticates with
+			// the `gh` credential helper. Rewritten on the throwaway copy only.
+			const remotes = await rewriteRemotesToHttps(created.path);
 			return {
 				path: created.path,
 				...(configHome.path ? { configHome: configHome.path } : {}),
 				notes: [
 					...(trusted.ran.length ? [`working copy prepared (${trusted.ran.join(", ")})`] : []),
 					...(configHome.path ? [`config home ${configHome.path} (jj writes its per-repo record there)`] : []),
+					...remotes.rewritten.map(
+						(rewrite) => `remote ${rewrite.remote} rewritten to ${rewrite.to} (the sandbox has no SSH)`,
+					),
 				],
-				problems: [...trusted.problems, ...configHome.problems],
+				problems: [...trusted.problems, ...configHome.problems, ...remotes.problems],
 			};
 		} catch (error) {
 			ctx.ui.notify(

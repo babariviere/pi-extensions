@@ -12,6 +12,10 @@ import {
 	prepareCommands,
 	prepareConfigHome,
 	prepareWorkingCopy,
+	httpsRemoteUrl,
+	parseGitRemotes,
+	remoteRewriteCommands,
+	rewriteRemotesToHttps,
 	sandboxPathFor,
 	strategyOrder,
 } from "./sandbox-clone.ts";
@@ -258,4 +262,94 @@ test("prepareConfigHome does nothing when the tool it exists for is unconfigured
 	assert.equal(prepared.path, undefined);
 	assert.deepEqual(prepared.problems, []);
 	assert.equal(existsSync(join(dir, "xdg")), false);
+});
+
+test("httpsRemoteUrl rewrites the SSH forms and leaves the rest alone", () => {
+	assert.equal(httpsRemoteUrl("git@github.com:stoikio/phishing.git"), "https://github.com/stoikio/phishing.git");
+	assert.equal(
+		httpsRemoteUrl("ssh://git@github.com/babariviere/pi-extensions.git"),
+		"https://github.com/babariviere/pi-extensions.git",
+	);
+	assert.equal(httpsRemoteUrl("git@gitlab.example.com:team/repo"), "https://gitlab.example.com/team/repo");
+	// Nothing to do, or nothing we understand: left untouched.
+	assert.equal(httpsRemoteUrl("https://github.com/stoikio/phishing.git"), undefined);
+	assert.equal(httpsRemoteUrl("/srv/mirrors/phishing.git"), undefined);
+	assert.equal(httpsRemoteUrl("../sibling-repo"), undefined);
+	assert.equal(httpsRemoteUrl(""), undefined);
+});
+
+test("parseGitRemotes keeps one entry per remote, fetch URL first", () => {
+	const remotes = parseGitRemotes(
+		[
+			"origin\tgit@github.com:stoikio/phishing.git (fetch)",
+			"origin\tgit@github.com:stoikio/phishing.git (push)",
+			"upstream\thttps://github.com/other/phishing.git (fetch)",
+			"",
+		].join("\n"),
+	);
+	assert.deepEqual(remotes, [
+		{ remote: "origin", url: "git@github.com:stoikio/phishing.git" },
+		{ remote: "upstream", url: "https://github.com/other/phishing.git" },
+	]);
+});
+
+test("a colocated copy is rewritten for both git and jj", () => {
+	const commands = remoteRewriteCommands(
+		"/night/clone",
+		{ remote: "origin", from: "git@github.com:stoikio/phishing.git", to: "https://github.com/stoikio/phishing.git" },
+		{ git: true, jj: true },
+	);
+	assert.deepEqual(
+		commands.map((command) => `${command.command} ${command.args.join(" ")}`),
+		[
+			"git -C /night/clone remote set-url origin https://github.com/stoikio/phishing.git",
+			"jj -R /night/clone --ignore-working-copy git remote set-url origin https://github.com/stoikio/phishing.git",
+		],
+	);
+});
+
+test("rewriteRemotesToHttps only touches the SSH remotes", async () => {
+	const ran: string[] = [];
+	const result = await rewriteRemotesToHttps("/night/clone", {
+		present: { git: true, jj: false },
+		list: async () => [
+			{ remote: "origin", url: "git@github.com:stoikio/phishing.git" },
+			{ remote: "mirror", url: "https://example.com/mirror.git" },
+		],
+		run: async (command) => {
+			ran.push(command.args.join(" "));
+		},
+	});
+	assert.deepEqual(result.rewritten, [
+		{ remote: "origin", from: "git@github.com:stoikio/phishing.git", to: "https://github.com/stoikio/phishing.git" },
+	]);
+	assert.deepEqual(result.problems, []);
+	assert.deepEqual(ran, ["-C /night/clone remote set-url origin https://github.com/stoikio/phishing.git"]);
+});
+
+test("a failing rewrite is a problem, not a thrown clone", async () => {
+	const result = await rewriteRemotesToHttps("/night/clone", {
+		present: { git: true, jj: false },
+		list: async () => [{ remote: "origin", url: "git@github.com:stoikio/phishing.git" }],
+		run: async () => {
+			throw new Error("fatal: No such remote 'origin'");
+		},
+	});
+	assert.deepEqual(result.rewritten, []);
+	assert.equal(result.problems.length, 1);
+	assert.match(result.problems[0], /No such remote/);
+});
+
+test("a copy that is neither a git nor a jj repo is left alone", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "clone-remotes-"));
+	try {
+		const result = await rewriteRemotesToHttps(dir, {
+			list: async () => {
+				throw new Error("git should not have been called");
+			},
+		});
+		assert.deepEqual(result, { rewritten: [], problems: [] });
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
 });
