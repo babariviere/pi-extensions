@@ -100,13 +100,32 @@ export interface SpindleNamedActionTypeSource {
  * so dynamic surfaces get argument checking before the sandbox runs. Absent or
  * empty sections keep the loose static declarations.
  *
- * `mcp` has no section on purpose: the bridge provider never pre-fetches a
- * server's tool list (see providers/mcp-bridge-provider.ts), so there is no
- * side-effect-free descriptor source to render.
+ * The `mcp` section is populated only from the on-disk MCP tool cache
+ * (mcp/tool-cache.ts), never from a live list: generating types must not
+ * connect a server or trigger an OAuth prompt. A server whose tools have never
+ * been listed contributes nothing and keeps the loose declarations.
  */
 export interface SpindleGuestTypeSources {
 	extensionTools?: SpindleNamedActionTypeSource[];
+	mcpServers?: SpindleMcpServerTypeSource[];
 }
+
+/** One MCP server's cached tool schemas, for the generated `mcp` surface. */
+export interface SpindleMcpServerTypeSource {
+	server: string;
+	tools: SpindleNamedActionTypeSource[];
+}
+
+/**
+ * Implemented by an MCP provider that can hand over cached tool schemas. Duck
+ * typed so the bridge provider (which has no schemas to give) needs no change.
+ */
+export interface SpindleMcpTypeSourceProvider {
+	mcpGuestTypeSources(context: SpindleInvocationContext): Promise<SpindleMcpServerTypeSource[]>;
+}
+
+export const isMcpTypeSourceProvider = (value: unknown): value is SpindleMcpTypeSourceProvider =>
+	typeof (value as { mcpGuestTypeSources?: unknown } | null)?.mcpGuestTypeSources === "function";
 
 /**
  * Pre-rendered `declare const` blocks replacing the loose declaration lines.
@@ -114,6 +133,7 @@ export interface SpindleGuestTypeSources {
  */
 export interface SpindleDynamicGuestDeclarations {
 	extensions?: string;
+	mcp?: string;
 }
 
 export interface SpindleProviderListRequest {

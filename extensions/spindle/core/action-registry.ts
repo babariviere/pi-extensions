@@ -8,6 +8,7 @@ import {
 	type SpindleExecutionTraceRecorder,
 } from "../audit/trace.ts";
 import {
+	isMcpTypeSourceProvider,
 	SPINDLE_NESTED_TOOL_CALL_ID_PREFIX,
 	type SpindleActionDescriptor,
 	type SpindleCapabilityCatalog,
@@ -357,14 +358,29 @@ export class ActionRegistry {
 	 * declarations in place for that execution.
 	 */
 	async guestTypeSources(context: SpindleInvocationContext): Promise<SpindleGuestTypeSources> {
-		const provider = this.#providers.get("extensions");
-		if (!provider) return {};
-		const descriptors = await provider.list({ limit: 1_000 }, context);
-		const extensionTools = descriptors.map((descriptor) => ({
-			name: descriptor.name,
-			inputSchema: descriptor.inputSchema,
-		}));
-		return extensionTools.length > 0 ? { extensionTools } : {};
+		const sources: SpindleGuestTypeSources = {};
+		const extensions = this.#providers.get("extensions");
+		if (extensions) {
+			const descriptors = await extensions.list({ limit: 1_000 }, context);
+			const extensionTools = descriptors.map((descriptor) => ({
+				name: descriptor.name,
+				inputSchema: descriptor.inputSchema,
+			}));
+			if (extensionTools.length > 0) sources.extensionTools = extensionTools;
+		}
+		// The MCP section is optional and independent: the bridge provider cannot
+		// supply schemas, and a cache miss must leave the loose declarations rather
+		// than fail the execution or provoke a connect.
+		const mcp = this.#providers.get("mcp");
+		if (isMcpTypeSourceProvider(mcp)) {
+			try {
+				const mcpServers = await mcp.mcpGuestTypeSources(context);
+				if (mcpServers.length > 0) sources.mcpServers = mcpServers;
+			} catch {
+				// no MCP section for this execution
+			}
+		}
+		return sources;
 	}
 
 	async search(query: string, context: SpindleInvocationContext, limit = 30): Promise<ResolvedSpindleAction[]> {

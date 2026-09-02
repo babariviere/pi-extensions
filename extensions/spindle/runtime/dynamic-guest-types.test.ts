@@ -49,3 +49,69 @@ test("the generated surface replaces the loose declaration and gates bad argumen
 	assert.ok(bad.errors.length > 0);
 	assert.match(bad.errors[0]!.message, /quer/);
 });
+
+const readChannel = {
+	name: "read_channel",
+	inputSchema: {
+		type: "object",
+		properties: { channel: { type: "string" }, limit: { type: "number" } },
+		required: ["channel"],
+		additionalProperties: false,
+	},
+};
+
+test("cached MCP tools render into a per-server tool map", () => {
+	const dynamic = buildDynamicGuestDeclarations({ mcpServers: [{ server: "slack", tools: [readChannel] }] });
+	assert.match(String(dynamic.mcp), /interface SpindleMcpToolMap \{/);
+	assert.match(String(dynamic.mcp), /read_channel: \{ channel: string; limit\?: number \};/);
+	assert.match(String(dynamic.mcp), /declare const mcp: SpindleMcpApiDynamic;/);
+	// Index signatures at both levels keep an uncached tool and a computed server
+	// callable rather than turning them into type errors.
+	assert.match(String(dynamic.mcp), /\[tool: string\]: Record<string, unknown>;/);
+	assert.match(String(dynamic.mcp), /\[server: string\]: Record<string, Record<string, unknown>>;/);
+});
+
+test("no cached MCP server leaves the loose mcp declaration alone", () => {
+	assert.equal(buildDynamicGuestDeclarations({ mcpServers: [] }).mcp, undefined);
+	assert.equal(buildDynamicGuestDeclarations({ mcpServers: [{ server: "slack", tools: [] }] }).mcp, undefined);
+});
+
+test("the generated mcp surface type-checks a good call and rejects a bad one", () => {
+	const declarations = guestTypeDeclarations(
+		true,
+		buildDynamicGuestDeclarations({ mcpServers: [{ server: "slack", tools: [readChannel] }] }),
+	);
+	assert.equal(declarations.includes("declare const mcp: SpindleMcpApi;\n"), false);
+
+	const good = typeCheckSpindleCode("return await mcp.call('slack', 'read_channel', { channel: 'c' });", declarations);
+	assert.deepEqual(good.errors, []);
+
+	const bad = typeCheckSpindleCode("return await mcp.call('slack', 'read_channel', { chanel: 'c' });", declarations);
+	assert.ok(bad.errors.length > 0);
+	assert.match(bad.errors[0]!.message, /chanel/);
+
+	// Deliberately NOT caught here: `SpindleMcpToolMap[S][T]` is a generic indexed
+	// access, so TypeScript runs excess-property checking against it but defers
+	// assignability. A wrong argument type and a missing required argument both
+	// reach dispatch, where the server's schema validation refuses them. These
+	// assertions pin that boundary so a future change to the surface is noticed.
+	const wrongType = typeCheckSpindleCode(
+		"return await mcp.call('slack', 'read_channel', { channel: 1 });",
+		declarations,
+	);
+	assert.deepEqual(wrongType.errors, []);
+	const missing = typeCheckSpindleCode("return await mcp.call('slack', 'read_channel', {});", declarations);
+	assert.deepEqual(missing.errors, []);
+});
+
+test("an uncached tool on a cached server falls through to the loose overload", () => {
+	const declarations = guestTypeDeclarations(
+		true,
+		buildDynamicGuestDeclarations({ mcpServers: [{ server: "slack", tools: [readChannel] }] }),
+	);
+	const outcome = typeCheckSpindleCode(
+		"return await mcp.call('slack', 'not_listed_yet', { anything: 1 });",
+		declarations,
+	);
+	assert.deepEqual(outcome.errors, []);
+});

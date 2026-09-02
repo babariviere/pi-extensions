@@ -8,13 +8,17 @@
  * call against the action's own inputSchema before invoke, so drift between
  * these declarations and a live tool fails at the usual validate stage.
  *
- * `mcp` has no generated surface: the bridge provider never pre-fetches a
- * server's tool list, so there is no side-effect-free descriptor source.
+ * The `mcp` surface is generated too, but only from the on-disk MCP tool cache
+ * (mcp/tool-cache.ts): one typed `call` overload per cached (server, tool)
+ * pair, followed by the loose overloads so a computed server or an uncached
+ * tool still compiles. Nothing here connects a server, so the type gate cannot
+ * trigger an OAuth prompt.
  */
 
 import type {
 	SpindleDynamicGuestDeclarations,
 	SpindleGuestTypeSources,
+	SpindleMcpServerTypeSource,
 	SpindleNamedActionTypeSource,
 } from "../protocol.ts";
 
@@ -189,6 +193,102 @@ const renderExtensionsDeclaration = (sources: SpindleNamedActionTypeSource[]): s
 	);
 };
 
+/** Cap across every server, so a chatty catalog cannot blow up the declarations. */
+const MAX_MCP_TOOLS = 512;
+
+/**
+ * The generated `mcp` surface is a tool MAP indexed by server and tool name,
+ * not a list of overloads.
+ *
+ * Overloads were the first attempt and do not work: TypeScript picks the first
+ * signature that matches, so the permissive
+ * `call(server: string, tool: string, args?: Record<string, unknown>)` fallback
+ * that has to stay for uncached tools silently absorbs every mistake on a tool
+ * whose schema is known.
+ *
+ * What ships instead is one signature indexing a generated map,
+ * `args?: SpindleMcpToolMap[S][T]`, with index signatures at both levels so an
+ * uncached tool or a computed server name still types as
+ * `Record<string, unknown>`.
+ *
+ * What that catches, exactly: an unknown or misspelled property on a cached
+ * tool, which is the common failure. What it does not catch: a wrongly typed
+ * property, or a missing required one. `SpindleMcpToolMap[S][T]` is a generic
+ * indexed access and therefore deferred, and TypeScript runs excess-property
+ * checking against a deferred target but skips assignability. Both slip through
+ * to dispatch, where the server's own schema validation refuses them with a
+ * message naming the argument. Strengthening this further needs a negated type
+ * (`tool: string except the cached names`), which TypeScript does not have.
+ */
+const renderMcpToolEntry = (source: SpindleNamedActionTypeSource, budget: RenderBudget): string | undefined => {
+	const schemaJson = JSON.stringify(source.inputSchema);
+	const rendered =
+		schemaJson && schemaJson.length <= MAX_SCHEMA_SOURCE_CHARS ? schemaType(source.inputSchema, 0) : undefined;
+	if (!rendered || rendered.length > MAX_MEMBER_TYPE_CHARS) return undefined;
+	const text = `    ${propertyKey(source.name)}: ${rendered};`;
+	return spend(budget, text) ? text : undefined;
+};
+
+const renderMcpDeclaration = (servers: SpindleMcpServerTypeSource[]): string => {
+	const budget: RenderBudget = { chars: MAX_SECTION_CHARS };
+	const blocks: string[] = [];
+	let dropped = 0;
+	let rendered = 0;
+	for (const entry of [...servers].sort((left, right) => left.server.localeCompare(right.server))) {
+		const seen = new Set<string>();
+		const lines: string[] = [];
+		for (const tool of [...entry.tools].sort((left, right) => left.name.localeCompare(right.name))) {
+			if (seen.has(tool.name)) continue;
+			seen.add(tool.name);
+			if (rendered >= MAX_MCP_TOOLS) {
+				dropped += 1;
+				continue;
+			}
+			const line = renderMcpToolEntry(tool, budget);
+			if (!line) {
+				dropped += 1;
+				continue;
+			}
+			lines.push(line);
+			rendered += 1;
+		}
+		// The per-server index signature is what lets an uncached tool on a cached
+		// server stay callable instead of becoming a type error.
+		if (lines.length > 0) {
+			blocks.push(
+				`  ${propertyKey(entry.server)}: {\n${lines.join("\n")}\n    [tool: string]: Record<string, unknown>;\n  };`,
+			);
+		}
+	}
+	if (blocks.length === 0) return "";
+	const serverNames = [...new Set(servers.map((entry) => entry.server))].sort();
+	const note =
+		dropped > 0
+			? `// Omitted ${dropped} tool(s) from this map; those calls type as\n// Record<string, unknown> and are still validated by the server at dispatch.\n`
+			: "";
+	return (
+		"// Generated from the on-disk MCP tool cache: a cached (server, tool) pair\n" +
+		"// carries its real input schema, so a misspelled or unknown argument fails\n" +
+		"// the type gate before the sandbox runs. An uncached tool, or a server name\n" +
+		"// computed at runtime, types as Record<string, unknown>. Argument types and\n" +
+		"// required arguments are enforced by the server at dispatch. Generating this\n" +
+		"// never connects to a server, so it can never trigger an auth prompt.\n" +
+		note +
+		`// Cached servers: ${serverNames.join(", ")}\n` +
+		`interface SpindleMcpToolMap {\n${blocks.join("\n")}\n  [server: string]: Record<string, Record<string, unknown>>;\n}\n` +
+		"type SpindleMcpApiDynamic = {\n" +
+		"  call<S extends string, T extends string>(server: S, tool: T, args?: SpindleMcpToolMap[S][T]): Promise<SpindleMcpResult>;\n" +
+		"  call(args: { server?: string; tool: string; args?: Record<string, unknown> }): Promise<SpindleMcpResult | unknown>;\n" +
+		"  list(server: string): Promise<unknown>;\n" +
+		"  list(args?: { server?: string }): Promise<unknown>;\n" +
+		"  connect(server: string): Promise<unknown>;\n" +
+		"  search(args: string | { query: string; server?: string; regex?: boolean; includeSchemas?: boolean }): Promise<unknown>;\n" +
+		"  describe(args: string | { tool: string; server?: string }): Promise<unknown>;\n" +
+		"};\n" +
+		"declare const mcp: SpindleMcpApiDynamic;\n"
+	);
+};
+
 /**
  * Render replacement `declare const` blocks for guestTypeDeclarations(). Missing
  * or empty sections return nothing so the loose static lines survive.
@@ -198,6 +298,10 @@ export const buildDynamicGuestDeclarations = (sources: SpindleGuestTypeSources):
 	if (sources.extensionTools && sources.extensionTools.length > 0) {
 		const extensions = renderExtensionsDeclaration(sources.extensionTools);
 		if (extensions) dynamic.extensions = extensions;
+	}
+	if (sources.mcpServers && sources.mcpServers.length > 0) {
+		const mcp = renderMcpDeclaration(sources.mcpServers);
+		if (mcp) dynamic.mcp = mcp;
 	}
 	return dynamic;
 };

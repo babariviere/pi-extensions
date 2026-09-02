@@ -25,6 +25,8 @@ import { CapturedToolsProvider } from "./providers/captured-tools-provider.ts";
 import { activeNightMcpReadOnly } from "./mcp/night-bridge.ts";
 import { effectiveMcpReadOnlyConfig, McpReadOnlyGate } from "./mcp/read-only-policy.ts";
 import { McpBridgeProvider } from "./providers/mcp-bridge-provider.ts";
+import { McpClientHub } from "./mcp/client-hub.ts";
+import { McpClientProvider } from "./providers/mcp-client-provider.ts";
 import { PiToolsProvider } from "./providers/pi-tools-provider.ts";
 import { SandboxController } from "./sandbox/controller.ts";
 import { SpindleSessionStore } from "./session-store.ts";
@@ -45,6 +47,13 @@ import { SPINDLE_PROVIDER_DISCOVER_EVENT, type SpindleProvider, type SpindleProv
 
 const RESERVED_PROVIDER_NAMES = ["pi", "mcp", "agents", "extensions", "spindle"];
 
+/**
+ * Spindle's own MCP client is the default. `SPINDLE_MCP_CLIENT=0` falls back to
+ * the pi-mcp-adapter gateway bridge, which stays vendored as the escape hatch
+ * for a server the client cannot yet run (unix socket, `requestHeadersCommand`).
+ */
+const useSpindleMcpClient = (): boolean => process.env.SPINDLE_MCP_CLIENT !== "0";
+
 /** How long session teardown waits for cancelled subagent children to die. */
 const AGENT_DRAIN_TIMEOUT_MS = 5_000;
 
@@ -55,6 +64,8 @@ export class SpindleState {
 	#cwd: string | undefined;
 	/** Filesystem guardrail for the mutating core tools; undefined until initialize(). */
 	#sandbox: SandboxController | undefined;
+	/** Spindle's own MCP client, created on first `mcp.*` use. */
+	#mcpHub: McpClientHub | undefined;
 	/** Unsubscribe for the mid-session sandbox request listener. */
 	#unsubscribeSandbox: (() => void) | undefined;
 	/**
@@ -179,11 +190,20 @@ export class SpindleState {
 			);
 		}
 		if (capturedToolsProvider) this.#registry.register(capturedToolsProvider);
+		// `mcp.*` has two implementations over the same ~/.pi/agent/mcp.json:
+		// Spindle's own MCP client (default) and the historical bridge to the
+		// pi-mcp-adapter gateway tool (`SPINDLE_MCP_CLIENT=0`). Both expose an
+		// identical sandbox surface, so the switch is invisible to a program.
 		this.#registry.register(
-			new McpBridgeProvider(
-				() => this.capturedTools,
-				() => this.#mcpReadOnlyGate(),
-			),
+			useSpindleMcpClient()
+				? new McpClientProvider(
+						() => (this.#mcpHub ??= new McpClientHub({ cwd: context.cwd })),
+						() => this.#mcpReadOnlyGate(),
+					)
+				: new McpBridgeProvider(
+						() => this.capturedTools,
+						() => this.#mcpReadOnlyGate(),
+					),
 		);
 		this.#registry.register(
 			new SpindleAgentsProvider(

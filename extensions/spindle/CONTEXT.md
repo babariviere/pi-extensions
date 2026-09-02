@@ -32,7 +32,7 @@ plus its wiring, and none pulls in a dropped subsystem.
 | `failure-progress.ts` | `src/failure-progress.ts` | a failed program names the calls that already succeeded |
 | `output-budget.ts` | `src/output-budget.ts` | oversized output spills to a temp artifact instead of losing its middle |
 | `config.ts` (`executor.maxTimeoutMs`), `execution-service.ts` (`requestedTimeoutMs`) | same fields upstream | a per-invocation `timeoutMs` raises (never lowers) the program deadline |
-| `runtime/dynamic-guest-types.ts` | `src/runtime/dynamic-guest-types.ts` (mcp section dropped) | `extensions.<tool>` is typed from the live captured catalog; `mcp` stays loose because the bridge never pre-fetches tool lists |
+| `runtime/dynamic-guest-types.ts` | `src/runtime/dynamic-guest-types.ts` (mcp section rewritten) | `extensions.<tool>` is typed from the live captured catalog; `mcp` is typed from the on-disk MCP tool cache as an indexed tool map, so generation never connects a server |
 | `core/action-repair.ts`, `providers/arg-normalization.ts` | same names upstream | near-miss action names and argument keys repair from the declared catalog/schema, with didactic failures |
 | `mcp/descriptor-cache.ts` | `src/providers/mcp-descriptor-cache.ts` (rewritten: spindle owns no MCP client) | in-process memo for `mcp.list` / `search` / `describe`, invalidated by config fingerprint, `connect` and TTL |
 | `core/pi-bash-error.ts` | `src/core/pi-bash-error.ts` | `pi.bash({ settle: true })` keeps its exit status across `tool_result` middleware |
@@ -96,7 +96,7 @@ Globals inside `spindle_exec`:
 - `pi.*` — Pi core tools (full code mode only), via `providers/pi-tools-provider.ts`
 - `extensions.*` — tools registered by sibling extensions, via `capture/` + `providers/captured-tools-provider.ts`
 - `tools.*` — cross-provider discovery and generic dispatch (full code mode only): `providers` / `catalog` / `list` / `search` / `describe` / `call` over every registered provider
-- `mcp.*` — MCP tools through the `pi-mcp-adapter` `mcp` gateway tool, via `providers/mcp-bridge-provider.ts`
+- `mcp.*` — MCP tools from `mcp.json`, served by `providers/mcp-client-provider.ts` (spindle's own MCP client, default). `SPINDLE_MCP_CLIENT=0` falls back to `providers/mcp-bridge-provider.ts` (the `pi-mcp-adapter` `mcp` gateway tool). Identical sandbox surface either way
 - `agents.*` — custom markdown subagents, via `providers/agents-provider.ts` + `agents/`
 - Host APIs, via `runtime/guest-polyfills.ts`: `TextEncoder`/`TextDecoder`,
   `URL`/`URLSearchParams`, `atob`/`btoa`, `structuredClone`, `crypto`
@@ -467,6 +467,12 @@ risk/approval hunks by hand.
 | `sandbox/night-bridge.ts` | Reads the night-mode handshake, so a subagent process inherits the run's policy without any IPC. Gated on participation, so a bystander session does not. |
 | `sandbox/resolve.ts` | Precedence: config, request, and the floor an active night run imposes. Pure. |
 | `mcp/read-only-policy.ts` | Read-only MCP guardrail: the declarative `mcp` config block, the built-in per-server profiles (slack, linear, datadog, metabase), the name-shape classifier, and `McpReadOnlyGate`, which owns the allow/deny decision for both dispatch points. Pure. |
+| `mcp/server-config.ts` | `mcp.json` loader for spindle's own client. Field-compatible with pi-mcp-adapter (same `mcpServers` schema, same `includeTools`/`excludeTools` glob rules, same `mcp_<server>_<tool>` prefix), layered agent → `.pi/mcp.json` → `.mcp.json`, credentials URL-bound on merge. Pure. |
+| `mcp/token-store.ts` | OAuth credential storage. Same credential-store service and `sha256-<sha256(serverName)>` account as pi-mcp-adapter, so switching clients needs no re-auth, but a record is always **one** item: reading one of the adapter's chunked records compacts it, which is what ends the per-item macOS keychain prompt storm (the adapter chunks at 1000 chars for the Windows blob cap, turning one server into six keychain items with six ACLs). |
+| `mcp/oauth-provider.ts` | `OAuthClientProvider` over `token-store.ts`. Headless refresh works; anything needing a browser throws `McpAuthorizationRequiredError` unless a `redirect` handler is supplied, so a tool call never tries to open one. |
+| `mcp/tool-cache.ts` | Tool schemas persisted to `<agentDir>/spindle-mcp-tools.json`, keyed by endpoint + config fingerprint. This is what lets `mcp.list` / `search` / `describe` answer without connecting, so `describe` returns a real input schema instead of the bridge's permissive stub, and discovery cannot trigger an OAuth prompt. |
+| `mcp/client-hub.ts` | The MCP client itself: lazy per-server connect over streamable HTTP (stdio supported, unix socket reported as unsupported), tool filtering, name resolution for `server.tool` / `mcp_server_tool` / bare names, and `callTool`. |
+| `providers/mcp-client-provider.ts` | `mcp.*` on the hub. Same five management actions, same `mcp.<server>.<tool>` refs, same `{ text, content, structuredContent }` shape and same `McpReadOnlyGate` as the bridge, so a program cannot tell which one it is talking to. |
 | `mcp/night-bridge.ts` | Reads `mcp.readOnly` from the night-mode handshake, so a subagent process inherits the guardrail with no IPC. Participation-gated, like `sandbox/night-bridge.ts`. |
 
 ### Filesystem sandbox

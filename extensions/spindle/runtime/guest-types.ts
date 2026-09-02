@@ -396,6 +396,7 @@ const FULL_CODE_GLOBAL_DECLARATIONS = [
 ];
 
 const EXTENSIONS_LOOSE_DECLARATION = "declare const extensions: SpindleExtensionsApi;\n";
+const MCP_LOOSE_DECLARATION = "declare const mcp: SpindleMcpApi;\n";
 
 const terminatedDeclaration = (block: string): string => (block.endsWith("\n") ? block : `${block}\n`);
 
@@ -405,10 +406,16 @@ const terminatedDeclaration = (block: string): string => (block.endsWith("\n") ?
  * it, and a missing section keeps the loose surface (see
  * runtime/dynamic-guest-types.ts).
  */
-const applyDynamicDeclarations = (declarations: string, dynamic: SpindleDynamicGuestDeclarations): string =>
-	dynamic.extensions && declarations.includes(EXTENSIONS_LOOSE_DECLARATION)
-		? declarations.replace(EXTENSIONS_LOOSE_DECLARATION, terminatedDeclaration(dynamic.extensions))
-		: declarations;
+const applyDynamicDeclarations = (declarations: string, dynamic: SpindleDynamicGuestDeclarations): string => {
+	let applied = declarations;
+	if (dynamic.extensions && applied.includes(EXTENSIONS_LOOSE_DECLARATION)) {
+		applied = applied.replace(EXTENSIONS_LOOSE_DECLARATION, terminatedDeclaration(dynamic.extensions));
+	}
+	if (dynamic.mcp && applied.includes(MCP_LOOSE_DECLARATION)) {
+		applied = applied.replace(MCP_LOOSE_DECLARATION, terminatedDeclaration(dynamic.mcp));
+	}
+	return applied;
+};
 
 export const guestTypeDeclarations = (fullCodeMode: boolean, dynamic?: SpindleDynamicGuestDeclarations): string => {
 	if (!fullCodeMode) {
