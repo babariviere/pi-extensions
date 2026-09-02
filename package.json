@@ -30,7 +30,7 @@
     ]
   },
   "optionalDependencies": {
-    "@anthropic-ai/sandbox-runtime": "^0.0.26"
+    "@anthropic-ai/sandbox-runtime": "^0.0.75"
   },
   "dependencies": {
     "@jitl/quickjs-singlefile-mjs-release-sync": "^0.32.0",
