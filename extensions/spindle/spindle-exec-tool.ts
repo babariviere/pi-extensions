@@ -104,14 +104,10 @@ export const createSpindleExecTool = (
 				payloads: Type.Optional(
 					Type.Record(Type.String(), Type.String(), {
 						description:
-							"Named payloads exposed as π.key. Use for any awkward payload: multi-line file content, JSON blobs, long prose, and strings with literal ${...}. JSON-encode structured data and JSON.parse(π.key) in the sandbox. Legacy alias: strings.",
+							"Named payloads exposed as π.key. Use for any awkward payload: multi-line file content, JSON blobs, long prose, and strings with literal ${...}. JSON-encode structured data and JSON.parse(π.key) in the sandbox.",
 					}),
 				),
-				strings: Type.Optional(
-					Type.Record(Type.String(), Type.String(), {
-						description: "Legacy alias for payloads; prefer payloads.",
-					}),
-				),
+
 				resultFormat: Type.Optional(Type.Union(RESULT_FORMATS.map((value) => Type.Literal(value)))),
 				agentBudget: Type.Optional(
 					Type.Number({

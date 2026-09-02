@@ -39,8 +39,10 @@ plus its wiring, and none pulls in a dropped subsystem.
 | `core/core-override-guidance.ts` | `src/core/core-override-guidance.ts` | an exact-name core override keeps its authored prompt text in full code mode |
 | `ui/highlight.ts` (dynamic `import("shiki")`) | upstream's startup-perf change | the full shiki entry stays out of extension startup |
 
-The `spindle_exec` named-payload argument is `payloads`; `strings` remains as a
-silently remapped legacy alias.
+The `spindle_exec` named-payload argument is `payloads`. `strings` is still
+accepted and silently remapped in `prepareArguments`, but it is no longer
+declared in the tool schema or named in any prompt surface, so nothing teaches a
+model to reach for it.
 
 ## Upstream drift audit
 
