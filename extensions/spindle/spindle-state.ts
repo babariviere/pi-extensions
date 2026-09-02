@@ -292,6 +292,7 @@ export class SpindleState {
 				...(effective.denyWrite.length ? { denyWrite: effective.denyWrite } : {}),
 				...(effective.denyRead.length ? { denyRead: effective.denyRead } : {}),
 				network: effective.network,
+				platformTlsVerification: effective.platformTlsVerification,
 			},
 			policyEnvironment(cwd),
 		);

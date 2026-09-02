@@ -33,6 +33,8 @@ export interface SandboxSettings {
 	denyRead: string[];
 	allowedDomains: string[];
 	deniedDomains: string[];
+	/** Allow macOS `trustd` access so Go CLIs can verify TLS chains. */
+	platformTlsVerification?: boolean;
 }
 
 export interface EffectiveSandboxInput {
@@ -55,6 +57,8 @@ export interface EffectiveSandbox {
 	denyWrite: string[];
 	denyRead: string[];
 	network: { allowedDomains: string[]; deniedDomains: string[] };
+	/** Allow macOS `trustd` access so Go CLIs can verify TLS chains. */
+	platformTlsVerification: boolean;
 	/** Where the mode came from. */
 	source: "config" | "request" | "night" | "agent";
 	/**
@@ -104,6 +108,9 @@ export function effectiveSandbox(input: EffectiveSandboxInput): EffectiveSandbox
 			allowedDomains: dedupe([...settings.allowedDomains, ...(night?.network?.allowedDomains ?? [])]),
 			deniedDomains: [...settings.deniedDomains],
 		},
+		// Config-only: a request that tightens the mode must not be able to break
+		// every Go CLI in the session as a side effect.
+		platformTlsVerification: settings.platformTlsVerification ?? true,
 		source,
 		...(mode !== asked ? { refused: { asked, enforced: mode } } : {}),
 	};

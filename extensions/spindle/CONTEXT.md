@@ -511,6 +511,19 @@ the duration of a night run.
 }
 ```
 
+`platformTlsVerification` (default `true`) is the one network knob that is not
+about domains. Go on darwin ignores `SSL_CERT_FILE`/`SSL_CERT_DIR` and delegates
+chain validation to the platform verifier, which needs
+`mach-lookup com.apple.trustd.agent`. `srt` only emits that rule when its config
+carries `enableWeakerNetworkIsolation`, so without it every Go CLI (`gh`,
+`terraform`, `kubectl`, `gcloud`) fails every HTTPS call with
+`tls: failed to verify certificate: x509: OSStatus -26276` while `curl` in the
+same shell succeeds. The trade-off srt documents is a potential exfiltration
+channel through `trustd`; set `"platformTlsVerification": false` to take the
+tighter profile and lose those tools. It is config-only on purpose: a `/sandbox`
+request or a night floor that tightens the mode must not break every Go CLI in
+the session as a side effect.
+
 The mode names mirror Codex CLI's, since that vocabulary is already familiar:
 
 | Mode | Writable |

@@ -80,6 +80,11 @@ export interface SpindleSandboxConfig {
 	/** Domain allowlist for the sandbox network proxy. `*` means unrestricted. */
 	allowedDomains: string[];
 	deniedDomains: string[];
+	/**
+	 * Let sandboxed processes reach macOS `trustd`, which Go binaries need to
+	 * verify TLS chains (`gh`, `terraform`, `kubectl`, `gcloud`). Default true.
+	 */
+	platformTlsVerification: boolean;
 }
 
 export interface SpindleToolCaptureConfig {
@@ -150,6 +155,7 @@ export const DEFAULT_SPINDLE_CONFIG: SpindleConfig = {
 		denyRead: [],
 		allowedDomains: ["*"],
 		deniedDomains: [],
+		platformTlsVerification: true,
 	},
 	mcp: DEFAULT_MCP_READ_ONLY_CONFIG,
 	capture: {
@@ -305,6 +311,10 @@ export const normalizeSpindleConfig = (input: Record<string, unknown>): SpindleC
 			denyRead: stringList(sandbox.denyRead),
 			allowedDomains: stringList(sandbox.allowedDomains, DEFAULT_SPINDLE_CONFIG.sandbox.allowedDomains),
 			deniedDomains: stringList(sandbox.deniedDomains),
+			platformTlsVerification: booleanValue(
+				sandbox.platformTlsVerification,
+				DEFAULT_SPINDLE_CONFIG.sandbox.platformTlsVerification,
+			),
 		},
 		mcp: normalizeMcpReadOnlyConfig(input.mcp),
 		capture: {

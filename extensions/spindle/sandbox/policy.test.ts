@@ -190,3 +190,17 @@ test("describeSandbox summarises enforcement", () => {
 	assert.match(describeSandbox(resolveSandboxPolicy({}, environment())), /^sandbox workspace-write: /);
 	assert.match(describeSandbox(resolveSandboxPolicy({ mode: "off" }, environment())), /no enforcement/);
 });
+
+test("platform TLS verification is on by default so Go CLIs can verify chains", () => {
+	// Go on darwin ignores SSL_CERT_FILE and asks trustd, so without this rule
+	// every gh/terraform/kubectl HTTPS call dies with x509: OSStatus -26276.
+	const policy = resolveSandboxPolicy({}, environment());
+	assert.equal(policy.platformTlsVerification, true);
+	assert.equal(toSandboxRuntimeConfig(policy).enableWeakerNetworkIsolation, true);
+});
+
+test("platform TLS verification can be turned off for the tighter profile", () => {
+	const policy = resolveSandboxPolicy({ platformTlsVerification: false }, environment());
+	assert.equal(policy.platformTlsVerification, false);
+	assert.equal(toSandboxRuntimeConfig(policy).enableWeakerNetworkIsolation, false);
+});

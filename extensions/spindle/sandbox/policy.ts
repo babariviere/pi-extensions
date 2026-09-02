@@ -43,6 +43,16 @@ export interface SandboxPolicy {
 	/** Absolute directories reads are denied under (enforced by the OS sandbox on `bash`). */
 	denyRead: string[];
 	network: SandboxNetworkPolicy;
+	/**
+	 * Let sandboxed processes reach macOS `trustd` so Go binaries can verify TLS
+	 * chains. Defaults to true: without it `gh`, `terraform`, `kubectl` and every
+	 * other Go CLI fails every HTTPS call with
+	 * `tls: failed to verify certificate: x509: OSStatus -26276`, because Go on
+	 * darwin ignores `SSL_CERT_FILE` and delegates chain validation to the
+	 * platform verifier. Set to false to keep the tighter profile at the cost of
+	 * those tools.
+	 */
+	platformTlsVerification: boolean;
 }
 
 export interface SandboxPolicyInput {
@@ -52,6 +62,8 @@ export interface SandboxPolicyInput {
 	denyWrite?: string[];
 	denyRead?: string[];
 	network?: Partial<SandboxNetworkPolicy>;
+	/** Allow macOS `trustd` access so Go CLIs can verify TLS chains (default true). */
+	platformTlsVerification?: boolean;
 }
 
 export interface PolicyEnvironment {
@@ -218,6 +230,7 @@ export function resolveSandboxPolicy(input: SandboxPolicyInput, environment: Pol
 			allowedDomains: input.network?.allowedDomains ?? DEFAULT_NETWORK.allowedDomains,
 			deniedDomains: input.network?.deniedDomains ?? DEFAULT_NETWORK.deniedDomains,
 		},
+		platformTlsVerification: input.platformTlsVerification ?? true,
 	};
 }
 
@@ -289,6 +302,7 @@ export function assertReadAllowed(policy: SandboxPolicy, absolutePath: string): 
 export function toSandboxRuntimeConfig(policy: SandboxPolicy): {
 	network: SandboxNetworkPolicy;
 	filesystem: { allowWrite: string[]; denyWrite: string[]; denyRead: string[] };
+	enableWeakerNetworkIsolation?: boolean;
 } {
 	const named = policy.network.allowedDomains.filter((domain) => domain !== UNRESTRICTED_DOMAIN);
 	return {
@@ -301,6 +315,9 @@ export function toSandboxRuntimeConfig(policy: SandboxPolicy): {
 			denyWrite: policy.denyWrite,
 			denyRead: policy.denyRead,
 		},
+		// Emits `(allow mach-lookup (global-name "com.apple.trustd.agent"))` in the
+		// seatbelt profile, which is what Go's darwin verifier needs.
+		enableWeakerNetworkIsolation: policy.platformTlsVerification,
 	};
 }
 
