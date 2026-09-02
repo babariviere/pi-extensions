@@ -24,6 +24,7 @@ import { SpindleToolLifecycle, SpindleToolOwnership, ownsSpindleToolSource } fro
 import { expandSkillDirMarkersForRead, expandSkillDirMarkersInSkillBlock } from "./core/skill-dir.ts";
 import { restoreSkillsForFullCodePrompt } from "./core/skill-prompt.ts";
 import { buildSkillReferenceGuidance } from "./core/skill-references.ts";
+import { coreOverridePromptGuidance } from "./core/core-override-guidance.ts";
 import { createSpindleExecTool } from "./spindle-exec-tool.ts";
 import { SpindleState } from "./spindle-state.ts";
 import { piHostCompatibilityWarning } from "./host-compatibility.ts";
@@ -270,8 +271,13 @@ export default async function spindle(pi: ExtensionAPI): Promise<void> {
 		// delegate by name. Resolve only explicit invocation lines so full code
 		// mode preserves Pi's progressive skill loading without exposing read.
 		const skillReferenceGuidance = fullCodeMode ? buildSkillReferenceGuidance(event.prompt, skills) : undefined;
+		// An extension that overrides a core tool by exact name keeps its authored
+		// guidance: in full code mode the override is only reachable as `pi.<name>`,
+		// so its own prompt text would otherwise never be shown.
+		const overrideGuidance = fullCodeMode ? coreOverridePromptGuidance(capturedTools).trim() : "";
 		const guidance =
 			(fullCodeMode ? FULL_CODE_GUIDANCE : ORCHESTRATION_ONLY_GUIDANCE) +
+			(overrideGuidance ? `\n\n${overrideGuidance}` : "") +
 			(skillReferenceGuidance ? `\n\n${skillReferenceGuidance}` : "");
 		return {
 			systemPrompt: `${systemPrompt}\n\n${guidance}`,
