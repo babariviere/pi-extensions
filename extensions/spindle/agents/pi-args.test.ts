@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { type DiscoveredAgent } from "./discovery.ts";
-import { SANDBOX_MODE_FLAG } from "./constants.ts";
+import { SANDBOX_MODE_FLAG, TASK_FILE_FLAG } from "./constants.ts";
 import {
 	buildChildArgs,
 	childExtensionPath,
@@ -68,12 +68,19 @@ test("buildChildArgs omits the read-first instruction when reads is empty", () =
 	assert.ok(!taskArg.includes("Read these files first"));
 });
 
-test("buildChildArgs omits the inline task when includeTask is false", () => {
-	const args = buildChildArgs(agent(), "do the thing", { ...opts, includeTask: false });
-	// The task is submitted separately (via `herdr agent prompt`), so no inline
-	// task arg is present; the session flag still is.
+test("buildChildArgs hands the task over as a file instead of an inline arg", () => {
+	const taskFile = "/tmp/run/worker-0.task.md";
+	const args = buildChildArgs(agent(), "do the thing", { ...opts, includeTask: false, taskFile });
+	// The child reads the task itself, so no inline task arg; the session flag
+	// still is present.
 	assert.ok(!args.some((a) => a.startsWith("Task:")));
 	assert.ok(args.includes("--session"));
+	const idx = args.indexOf(`--${TASK_FILE_FLAG}`);
+	assert.ok(idx !== -1);
+	assert.equal(args[idx + 1], taskFile);
+	// Spindle registers the flag itself: an unsandboxed agent needs no injected
+	// child extension to accept a task.
+	assert.equal(args.includes("--extension"), false);
 });
 
 test("buildChildArgs loads the child extension only for a sandboxed agent", () => {

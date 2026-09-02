@@ -19,6 +19,7 @@ const MCP_STATUS_KEY = "spindle-mcp";
 import { loadCodePreviewSettings } from "./ui/code-preview.ts";
 import { type SpindleToolShellDecorator, withCodePreviewShell } from "./ui/code-preview-shell.ts";
 import { cleanupOldRuns } from "./agents/paths.ts";
+import { registerTaskFileFlag, taskDeliveryFor } from "./agents/task-delivery.ts";
 import { CapturedToolCatalog } from "./capture/catalog.ts";
 import { authorizeMcpServer, logoutMcpServer } from "./mcp/auth-flow.ts";
 import { loadMcpServerConfig } from "./mcp/server-config.ts";
@@ -80,6 +81,13 @@ export default async function spindle(pi: ExtensionAPI): Promise<void> {
 	const toolOwnership = new SpindleToolOwnership(pi);
 	const spindleUi = new SpindleUiController(state, codePreviewSettings);
 
+	// A subagent's task arrives as a file path rather than as typed input (see
+	// `agents/task-delivery.ts`). Registered here, in Spindle itself, so it works
+	// for every child - including one with no `sandbox:`, which gets no injected
+	// child extension.
+	registerTaskFileFlag(pi);
+	const deliverTask = taskDeliveryFor(pi);
+
 	const unsubscribeProviderRegistration = pi.events.on(SPINDLE_PROVIDER_REGISTER_EVENT, (value: unknown) => {
 		const registration = registrationFrom(value);
 		if (!registration) throw new Error("Invalid Spindle provider registration");
@@ -115,7 +123,7 @@ export default async function spindle(pi: ExtensionAPI): Promise<void> {
 		toolCapture.setPolicy(inactiveCapturePolicy);
 	};
 
-	pi.on("session_start", async (_event, context) => {
+	pi.on("session_start", async (event, context) => {
 		spindleUi.stop();
 		suspendToolCapture();
 		if (!compatibilityWarningShown) {
@@ -150,6 +158,10 @@ export default async function spindle(pi: ExtensionAPI): Promise<void> {
 		} catch {
 			// Cleanup is housekeeping; never let it break session startup.
 		}
+		// Last: a subagent's task starts a turn, so the sandbox floor, tool mode and
+		// UI have to be in place before it lands. No-op unless this process was
+		// launched with `--spindle-task-file`.
+		deliverTask(event.reason);
 	});
 
 	// ── sandbox command ──────────────────────────────────────────────────

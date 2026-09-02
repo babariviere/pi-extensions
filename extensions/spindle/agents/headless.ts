@@ -44,7 +44,7 @@ export function runHeadlessBatch(reqs: RunRequest[], ctx: RunContext): Promise<R
 }
 
 function runHeadless(req: RunRequest, ctx: RunContext, defaultProvider: string | undefined): Promise<RunResult> {
-	const prepared = prepareChildRun(req, ctx, { defaultProvider, includeTask: true });
+	const prepared = prepareChildRun(req, ctx, { defaultProvider, taskDelivery: "inline" });
 	const { outputPath, sessionPath, childArgs } = prepared;
 
 	return new Promise<RunResult>((resolve) => {

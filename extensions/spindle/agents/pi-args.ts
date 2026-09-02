@@ -23,7 +23,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
 import { buildNightContract, readActiveNightRun } from "../../night-mode/night-run.ts";
-import { SANDBOX_MODE_FLAG } from "./constants.ts";
+import { SANDBOX_MODE_FLAG, TASK_FILE_FLAG } from "./constants.ts";
 import { type DiscoveredAgent } from "./discovery.ts";
 import { injectOutputInstruction } from "./paths.ts";
 
@@ -79,11 +79,18 @@ export interface ChildInvocationOpts {
 	/** Per-run thinking override; takes precedence over the agent's frontmatter thinking. */
 	thinkingOverride?: string;
 	/**
-	 * When false, omit the inline task message; the caller submits the task
-	 * separately (e.g. via `herdr agent prompt`, which delivers it as a clean
-	 * user message rather than a shell arg). Defaults to true (headless spawn).
+	 * When false, omit the inline task message; the task travels in
+	 * {@link ChildInvocationOpts.taskFile} instead. Defaults to true (headless
+	 * spawn, where any characters are safe in an argv entry).
 	 */
 	includeTask?: boolean;
+	/**
+	 * Path to the file holding the framed task, delivered by the child's own
+	 * Spindle as its first user message (see `task-delivery.ts`). Used by the
+	 * herdr backend, whose `agent start` types its args into a shell and so
+	 * cannot carry a multi-line task.
+	 */
+	taskFile?: string;
 	/** Files the child should read first for context; injected into the task. */
 	reads?: string[];
 	/** Inherit the night-mode contract (unattended run, no outbound messages, draft PRs). */
@@ -169,6 +176,13 @@ export function buildChildArgs(agent: DiscoveredAgent, task: string, opts: Child
 	if (opts.systemPromptFile && agent.systemPrompt.trim().length > 0) {
 		const flag = agent.config.systemPromptMode === "append" ? "--append-system-prompt" : "--system-prompt";
 		args.push(flag, opts.systemPromptFile);
+	}
+
+	// The task as a path, not as text: a single-line arg `herdr agent start` can
+	// type. No `--extension` needed - Spindle registers this flag itself, so it
+	// works the same for an agent with no `sandbox:`.
+	if (opts.taskFile) {
+		args.push(`--${TASK_FILE_FLAG}`, opts.taskFile);
 	}
 
 	if (agent.config.inheritSkills === false) {

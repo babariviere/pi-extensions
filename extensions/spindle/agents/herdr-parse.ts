@@ -51,26 +51,6 @@ export function isPaneBusyError(error: string | undefined): boolean {
 	return /agent[_ ]?pane[_ ]?busy|not an available shell/i.test(error ?? "");
 }
 
-/**
- * True when a `herdr agent prompt --wait` error means the text landed in the
- * agent's composer but no turn ever started: herdr saw no state change within
- * its submission window and reported `agent_prompt_stalled`. The prompt itself
- * is already in the input, so the repair is to replay the submit key, never to
- * re-send the prompt.
- */
-export function isPromptStalledError(error: string | undefined): boolean {
-	return /agent[_ ]?prompt[_ ]?stalled/i.test(error ?? "");
-}
-
-/**
- * True when herdr rejected a submission because the agent is blocked (waiting on
- * a permission prompt or similar). herdr rejects before sending any input, so
- * there is nothing in the composer and nothing to repair.
- */
-export function isAgentBlockedError(error: string | undefined): boolean {
-	return /agent[_ ]?blocked/i.test(error ?? "");
-}
-
 /** True when a herdr CLI error is a plain deadline expiry rather than a fault. */
 export function isTimeoutError(error: string | undefined): boolean {
 	return /tim(e|ed)\s*out|timeout/i.test(error ?? "");

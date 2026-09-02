@@ -3,7 +3,7 @@
  */
 
 import { writeFileSync } from "node:fs";
-import { buildChildArgs } from "./pi-args.ts";
+import { buildChildArgs, formatTaskMessage, type TaskFraming } from "./pi-args.ts";
 import { outputPathFor, type ResolvedOutput } from "./output.ts";
 import { ensureDir, runPaths } from "./paths.ts";
 import { type DiscoveredAgent } from "./discovery.ts";
@@ -161,20 +161,29 @@ export interface PreparedRun {
 	promptPath: string;
 	hasPrompt: boolean;
 	childArgs: string[];
+	/** Where the task was written, when it is delivered as a file. */
+	taskPath?: string;
 }
+
+/** How a backend hands the task to its child. */
+export type TaskDelivery = "inline" | "file";
 
 /**
  * Prepare a single run's on-disk files and child `pi` args. This is the setup
  * both backends share: resolve the run dir, honor a per-run `output` override,
- * write the system prompt when present, and build the child args. The only
- * per-backend knob is `includeTask`: the headless adapter inlines the task as
- * the initial message, while the herdr adapter omits it here and submits it via
- * `agent prompt` (which handles multi-line text `agent start` cannot encode).
+ * write the system prompt when present, and build the child args.
+ *
+ * The only per-backend knob is `taskDelivery`. The headless adapter inlines the
+ * task as an argv entry, where any characters are safe. The herdr adapter
+ * cannot: `agent start` types the launch command into a shell and rejects
+ * multi-line args, so the task is written to a file and the child's own Spindle
+ * delivers it as the first user message (`task-delivery.ts`). Both paths frame
+ * the task identically, through `formatTaskMessage`.
  */
 export function prepareChildRun(
 	req: RunRequest,
 	ctx: RunContext,
-	opts: { defaultProvider: string | undefined; includeTask: boolean },
+	opts: { defaultProvider: string | undefined; taskDelivery: TaskDelivery },
 ): PreparedRun {
 	const paths = runPaths(ctx.sessionFile, ctx.sessionId, ctx.runId, req.agent.config.name, req.index);
 	ensureRunDir(paths.dir);
@@ -184,17 +193,26 @@ export function prepareChildRun(
 	const hasPrompt = req.agent.systemPrompt.trim().length > 0;
 	if (hasPrompt) writeSystemPrompt(paths.promptPath, req.agent.systemPrompt);
 
+	// One framing for both delivery modes: the file and the inline arg carry the
+	// same text, so a subagent's first message does not depend on its backend.
+	const framing: TaskFraming = {
+		...(req.reads ? { reads: req.reads } : {}),
+		...(req.night ? { night: req.night } : {}),
+		...(req.cwd ? { workspacePath: req.cwd } : {}),
+		...(req.artifactsDir ? { artifactsDir: req.artifactsDir } : {}),
+	};
+	const taskPath = opts.taskDelivery === "file" ? paths.taskPath : undefined;
+	if (taskPath) writeFileSync(taskPath, formatTaskMessage(req.task, framing), { mode: 0o600 });
+
 	const childArgs = buildChildArgs(req.agent, req.task, {
 		sessionFile: paths.sessionPath,
 		systemPromptFile: hasPrompt ? paths.promptPath : undefined,
 		defaultProvider: opts.defaultProvider,
 		modelOverride: req.overrides?.model,
 		thinkingOverride: req.overrides?.thinking,
-		reads: req.reads,
-		night: req.night,
-		...(req.cwd ? { workspacePath: req.cwd } : {}),
-		...(req.artifactsDir ? { artifactsDir: req.artifactsDir } : {}),
-		includeTask: opts.includeTask,
+		...framing,
+		includeTask: opts.taskDelivery === "inline",
+		...(taskPath ? { taskFile: taskPath } : {}),
 	});
 
 	return {
@@ -204,5 +222,6 @@ export function prepareChildRun(
 		promptPath: paths.promptPath,
 		hasPrompt,
 		childArgs,
+		...(taskPath ? { taskPath } : {}),
 	};
 }

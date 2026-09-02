@@ -7,6 +7,7 @@
  *   <sessionDir>/subagent-runs/<sessionId>/<runId>/<agent>-<index>.md            result
  *   <sessionDir>/subagent-runs/<sessionId>/<runId>/<agent>-<index>.session.jsonl child session
  *   <sessionDir>/subagent-runs/<sessionId>/<runId>/<agent>-<index>.prompt.md     system prompt
+ *   <sessionDir>/subagent-runs/<sessionId>/<runId>/<agent>-<index>.task.md       task message
  *
  * When there is no parent session file (e.g. a one-off invocation) we fall back
  * to a temp dir. A throttled, best-effort sweep prunes runs older than a cutoff
@@ -56,6 +57,8 @@ export interface RunPaths {
 	outputPath: string;
 	sessionPath: string;
 	promptPath: string;
+	/** Task message, when the backend hands the task over as a file. */
+	taskPath: string;
 }
 
 export function runPaths(
@@ -72,6 +75,7 @@ export function runPaths(
 		outputPath: join(dir, `${stem}.md`),
 		sessionPath: join(dir, `${stem}.session.jsonl`),
 		promptPath: join(dir, `${stem}.prompt.md`),
+		taskPath: join(dir, `${stem}.task.md`),
 	};
 }
 

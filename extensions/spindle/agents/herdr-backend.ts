@@ -25,12 +25,18 @@
  * via `--session` (see run.ts `resolveRunOutput`).
  *
  * Task delivery: `agent start` types its args into a shell and rejects
- * multi-line ones, so we start pi with flags only (all single-line) and then
- * submit the (multi-line) task with `herdr agent prompt`, which uses bracketed
- * paste to deliver it as one clean user message. Submission is confirmed rather
- * than assumed (see `HerdrClient.promptAgent`): a swallowed submit key leaves
- * the task sitting in the composer, so a stalled submission replays the key
- * instead of reporting a running run that will never produce anything.
+ * multi-line ones, so we start pi with flags only (all single-line), one of
+ * which is `--spindle-task-file <path>` pointing at the framed task the run
+ * preparation wrote. The child's own Spindle reads that file and injects it as
+ * its first user message (`task-delivery.ts`), so the task arrives with the
+ * process and nothing is ever typed into the TUI.
+ *
+ * That replaced `herdr agent prompt`, which wrote the task to pi's tty: input
+ * arriving before pi bound its input handler was discarded rather than
+ * buffered, so a slow child (fresh night workspace, extension load, MCP
+ * connect) came up idle with an empty composer and the run died at its timeout
+ * with no output. Replaying the submit key could not repair that - the text was
+ * already gone.
  *
  * Completion: each run waits on a blocking `herdr agent wait`
  * (idle-after-working, or pane gone) rather than polling, then confirms the turn
@@ -45,7 +51,6 @@ import { herdr } from "./herdr-client.ts";
 import { paneLabel } from "./herdr-parse.ts";
 import { currentWorkspaceId } from "./herdr-transport.ts";
 import { waitForAgentFinish } from "./pane-lifecycle.ts";
-import { formatTaskMessage } from "./pi-args.ts";
 import { readDefaultProvider } from "./settings.ts";
 import { hasTerminalAssistantMessage, resolveRunOutput } from "./output.ts";
 import { outcomeError, type RunOutcome, waitForRunCompletion } from "./herdr-completion.ts";
@@ -216,8 +221,9 @@ interface SpawnedRun {
 
 /** Write the per-run files and args; no herdr calls yet. */
 function prepareRun(req: RunRequest, ctx: RunContext, defaultProvider: string | undefined): PreparedRun {
-	// Flags only: the task is submitted after start via `agent prompt`.
-	const p = prepareChildRun(req, ctx, { defaultProvider, includeTask: false });
+	// Flags only, all single-line: the task travels as a file path the child reads
+	// itself (`taskDelivery: "file"`).
+	const p = prepareChildRun(req, ctx, { defaultProvider, taskDelivery: "file" });
 	return { req, outputPath: p.outputPath, sessionPath: p.sessionPath, childArgs: p.childArgs };
 }
 
@@ -262,32 +268,18 @@ async function launchRun(p: PreparedRun, ctx: RunContext): Promise<SpawnedRun> {
 		};
 	}
 
-	// Label the pane with the task so a watcher can tell panes apart, then submit
-	// the task as a clean user message (bracketed paste handles its newlines).
+	// Label the pane with the task so a watcher can tell panes apart. The task
+	// itself needs no delivery step: it came in on `--spindle-task-file` and the
+	// child injects it once its runtime is up.
 	await herdr.renamePane(p.paneId, paneLabel(p.req.agent.config.name, p.req.task));
-	const prompted = await herdr.promptAgent(
-		p.paneId,
-		formatTaskMessage(p.req.task, {
-			...(p.req.reads ? { reads: p.req.reads } : {}),
-			...(p.req.night ? { night: p.req.night } : {}),
-			...(p.req.cwd ? { workspacePath: p.req.cwd } : {}),
-			...(p.req.artifactsDir ? { artifactsDir: p.req.artifactsDir } : {}),
-		}),
-		{ ...(ctx.signal ? { signal: ctx.signal } : {}) },
-	);
 
-	ctx.onStatus?.(p.req.index, {
-		state: prompted.ok ? "running" : "failed",
-		paneId: p.paneId,
-		outputPath: p.outputPath,
-	});
+	ctx.onStatus?.(p.req.index, { state: "running", paneId: p.paneId, outputPath: p.outputPath });
 
 	return {
 		req: p.req,
 		outputPath: p.outputPath,
 		sessionPath: p.sessionPath,
 		paneId: p.paneId,
-		error: prompted.ok ? undefined : prompted.error,
 	};
 }
 
