@@ -3,6 +3,7 @@ import { test } from "node:test";
 
 import {
 	authorizeMcpServer,
+	type AuthorizeMcpServerOptions,
 	logoutMcpServer,
 	McpAuthFlowError,
 	type McpCallbackServer,
@@ -120,6 +121,37 @@ test("a consent screen leg redeems the callback code", async () => {
 		authorizationCode: "the-code",
 		iss: "https://auth.example",
 	});
+});
+
+test("the authorization URL stays out of the notification unless the browser failed", async () => {
+	const { listen } = fakeListen({ code: "the-code" });
+	const notes: string[] = [];
+	const authorize = async (openUrl: AuthorizeMcpServerOptions["openUrl"]) => {
+		notes.length = 0;
+		await authorizeMcpServer({
+			cwd: "/repo",
+			serverName: "slack",
+			store: new McpTokenStore(memoryKeyring()),
+			loadConfig: () => config(server()),
+			listen,
+			notify: (message) => void notes.push(message),
+			...(openUrl ? { openUrl } : {}),
+			runAuth: async (provider, authOptions) => {
+				if (!authOptions.authorizationCode) {
+					await provider.redirectToAuthorization(new URL("https://auth.example/authorize?x=1"));
+					return "REDIRECT";
+				}
+				return "AUTHORIZED";
+			},
+		});
+		return notes.join("\n");
+	};
+
+	const quiet = await authorize(() => {});
+	assert.doesNotMatch(quiet, /auth\.example/);
+
+	const failed = await authorize((url, onFailure) => onFailure?.(url));
+	assert.match(failed, /Could not open a browser[\s\S]*https:\/\/auth\.example\/authorize\?x=1/);
 });
 
 test("a callback with the wrong state is refused", async () => {

@@ -142,16 +142,22 @@ export const listenForOAuthCallback = async (port: number): Promise<McpCallbackS
 	};
 };
 
-/** Best effort: the URL is always printed too, so a failed launcher is not fatal. */
-export const openInBrowser = (url: URL): void => {
+/**
+ * Best effort. `onFailure` receives the URL back when the launcher never
+ * started, which is the only case where the caller has to print it: an
+ * authorization URL is 500+ characters and the UI renders a notification as a
+ * single line attached to the editor, so printing it unconditionally floods the
+ * prompt.
+ */
+export const openInBrowser = (url: URL, onFailure?: (url: URL) => void): void => {
 	const command = process.platform === "darwin" ? "open" : process.platform === "win32" ? "cmd" : "xdg-open";
 	const args = process.platform === "win32" ? ["/c", "start", "", url.toString()] : [url.toString()];
 	try {
 		const child = spawn(command, args, { stdio: "ignore", detached: true });
-		child.on("error", () => {});
+		child.on("error", () => onFailure?.(url));
 		child.unref();
 	} catch {
-		// The printed URL is the fallback.
+		onFailure?.(url);
 	}
 };
 
@@ -162,7 +168,7 @@ export interface AuthorizeMcpServerOptions {
 	loadConfig?: (cwd: string) => McpServerConfig;
 	/** Progress and the authorization URL, for the command's UI. */
 	notify?: (message: string) => void;
-	openUrl?: (url: URL) => void;
+	openUrl?: (url: URL, onFailure?: (url: URL) => void) => void;
 	listen?: (port: number) => Promise<McpCallbackServer>;
 	runAuth?: typeof sdkAuth;
 	timeoutMs?: number;
@@ -242,8 +248,13 @@ export const authorizeMcpServer = async (options: AuthorizeMcpServerOptions): Pr
 			redirectUrl: server.redirectUrl,
 			...(oauthConfig ? { config: oauthConfig } : {}),
 			onRedirect: (authorizationUrl) => {
-				notify(`Opening the consent screen for '${options.serverName}':\n${authorizationUrl.toString()}`);
-				(options.openUrl ?? openInBrowser)(authorizationUrl);
+				// Short by design: the URL only shows up when the browser never opened.
+				notify(`Opening the consent screen for '${options.serverName}' in your browser.`);
+				(options.openUrl ?? openInBrowser)(authorizationUrl, (url) => {
+					notify(
+						`Could not open a browser. Open this URL to authorize '${options.serverName}':\n${url.toString()}`,
+					);
+				});
 			},
 		});
 
