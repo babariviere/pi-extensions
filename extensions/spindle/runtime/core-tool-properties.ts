@@ -72,9 +72,7 @@ const piToolSignatures = (declarations: string): Map<string, string[]> => {
 	return signatures;
 };
 
-const collect = (
-	declarations: string,
-): { names: string[]; properties: Map<string, string[]> } => {
+const collect = (declarations: string): { names: string[]; properties: Map<string, string[]> } => {
 	const typeDeclarations = extractTypeDeclarations(declarations);
 	const signatures = piToolSignatures(declarations);
 	const owners = new Map<string, Set<string>>();

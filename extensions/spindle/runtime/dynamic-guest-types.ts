@@ -65,7 +65,9 @@ const objectType = (schema: Record<string, unknown>, depth: number): string => {
 	}
 	const additional = schema.additionalProperties;
 	if (additional !== false) {
-		members.push(isRecord(additional) ? `[key: string]: ${schemaType(additional, depth + 1)}` : "[key: string]: unknown");
+		members.push(
+			isRecord(additional) ? `[key: string]: ${schemaType(additional, depth + 1)}` : "[key: string]: unknown",
+		);
 	}
 	return `{ ${members.join("; ")} }`;
 };

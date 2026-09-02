@@ -34,9 +34,13 @@ test("non-identifier tool names render as quoted members", () => {
 });
 
 test("the generated surface replaces the loose declaration and gates bad arguments", () => {
-	const declarations = guestTypeDeclarations(true, undefined, buildDynamicGuestDeclarations({
-		extensionTools: [searchTool],
-	}));
+	const declarations = guestTypeDeclarations(
+		true,
+		undefined,
+		buildDynamicGuestDeclarations({
+			extensionTools: [searchTool],
+		}),
+	);
 	assert.equal(declarations.includes("declare const extensions: SpindleExtensionsApi;\n"), false);
 
 	const good = typeCheckSpindleCode("return await extensions.web_search({ query: 'x' });", declarations);

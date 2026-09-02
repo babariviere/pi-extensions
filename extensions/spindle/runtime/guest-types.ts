@@ -17,6 +17,13 @@ import type { SpindleToolGate } from "../core/tool-allowlist.ts";
 import type { SpindleDynamicGuestDeclarations } from "../protocol.ts";
 
 export const GUEST_TYPE_DECLARATIONS = `
+// Engine features past the declared \`lib\` tier (see runtime/type-checker.ts).
+// The pinned engine implements Error.isError, which TypeScript ships only in
+// lib.esnext.error; the rest of what it has beyond es2025 is nothing we want to
+// promise. Keep this block in step with runtime/guest-baseline.test.ts.
+interface ErrorConstructor {
+  isError(value: unknown): value is Error;
+}
 type JsonPrimitive = string | number | boolean | null;
 type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
 interface SpindleCapturedToolResult {

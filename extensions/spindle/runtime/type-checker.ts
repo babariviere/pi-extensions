@@ -34,7 +34,23 @@ const compilerOptions: ts.CompilerOptions = {
 	useUnknownInCatchVariables: false,
 	noEmit: false,
 	skipLibCheck: true,
-	lib: ["lib.es2022.d.ts"],
+	// The pinned engine (bellard/quickjs 2025-09-13, see
+	// runtime/guest-baseline.test.ts) implements effectively all of ES2025:
+	// Object.groupBy, Map.groupBy, Promise.withResolvers/try, the Set
+	// combinators, the iterator helpers, RegExp.escape, regexp `v` flag and
+	// inline modifiers, Float16Array, ArrayBuffer.transfer/resize. Declaring a
+	// lower lib did not make those unavailable, it only made them untyped:
+	// TS2339 is filtered out below, so a model using them got `any` instead of a
+	// signature. es2025 is the highest tier that promises nothing the engine
+	// lacks; esnext would add Array.fromAsync, JSON.rawJSON and Symbol.dispose,
+	// which the engine does not implement, turning clean type errors into
+	// runtime ReferenceErrors.
+	//
+	// Two pre-existing gaps are not fixable by tier choice, because lib.es5
+	// declares them: `Intl` and `Atomics` are absent from the engine at every
+	// tier. runtime/guest-polyfills.ts makes those fail with an actionable
+	// message instead of a bare undefined-property TypeError.
+	lib: ["lib.es2025.d.ts"],
 	// The emitted map is what runtime/source-map.ts uses to translate guest
 	// stack positions back to the program the model wrote.
 	sourceMap: true,

@@ -306,10 +306,10 @@ test("a failing element is reported as failed without masking the rejection", as
 		[
 			"try {",
 			"  await mapLimit(['a', 'b', 'c', 'd'], (v) => { if (v === 'c') throw new Error('boom'); return v; });",
-		"} catch (error) {",
-		"  return 'caught: ' + error.message;",
-		"}",
-		"return 'not reached';",
+			"} catch (error) {",
+			"  return 'caught: ' + error.message;",
+			"}",
+			"return 'not reached';",
 		].join("\n"),
 	);
 	assert.equal(result.terminationReason, "completed");
@@ -320,9 +320,7 @@ test("a failing element is reported as failed without masking the rejection", as
 });
 
 test("a narrow fan-out emits no span and no item traffic", async () => {
-	const { result, spans, items } = await recordItems(
-		"return await Promise.all([1, 2, 3].map(async (n) => n * 2));",
-	);
+	const { result, spans, items } = await recordItems("return await Promise.all([1, 2, 3].map(async (n) => n * 2));");
 	assert.equal(result.terminationReason, "completed");
 	assert.deepEqual(result.value, [2, 4, 6]);
 	assert.equal(spans.length, 0);
