@@ -2,14 +2,14 @@
  * ADAPTED from upstream `src/providers/mcp-descriptor-cache.ts`.
  *
  * Upstream caches its own mcporter descriptors. Spindle owns no MCP client: it
- * forwards metadata reads ($list / $search / $describe) to the pi-mcp-adapter
+ * forwards metadata reads (list / search / describe) to the pi-mcp-adapter
  * gateway, which re-resolves them on every call. Those reads are pure metadata,
  * repeat constantly inside a single program (discovery, then a call), and are
  * the only MCP surface that is safe to memoize.
  *
  * The cache is therefore in-process, short-lived, and invalidated by anything
  * that can change the answer: a config-file fingerprint (mtime + size of the
- * mcp.json layers), an explicit $connect, and a TTL.
+ * mcp.json layers), an explicit connect, and a TTL.
  */
 
 import fs from "node:fs";
@@ -19,7 +19,7 @@ import path from "node:path";
 /** Metadata reads are cheap to redo; a short window still kills the repeats. */
 export const MCP_DESCRIPTOR_CACHE_TTL_MS = 30_000;
 
-export const MCP_CACHEABLE_ACTIONS: ReadonlySet<string> = new Set(["$list", "$search", "$describe"]);
+export const MCP_CACHEABLE_ACTIONS: ReadonlySet<string> = new Set(["list", "search", "describe"]);
 
 const configLayerPaths = (cwd: string): string[] => {
 	const agentDir = process.env.PI_AGENT_DIR ?? path.join(os.homedir(), ".pi", "agent");

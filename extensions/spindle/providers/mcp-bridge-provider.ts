@@ -37,7 +37,7 @@ const emptyObjectSchema = {
 
 const descriptors: SpindleActionDescriptor[] = [
 	{
-		name: "$call",
+		name: "call",
 		description: "Call an MCP tool by explicit server and tool name",
 		inputSchema: {
 			type: "object",
@@ -52,7 +52,7 @@ const descriptors: SpindleActionDescriptor[] = [
 		namespace: "management",
 	},
 	{
-		name: "$list",
+		name: "list",
 		description: "List MCP servers and their status as reported by pi-mcp-adapter (does not force a connect)",
 		inputSchema: {
 			type: "object",
@@ -62,7 +62,7 @@ const descriptors: SpindleActionDescriptor[] = [
 		namespace: "management",
 	},
 	{
-		name: "$search",
+		name: "search",
 		description: "Search MCP tools by query across configured servers",
 		inputSchema: {
 			type: "object",
@@ -78,7 +78,7 @@ const descriptors: SpindleActionDescriptor[] = [
 		namespace: "management",
 	},
 	{
-		name: "$describe",
+		name: "describe",
 		description: "Describe a single MCP tool, including its input schema",
 		inputSchema: {
 			type: "object",
@@ -89,7 +89,7 @@ const descriptors: SpindleActionDescriptor[] = [
 		namespace: "management",
 	},
 	{
-		name: "$connect",
+		name: "connect",
 		description:
 			"Connect (lazy) a configured MCP server and refresh its tool metadata; matches the pi-mcp-adapter mcp({ connect }) hint",
 		inputSchema: {
@@ -138,7 +138,7 @@ const normalizeMcpResult = (result: unknown): unknown => {
  * `mcp.<server>.<tool>` reached as a ref rather than as guest sugar.
  *
  * In the sandbox `mcp.slack.slack_read_channel(args)` is rewritten to
- * `mcp.$call`, but `tools.call({ ref: "mcp.slack.slack_read_channel" })` arrives
+ * `mcp.call`, but `tools.call({ ref: "mcp.slack.slack_read_channel" })` arrives
  * here with the whole `slack.slack_read_channel` as the action name, and used to
  * fail with "Unknown Spindle action". Both spellings must reach the same place,
  * gate included.
@@ -165,8 +165,8 @@ export class McpBridgeProvider implements SpindleProvider {
 		 */
 		readonly readOnlyGate: () => McpReadOnlyGate = () => McpReadOnlyGate.unrestricted(),
 		/**
-		 * Short-lived memo for the metadata reads ($list / $search / $describe).
-		 * Tool calls are never cached; a $connect clears it.
+		 * Short-lived memo for the metadata reads (list / search / describe).
+		 * Tool calls are never cached; a connect clears it.
 		 */
 		readonly descriptors: McpDescriptorCache = new McpDescriptorCache(),
 	) {}
@@ -213,7 +213,7 @@ export class McpBridgeProvider implements SpindleProvider {
 		context: SpindleInvocationContext,
 	): Promise<unknown> {
 		switch (actionName) {
-			case "$call": {
+			case "call": {
 				const server = typeof args.server === "string" ? args.server : undefined;
 				// The one place a sandbox program can reach a write on an MCP server:
 				// refused here, before the gateway is even looked up.
@@ -227,11 +227,11 @@ export class McpBridgeProvider implements SpindleProvider {
 					context,
 				);
 			}
-			case "$list": {
+			case "list": {
 				const server = typeof args.server === "string" ? args.server : undefined;
 				return this.#gatewayCall(server ? { server } : {}, context);
 			}
-			case "$search": {
+			case "search": {
 				const server = typeof args.server === "string" ? args.server : undefined;
 				return this.#gatewayCall(
 					{
@@ -243,9 +243,9 @@ export class McpBridgeProvider implements SpindleProvider {
 					context,
 				);
 			}
-			case "$describe":
+			case "describe":
 				return this.#gatewayCall({ describe: String(args.tool ?? "") }, context);
-			case "$connect":
+			case "connect":
 				// A connect changes what every metadata read reports.
 				this.descriptors.clear();
 				return this.#gatewayCall({ connect: String(args.server ?? "") }, context);

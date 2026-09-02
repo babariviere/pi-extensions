@@ -267,94 +267,57 @@ globalThis.agents = Object.freeze({
   cancel: (args) =>
     __call("agents.cancel", typeof args === "string" ? { runId: args } : (args || {})),
 });
-// mcp.<server>.<tool>(args) is pure sugar for mcp.call({ server, tool, args });
-// every route lands on the pi-mcp-adapter gateway, which connects lazily.
-globalThis.mcp = new Proxy({}, {
-  get(_target, server) {
-    if (server === "then") return undefined;
-    if (server === "list") {
-      return (args = {}) => __call("mcp.$list", typeof args === "string" ? { server: args } : args);
-    }
-    if (server === "connect") {
-      return (args) => __call("mcp.$connect", typeof args === "string" ? { server: args } : args);
-    }
-    if (server === "search") {
-      return (args) => __call("mcp.$search", typeof args === "string" ? { query: args } : args);
-    }
-    if (server === "describe") {
-      return (args) => __call("mcp.$describe", typeof args === "string" ? { tool: args } : args);
-    }
-    if (server === "call") {
-      return (serverName, tool, args) =>
-        __call(
-          "mcp.$call",
-          serverName && typeof serverName === "object"
-            ? serverName
-            : { server: serverName, tool, args: args ?? {} },
-        );
-    }
-    // Calling the server proxy itself (mcp.<server>()) lists that server's
-    // tools, matching the natural "inspect a server" guess; property access
-    // stays sugar for mcp.call({ server, tool, args }).
-    return new Proxy(function () {}, {
-      apply() {
-        return __call("mcp.$list", { server: String(server) });
-      },
-      get(_serverTarget, tool) {
-        if (tool === "then") return undefined;
-        return (args = {}) =>
-          __call("mcp.$call", { server: String(server), tool: String(tool), args });
-      },
-    });
-  },
+// One way in: mcp.call({ server, tool, args }), or the positional form
+// mcp.call(server, tool, args). Every route lands on the pi-mcp-adapter
+// gateway, which connects lazily.
+//
+// Discovery deliberately lives here rather than on tools.*: pi-mcp-adapter
+// connects servers on demand, so an MCP tool list only exists after a gateway
+// round-trip and cannot be folded into the static action registry without
+// forcing every configured server to connect.
+globalThis.mcp = Object.freeze({
+  call: (serverName, tool, args) =>
+    __call(
+      "mcp.call",
+      serverName && typeof serverName === "object"
+        ? serverName
+        : { server: serverName, tool, args: args ?? {} },
+    ),
+  list: (args = {}) => __call("mcp.list", typeof args === "string" ? { server: args } : args),
+  search: (args) => __call("mcp.search", typeof args === "string" ? { query: args } : args),
+  describe: (args) => __call("mcp.describe", typeof args === "string" ? { tool: args } : args),
+  connect: (args) => __call("mcp.connect", typeof args === "string" ? { server: args } : args),
 });
-let __nextWorkflowSpanId = 0;
-const __workflowSpanMetadata = (kind, items, options, stageCount) => {
-  const itemCount = Array.isArray(items) ? items.length : undefined;
-  let concurrency;
-  if (kind === "parallel" && itemCount !== undefined) {
-    if (itemCount === 0) concurrency = 0;
-    else {
-      const concurrencyOpt = typeof options === "number" ? { concurrency: options } : options ?? {};
-      const requested = Number(concurrencyOpt.concurrency ?? itemCount);
-      if (Number.isFinite(requested) && requested >= 1) {
-        concurrency = Math.max(1, Math.min(itemCount, Math.floor(requested)));
-      }
-    }
-  }
-  return {
-    kind,
-    ...(itemCount !== undefined ? { itemCount } : {}),
-    ...(stageCount !== undefined ? { stageCount } : {}),
-    ...(concurrency !== undefined ? { concurrency } : {}),
-  };
-};
-const __withWorkflowSpan = async (metadata, body) => {
-  const id = "span-" + __nextWorkflowSpanId++;
+let __nextSpanId = 0;
+// Captured before the Promise.all instrumentation below, so the worker pool
+// and the wrapper never recurse through each other.
+const __nativePromiseAll = Promise.all.bind(Promise);
+const __withSpan = async (metadata, body) => {
+  const id = "span-" + __nextSpanId++;
   await __call("spindle.$spanStart", { id, ...metadata });
   try {
     const value = await body();
     await __call("spindle.$spanEnd", { id, outcome: "succeeded" });
     return value;
   } catch (error) {
-    try { await __call("spindle.$spanEnd", { id, outcome: "failed" }); } catch { /* preserve the workflow error */ }
+    try { await __call("spindle.$spanEnd", { id, outcome: "failed" }); } catch { /* preserve the original error */ }
     throw error;
   }
 };
-const __runParallel = async (thunks, options) => {
+const __runPool = async (thunks, options) => {
   if (!Array.isArray(thunks) || thunks.some((thunk) => typeof thunk !== "function")) {
-    throw new TypeError("workflow.parallel expects an array of functions or (items, mapper)");
+    throw new TypeError("mapLimit expects an array of functions or (items, mapper)");
   }
   if (thunks.length === 0) return [];
   const concurrencyOpt = typeof options === "number" ? { concurrency: options } : options ?? {};
   const requestedConcurrency = Number(concurrencyOpt.concurrency ?? thunks.length);
   if (!Number.isFinite(requestedConcurrency) || requestedConcurrency < 1) {
-    throw new RangeError("workflow.parallel concurrency must be a positive finite number");
+    throw new RangeError("mapLimit concurrency must be a positive finite number");
   }
   const concurrency = Math.max(1, Math.min(thunks.length || 1, Math.floor(requestedConcurrency)));
   const results = new Array(thunks.length);
   let cursor = 0;
-  await Promise.all(Array.from({ length: concurrency }, async () => {
+  await __nativePromiseAll(Array.from({ length: concurrency }, async () => {
     while (cursor < thunks.length) {
       const index = cursor++;
       results[index] = await thunks[index]();
@@ -362,52 +325,51 @@ const __runParallel = async (thunks, options) => {
   }));
   return results;
 };
-const __workflowParallel = async (items, arg2, arg3) => {
+// The one concurrency primitive Promise.all cannot express: Promise.all
+// receives already-started promises, so it can never bound how many run at
+// once. mapLimit takes thunks (or items + mapper) and starts them lazily
+// behind a worker pool.
+const __mapLimit = async (items, arg2, arg3) => {
   const options = typeof arg2 === "function" ? arg3 : arg2;
-  return __withWorkflowSpan(
-    __workflowSpanMetadata("parallel", items, options),
+  const itemCount = Array.isArray(items) ? items.length : undefined;
+  let concurrency;
+  if (itemCount !== undefined) {
+    if (itemCount === 0) concurrency = 0;
+    else {
+      const opt = typeof options === "number" ? { concurrency: options } : options ?? {};
+      const requested = Number(opt.concurrency ?? itemCount);
+      if (Number.isFinite(requested) && requested >= 1) {
+        concurrency = Math.max(1, Math.min(itemCount, Math.floor(requested)));
+      }
+    }
+  }
+  return __withSpan(
+    {
+      kind: "parallel",
+      ...(itemCount !== undefined ? { itemCount } : {}),
+      ...(concurrency !== undefined ? { concurrency } : {}),
+    },
     async () => {
       if (typeof arg2 === "function") {
-        if (!Array.isArray(items)) throw new TypeError("workflow.parallel expects an array as the first argument");
-        return __runParallel(items.map((item, index) => () => arg2(item, index)), arg3);
+        if (!Array.isArray(items)) throw new TypeError("mapLimit expects an array as the first argument");
+        return __runPool(items.map((item, index) => () => arg2(item, index)), arg3);
       }
-      return __runParallel(items, arg2);
+      return __runPool(items, arg2);
     },
   );
 };
-const __workflowPipeline = async (items, ...stages) =>
-  __withWorkflowSpan(
-    __workflowSpanMetadata("pipeline", items, undefined, stages.length),
-    async () => {
-      if (!Array.isArray(items) || stages.some((stage) => typeof stage !== "function")) {
-        throw new TypeError("workflow.pipeline expects an array followed by stage functions");
-      }
-      return __workflowParallel(items.map((original, index) => async () => {
-        let value = original;
-        for (const stage of stages) value = await stage(value, original, index);
-        return value;
-      }));
-    },
-  );
-globalThis.workflow = Object.freeze({
-  parallel: __workflowParallel,
-  pipeline: __workflowPipeline,
-  configure: (args) => __call("spindle.$configure", args),
-  phase: (nameOrInput, options = {}) => {
-    const input =
-      nameOrInput && typeof nameOrInput === "object" && !Array.isArray(nameOrInput)
-        ? { ...nameOrInput }
-        : { ...options, name: nameOrInput };
-    return __call("spindle.$phase", input);
-  },
-  item: (args) => __call("spindle.$item", args),
-  event: (args) => __call("spindle.$event", args),
-  log: (...values) => print(...values),
-});
-globalThis.parallel = __workflowParallel;
-globalThis.pipeline = __workflowPipeline;
-globalThis.phase = workflow.phase;
-globalThis.log = workflow.log;
+globalThis.mapLimit = __mapLimit;
+// Observability for the path the model actually uses. Promise.all cannot be
+// capped (its inputs are already running by the time it is called), but its
+// width is known at call time, so a wide fan-out still shows up in the
+// activity widget. Narrow fan-outs skip the span so the common two-call case
+// pays no host round-trip.
+const __PROMISE_ALL_SPAN_MIN = 4;
+Promise.all = function all(values) {
+  const list = Array.isArray(values) ? values : undefined;
+  if (!list || list.length < __PROMISE_ALL_SPAN_MIN) return __nativePromiseAll(values);
+  return __withSpan({ kind: "parallel", itemCount: list.length }, () => __nativePromiseAll(list));
+};
 globalThis.console = Object.freeze({ log: print, info: print, warn: print, error: print });
 const __timerCallbacks = new Map();
 let __nextTimerId = 1;

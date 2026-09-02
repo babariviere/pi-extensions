@@ -16,9 +16,6 @@
  */
 
 import type {
-	SpindleActivityEventInput,
-	SpindleActivityItemInput,
-	SpindlePhaseInput,
 	SpindleRunDisplay,
 } from "./activity/types.ts";
 import {
@@ -43,7 +40,7 @@ export interface HostCallContext {
 	parentToolCallId: string;
 	/** Effective full-code mode; gates pi/extensions visibility in discovery. */
 	fullCodeMode: boolean;
-	/** Ordered workflow phase names, appended by `spindle.$phase`. */
+	/** Ordered workflow phase names. No guest API appends to this today. */
 	phases: string[];
 	/** Live workflow span operations, keyed by the guest's span id. */
 	workflowSpans: Map<string, { kind: "parallel" | "pipeline"; operation: SpindleExecutionTraceOperationHandle }>;
@@ -68,7 +65,7 @@ export interface HostCallContext {
 
 /** One guest/host call: the bridge ref it answers, and how to run it. */
 export interface HostCall {
-	/** The guest bridge ref this entry answers, e.g. "spindle.$phase". */
+	/** The guest bridge ref this entry answers, e.g. "spindle.$call". */
 	ref: string;
 	handle(args: Record<string, unknown>, ctx: HostCallContext, signal: AbortSignal): Promise<unknown> | unknown;
 }
@@ -155,57 +152,6 @@ export const HOST_CALLS: readonly HostCall[] = [
 			ctx.traceAttempt("spindle.workflow.progress", args, signal, () =>
 				ctx.update(String(args.message ?? "Working")),
 			),
-	},
-	{
-		ref: "spindle.$configure",
-		handle: (args, ctx, signal) =>
-			ctx.traceAttempt("spindle.workflow.configure", args, signal, () => {
-				const display: SpindleRunDisplay = {
-					...(typeof args.name === "string" ? { name: args.name } : {}),
-					...(typeof args.description === "string" ? { description: args.description } : {}),
-				};
-				return ctx.activity?.configure(ctx.parentToolCallId, display) ?? display;
-			}),
-	},
-	{
-		ref: "spindle.$phase",
-		handle: (args, ctx, signal) =>
-			ctx.traceAttempt("spindle.workflow.phase", args, signal, (setStage) => {
-				setStage("validate");
-				const name = typeof args.name === "string" ? args.name.trim() : "";
-				if (!name) throw new Error("Workflow phase name must be a non-empty string");
-				ctx.phases.push(name);
-				const phaseIndex = ctx.phases.length - 1;
-				const phaseInput: SpindlePhaseInput = {
-					name,
-					...(typeof args.id === "string" ? { id: args.id } : {}),
-					...(typeof args.description === "string" ? { description: args.description } : {}),
-					...(typeof args.total === "number" ? { total: args.total } : {}),
-				};
-				setStage("invoke");
-				const activityPhase = ctx.activity?.phase(ctx.parentToolCallId, phaseInput);
-				ctx.update(`Phase: ${name}`);
-				return {
-					name,
-					index: phaseIndex,
-					...(activityPhase ? { id: activityPhase.id } : {}),
-				};
-			}),
-	},
-	{
-		ref: "spindle.$item",
-		handle: (args, ctx, signal) =>
-			ctx.traceAttempt("spindle.workflow.item", args, signal, () => {
-				const item = args as unknown as SpindleActivityItemInput;
-				return ctx.activity?.upsertItem(ctx.parentToolCallId, item) ?? item;
-			}),
-	},
-	{
-		ref: "spindle.$event",
-		handle: (args, ctx, signal) =>
-			ctx.traceAttempt("spindle.workflow.event", args, signal, () => {
-				ctx.activity?.event(ctx.parentToolCallId, args as unknown as SpindleActivityEventInput);
-			}),
 	},
 	{
 		ref: "spindle.$spanStart",

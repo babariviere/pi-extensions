@@ -207,17 +207,7 @@ interface SpindleMcpResult {
   content: unknown[];
   structuredContent: unknown;
 }
-interface SpindleMcpTool {
-  (args?: Record<string, unknown>): Promise<SpindleMcpResult | unknown>;
-}
-interface SpindleMcpServer {
-  // mcp.<server>() lists the server's tools; mcp.<server>.<tool>(args) calls one.
-  (): Promise<unknown>;
-  [tool: string]: SpindleMcpTool;
-}
-// Servers connect lazily inside pi-mcp-adapter: nothing here pre-fetches a
-// tool list, so a call never forces every configured server to connect.
-type SpindleMcpApi = Record<string, SpindleMcpServer> & {
+type SpindleMcpApi = {
   call(server: string, tool: string, args?: Record<string, unknown>): Promise<SpindleMcpResult | unknown>;
   call(args: { server?: string; tool: string; args?: Record<string, unknown> }): Promise<SpindleMcpResult | unknown>;
   list(server: string): Promise<unknown>;
@@ -226,55 +216,17 @@ type SpindleMcpApi = Record<string, SpindleMcpServer> & {
   search(args: string | { query: string; server?: string; regex?: boolean; includeSchemas?: boolean }): Promise<unknown>;
   describe(args: string | { tool: string }): Promise<unknown>;
 };
-type SpindleActivityStatus = "pending" | "running" | "completed" | "failed" | "blocked" | "stopped";
-type SpindleActivityKind = "agent" | "actor" | "tool" | "extension" | "mcp" | "mesh" | "task" | "custom";
-interface SpindleWorkflowDisplay {
-  name?: string;
-  description?: string;
-}
-interface SpindleWorkflowPhaseOptions {
-  id?: string;
-  description?: string;
-  total?: number;
-}
-interface SpindleWorkflowPhaseInput extends SpindleWorkflowPhaseOptions {
-  name: string;
-}
-interface SpindleWorkflowItem {
-  id: string;
-  label: string;
-  status?: SpindleActivityStatus;
-  phase?: string;
-  detail?: string;
-  kind?: SpindleActivityKind;
-  current?: string;
-  total?: number;
-  completed?: number;
-  data?: unknown;
-}
-interface SpindleWorkflowApi {
-  parallel<T, R>(items: T[], mapper: (item: T, index: number) => Promise<R> | R, concurrency?: number | { concurrency?: number }): Promise<R[]>;
-  parallel<T>(thunks: Array<() => Promise<T> | T>, concurrency?: number | { concurrency?: number }): Promise<T[]>;
-  pipeline<T>(items: T[], ...stages: Array<(value: unknown, original: T, index: number) => Promise<unknown> | unknown>): Promise<unknown[]>;
-  configure(display: SpindleWorkflowDisplay): Promise<SpindleWorkflowDisplay>;
-  phase(name: string, options?: SpindleWorkflowPhaseOptions): Promise<{ name: string; index: number; id?: string }>;
-  phase(input: SpindleWorkflowPhaseInput): Promise<{ name: string; index: number; id?: string }>;
-  item(item: SpindleWorkflowItem): Promise<SpindleWorkflowItem>;
-  event(event: { message: string; level?: "info" | "success" | "warning" | "error"; data?: unknown }): Promise<void>;
-  log(...values: unknown[]): void;
-}
 declare const pi: PiToolsApi;
 declare const extensions: SpindleExtensionsApi;
 declare const tools: SpindleToolsApi;
 declare const agents: SpindleAgentsApi;
 declare const mcp: SpindleMcpApi;
-declare const workflow: SpindleWorkflowApi;
-declare function parallel<T, R>(items: T[], mapper: (item: T, index: number) => Promise<R> | R, concurrency?: number | { concurrency?: number }): Promise<R[]>;
-declare function parallel<T>(thunks: Array<() => Promise<T> | T>, concurrency?: number | { concurrency?: number }): Promise<T[]>;
-declare function pipeline<T>(items: T[], ...stages: Array<(value: unknown, original: T, index: number) => Promise<unknown> | unknown>): Promise<unknown[]>;
-declare function phase(name: string, options?: SpindleWorkflowPhaseOptions): Promise<{ name: string; index: number; id?: string }>;
-declare function phase(input: SpindleWorkflowPhaseInput): Promise<{ name: string; index: number; id?: string }>;
-declare function log(...values: unknown[]): void;
+// Bounded-concurrency fan-out. Promise.all is the right tool for a handful of
+// independent calls; mapLimit is for a wide list, because Promise.all receives
+// promises that have already started and therefore cannot cap how many run at
+// once. Defaults to unbounded when concurrency is omitted.
+declare function mapLimit<T, R>(items: T[], mapper: (item: T, index: number) => Promise<R> | R, concurrency?: number | { concurrency?: number }): Promise<R[]>;
+declare function mapLimit<T>(thunks: Array<() => Promise<T> | T>, concurrency?: number | { concurrency?: number }): Promise<T[]>;
 interface SpindleConsole {
   log(...args: unknown[]): void;
   info(...args: unknown[]): void;

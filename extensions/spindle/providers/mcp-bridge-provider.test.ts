@@ -56,7 +56,7 @@ test("mcp.call refuses a write tool before the gateway is reached", async () => 
 		["datadog", "update_datadog_monitor"],
 	]) {
 		await assert.rejects(
-			() => provider.invoke("$call", { server, tool, args: {} }, context),
+			() => provider.invoke("call", { server, tool, args: {} }, context),
 			new RegExp(`MCP call ${server}\\.${tool} is refused`),
 		);
 	}
@@ -66,8 +66,8 @@ test("mcp.call refuses a write tool before the gateway is reached", async () => 
 test("mcp.call still forwards a read tool", async () => {
 	const spy = gatewayCatalog();
 	const provider = new McpBridgeProvider(() => spy.catalog, nightGate);
-	await provider.invoke("$call", { server: "linear", tool: "get_issue", args: { id: "ENG-1" } }, context);
-	await provider.invoke("$call", { server: "slack", tool: "slack_read_thread", args: {} }, context);
+	await provider.invoke("call", { server: "linear", tool: "get_issue", args: { id: "ENG-1" } }, context);
+	await provider.invoke("call", { server: "slack", tool: "slack_read_thread", args: {} }, context);
 	assert.deepEqual(spy.calls, [
 		{ tool: "get_issue", args: { id: "ENG-1" }, server: "linear" },
 		{ tool: "slack_read_thread", args: {}, server: "slack" },
@@ -77,9 +77,9 @@ test("mcp.call still forwards a read tool", async () => {
 test("mcp management actions are never gated", async () => {
 	const spy = gatewayCatalog();
 	const provider = new McpBridgeProvider(() => spy.catalog, nightGate);
-	await provider.invoke("$search", { query: "message" }, context);
-	await provider.invoke("$describe", { tool: "slack_send_message" }, context);
-	await provider.invoke("$connect", { server: "slack" }, context);
+	await provider.invoke("search", { query: "message" }, context);
+	await provider.invoke("describe", { tool: "slack_send_message" }, context);
+	await provider.invoke("connect", { server: "slack" }, context);
 	assert.equal(spy.calls.length, 3);
 });
 
@@ -125,12 +125,12 @@ test("mcp.<server>.<tool> refs route to the gateway instead of Unknown Spindle a
 test("adapter-prefixed reads reach the gateway on the subagent path", async () => {
 	const spy = gatewayCatalog();
 	const provider = new McpBridgeProvider(() => spy.catalog, nightGate);
-	await provider.invoke("$call", { server: "slack", tool: "slack_slack_read_channel", args: {} }, context);
-	await provider.invoke("$call", { server: "datadog", tool: "datadog_search_datadog_logs", args: {} }, context);
-	await provider.invoke("$call", { server: "linear", tool: "linear_list_teams", args: {} }, context);
+	await provider.invoke("call", { server: "slack", tool: "slack_slack_read_channel", args: {} }, context);
+	await provider.invoke("call", { server: "datadog", tool: "datadog_search_datadog_logs", args: {} }, context);
+	await provider.invoke("call", { server: "linear", tool: "linear_list_teams", args: {} }, context);
 	assert.equal(spy.calls.length, 3);
 	await assert.rejects(
-		() => provider.invoke("$call", { server: "slack", tool: "slack_slack_send_message", args: {} }, context),
+		() => provider.invoke("call", { server: "slack", tool: "slack_slack_send_message", args: {} }, context),
 		/is refused/,
 	);
 });
@@ -151,8 +151,8 @@ test("repeated metadata reads hit the gateway once", async () => {
 	const spy = gatewayCatalog();
 	const provider = new McpBridgeProvider(() => spy.catalog);
 	const cwdContext = { ...context, cwd: "/tmp" };
-	await provider.invoke("$list", {}, cwdContext);
-	await provider.invoke("$list", {}, cwdContext);
+	await provider.invoke("list", {}, cwdContext);
+	await provider.invoke("list", {}, cwdContext);
 	assert.equal(spy.calls.length, 1);
 });
 
@@ -160,8 +160,8 @@ test("a tool call is never served from the descriptor cache", async () => {
 	const spy = gatewayCatalog();
 	const provider = new McpBridgeProvider(() => spy.catalog);
 	const cwdContext = { ...context, cwd: "/tmp" };
-	await provider.invoke("$call", { server: "s", tool: "read_thing", args: {} }, cwdContext);
-	await provider.invoke("$call", { server: "s", tool: "read_thing", args: {} }, cwdContext);
+	await provider.invoke("call", { server: "s", tool: "read_thing", args: {} }, cwdContext);
+	await provider.invoke("call", { server: "s", tool: "read_thing", args: {} }, cwdContext);
 	assert.equal(spy.calls.length, 2);
 });
 
@@ -169,8 +169,8 @@ test("a connect invalidates cached metadata reads", async () => {
 	const spy = gatewayCatalog();
 	const provider = new McpBridgeProvider(() => spy.catalog);
 	const cwdContext = { ...context, cwd: "/tmp" };
-	await provider.invoke("$list", {}, cwdContext);
-	await provider.invoke("$connect", { server: "s" }, cwdContext);
-	await provider.invoke("$list", {}, cwdContext);
+	await provider.invoke("list", {}, cwdContext);
+	await provider.invoke("connect", { server: "s" }, cwdContext);
+	await provider.invoke("list", {}, cwdContext);
 	assert.equal(spy.calls.filter((call) => call.connect === undefined).length, 2);
 });

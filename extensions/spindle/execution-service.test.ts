@@ -118,11 +118,27 @@ test("discovery actions dispatch through the static host calls", async () => {
 	assert.deepEqual(value.called, { echoed: { via: "call" } });
 });
 
-test("workflow phases surface in the result", async () => {
+test("mapLimit bounds how many thunks run at once", async () => {
 	const service = serviceWith([]);
-	const result = await execute(service, "await workflow.phase('scanning'); return 1;");
-	assert.equal(result.success, true);
-	assert.deepEqual(result.phases, ["scanning"]);
+	const result = await execute(
+		service,
+		[
+			"let live = 0;",
+			"let peak = 0;",
+			"const out = await mapLimit([1, 2, 3, 4, 5, 6], async (n) => {",
+			"  live++;",
+			"  peak = Math.max(peak, live);",
+			"  await new Promise((resolve) => setTimeout(resolve, 1));",
+			"  live--;",
+			"  return n * 2;",
+			"}, 2);",
+			"return { out, peak };",
+		].join("\n"),
+	);
+	assert.equal(result.success, true, result.error ?? "");
+	const value = result.value as { out: number[]; peak: number };
+	assert.deepEqual(value.out, [2, 4, 6, 8, 10, 12]);
+	assert.equal(value.peak, 2);
 });
 
 test("agent budget exhaustion fails the program", async () => {
