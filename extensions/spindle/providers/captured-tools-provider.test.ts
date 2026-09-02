@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import type { CapturedToolCatalog, CapturedToolEntry } from "../capture/catalog.ts";
-import { SpindleToolGate } from "../core/tool-allowlist.ts";
 import { CapturedToolsProvider } from "./captured-tools-provider.ts";
 
 const context = {} as any;
@@ -29,37 +28,23 @@ const catalog = (...entries: CapturedToolEntry[]): CapturedToolCatalog =>
 
 const tools = catalog(entry("fetch_content"), entry("todo"), entry("web_search"));
 
-const provider = (allowed?: string[]) =>
-	new CapturedToolsProvider(tools, SpindleToolGate.of(allowed ? new Set(allowed) : undefined));
+const provider = () => new CapturedToolsProvider(tools);
 
-const names = async (allowed?: string[]): Promise<string[]> =>
-	(await provider(allowed).list(listRequest, context)).map((descriptor) => descriptor.name);
-
-test("an unrestricted provider lists every captured tool", async () => {
-	assert.deepEqual((await names()).sort(), ["fetch_content", "todo", "web_search"]);
+test("the provider lists every captured tool", async () => {
+	const names = (await provider().list(listRequest, context)).map((descriptor) => descriptor.name);
+	assert.deepEqual(names.sort(), ["fetch_content", "todo", "web_search"]);
 });
 
-test("list hides captured tools the allowlist excludes", async () => {
-	assert.deepEqual(await names(["todo"]), ["todo"]);
-	assert.deepEqual(await names([]), []);
+test("list filters by query", async () => {
+	const names = (await provider().list({ query: "search" } as any, context)).map((descriptor) => descriptor.name);
+	assert.deepEqual(names, ["web_search"]);
 });
 
-test("describe throws the restriction error for a disallowed captured tool", async () => {
-	await assert.rejects(
-		() => provider(["todo"]).describe("web_search", context),
-		/Tool extensions\.web_search is not in this agent's tool allowlist \(allowed: todo\)/,
-	);
-});
-
-test("describe still returns undefined for a tool that was never captured", async () => {
-	assert.equal(await provider(["todo"]).describe("nope", context), undefined);
+test("describe returns undefined for a tool that was never captured", async () => {
 	assert.equal(await provider().describe("nope", context), undefined);
 });
 
-test("invoke and prepareArguments reject a disallowed captured tool", async () => {
-	await assert.rejects(
-		() => provider(["todo"]).invoke("web_search", {}, context),
-		/not in this agent's tool allowlist/,
-	);
-	assert.throws(() => provider(["todo"]).prepareArguments("web_search", {}), /not in this agent's tool allowlist/);
+test("describe resolves a captured tool", async () => {
+	const descriptor = await provider().describe("todo", context);
+	assert.equal(descriptor?.name, "todo");
 });

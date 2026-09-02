@@ -2,7 +2,7 @@
  * Build the child `pi` CLI invocation from a discovered agent config.
  *
  * `pi` has no native `--agent <name>` flag, so we reconstruct the invocation
- * from the agent's frontmatter (model/thinking, tools, system prompt, skills)
+ * from the agent's frontmatter (model/thinking, sandbox, system prompt, skills)
  * the same way pi-subagents does. Keeping this in one module means switching to
  * a native flag later (if one appears) is a one-file change.
  *
@@ -23,7 +23,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
 import { buildNightContract, readActiveNightRun } from "../../night-mode/night-run.ts";
-import { ALLOWED_TOOLS_FLAG, SANDBOX_MODE_FLAG, SPINDLE_EXEC_TOOL } from "./constants.ts";
+import { SANDBOX_MODE_FLAG } from "./constants.ts";
 import { type DiscoveredAgent } from "./discovery.ts";
 import { injectOutputInstruction } from "./paths.ts";
 
@@ -156,33 +156,14 @@ export function buildChildArgs(agent: DiscoveredAgent, task: string, opts: Child
 	if (model) args.push("--model", model);
 	if (thinking && thinking !== "off") args.push("--thinking", thinking);
 
-	// When the agent declares a tool allowlist, keep `spindle_exec` in pi's
-	// `--tools` filter regardless: it is the child's ONLY tool path when it runs
-	// Spindle in full code mode (Spindle strips the pi core tools from the active
-	// set), so an allowlist that omits it leaves the agent unable to do anything.
-	// The declared allowlist is still enforced one level down: it travels via
-	// `--${ALLOWED_TOOLS_FLAG}` and the child's Spindle removes the disallowed
-	// tools from the `pi.*` / `extensions.*` schema inside the sandbox. The child
-	// extension is loaded here only to register that flag; a child with no
-	// allowlist needs no injected extension at all. With no allowlist all tools
-	// are enabled, so nothing to add.
-	const restrictsTools = !!agent.config.tools && agent.config.tools.length > 0;
-	// The sandbox mode travels the same way, and is a floor the child cannot
-	// loosen (see `sandbox/agent-floor.ts`). It is the preferred way to bound a
-	// research agent: it keeps `bash` available for reads instead of removing the
-	// tool and letting the agent discover the restriction by failing.
-	const sandboxMode = agent.config.sandbox;
-	if (restrictsTools || sandboxMode) {
+	// A subagent keeps the parent's whole toolset. It is bounded by its sandbox
+	// mode instead, a floor the child cannot loosen (see
+	// `sandbox/agent-floor.ts`): the kernel refuses the writes while every read
+	// tool stays available. The injected child extension exists only to make pi
+	// accept the flag, so an agent with no `sandbox:` needs no extension at all.
+	if (agent.config.sandbox) {
 		args.push("--extension", childExtensionPath());
-	}
-	if (restrictsTools) {
-		const declared = agent.config.tools ?? [];
-		const tools = declared.includes(SPINDLE_EXEC_TOOL) ? [...declared] : [...declared, SPINDLE_EXEC_TOOL];
-		args.push("--tools", tools.join(","));
-		args.push(`--${ALLOWED_TOOLS_FLAG}`, declared.join(","));
-	}
-	if (sandboxMode) {
-		args.push(`--${SANDBOX_MODE_FLAG}`, sandboxMode);
+		args.push(`--${SANDBOX_MODE_FLAG}`, agent.config.sandbox);
 	}
 
 	if (opts.systemPromptFile && agent.systemPrompt.trim().length > 0) {

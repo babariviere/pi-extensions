@@ -77,7 +77,7 @@ test("withBuiltinAgent appends the personaless agent", () => {
 	const builtin = agents.find((a) => a.config.name === BUILTIN_AGENT_NAME);
 	assert.equal(builtin?.scope, "builtin");
 	assert.equal(builtin?.systemPrompt, "");
-	assert.equal(builtin?.config.tools, undefined);
+	assert.equal(builtin?.config.sandbox, undefined);
 });
 
 test("an on-disk agent shadows the built-in one", () => {

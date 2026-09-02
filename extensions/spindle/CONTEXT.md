@@ -419,8 +419,8 @@ provider (`pi` / `mcp` / `agents` / captured) and on `CapturedToolEntry`
 (`capture/catalog.ts`, `capture/interceptor.ts`); and the
 `spindle.approval.auto` projection cases (`audit/projection.ts`).
 
-The subagent `tools:` allowlist (`core/tool-allowlist.ts`, `SpindleToolGate`)
-is a separate system and is untouched. The `"approve"` member was also removed
+The subagent sandbox floor (`sandbox/agent-floor.ts`) is a separate system and
+is untouched. The `"approve"` member was also removed
 from `audit/trace.ts`'s `SpindleExecutionFailureStageV1` union and its `stages`
 validator Set. Additionally, `SpindleExecutionTraceRecorder.seal()` now honors
 its `error` argument: the caller's concrete failure text (runtime error,
@@ -635,7 +635,7 @@ relative to `import.meta.url`, so it keeps working after the move with no edit â
 `agents/pi-args.test.ts` asserts this. (Formerly `result-tool.ts`, which hosted
 a `submit_result` tool; that tool was removed in favor of reading the child's
 final assistant message, and the file was trimmed to just registering the
-allowlist flag.)
+sandbox-mode flag.)
 
 ### herdr client
 
@@ -681,45 +681,48 @@ block is no longer emitted as raw tool text. Instead `RunProgressMonitor`
 `SpindleAgentRun.runId` is set to `context.parentToolCallId`, which is also the
 `SpindleActivityRun.id`, so the widget can associate rows with the running program.
 
-### Subagent tool allowlists
+### Subagent sandboxing
 
-An agent definition's `tools:` frontmatter can no longer be enforced with pi's
-own `--tools` filter: the child must keep `spindle_exec` (its only tool path in
-full code mode), and keeping it would re-expose every core tool through `pi.*`.
-So the enforcement moved into the sandbox:
+A subagent used to be bounded by its `tools:` frontmatter: the parent filtered
+pi's `--tools`, forwarded the declared list on `--spindle-allowed-tools`, and a
+`SpindleToolGate` in the child removed the rest from the `pi.*` / `extensions.*`
+schema. That took the capability away without taking the danger away. A
+librarian denied `bash` found out by failing mid-task (`Tool pi.bash is not in
+this agent's tool allowlist`), then rerouted through weaker tools and burned
+turns doing it, while still being free to write anywhere it could reach.
 
-- `agents/pi-args.ts` appends `spindle_exec` to `--tools` (the child's only
-  tool path in full code mode) and forwards the declared list via
-  `--${ALLOWED_TOOLS_FLAG}` (`--spindle-allowed-tools`, declared in
-  `agents/constants.ts`).
-- The flag is registered by `agents/child-extension.ts`, loaded via
-  `--extension` only when the parent restricts tools. pi rejects the same flag
-  from two extensions, so Spindle does not also register it; it reads the value
-  off argv (`getFlag` only resolves flags the reading extension registered).
-- `core/tool-allowlist.ts` parses it and owns `SpindleToolGate`, the single
-  module that decides "may this tool be called". Absent/blank means an
-  unrestricted gate. `allows(name)` / `assert(namespace, name)` are the whole
-  enforcement surface; the transport carve-out and "undefined = unrestricted"
-  live inside the gate.
-- `spindle-state.ts` builds one `SpindleToolGate` (via `fromArgv`) and threads
-  that gate into `PiToolsProvider`, `CapturedToolsProvider` and
-  `SpindleExecutionService`.
-- `runtime/guest-types.ts` strips disallowed `pi.*` members from `PiToolsApi`
-  (and the `pi` global when nothing survives) by consulting the gate's
-  `allows()`, so the declared schema matches what may be called. The string
-  surgery stays here (it owns the schema format; `core/` must not depend on
-  `runtime/`). That is schema shaping only: `type-checker.ts` filters out
-  TS2339 (`TYPE_CORRECTNESS_CODES`), so the actual rejection comes from the
-  providers, which call `gate.assert(this.name, action)` from `describe()` â€”
-  undefined there would surface as the misleading "Unknown Spindle action".
+That whole system is gone (`core/tool-allowlist.ts`, its flag, the gate
+threading through the providers and the execution service, the `PiToolsApi`
+schema surgery in `runtime/guest-types.ts`, and the `tools:` field itself). A
+subagent keeps the parent's full toolset and is bounded by the filesystem
+sandbox instead:
 
-`spindle_exec` is always allowed: it is the child's only tool path in full code
-mode and is never callable from inside the sandbox, so gating it would be both
-pointless and fatal. A restricted subagent still answers through its final
-assistant message, not a tool, so no result-channel tool needs a carve-out.
+- an agent definition declares `sandbox: read-only` (any `SandboxMode`;
+  `agents/frontmatter.ts` drops an unrecognised value rather than failing the
+  launch);
+- `agents/pi-args.ts` forwards it on `--${SANDBOX_MODE_FLAG}`
+  (`--spindle-sandbox`, declared in `agents/constants.ts`) and loads
+  `agents/child-extension.ts` via `--extension` only to register that flag, for
+  the same reason the allowlist needed one: pi rejects a flag registered twice,
+  and `getFlag` only resolves flags the reading extension registered, so
+  Spindle reads raw argv (`core/argv-flag.ts`);
+- `sandbox/agent-floor.ts` turns the flag into a `SandboxRequest`, and
+  `spindle-state.ts` passes it to `effectiveSandbox` as a **floor** alongside
+  the night floor: a `/sandbox` request inside the child can tighten it, never
+  loosen it, and the tightest of the two floors wins (`sandbox/resolve.ts`).
 
-Scope: the allowlist gates `pi.*` and `extensions.*` only. `mcp.*`, `agents.*`
-and `workflow.*` are not tools in that sense and stay available.
+Enforcement is the existing one, so there is no second mechanism to keep in
+sync: `bash` runs under the OS sandbox (Seatbelt/bubblewrap via
+`@anthropic-ai/sandbox-runtime`), `write`/`edit` are path-checked, and the read
+tools honour `denyRead`.
+
+What this does not do: `read-only` still grants the temp dirs (a compiler that
+cannot write a temp file is a brick, not a sandbox) and leaves egress
+unrestricted, so it bounds damage rather than visibility. It also refuses tools
+that write outside temp, including `jj` without `--ignore-working-copy` (it
+snapshots the working copy) and anything writing a build cache, since
+`read-only`'s writable set is temp only, not the cache roots `workspace-write`
+grants.
 
 ### Run lifetime and cancellation
 

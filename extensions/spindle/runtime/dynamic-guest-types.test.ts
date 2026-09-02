@@ -36,7 +36,6 @@ test("non-identifier tool names render as quoted members", () => {
 test("the generated surface replaces the loose declaration and gates bad arguments", () => {
 	const declarations = guestTypeDeclarations(
 		true,
-		undefined,
 		buildDynamicGuestDeclarations({
 			extensionTools: [searchTool],
 		}),

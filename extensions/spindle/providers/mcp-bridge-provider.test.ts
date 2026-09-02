@@ -85,7 +85,7 @@ test("mcp management actions are never gated", async () => {
 
 test("the same policy covers the gateway reached as extensions.mcp", async () => {
 	const spy = gatewayCatalog();
-	const provider = new CapturedToolsProvider(spy.catalog, undefined, nightGate);
+	const provider = new CapturedToolsProvider(spy.catalog, nightGate);
 	await assert.rejects(
 		() => provider.invoke("mcp", { tool: "slack_send_message", server: "slack", args: {} }, context),
 		/MCP call slack\.slack_send_message is refused/,
@@ -98,13 +98,13 @@ test("the same policy covers the gateway reached as extensions.mcp", async () =>
 test("a pi-mcp-adapter direct tool is gated by its own name", async () => {
 	const writer = gatewayCatalog("slack_send_message");
 	await assert.rejects(
-		() => new CapturedToolsProvider(writer.catalog, undefined, nightGate).invoke("slack_send_message", {}, context),
+		() => new CapturedToolsProvider(writer.catalog, nightGate).invoke("slack_send_message", {}, context),
 		/MCP call slack\.slack_send_message is refused/,
 	);
 	assert.deepEqual(writer.calls, []);
 
 	const reader = gatewayCatalog("slack_read_thread");
-	await new CapturedToolsProvider(reader.catalog, undefined, nightGate).invoke("slack_read_thread", {}, context);
+	await new CapturedToolsProvider(reader.catalog, nightGate).invoke("slack_read_thread", {}, context);
 	assert.equal(reader.calls.length, 1);
 });
 
@@ -137,7 +137,7 @@ test("adapter-prefixed reads reach the gateway on the subagent path", async () =
 
 test("the mcp__<server> namespace proxy is gated like the gateway", async () => {
 	const spy = gatewayCatalog("mcp__slack");
-	const provider = new CapturedToolsProvider(spy.catalog, undefined, nightGate);
+	const provider = new CapturedToolsProvider(spy.catalog, nightGate);
 	await provider.invoke("mcp__slack", { tool: "slack_read_channel", args: {} }, context);
 	assert.equal(spy.calls.length, 1);
 	await assert.rejects(

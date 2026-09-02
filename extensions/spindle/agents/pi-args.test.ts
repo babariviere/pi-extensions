@@ -1,8 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { type DiscoveredAgent } from "./discovery.ts";
-import { SPINDLE_EXEC_TOOL } from "./constants.ts";
-import { ALLOWED_TOOLS_FLAG, SANDBOX_MODE_FLAG } from "./constants.ts";
+import { SANDBOX_MODE_FLAG } from "./constants.ts";
 import {
 	buildChildArgs,
 	childExtensionPath,
@@ -77,44 +76,20 @@ test("buildChildArgs omits the inline task when includeTask is false", () => {
 	assert.ok(args.includes("--session"));
 });
 
-test("buildChildArgs loads no injected extension when the agent declares no allowlist", () => {
-	const args = buildChildArgs(agent(), "t", opts);
-	assert.ok(!args.includes("--extension"));
-});
-
-test("buildChildArgs loads the child extension only when an allowlist is present", () => {
-	const args = buildChildArgs(agent({ tools: ["read"] }), "t", opts);
+test("buildChildArgs loads the child extension only for a sandboxed agent", () => {
+	assert.ok(!buildChildArgs(agent(), "t", opts).includes("--extension"));
+	const args = buildChildArgs(agent({ sandbox: "read-only" }), "t", opts);
 	const idx = args.indexOf("--extension");
 	assert.ok(idx !== -1);
 	assert.equal(args[idx + 1], childExtensionPath());
 	assert.ok(childExtensionPath().endsWith("child-extension.ts"));
 });
 
-test("buildChildArgs appends spindle_exec to a declared tools allowlist", () => {
-	const args = buildChildArgs(agent({ tools: ["read", "grep"] }), "t", opts);
-	const toolsIdx = args.indexOf("--tools");
-	assert.equal(args[toolsIdx + 1], `read,grep,${SPINDLE_EXEC_TOOL}`);
-});
-
-test("buildChildArgs does not duplicate spindle_exec when already allowlisted", () => {
-	const args = buildChildArgs(agent({ tools: ["read", SPINDLE_EXEC_TOOL] }), "t", opts);
-	const toolsIdx = args.indexOf("--tools");
-	assert.equal(args[toolsIdx + 1], `read,${SPINDLE_EXEC_TOOL}`);
-});
-
-test("buildChildArgs forwards the declared allowlist as the spindle restriction flag", () => {
-	const args = buildChildArgs(agent({ tools: ["read", "grep"] }), "t", opts);
-	const flagIdx = args.indexOf(`--${ALLOWED_TOOLS_FLAG}`);
-	assert.ok(flagIdx !== -1);
-	// The flag carries the DECLARED list only: spindle_exec is added to --tools so
-	// the child can run, not to what the sandbox may call.
-	assert.equal(args[flagIdx + 1], "read,grep");
-});
-
-test("buildChildArgs omits --tools and the restriction flag when the agent declares no allowlist", () => {
-	const args = buildChildArgs(agent({}), "t", opts);
-	assert.ok(!args.includes("--tools"));
-	assert.ok(!args.includes(`--${ALLOWED_TOOLS_FLAG}`));
+test("buildChildArgs never filters the child's tools", () => {
+	// A subagent keeps the parent's whole toolset; its sandbox mode bounds it.
+	for (const config of [{}, { sandbox: "read-only" as const }]) {
+		assert.equal(buildChildArgs(agent(config), "t", opts).includes("--tools"), false);
+	}
 });
 
 test("qualifyModel prefixes a bare model with the default provider only when needed", () => {
@@ -157,18 +132,12 @@ test("buildChildArgs omits --thinking when thinking is unset or off", () => {
 	assert.ok(!buildChildArgs(agent({ model: "claude-opus-4-8", thinking: "off" }), "t", opts).includes("--thinking"));
 });
 
-test("buildChildArgs adds model and tools list without a thinking suffix", () => {
-	const args = buildChildArgs(
-		agent({ model: "claude-opus-4-8", thinking: "low", tools: ["read", "bash"] }),
-		"t",
-		opts,
-	);
+test("buildChildArgs adds the model without a thinking suffix", () => {
+	const args = buildChildArgs(agent({ model: "claude-opus-4-8", thinking: "low" }), "t", opts);
 	const modelIdx = args.indexOf("--model");
 	assert.equal(args[modelIdx + 1], "claude-opus-4-8");
 	const thinkingIdx = args.indexOf("--thinking");
 	assert.equal(args[thinkingIdx + 1], "low");
-	const toolsIdx = args.indexOf("--tools");
-	assert.equal(args[toolsIdx + 1], `read,bash,${SPINDLE_EXEC_TOOL}`);
 });
 
 test("buildChildArgs modelOverride takes precedence over the agent's frontmatter model", () => {
@@ -261,14 +230,7 @@ test("buildChildArgs forwards a declared sandbox mode as the floor flag", () => 
 	assert.equal(args[args.indexOf("--extension") + 1], childExtensionPath());
 	// A sandboxed agent keeps every tool: the kernel does the restricting.
 	assert.equal(args.includes("--tools"), false);
-	assert.equal(args.includes(`--${ALLOWED_TOOLS_FLAG}`), false);
-});
-
-test("buildChildArgs loads the child extension once when both restrictions apply", () => {
-	const args = buildChildArgs(agent({ tools: ["read"], sandbox: "read-only" }), "do it", opts);
 	assert.equal(args.filter((a) => a === "--extension").length, 1);
-	assert.ok(args.includes(`--${ALLOWED_TOOLS_FLAG}`));
-	assert.ok(args.includes(`--${SANDBOX_MODE_FLAG}`));
 });
 
 test("buildChildArgs sends no sandbox flag when the agent declares no mode", () => {

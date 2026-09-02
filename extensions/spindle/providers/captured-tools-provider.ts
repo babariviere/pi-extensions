@@ -2,7 +2,6 @@ import path from "node:path";
 import { runAbortable, throwIfAborted } from "../async-settlement.ts";
 import type { AgentToolResult, SourceInfo } from "@earendil-works/pi-coding-agent";
 import { CapturedToolCatalog, type CapturedToolEntry } from "../capture/catalog.ts";
-import { SpindleToolGate } from "../core/tool-allowlist.ts";
 import { assertMcpGatewayArguments, McpReadOnlyGate, mcpNamespaceProxyServer } from "../mcp/read-only-policy.ts";
 import type {
 	SpindleActionDescriptor,
@@ -89,8 +88,6 @@ export class CapturedToolsProvider implements SpindleProvider {
 
 	constructor(
 		readonly catalog: CapturedToolCatalog,
-		/** Subagent `tools:` gate; an unrestricted gate for a normal session. */
-		readonly gate: SpindleToolGate = SpindleToolGate.of(undefined),
 		/**
 		 * Read-only MCP guardrail. Captured tools are the second way an MCP call can
 		 * leave the sandbox: pi-mcp-adapter registers its `mcp` gateway (and any
@@ -106,10 +103,7 @@ export class CapturedToolsProvider implements SpindleProvider {
 		_context: SpindleInvocationContext,
 	): Promise<SpindleActionDescriptor[]> {
 		const query = request.query?.trim().toLowerCase();
-		const descriptors = this.catalog
-			.list()
-			.filter((entry) => this.gate.allows(entry.name))
-			.map(descriptorFrom);
+		const descriptors = this.catalog.list().map(descriptorFrom);
 		if (!query) return descriptors;
 		return descriptors.filter((descriptor) =>
 			`${descriptor.name} ${descriptor.description} ${descriptor.namespace ?? ""}`.toLowerCase().includes(query),
@@ -122,14 +116,10 @@ export class CapturedToolsProvider implements SpindleProvider {
 	): Promise<SpindleActionDescriptor | undefined> {
 		const entry = this.catalog.get(actionName);
 		if (!entry) return undefined;
-		// See PiToolsProvider.describe: a restricted tool must say so, not look like
-		// an unknown one. list() already hides it.
-		this.gate.assert(this.name, actionName);
 		return descriptorFrom(entry);
 	}
 
 	prepareArguments(actionName: string, args: Record<string, unknown>): Record<string, unknown> {
-		this.gate.assert(this.name, actionName);
 		const prepare = this.catalog.require(actionName).wrappedTool.prepareArguments;
 		if (!prepare) return args;
 		const prepared = prepare(args);
@@ -144,7 +134,6 @@ export class CapturedToolsProvider implements SpindleProvider {
 		args: Record<string, unknown>,
 		context: SpindleInvocationContext,
 	): Promise<CapturedToolInvocationResult> {
-		this.gate.assert(this.name, actionName);
 		const entry = this.catalog.require(actionName);
 		this.#assertMcpReadOnly(entry, args);
 		return this.#scheduler.run(entry.definition.executionMode, () =>

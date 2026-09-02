@@ -2,8 +2,8 @@
  * Hand-rolled frontmatter parser for the flat agent markdown files used by pi.
  *
  * The agent files use a simple `---`-delimited YAML-ish block with only:
- *   - scalar strings (`model: claude-opus-4-8`)
- *   - comma lists (`tools: read, grep, find`)
+ *   - scalar strings (`model: claude-opus-4-8`, `sandbox: read-only`)
+ *   - comma lists (`defaultReads: AGENTS.md, README.md`)
  *   - booleans (`inheritSkills: false`)
  *
  * We deliberately do NOT pull in a YAML dependency. Anything we do not
@@ -25,7 +25,6 @@ export interface AgentConfig {
 	description?: string;
 	model?: string;
 	thinking?: string;
-	tools?: string[];
 	systemPromptMode?: "replace" | "append";
 	inheritProjectContext?: boolean;
 	inheritSkills?: boolean;
@@ -151,7 +150,6 @@ export function toAgentConfig(data: Record<string, FrontmatterValue>, fallbackNa
 		description: asString(data.description)?.trim(),
 		model: asString(data.model)?.trim(),
 		thinking: asString(data.thinking)?.trim(),
-		tools: asStringList(data.tools),
 		systemPromptMode,
 		inheritProjectContext: asBool(data.inheritProjectContext),
 		inheritSkills: asBool(data.inheritSkills),

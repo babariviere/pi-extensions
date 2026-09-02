@@ -17,8 +17,6 @@ import { CapturedToolCatalog } from "./capture/catalog.ts";
 import { loadSpindleConfig, type SpindleConfig } from "./config.ts";
 import { ActionRegistry } from "./core/action-registry.ts";
 import { SpindleToolResultProxy } from "./core/tool-result-proxy.ts";
-import { SpindleToolGate } from "./core/tool-allowlist.ts";
-import { ALLOWED_TOOLS_FLAG } from "./agents/constants.ts";
 import { SpindleExecutionService } from "./execution-service.ts";
 import { SpindleAgentRunRegistry } from "./providers/agent-run-monitor.ts";
 import { AgentRunBook, type AgentCompletionEvent } from "./providers/agent-run-book.ts";
@@ -55,13 +53,6 @@ export class SpindleState {
 	#config: SpindleConfig | undefined;
 	#execution: SpindleExecutionService | undefined;
 	#cwd: string | undefined;
-	/**
-	 * Tool gate for this session, built from the parent's
-	 * `--${ALLOWED_TOOLS_FLAG}` flag. Restricted only when this pi process is a
-	 * Spindle subagent whose definition declared `tools:`; an unrestricted gate
-	 * for a normal session.
-	 */
-	#gate: SpindleToolGate = SpindleToolGate.of(undefined);
 	/** Filesystem guardrail for the mutating core tools; undefined until initialize(). */
 	#sandbox: SandboxController | undefined;
 	/** Unsubscribe for the mid-session sandbox request listener. */
@@ -147,7 +138,6 @@ export class SpindleState {
 		this.activity.reset();
 		this.agentRuns.reset();
 		this.#cwd = context.cwd;
-		this.#gate = SpindleToolGate.fromArgv(ALLOWED_TOOLS_FLAG);
 		this.#agentSandbox = agentSandboxFloor();
 		// A new session must not inherit the previous one's children, nor its state.
 		this.agentRunBook.reset();
@@ -173,13 +163,13 @@ export class SpindleState {
 		this.#registry = new ActionRegistry(new SpindleToolResultProxy(() => this.capturedTools.runner));
 		const capturedToolsProvider =
 			this.#config.fullCodeMode && this.#config.capture.enabled
-				? new CapturedToolsProvider(this.capturedTools, this.#gate, () => this.#mcpReadOnlyGate())
+				? new CapturedToolsProvider(this.capturedTools, () => this.#mcpReadOnlyGate())
 				: undefined;
 		if (this.#config.fullCodeMode) {
 			this.#sandbox = await this.#createSandbox(context);
 			const sandbox = this.#sandbox;
 			this.#registry.register(
-				new PiToolsProvider(context.cwd, this.capturedTools, capturedToolsProvider, this.#gate, {
+				new PiToolsProvider(context.cwd, this.capturedTools, capturedToolsProvider, {
 					bash: sandbox.bashOperations(),
 					wrapCommand: (command: string) => sandbox.wrapCommand(command),
 					edit: sandbox.editOperations(),
@@ -211,13 +201,7 @@ export class SpindleState {
 		for (const provider of this.#externalProviders.values()) {
 			this.#registry.register(provider);
 		}
-		this.#execution = new SpindleExecutionService(
-			this.#registry,
-			this.#config,
-			this.activity,
-			this.#gate,
-			this.sessionStore,
-		);
+		this.#execution = new SpindleExecutionService(this.#registry, this.#config, this.activity, this.sessionStore);
 		const discovery: SpindleProviderDiscovery = {
 			version: 1,
 			register: (provider, options) => this.registerExternal(provider, options),
@@ -261,7 +245,6 @@ export class SpindleState {
 		this.#config = undefined;
 		this.#execution = undefined;
 		this.#cwd = undefined;
-		this.#gate = SpindleToolGate.of(undefined);
 		this.#agentSandbox = undefined;
 		this.activity.reset();
 		this.agentRuns.reset();

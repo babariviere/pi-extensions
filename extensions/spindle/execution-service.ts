@@ -12,7 +12,6 @@ import type { SpindleRunDisplay } from "./activity/types.ts";
 import { MAX_AGENT_TIMEOUT_MS, MIN_AGENT_TIMEOUT_MS, type SpindleConfig } from "./config.ts";
 import { fullCodeProvider, hostCallTable, type HostCallContext, type SpindleStateNote } from "./host-calls.ts";
 import { ActionRegistry, type SpindleCallAudit, type SpindleRegistryActivityEvent } from "./core/action-registry.ts";
-import type { SpindleToolGate } from "./core/tool-allowlist.ts";
 import { redactRecordedArgs } from "./core/arg-redaction.ts";
 import { spindleProcessSnapshot } from "./env-snapshot.ts";
 import { SpindleSessionStore, type SpindleSessionStoreKey } from "./session-store.ts";
@@ -123,8 +122,6 @@ export class SpindleExecutionService {
 		readonly registry: ActionRegistry,
 		readonly config: SpindleConfig,
 		readonly activity?: SpindleActivityStore,
-		/** Subagent `tools:` gate; an unrestricted gate for a normal session. */
-		readonly toolGate?: SpindleToolGate,
 		/**
 		 * The session-scoped scratchpad behind the guest's `τ` namespace. Owned by
 		 * `SpindleState` in a real session, so it outlives one program; a private
@@ -160,7 +157,6 @@ export class SpindleExecutionService {
 			options.code,
 			dependencies.guestTypeDeclarations(
 				effectiveFullCodeMode,
-				this.toolGate,
 				dependencies.buildDynamicGuestDeclarations(guestTypeSources),
 			),
 		);

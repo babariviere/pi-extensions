@@ -13,7 +13,6 @@
  * (see `TYPE_CORRECTNESS_CODES`), so the rejection itself comes from the
  * providers at call time.
  */
-import type { SpindleToolGate } from "../core/tool-allowlist.ts";
 import type { SpindleDynamicGuestDeclarations } from "../protocol.ts";
 
 export const GUEST_TYPE_DECLARATIONS = `
@@ -396,41 +395,6 @@ const FULL_CODE_GLOBAL_DECLARATIONS = [
 	"declare const tools: SpindleToolsApi;\n",
 ];
 
-const PI_TOOLS_API_HEADER = "interface PiToolsApi {";
-const PI_TOOLS_API_MEMBER = /^ {2}([A-Za-z][A-Za-z0-9_]*)\(/;
-
-/**
- * Drop the disallowed `pi.*` members from `PiToolsApi` so the schema handed to
- * the type-checker describes only what a restricted subagent may call. When
- * nothing is left, the `pi` global goes too.
- */
-const restrictPiTools = (declarations: string, gate: SpindleToolGate): string => {
-	const lines = declarations.split("\n");
-	const kept: string[] = [];
-	let inPiTools = false;
-	let members = 0;
-	for (const line of lines) {
-		if (!inPiTools) {
-			inPiTools = line.startsWith(PI_TOOLS_API_HEADER);
-			kept.push(line);
-			continue;
-		}
-		if (line === "}") {
-			inPiTools = false;
-			kept.push(line);
-			continue;
-		}
-		const member = PI_TOOLS_API_MEMBER.exec(line);
-		if (member) {
-			if (!gate.allows(member[1])) continue;
-			members++;
-		}
-		kept.push(line);
-	}
-	const restricted = kept.join("\n");
-	return members > 0 ? restricted : restricted.replace("declare const pi: PiToolsApi;\n", "");
-};
-
 const EXTENSIONS_LOOSE_DECLARATION = "declare const extensions: SpindleExtensionsApi;\n";
 
 const terminatedDeclaration = (block: string): string => (block.endsWith("\n") ? block : `${block}\n`);
@@ -446,17 +410,12 @@ const applyDynamicDeclarations = (declarations: string, dynamic: SpindleDynamicG
 		? declarations.replace(EXTENSIONS_LOOSE_DECLARATION, terminatedDeclaration(dynamic.extensions))
 		: declarations;
 
-export const guestTypeDeclarations = (
-	fullCodeMode: boolean,
-	gate?: SpindleToolGate,
-	dynamic?: SpindleDynamicGuestDeclarations,
-): string => {
+export const guestTypeDeclarations = (fullCodeMode: boolean, dynamic?: SpindleDynamicGuestDeclarations): string => {
 	if (!fullCodeMode) {
 		return FULL_CODE_GLOBAL_DECLARATIONS.reduce(
 			(declarations, declaration) => declarations.replace(declaration, ""),
 			GUEST_TYPE_DECLARATIONS,
 		);
 	}
-	const base = gate?.restricted ? restrictPiTools(GUEST_TYPE_DECLARATIONS, gate) : GUEST_TYPE_DECLARATIONS;
-	return dynamic ? applyDynamicDeclarations(base, dynamic) : base;
+	return dynamic ? applyDynamicDeclarations(GUEST_TYPE_DECLARATIONS, dynamic) : GUEST_TYPE_DECLARATIONS;
 };
