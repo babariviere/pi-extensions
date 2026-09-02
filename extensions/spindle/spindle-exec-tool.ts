@@ -51,6 +51,7 @@ import { countNewlines, truncateMiddle } from "./util.ts";
 import { prepareSpindleExecArguments, resolveSpindleExecStrings } from "./spindle-exec-arguments.ts";
 import { normalizeRunDisplay } from "./run-display.ts";
 import { typeErrorRecoveryHint } from "./type-error-guidance.ts";
+import { formatFailureProgress } from "./failure-progress.ts";
 import { repairSpindleGuestCode } from "./runtime/guest-code-repair.ts";
 
 const RESULT_FORMATS = ["auto", "yaml", "json", "text"] as const;
@@ -620,10 +621,14 @@ export const createSpindleExecTool = (
 
 				const selectedResultFormat = params.resultFormat ?? state.config.executor.resultFormat;
 				const formattedValue = formatSpindleValue(result.value, selectedResultFormat);
+				const failureProgress = formatFailureProgress(result.trace);
 				const sections = [...result.logs];
 				const logPrefix = result.logs.join("\n\n");
 				if (formattedValue.text) sections.push(formattedValue.text);
 				if (result.error) sections.push(`Runtime error: ${result.error}`);
+				// A failed program still mutated whatever its successful calls touched;
+				// name them so the model inspects before repeating the work.
+				if (failureProgress) sections.push(failureProgress);
 				const rawOutput = sections.join("\n\n");
 				const outputWillTruncate = rawOutput.length > state.config.executor.maxOutputChars;
 				const outputFormat =
