@@ -471,6 +471,8 @@ risk/approval hunks by hand.
 | `mcp/oauth-provider.ts` | `OAuthClientProvider` over `token-store.ts`. Headless refresh works; anything needing a browser throws `McpAuthorizationRequiredError` unless a `redirect` handler is supplied, so a tool call never tries to open one. |
 | `mcp/tool-cache.ts` | Tool schemas persisted to `<agentDir>/spindle-mcp-tools.json`, keyed by endpoint + config fingerprint. This is what lets `mcp.list` / `search` / `describe` answer without connecting, so `describe` returns a real input schema instead of the bridge's permissive stub, and discovery cannot trigger an OAuth prompt. |
 | `mcp/client-hub.ts` | The MCP client itself: lazy per-server connect over streamable HTTP (stdio supported, unix socket reported as unsupported), tool filtering, name resolution for `server.tool` / `mcp_server_tool` / bare names, and `callTool`. |
+| `mcp/auth-flow.ts` | The `/mcp-auth` browser leg: loopback callback server on a fixed port, the two `auth()` legs, state validation, and dropping a client registered against another redirect URI. **The only module that may open a consent screen**, and it is reachable only from the slash command. |
+| `mcp/status-report.ts` | Text for `/mcp status` and `/mcp tools`. Pure, so the formatting is tested without a session. |
 | `providers/mcp-client-provider.ts` | `mcp.*` on the hub. Same five management actions, same `mcp.<server>.<tool>` refs, same `{ text, content, structuredContent }` shape and same `McpReadOnlyGate` as the bridge, so a program cannot tell which one it is talking to. |
 | `mcp/night-bridge.ts` | Reads `mcp.readOnly` from the night-mode handshake, so a subagent process inherits the guardrail with no IPC. Participation-gated, like `sandbox/night-bridge.ts`. |
 
@@ -846,8 +848,10 @@ Four invariants:
 3. **Authorization is the user's, never the tool's.** A refresh-token grant runs
    headless. Anything that would need a consent screen throws
    `McpAuthorizationRequiredError`, whose message tells the model to stop and ask
-   the user to run `/mcp-auth <server>`. There is no option to open a browser;
-   `redirectToAuthorization` returns `never`.
+   the user to run `/mcp-auth <server>`. The consent screen needs an `onRedirect`
+   handler, and `mcp/auth-flow.ts` is the only caller that supplies one, so an
+   unattended authorization is impossible by construction rather than by
+   convention: `client-hub.ts` has no way to pass it.
 4. **One credential-store item per server.** `mcp/token-store.ts` writes a
    record as a single item and compacts a chunked pi-mcp-adapter record on read.
    The adapter chunks anything over 1280 chars into 1000-char items for the
@@ -857,6 +861,29 @@ Four invariants:
 Results are normalized to `{ text, content, structuredContent }`, and an
 `isError` result is rethrown with its text so a failed tool call rejects instead
 of returning quietly.
+
+### `/mcp` and `/mcp-auth`
+
+Both commands came from pi-mcp-adapter before; with the in-tree client they are
+registered in `index.ts` and share the session's hub through
+`SpindleState.mcpClient(cwd)`, so a status read shows the connections this
+session really holds and an authorization is visible to `mcp.*` with no reload.
+
+| Command | Effect |
+|---|---|
+| `/mcp` (or `/mcp status`) | Servers, states, tool counts (marked `cached` when they came from disk), targets, and any `mcp.json` parse errors |
+| `/mcp tools [server]` | Cached tools per server; names the `connect` command when a server has none |
+| `/mcp connect <server>` | Connect (or reconnect) and refresh the schema cache |
+| `/mcp logout <server>` | Clear that server's credential-store record |
+| `/mcp-auth <server>` | Authorize in a browser, then connect to prove the token works and warm the cache |
+
+`/mcp-auth` uses a FIXED loopback port (33418 by default, `oauth.redirectPort`
+per server, or `SPINDLE_MCP_REDIRECT_PORT`) rather than an ephemeral one: a
+dynamically registered OAuth client is bound to the exact `redirect_uri` it
+registered with, so an ephemeral port would force a fresh client registration on
+every authorization. A stored client registered against a different redirect URI
+is dropped up front (tokens are kept, since a refresh may still work), because
+the authorization server would reject it.
 
 `mcp.json` compatibility is deliberate and load-bearing: the same file, the same
 `mcpServers` schema, the same `includeTools` / `excludeTools` glob rules, the

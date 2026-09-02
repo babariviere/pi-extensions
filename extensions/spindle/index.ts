@@ -18,6 +18,9 @@ import { loadCodePreviewSettings } from "./ui/code-preview.ts";
 import { type SpindleToolShellDecorator, withCodePreviewShell } from "./ui/code-preview-shell.ts";
 import { cleanupOldRuns } from "./agents/paths.ts";
 import { CapturedToolCatalog } from "./capture/catalog.ts";
+import { authorizeMcpServer, logoutMcpServer } from "./mcp/auth-flow.ts";
+import { loadMcpServerConfig } from "./mcp/server-config.ts";
+import { formatMcpStatus, formatMcpTools } from "./mcp/status-report.ts";
 import { installRegisteredToolCapture } from "./capture/interceptor.ts";
 import { DEFAULT_SPINDLE_CONFIG, effectiveToolCaptureConfig } from "./config.ts";
 import { SpindleToolLifecycle, SpindleToolOwnership, ownsSpindleToolSource } from "./core/tool-ownership.ts";
@@ -213,6 +216,117 @@ export default async function spindle(pi: ExtensionAPI): Promise<void> {
 				return;
 			}
 			renderSandboxStatus(context, applied);
+		},
+	});
+
+	// `/mcp` and `/mcp-auth`. These used to come from pi-mcp-adapter; with the
+	// in-tree client they have to come from here, and `/mcp-auth` is the ONLY
+	// path in spindle that may open a consent screen (see mcp/auth-flow.ts).
+	const mcpSubcommands = [
+		{ value: "status", label: "status — servers, states and tool counts" },
+		{ value: "tools", label: "tools [server] — cached tools" },
+		{ value: "connect", label: "connect <server> — connect and refresh tools" },
+		{ value: "logout", label: "logout <server> — forget stored credentials" },
+	];
+	const mcpServerNames = (cwd: string): string[] => {
+		try {
+			return loadMcpServerConfig(cwd).servers.map((server) => server.name);
+		} catch {
+			return [];
+		}
+	};
+	const completeMcpArguments = (prefix: string) => {
+		const normalized = prefix.trimStart();
+		const withSubcommand = normalized.match(/^(\S+)\s+(.*)$/);
+		if (!withSubcommand) {
+			return mcpSubcommands.filter((entry) => entry.value.startsWith(normalized));
+		}
+		const [, subcommand = "", serverPrefix = ""] = withSubcommand;
+		if (subcommand === "status") return [];
+		return mcpServerNames(process.cwd())
+			.filter((name) => name.startsWith(serverPrefix))
+			.map((name) => ({ value: `${subcommand} ${name}`, label: name }));
+	};
+
+	pi.registerCommand("mcp", {
+		description: "MCP servers from mcp.json (status | tools [server] | connect <server> | logout <server>)",
+		getArgumentCompletions: completeMcpArguments,
+		handler: async (args, context) => {
+			const [subcommand = "status", serverName] = args.trim().split(/\s+/).filter(Boolean);
+			const hub = state.mcpClient(context.cwd);
+			try {
+				if (subcommand === "status") {
+					const config = loadMcpServerConfig(context.cwd);
+					context.ui.notify(formatMcpStatus(hub.status(), config.errors), "info");
+					return;
+				}
+				if (subcommand === "tools") {
+					context.ui.notify(formatMcpTools(await hub.listTools(serverName), serverName), "info");
+					return;
+				}
+				if (subcommand === "connect") {
+					if (!serverName) {
+						context.ui.notify("spindle: /mcp connect <server>", "warning");
+						return;
+					}
+					const status = await hub.connect(serverName);
+					context.ui.notify(`MCP '${status.name}': ${status.state}, ${status.tools ?? 0} tool(s) cached.`, "info");
+					return;
+				}
+				if (subcommand === "logout") {
+					if (!serverName) {
+						context.ui.notify("spindle: /mcp logout <server>", "warning");
+						return;
+					}
+					logoutMcpServer(serverName);
+					context.ui.notify(
+						`Cleared stored credentials for '${serverName}'. Run /mcp-auth ${serverName} to authorize again.`,
+						"info",
+					);
+					return;
+				}
+				context.ui.notify(
+					`spindle: unknown /mcp subcommand '${subcommand}'. Use status, tools, connect or logout.`,
+					"error",
+				);
+			} catch (error) {
+				context.ui.notify(`spindle: ${error instanceof Error ? error.message : String(error)}`, "error");
+			}
+		},
+	});
+
+	pi.registerCommand("mcp-auth", {
+		description: "Authorize an MCP server with OAuth in a browser",
+		getArgumentCompletions: (prefix) =>
+			mcpServerNames(process.cwd())
+				.filter((name) => name.startsWith(prefix.trimStart()))
+				.map((name) => ({ value: name, label: name })),
+		handler: async (args, context) => {
+			const serverName = args.trim().split(/\s+/).filter(Boolean)[0];
+			if (!serverName) {
+				const names = mcpServerNames(context.cwd);
+				context.ui.notify(
+					names.length > 0 ? `spindle: /mcp-auth <server> — one of: ${names.join(", ")}` : "spindle: no MCP server is configured",
+					"warning",
+				);
+				return;
+			}
+			try {
+				const result = await authorizeMcpServer({
+					cwd: context.cwd,
+					serverName,
+					notify: (message) => context.ui.notify(message, "info"),
+				});
+				// Connect right away: it proves the token works and warms the schema
+				// cache, so discovery and the typed guest surface are useful at once.
+				const status = await state.mcpClient(context.cwd).connect(serverName);
+				context.ui.notify(
+					`MCP '${serverName}' ${result.state === "refreshed" ? "was already authorized" : "authorized"}: ${status.tools ?? 0} tool(s) cached.`,
+					"info",
+				);
+			} catch (error) {
+				context.ui.notify(`spindle: ${error instanceof Error ? error.message : String(error)}`, "error");
+			}
 		},
 	});
 

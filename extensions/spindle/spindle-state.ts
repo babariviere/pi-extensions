@@ -56,7 +56,7 @@ export class SpindleState {
 	#cwd: string | undefined;
 	/** Filesystem guardrail for the mutating core tools; undefined until initialize(). */
 	#sandbox: SandboxController | undefined;
-	/** Spindle's own MCP client, created on first `mcp.*` use. */
+	/** Spindle's own MCP client, created on first `mcp.*` use or first `/mcp` command. */
 	#mcpHub: McpClientHub | undefined;
 	/** Unsubscribe for the mid-session sandbox request listener. */
 	#unsubscribeSandbox: (() => void) | undefined;
@@ -187,7 +187,7 @@ export class SpindleState {
 		// nothing and never touches the credential store.
 		this.#registry.register(
 			new McpClientProvider(
-				() => (this.#mcpHub ??= new McpClientHub({ cwd: context.cwd })),
+				() => this.mcpClient(context.cwd),
 				() => this.#mcpReadOnlyGate(),
 			),
 		);
@@ -382,6 +382,18 @@ export class SpindleState {
 		const suffix = reason ? ` (${reason})` : "";
 		context.ui.notify(`spindle: ${controller.describe()}${suffix}`, "info");
 		return state;
+	}
+
+	/**
+	 * Spindle's MCP client, created on demand.
+	 *
+	 * Shared with the `/mcp` and `/mcp-auth` commands so a status read reflects
+	 * the connections this session actually holds, and so an authorization is
+	 * immediately visible to `mcp.*` without a reload.
+	 */
+	mcpClient(cwd: string): McpClientHub {
+		this.#mcpHub ??= new McpClientHub({ cwd });
+		return this.#mcpHub;
 	}
 
 	/** Current sandbox state, or undefined when there is no sandbox. */

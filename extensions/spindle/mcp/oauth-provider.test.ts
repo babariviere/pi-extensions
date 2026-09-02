@@ -100,17 +100,24 @@ test("client metadata advertises the loopback redirect and requested scopes", ()
 	assert.equal(metadata.token_endpoint_auth_method, "none");
 });
 
-test("a browser flow is always refused, and the refusal names /mcp-auth", () => {
+test("a browser flow is refused without onRedirect, and the refusal names /mcp-auth", async () => {
 	const { provider } = providerWith();
-	assert.throws(
+	await assert.rejects(
 		() => provider.redirectToAuthorization(new URL("https://auth.example/authorize")),
 		McpAuthorizationRequiredError,
 	);
-	assert.throws(
+	await assert.rejects(
 		() => provider.redirectToAuthorization(new URL("https://auth.example/authorize")),
 		/ask the user to run '\/mcp-auth slack'/,
 	);
 	assert.throws(() => provider.codeVerifier(), McpAuthorizationRequiredError);
+});
+
+test("onRedirect is the only way to reach a consent screen", async () => {
+	const seen: string[] = [];
+	const { provider } = providerWith({ onRedirect: (url) => void seen.push(url.toString()) });
+	await provider.redirectToAuthorization(new URL("https://auth.example/authorize?x=1"));
+	assert.deepEqual(seen, ["https://auth.example/authorize?x=1"]);
 });
 
 test("the PKCE verifier and state persist for the callback leg", () => {

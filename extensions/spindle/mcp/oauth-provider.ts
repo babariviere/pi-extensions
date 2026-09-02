@@ -3,12 +3,13 @@
  * `McpTokenStore` (and therefore by pi-mcp-adapter's own credential-store
  * records, so no re-authentication is needed when switching clients).
  *
- * Non-interactive, with no escape hatch. A refresh-token grant runs headless
- * and is the common case for an already-authorized server. Anything that needs
- * a browser throws `McpAuthorizationRequiredError`, whose message tells the
- * model to ask the user to run `/mcp-auth <server>`: a tool call must never
- * open a consent screen on the user's behalf, and there is deliberately no
- * option to make it do so.
+ * Non-interactive unless a human asked for it. A refresh-token grant runs
+ * headless and is the common case for an already-authorized server. A consent
+ * screen needs `onRedirect`, which ONLY `mcp/auth-flow.ts` supplies, and
+ * `auth-flow.ts` is only reachable from the `/mcp-auth` command. `client-hub.ts`
+ * has no way to pass it, so a tool call always gets
+ * `McpAuthorizationRequiredError` instead of a browser window, and its message
+ * tells the model to ask the user to run `/mcp-auth <server>`.
  *
  * Tokens are URL-bound: a record minted for one `url` is ignored (not sent)
  * when the configured url changes.
@@ -46,11 +47,14 @@ export interface McpOAuthProviderOptions {
 	config?: McpOAuthConfig;
 	/** Client name advertised to the authorization server during registration. */
 	clientName?: string;
-	/**
-	 * Loopback redirect URI recorded at registration time, so a record written
-	 * here stays usable by the `/mcp-auth` flow that owns the browser leg.
-	 */
+	/** Loopback redirect URI; must match what the callback server listens on. */
 	redirectUrl?: string;
+	/**
+	 * Consent-screen handler. Supplied only by `mcp/auth-flow.ts`, i.e. only when
+	 * a human ran `/mcp-auth`. Absent everywhere else, which is what makes an
+	 * unattended authorization impossible rather than merely discouraged.
+	 */
+	onRedirect?: (authorizationUrl: URL) => void | Promise<void>;
 	now?: () => number;
 }
 
@@ -193,11 +197,14 @@ export class McpOAuthProvider implements OAuthClientProvider {
 	}
 
 	/**
-	 * Refused, always. Reaching here means the SDK wants a consent screen, which
-	 * is the user's job via `/mcp-auth`, not this process's.
+	 * Refused unless a human is driving. Reaching here without `onRedirect` means
+	 * something automated wants a consent screen, which is the user's job via
+	 * `/mcp-auth`, not this process's.
 	 */
-	redirectToAuthorization(_authorizationUrl: URL): never {
-		throw new McpAuthorizationRequiredError(this.#options.serverName);
+	async redirectToAuthorization(authorizationUrl: URL): Promise<void> {
+		const onRedirect = this.#options.onRedirect;
+		if (!onRedirect) throw new McpAuthorizationRequiredError(this.#options.serverName);
+		await onRedirect(authorizationUrl);
 	}
 
 	saveCodeVerifier(codeVerifier: string): void {
