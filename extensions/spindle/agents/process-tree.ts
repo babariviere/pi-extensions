@@ -34,11 +34,7 @@ export interface KillableChild {
  * makes the group kill throw; the direct kill is then the best available
  * teardown. Never throws.
  */
-export function signalProcessTree(
-	child: KillableChild,
-	signal: NodeJS.Signals,
-	deps: ProcessTreeDeps = {},
-): void {
+export function signalProcessTree(child: KillableChild, signal: NodeJS.Signals, deps: ProcessTreeDeps = {}): void {
 	const kill = deps.kill ?? ((pid: number, sig: NodeJS.Signals) => process.kill(pid, sig));
 	const pid = child.pid;
 	if (pid === undefined) return;

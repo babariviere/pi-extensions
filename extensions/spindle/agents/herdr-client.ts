@@ -16,7 +16,10 @@ import {
 	type HerdrTab,
 	type PaneAgentState,
 	findAgentStatus,
+	isAgentBlockedError,
 	isPaneBusyError,
+	isPromptStalledError,
+	isTimeoutError,
 	lastJsonLine,
 	parsePaneId,
 	parseTab,
@@ -149,12 +152,77 @@ export class HerdrClient {
 	/**
 	 * Submit a prompt to a live agent via `herdr agent prompt`. Uses bracketed
 	 * paste, so multi-line text is delivered as one clean user message. `target`
-	 * is a live agent name or the pane id hosting it. Returns after submission;
-	 * completion is awaited separately by the caller.
+	 * is a live agent name or the pane id hosting it.
+	 *
+	 * Submission is confirmed, not assumed: a bare `agent prompt` exits 0 as soon
+	 * as the text is sent, and when pi is still binding its input the trailing
+	 * submit key is swallowed as a newline — the task then sits in the composer
+	 * forever and the run dies at its timeout with no output. So we pass `--wait
+	 * --until working --until done`, which makes herdr report
+	 * `agent_prompt_stalled` when no state change follows the submission, and
+	 * repair that by replaying ONLY the submit key (re-sending the prompt would
+	 * duplicate the text that is already in the composer).
+	 *
+	 * A `--wait` timeout is NOT a stall: herdr only starts that wait after it has
+	 * observed a state change, so the input was accepted and the turn may already
+	 * have completed. Those resolve `ok` and let the completion machinery decide.
+	 * Returns after submission; completion is awaited separately by the caller.
 	 */
-	async promptAgent(target: string, text: string): Promise<{ ok: boolean; error?: string }> {
-		const res = await this.#transport.run(["agent", "prompt", target, text]);
-		return res.ok ? { ok: true } : { ok: false, error: res.error };
+	async promptAgent(
+		target: string,
+		text: string,
+		opts?: { waitMs?: number; retries?: number; signal?: AbortSignal },
+	): Promise<{ ok: boolean; error?: string }> {
+		const waitMs = opts?.waitMs ?? 15000;
+		const retries = opts?.retries ?? 2;
+		const res = await this.#transport.run(
+			[
+				"agent",
+				"prompt",
+				target,
+				text,
+				"--wait",
+				"--until",
+				"working",
+				"--until",
+				"done",
+				"--timeout",
+				String(waitMs),
+			],
+			waitMs + 5000,
+			opts?.signal,
+		);
+		if (res.ok) return { ok: true };
+		// Blocked: herdr never sent the text, so there is nothing to replay.
+		if (isAgentBlockedError(res.error)) return { ok: false, error: res.error };
+		// Accepted-but-unmatched (deadline hit after a state change): treat as sent.
+		if (isTimeoutError(res.error)) return { ok: true };
+		if (!isPromptStalledError(res.error)) return { ok: false, error: res.error };
+
+		let lastError = res.error;
+		for (let attempt = 0; attempt < retries && !opts?.signal?.aborted; attempt++) {
+			const state = await this.getPaneAgentState(target);
+			if (!state.exists) return { ok: false, error: `pane ${target} is gone` };
+			// The turn may have started between the stall report and this probe.
+			if (state.status === "working" || state.status === "done") return { ok: true };
+			await this.sendKeys(target, ["Enter"]);
+			const waited = await this.waitAgentStatus(target, ["working", "done"], waitMs, opts?.signal);
+			if (waited.kind === "reached") return { ok: true };
+			if (waited.kind === "gone") return { ok: false, error: `pane ${target} is gone` };
+			lastError = `the agent stayed idle after the submit key was replayed (${waited.kind})`;
+		}
+		return {
+			ok: false,
+			error: `the task was delivered to ${target} but no turn started after ${retries} submit retries (last herdr state: ${lastError ?? "agent_prompt_stalled"})`,
+		};
+	}
+
+	/**
+	 * Send raw key presses to an agent pane, e.g. replaying the submit key when a
+	 * prompt landed in the composer without starting a turn. Best-effort.
+	 */
+	async sendKeys(target: string, keys: string[]): Promise<void> {
+		await this.#transport.run(["agent", "send-keys", target, ...keys]);
 	}
 
 	/**
@@ -192,7 +260,7 @@ export class HerdrClient {
 		const res = await this.#transport.run(args, timeoutMs + 5000, signal);
 		if (res.ok) return { kind: "reached", status: findAgentStatus(lastJsonLine(res.stdout)) ?? statuses[0] };
 		const err = res.error ?? "";
-		if (/tim(e|ed)\s*out|timeout/i.test(err)) return { kind: "timeout" };
+		if (isTimeoutError(err)) return { kind: "timeout" };
 		// `agent_not_running` means no detected agent yet (startup) or its agent
 		// exited. The pane itself may still be alive, so callers must re-check pane
 		// existence before declaring the run dead.

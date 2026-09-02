@@ -27,7 +27,10 @@
  * Task delivery: `agent start` types its args into a shell and rejects
  * multi-line ones, so we start pi with flags only (all single-line) and then
  * submit the (multi-line) task with `herdr agent prompt`, which uses bracketed
- * paste to deliver it as one clean user message.
+ * paste to deliver it as one clean user message. Submission is confirmed rather
+ * than assumed (see `HerdrClient.promptAgent`): a swallowed submit key leaves
+ * the task sitting in the composer, so a stalled submission replays the key
+ * instead of reporting a running run that will never produce anything.
  *
  * Completion: each run races the transcript becoming stable against a blocking
  * `herdr agent wait` (idle-after-working, or pane gone) rather than polling, so
@@ -268,6 +271,7 @@ async function launchRun(p: PreparedRun, ctx: RunContext): Promise<SpawnedRun> {
 			...(p.req.cwd ? { workspacePath: p.req.cwd } : {}),
 			...(p.req.artifactsDir ? { artifactsDir: p.req.artifactsDir } : {}),
 		}),
+		{ ...(ctx.signal ? { signal: ctx.signal } : {}) },
 	);
 
 	ctx.onStatus?.(p.req.index, {

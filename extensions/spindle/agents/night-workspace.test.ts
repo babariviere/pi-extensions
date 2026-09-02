@@ -18,7 +18,10 @@ test("relocateWorkspacePaths points a declared file path at the surviving copy",
 		},
 		[workspace],
 	);
-	assert.equal(result.output, "Done.\nEvidence: file /night/sandboxes/repo.agents/agent-abc-0.artifacts/slack-pass.md");
+	assert.equal(
+		result.output,
+		"Done.\nEvidence: file /night/sandboxes/repo.agents/agent-abc-0.artifacts/slack-pass.md",
+	);
 	assert.equal(result.error, "could not read /night/sandboxes/repo.agents/agent-abc-0.artifacts/x.ts");
 });
 
