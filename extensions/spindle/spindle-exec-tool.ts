@@ -50,6 +50,7 @@ import { formatSpindleValue } from "./ui/structured.ts";
 import { countNewlines, truncateMiddle } from "./util.ts";
 import { prepareSpindleExecArguments, resolveSpindleExecStrings } from "./spindle-exec-arguments.ts";
 import { normalizeRunDisplay } from "./run-display.ts";
+import { typeErrorRecoveryHint } from "./type-error-guidance.ts";
 import { repairSpindleGuestCode } from "./runtime/guest-code-repair.ts";
 
 const RESULT_FORMATS = ["auto", "yaml", "json", "text"] as const;
@@ -647,8 +648,14 @@ export const createSpindleExecTool = (
 							error.line > 0 ? `Line ${error.line}:${error.column}: ${error.message}` : error.message,
 						)
 						.join("\n");
+					const recoveryHint = typeErrorRecoveryHint(code, result.typeErrors);
 					return {
-						content: [{ type: "text", text: `Type errors; code was not executed:\n${text}` }],
+						content: [
+							{
+								type: "text",
+								text: `Type errors; code was not executed:\n${text}${recoveryHint ? `\n\n${recoveryHint}` : ""}`,
+							},
+						],
 						details: persistedDetails,
 						isError: true,
 					};
