@@ -14,6 +14,7 @@
  * providers at call time.
  */
 import type { SpindleToolGate } from "../core/tool-allowlist.ts";
+import type { SpindleDynamicGuestDeclarations } from "../protocol.ts";
 
 export const GUEST_TYPE_DECLARATIONS = `
 type JsonPrimitive = string | number | boolean | null;
@@ -339,12 +340,32 @@ const restrictPiTools = (declarations: string, gate: SpindleToolGate): string =>
 	return members > 0 ? restricted : restricted.replace("declare const pi: PiToolsApi;\n", "");
 };
 
-export const guestTypeDeclarations = (fullCodeMode: boolean, gate?: SpindleToolGate): string => {
+const EXTENSIONS_LOOSE_DECLARATION = "declare const extensions: SpindleExtensionsApi;\n";
+
+const terminatedDeclaration = (block: string): string => (block.endsWith("\n") ? block : `${block}\n`);
+
+/**
+ * Swap the loose dynamic-surface declarations for schema-typed ones. Applied
+ * only when the loose anchor is still present: orchestration-only mode removes
+ * it, and a missing section keeps the loose surface (see
+ * runtime/dynamic-guest-types.ts).
+ */
+const applyDynamicDeclarations = (declarations: string, dynamic: SpindleDynamicGuestDeclarations): string =>
+	dynamic.extensions && declarations.includes(EXTENSIONS_LOOSE_DECLARATION)
+		? declarations.replace(EXTENSIONS_LOOSE_DECLARATION, terminatedDeclaration(dynamic.extensions))
+		: declarations;
+
+export const guestTypeDeclarations = (
+	fullCodeMode: boolean,
+	gate?: SpindleToolGate,
+	dynamic?: SpindleDynamicGuestDeclarations,
+): string => {
 	if (!fullCodeMode) {
 		return FULL_CODE_GLOBAL_DECLARATIONS.reduce(
 			(declarations, declaration) => declarations.replace(declaration, ""),
 			GUEST_TYPE_DECLARATIONS,
 		);
 	}
-	return gate?.restricted ? restrictPiTools(GUEST_TYPE_DECLARATIONS, gate) : GUEST_TYPE_DECLARATIONS;
+	const base = gate?.restricted ? restrictPiTools(GUEST_TYPE_DECLARATIONS, gate) : GUEST_TYPE_DECLARATIONS;
+	return dynamic ? applyDynamicDeclarations(base, dynamic) : base;
 };

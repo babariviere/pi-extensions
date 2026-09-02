@@ -11,6 +11,7 @@ import {
 	SPINDLE_NESTED_TOOL_CALL_ID_PREFIX,
 	type SpindleActionDescriptor,
 	type SpindleCapabilityCatalog,
+	type SpindleGuestTypeSources,
 	type SpindleInvocationActivityUpdate,
 	type SpindleInvocationContext,
 	type SpindleMediaBlock,
@@ -345,6 +346,24 @@ export class ActionRegistry {
 			complete: indexedActions === allActions.length,
 			reasons: indexedActions === allActions.length ? [] : ["action_limit"],
 		};
+	}
+
+	/**
+	 * Live descriptors for the dynamic guest surfaces, so the type gate can
+	 * reject argument-shape mistakes before the sandbox runs. Side-effect-free by
+	 * construction: only the captured extension catalog is read, and a provider
+	 * that cannot supply data contributes no section, leaving the loose
+	 * declarations in place for that execution.
+	 */
+	async guestTypeSources(context: SpindleInvocationContext): Promise<SpindleGuestTypeSources> {
+		const provider = this.#providers.get("extensions");
+		if (!provider) return {};
+		const descriptors = await provider.list({ limit: 1_000 }, context);
+		const extensionTools = descriptors.map((descriptor) => ({
+			name: descriptor.name,
+			inputSchema: descriptor.inputSchema,
+		}));
+		return extensionTools.length > 0 ? { extensionTools } : {};
 	}
 
 	async search(query: string, context: SpindleInvocationContext, limit = 30): Promise<ResolvedSpindleAction[]> {

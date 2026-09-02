@@ -34,6 +34,9 @@ let runtimeDependencies:
 			QuickJsRuntime: typeof import("./runtime/quickjs-runtime.ts").QuickJsRuntime;
 			typeCheckSpindleCode: typeof import("./runtime/type-checker.ts").typeCheckSpindleCode;
 			guestTypeDeclarations: typeof import("./runtime/guest-types.ts").guestTypeDeclarations;
+			buildDynamicGuestDeclarations: typeof import(
+				"./runtime/dynamic-guest-types.ts"
+			).buildDynamicGuestDeclarations;
 	  }>
 	| undefined;
 
@@ -42,10 +45,12 @@ const loadRuntimeDependencies = () =>
 		import("./runtime/quickjs-runtime.ts"),
 		import("./runtime/type-checker.ts"),
 		import("./runtime/guest-types.ts"),
-	]).then(([quickjs, checker, guest]) => ({
+		import("./runtime/dynamic-guest-types.ts"),
+	]).then(([quickjs, checker, guest, dynamicGuest]) => ({
 		QuickJsRuntime: quickjs.QuickJsRuntime,
 		typeCheckSpindleCode: checker.typeCheckSpindleCode,
 		guestTypeDeclarations: guest.guestTypeDeclarations,
+		buildDynamicGuestDeclarations: dynamicGuest.buildDynamicGuestDeclarations,
 	})));
 
 // Slack added on top of a blocking host call's own timeout so the call fails
@@ -119,9 +124,30 @@ export class SpindleExecutionService {
 		this.activity?.start(options.parentToolCallId, options.display);
 		const dependencies = await loadRuntimeDependencies();
 		const effectiveFullCodeMode = this.config.fullCodeMode;
+		// Schema-typed `extensions.*` declarations for this execution. Best effort:
+		// a provider that cannot describe itself leaves the loose declarations.
+		let guestTypeSources = {};
+		if (effectiveFullCodeMode) {
+			try {
+				guestTypeSources = await this.registry.guestTypeSources({
+					cwd: options.context.cwd,
+					signal: options.signal,
+					parentToolCallId: options.parentToolCallId,
+					nestedToolCallId: `${options.parentToolCallId}_types`,
+					extensionContext: options.context,
+					update: () => {},
+				});
+			} catch {
+				guestTypeSources = {};
+			}
+		}
 		const checked = dependencies.typeCheckSpindleCode(
 			options.code,
-			dependencies.guestTypeDeclarations(effectiveFullCodeMode, this.toolGate),
+			dependencies.guestTypeDeclarations(
+				effectiveFullCodeMode,
+				this.toolGate,
+				dependencies.buildDynamicGuestDeclarations(guestTypeSources),
+			),
 		);
 		if (checked.errors.length > 0) {
 			// The widget and trace must say *why* the program never ran, not just

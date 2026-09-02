@@ -89,6 +89,33 @@ export interface SpindleCapabilityCatalog {
 	reasons: string[];
 }
 
+/** One named action whose declared input schema can be rendered as a guest type. */
+export interface SpindleNamedActionTypeSource {
+	name: string;
+	inputSchema: Record<string, unknown>;
+}
+
+/**
+ * Live descriptor snapshot the registry hands to the guest declaration builder
+ * so dynamic surfaces get argument checking before the sandbox runs. Absent or
+ * empty sections keep the loose static declarations.
+ *
+ * `mcp` has no section on purpose: the bridge provider never pre-fetches a
+ * server's tool list (see providers/mcp-bridge-provider.ts), so there is no
+ * side-effect-free descriptor source to render.
+ */
+export interface SpindleGuestTypeSources {
+	extensionTools?: SpindleNamedActionTypeSource[];
+}
+
+/**
+ * Pre-rendered `declare const` blocks replacing the loose declaration lines.
+ * Values are full replacement text (helper interfaces + declare).
+ */
+export interface SpindleDynamicGuestDeclarations {
+	extensions?: string;
+}
+
 export interface SpindleProviderListRequest {
 	namespace?: string;
 	query?: string;
