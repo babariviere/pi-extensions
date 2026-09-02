@@ -41,10 +41,13 @@ export interface HostCallContext {
 	parentToolCallId: string;
 	/** Effective full-code mode; gates pi/extensions visibility in discovery. */
 	fullCodeMode: boolean;
-	/** Ordered workflow phase names. No guest API appends to this today. */
+	/** Ordered phase names, appended when a top-level fan-out span opens. */
 	phases: string[];
 	/** Live workflow span operations, keyed by the guest's span id. */
-	workflowSpans: Map<string, { kind: "parallel" | "pipeline"; operation: SpindleExecutionTraceOperationHandle }>;
+	workflowSpans: Map<
+		string,
+		{ kind: "parallel" | "pipeline"; operation: SpindleExecutionTraceOperationHandle; phaseId?: string }
+	>;
 	/** The registry-shaped invocation context (base context plus the call's signal). */
 	registryContext(signal: AbortSignal): SpindleInvocationContext & { signal: AbortSignal };
 	/** Progress line update (`spindle.$progress`, phase announcements). */
@@ -188,7 +191,31 @@ export const HOST_CALLS: readonly HostCall[] = [
 			}
 			if (ctx.workflowSpans.has(id)) throw new Error("Duplicate internal workflow span");
 			const operation = ctx.issueCall(`spindle.workflow.${kind}`, args);
-			ctx.workflowSpans.set(id, { kind, operation });
+			// A fan-out is the natural phase boundary, and opening a phase here is
+			// what makes the inferred items visible: `activity/store.ts` stamps
+			// every later item with `run.currentPhaseId`, and `ui/widget.ts`
+			// renders phase progress only when that id is set. Without a producer
+			// the whole existing render path stays dark.
+			//
+			// Only a top-level span opens one. A nested span (a wide Promise.all
+			// inside a mapLimit mapper) would otherwise close its own parent's
+			// phase, since store.phase() completes the previous one.
+			let phaseId: string | undefined;
+			if (ctx.workflowSpans.size === 0) {
+				const itemCount = typeof args.itemCount === "number" ? args.itemCount : undefined;
+				const name = itemCount !== undefined ? `fan-out \u00d7${itemCount}` : "fan-out";
+				// An explicit id keeps consecutive fan-outs distinct: store.phase()
+				// reuses a phase by name when no id is given.
+				const phase = ctx.activity?.phase(ctx.parentToolCallId, {
+					name,
+					id,
+					...(itemCount !== undefined ? { total: itemCount } : {}),
+				});
+				phaseId = phase?.id;
+				ctx.phases.push(name);
+				ctx.update(name);
+			}
+			ctx.workflowSpans.set(id, { kind, operation, ...(phaseId ? { phaseId } : {}) });
 			return undefined;
 		},
 	},

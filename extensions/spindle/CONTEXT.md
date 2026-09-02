@@ -120,6 +120,27 @@ Globals inside `spindle_exec`:
   or a conventional `path` / `file` / `id` / `name` key, else `#index`), and
   fan-outs narrower than 4 emit nothing at all. Flush failures are swallowed:
   progress must never mask the program's own outcome.
+
+  Items alone render nothing. The **only** consumer of `run.items` in the whole
+  UI is `phaseProgress()` in `ui/widget.ts`, which filters by `phaseId` and is
+  reached only when `run.currentPhaseId` is set; `currentPhaseId` is written
+  only by `activity/store.ts` `phase()`. Removing `workflow.phase` therefore
+  left that entire render path dark. `spindle.$spanStart` now opens a phase for
+  every **top-level** fan-out (`fan-out ×N`, `total` = the width, keyed by the
+  span id so consecutive fan-outs stay distinct), which makes the existing
+  renderers light up with **no edit to any parity-set file**: items inherit
+  `currentPhaseId` automatically at `store.ts:246`, and the `◆` chips in
+  `spindle-exec-tool.ts` read `ctx.phases`. A nested span (a wide `Promise.all`
+  inside a `mapLimit` mapper) deliberately opens no phase, because
+  `store.phase()` completes the previous phase and a child would otherwise
+  close its own parent's.
+
+  Known limitation: nothing completes the last phase early. `store.phase()`
+  closes the previous phase when the next one opens, and `store.finish()`
+  closes whatever is left, so a single-fan-out program shows its phase as
+  `running` until the program ends even though the counts are already final.
+  Fixing that needs a per-phase completion method on `activity/store.ts`, which
+  currently carries no hand edits.
 - `process` — minimal shim built from `env-snapshot.ts`: allowlisted `process.env` (HOME, USER, LOGNAME, SHELL, PWD, PATH, LANG, LC_*, TERM, TMPDIR, XDG_*), `process.platform` / `process.arch`, `process.cwd()`. No secret ever enters the guest.
 - `print`, `console`, `π` (named payloads; the `payloads` argument, legacy alias `strings`), `setTimeout` / `setInterval` / `clearTimeout` / `clearInterval`
 

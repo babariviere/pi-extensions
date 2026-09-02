@@ -175,7 +175,7 @@ export class SpindleExecutionService {
 		const phases: string[] = [];
 		const workflowSpans = new Map<
 			string,
-			{ kind: "parallel" | "pipeline"; operation: SpindleExecutionTraceOperationHandle }
+			{ kind: "parallel" | "pipeline"; operation: SpindleExecutionTraceOperationHandle; phaseId?: string }
 		>();
 		let agentCalls = 0;
 		const maxAgentCalls = Math.max(
