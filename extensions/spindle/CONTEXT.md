@@ -42,6 +42,51 @@ plus its wiring, and none pulls in a dropped subsystem.
 The `spindle_exec` named-payload argument is `payloads`; `strings` remains as a
 silently remapped legacy alias.
 
+## Upstream drift audit
+
+Audited 2026-09-02 against upstream `main` at `1a71fff54d9bfc03de4a8df925df15e65bc82392`
+(`0.76.2`). **380 commits** since the pinned commit. Recorded here so the
+"what is pi-fabric doing that we aren't" question is answered from this table
+instead of re-derived.
+
+The important correction: at the pin, upstream **already had** `actors/`,
+`mesh/`, `memory/`, `schema/`, `state/`, `prewalk/`, `topology/` and
+`compaction/`. Those are **trims** (see the removal sections below), not drift.
+Only three top-level subsystems are genuinely new since the pin.
+
+| New upstream subsystem | Upstream docs | What it is | Verdict here |
+|---|---|---|---|
+| `src/components/` | `docs/components.md`, `docs/component-calculus.md`, `docs/provider-component-calculus.md` | supervised third-party provider plugins: staged activation, provider generations, effect scopes, LIFO unwind, rolling replacement without host downtime | **skip** — solves live provider hot-swap for a long-running multi-tenant host. A single CLI session restarts the process |
+| `src/residency/` | `docs/residency-runtime.md` | resident host process so `agents.create({ residency: "durable" })` actors outlive the parent TUI, with ownership leases and adoption fencing | **skip** — a background process surviving session exit is a new failure and attack surface. `agents/` here is herdr-pane backed; an unattended run is a pane, not a daemon |
+| `src/speculation/` | `docs/speculation.md` | pre-launches literal read-only calls while the model is still streaming `code`, serves the cached result if the mutation epoch is still fresh | **the one worth revisiting.** Bounded blast radius (closed pure-read ref set, take-once serving) and a real latency win. Only port if `spindle_exec` startup latency is ever measured as a problem |
+
+Commit mix over the 250 commits the compare API returns (of 380; GitHub caps the
+range, so this is a sample, not the full history): 87 `chore`, 59 `fix`,
+46 `feat`, 12 `docs`, 7 `test`, 6 `refactor`, 2 `perf`. `feat` scopes cluster on
+`ui` (5), `prewalk` (5), `agents` (5), `components` (4), `capture` (4),
+`settings` (3), `core` (3) — i.e. mostly the dashboard, the component plane, and
+subsystems trimmed here. The `capture` and `core` work is the category most
+likely to contain further backport candidates; individual commits were not read.
+
+Where this fork is **ahead** of upstream: the whole `sandbox/` subsystem.
+Upstream has no filesystem guardrail at all, `pi.bash` there runs with full
+process rights, and its `node-process` / `bun-process` runtimes are documented
+as carrying no security boundary. `SpindleExecutorRuntime` is narrowed to the
+literal `"quickjs"` in `config.ts`, so there is no untyped or unsandboxed escape
+hatch to re-enable.
+
+External evidence weighed at the same time, for the record: the one independent
+benchmark ([r/PiCodingAgent Kaggle eval](https://www.reddit.com/r/PiCodingAgent/comments/1vjs5cs/testing_pirlm_and_pifabric_on_my_kaggle_eval/))
+had neither pi-fabric nor pi-rlm beating default Pi, with code mode scoring
+worse. The case for code mode itself rests on
+[Anthropic's code-execution-with-MCP](https://www.anthropic.com/engineering/code-execution-with-mcp)
+and [Cloudflare's Code Mode](https://blog.cloudflare.com/code-mode/), both of
+which argue for the single-programmable-tool shape this fork keeps, not for the
+orchestration layers it drops. [Cognition's "Don't Build Multi-Agents"](https://cognition.ai/blog/dont-build-multi-agents)
+is the standing argument against council and swarm fan-out: subagents handed a
+task string instead of the full parent trace make conflicting implicit
+decisions.
+
 ## Sandbox surface
 
 Globals inside `spindle_exec`:

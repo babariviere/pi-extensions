@@ -11,7 +11,7 @@ description: >-
 
 One type-checked TS program in a fresh isolated QuickJS sandbox. Only the `return` value reaches the model; `print()`/`console.log` go to the activity widget. `π` is not a tool.
 
-Available globals: `pi` and `extensions` (full code mode only), `mcp`, `agents`, `workflow`, `print`, `console`, `π`, `process`, and the bare aliases `parallel` / `pipeline` / `phase` / `log`. Nothing else exists — there is no `tools`, `memory`, `state`, `schema`, `compact`, `mesh`, `council`, `rlm`, `agent()`, or `budget`.
+Available globals: `pi`, `extensions`, and `tools` (full code mode only), `mcp`, `agents`, `workflow`, `print`, `console`, `π`, `process`, and the bare aliases `parallel` / `pipeline` / `phase` / `log`. Nothing else exists — there is no `memory`, `state`, `schema`, `compact`, `mesh`, `council`, `rlm`, `agent()`, or `budget`.
 
 `process` is a minimal shim: `process.env` is an allowlisted host snapshot (HOME, USER, LOGNAME, SHELL, PWD, PATH, LANG, LC_*, TERM, TMPDIR, XDG_*), `process.platform`/`process.arch` are host facts, and `process.cwd()` returns the session working directory. Sensitive variables are never exposed; for secrets in bash use the `<\\secret:NAME>` reference path.
 
