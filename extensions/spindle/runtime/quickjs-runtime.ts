@@ -137,6 +137,35 @@ const __normalizePiArgs = (name, args) => {
       }
     }
   }
+  // The declared batch shape uses the same short keys as the single-edit form
+  // ({ old, new }); pi core wants oldText/newText, and the alias table above
+  // only rewrites top-level keys.
+  if (name === "edit" && Array.isArray(out.edits)) {
+    let touched = false;
+    const edits = out.edits.map((entry) => {
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) return entry;
+      if (!("old" in entry) && !("new" in entry) && !("replacement" in entry)) return entry;
+      touched = true;
+      const mapped = Object.assign({}, entry);
+      if ("old" in mapped) {
+        if (!("oldText" in mapped)) mapped.oldText = mapped.old;
+        delete mapped.old;
+      }
+      if ("new" in mapped) {
+        if (!("newText" in mapped)) mapped.newText = mapped.new;
+        delete mapped.new;
+      }
+      if ("replacement" in mapped) {
+        if (!("newText" in mapped)) mapped.newText = mapped.replacement;
+        delete mapped.replacement;
+      }
+      return mapped;
+    });
+    if (touched) {
+      if (out === args) out = Object.assign({}, args);
+      out.edits = edits;
+    }
+  }
   if (name === "edit" && !Array.isArray(out.edits) && ("oldText" in out || "newText" in out)) {
     if (out === args) out = Object.assign({}, args);
     const edit = {};

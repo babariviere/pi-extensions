@@ -346,3 +346,21 @@ test("a wide Promise.all reports progress without the program asking", async () 
 		["#1", "#2", "#3", "#4", "#5"],
 	);
 });
+
+test("a batch edit accepts the same short keys as the single-edit form", async () => {
+	let received: Record<string, unknown> | undefined;
+	const result = await new QuickJsRuntime().execute(
+		"return await pi.edit({ path: '/x', edits: [{ old: 'a', new: 'b' }, { oldText: 'c', newText: 'd' }] });",
+		async (_ref, args) => {
+			received = args as Record<string, unknown>;
+			return { ok: true };
+		},
+		baseOptions,
+	);
+	assert.equal(result.terminationReason, "completed");
+	// The alias table only rewrites top-level keys, so entries are mapped too.
+	assert.deepEqual(received?.edits, [
+		{ oldText: "a", newText: "b" },
+		{ oldText: "c", newText: "d" },
+	]);
+});

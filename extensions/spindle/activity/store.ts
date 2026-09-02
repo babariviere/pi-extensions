@@ -234,6 +234,25 @@ export class SpindleActivityStore {
 		return structuredClone(phase);
 	}
 
+	/**
+	 * Mark one phase terminal without opening another. `phase()` only closes
+	 * the *previous* phase when a new one starts, and `finish()` closes whatever
+	 * is left at the end, so without this a single fan-out reads as `running`
+	 * long after its counts are final. `currentPhaseId` is deliberately left
+	 * pointing at the finished phase so the widget keeps rendering its totals.
+	 */
+	completePhase(runId: string, phaseId: string, success = true): void {
+		const run = this.#require(runId);
+		const phase = run.phases.find((candidate) => candidate.id === phaseId);
+		if (!phase || phase.status !== "running") return;
+		const now = Date.now();
+		phase.status = success ? "completed" : "failed";
+		phase.updatedAt = now;
+		phase.finishedAt = now;
+		run.updatedAt = now;
+		this.#emit();
+	}
+
 	upsertItem(runId: string, input: SpindleActivityItemInput): SpindleActivityItem {
 		const run = this.#require(runId);
 		const id = cleanId(input.id, `item-${run.items.length + 1}`);

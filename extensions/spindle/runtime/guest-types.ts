@@ -79,6 +79,13 @@ interface SpindleToolsApi {
   describe(args: { ref: string }): Promise<SpindleAction>;
   call(args: { ref: string; args?: Record<string, unknown> }): Promise<unknown>;
 }
+// NOTE: these declarations are compiler input, not prompt text. They are read
+// only by runtime/type-checker.ts and runtime/core-tool-properties.ts, and are
+// never sent to the model, so breadth here is free and costs no tokens. The
+// canonical, model-facing statement of the return-shape rule and the one
+// taught spelling per tool lives in FULL_CODE_GUIDANCE in index.ts. Keep the
+// unions here wide (every alias arg-normalization accepts) so an accepted call
+// never fails type checking; keep the guidance there narrow.
 // String-primary tools (read/bash/grep/find/ls) accept a bare string; the
 // runtime proxy coerces it to { <primaryField>: string }. Lets the model write
 // the natural form (pi.bash("ls")) instead of pi.bash({ command: "ls" }).

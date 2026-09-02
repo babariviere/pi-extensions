@@ -135,12 +135,25 @@ Globals inside `spindle_exec`:
   `store.phase()` completes the previous phase and a child would otherwise
   close its own parent's.
 
-  Known limitation: nothing completes the last phase early. `store.phase()`
-  closes the previous phase when the next one opens, and `store.finish()`
-  closes whatever is left, so a single-fan-out program shows its phase as
-  `running` until the program ends even though the counts are already final.
-  Fixing that needs a per-phase completion method on `activity/store.ts`, which
-  currently carries no hand edits.
+  `spindle.$spanEnd` closes the fan-out's phase through
+  `activity/store.ts` `completePhase()`, so a finished fan-out does not read as
+  `running` until the program ends. `currentPhaseId` is deliberately left
+  pointing at the finished phase, so the widget keeps rendering its final
+  totals rather than going blank. The same handler folds the fan-out's tally
+  into the phase name (`fan-out ×40 (38 ok, 2 failed)`), which the `◆` chips in
+  `spindle-exec-tool.ts` already render: no second surface was added for it.
+
+  A note on where the API is *taught*. `runtime/guest-types.ts` is compiler
+  input, not prompt text: it is read only by `runtime/type-checker.ts` and
+  `runtime/core-tool-properties.ts` and is never sent to the model. So breadth
+  there is free, and the unions should stay **wide** (every alias
+  `arg-normalization.ts` and `__piArgAliases` accept) so that an accepted call
+  never fails type checking. Narrowing them was tried and reverted: it bought
+  no tokens, and it forced 2769 / 2739 / 2353 into the advisory set in
+  `type-checker.ts`, which silently gave up type-level typo detection on every
+  `pi.*` argument. The single model-facing statement of the return-shape rule
+  and the one taught spelling per tool lives in `FULL_CODE_GUIDANCE` in
+  `index.ts`. Keep the declarations wide and the guidance narrow.
 - `process` — minimal shim built from `env-snapshot.ts`: allowlisted `process.env` (HOME, USER, LOGNAME, SHELL, PWD, PATH, LANG, LC_*, TERM, TMPDIR, XDG_*), `process.platform` / `process.arch`, `process.cwd()`. No secret ever enters the guest.
 - `print`, `console`, `π` (named payloads; the `payloads` argument, legacy alias `strings`), `setTimeout` / `setInterval` / `clearTimeout` / `clearInterval`
 
@@ -243,10 +256,14 @@ first two passes, then run `npm run fmt`.
 
 Also currently carrying no hand edits (same two mechanical rewrites only; not
 part of the guaranteed parity contract, but useful to know):
-`activity/{store,types}.ts`, `audit/index.ts`,
+`activity/types.ts`, `audit/index.ts`,
 `core/{call-preview,pi-tools,skill-dir,tool-result-proxy}.ts`,
 `providers/write-preview.ts`, `async-settlement.ts`,
 `config-migrations.ts`, `host-compatibility.ts`, `util.ts`.
+
+`activity/store.ts` **does carry one hand edit**: `completePhase()`, added so a
+finished fan-out can close its phase without waiting for the next phase or the
+end of the run.
 
 `runtime/type-checker.ts` **does carry hand edits**: `sourceMap: true` on the
 emit (consumed by `runtime/source-map.ts`), `transpileSpindleCode` returning

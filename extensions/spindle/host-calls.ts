@@ -46,7 +46,15 @@ export interface HostCallContext {
 	/** Live workflow span operations, keyed by the guest's span id. */
 	workflowSpans: Map<
 		string,
-		{ kind: "parallel" | "pipeline"; operation: SpindleExecutionTraceOperationHandle; phaseId?: string }
+		{
+			kind: "parallel" | "pipeline";
+			operation: SpindleExecutionTraceOperationHandle;
+			phaseId?: string;
+			/** Index into `phases`, so the chip can be rewritten with the outcome. */
+			phaseIndex?: number;
+			/** Latest status per item id, for the fan-out's ok/failed tally. */
+			itemStatus?: Map<string, string>;
+		}
 	>;
 	/** The registry-shaped invocation context (base context plus the call's signal). */
 	registryContext(signal: AbortSignal): SpindleInvocationContext & { signal: AbortSignal };
@@ -170,12 +178,16 @@ export const HOST_CALLS: readonly HostCall[] = [
 		handle: (args, ctx, signal) =>
 			ctx.traceAttempt("spindle.workflow.items", args, signal, () => {
 				const batch = Array.isArray(args.items) ? args.items : [];
+				const owner = [...ctx.workflowSpans.values()].find((span) => span.itemStatus !== undefined);
 				let applied = 0;
 				for (const entry of batch) {
 					if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
 					const input = entry as SpindleActivityItemInput;
 					if (typeof input.id !== "string" || typeof input.label !== "string") continue;
 					ctx.activity?.upsertItem(ctx.parentToolCallId, input);
+					// Only the top-level span carries a status map, so a nested fan-out's
+					// items are tallied against the fan-out the reader actually sees.
+					owner?.itemStatus?.set(input.id, String(input.status ?? "running"));
 					applied += 1;
 				}
 				return { applied };
@@ -201,6 +213,7 @@ export const HOST_CALLS: readonly HostCall[] = [
 			// inside a mapLimit mapper) would otherwise close its own parent's
 			// phase, since store.phase() completes the previous one.
 			let phaseId: string | undefined;
+			let phaseIndex: number | undefined;
 			if (ctx.workflowSpans.size === 0) {
 				const itemCount = typeof args.itemCount === "number" ? args.itemCount : undefined;
 				const name = itemCount !== undefined ? `fan-out \u00d7${itemCount}` : "fan-out";
@@ -212,10 +225,16 @@ export const HOST_CALLS: readonly HostCall[] = [
 					...(itemCount !== undefined ? { total: itemCount } : {}),
 				});
 				phaseId = phase?.id;
+				phaseIndex = ctx.phases.length;
 				ctx.phases.push(name);
 				ctx.update(name);
 			}
-			ctx.workflowSpans.set(id, { kind, operation, ...(phaseId ? { phaseId } : {}) });
+			ctx.workflowSpans.set(id, {
+				kind,
+				operation,
+				...(phaseId ? { phaseId } : {}),
+				...(phaseIndex !== undefined ? { phaseIndex, itemStatus: new Map<string, string>() } : {}),
+			});
 			return undefined;
 		},
 	},
@@ -226,6 +245,25 @@ export const HOST_CALLS: readonly HostCall[] = [
 			const span = ctx.workflowSpans.get(id);
 			if (!span) throw new Error("Unknown internal workflow span");
 			ctx.workflowSpans.delete(id);
+			// Close the fan-out's phase as soon as the fan-out is done, rather than
+			// waiting for the next phase or the end of the run.
+			if (span.phaseId) {
+				ctx.activity?.completePhase(ctx.parentToolCallId, span.phaseId, args.outcome === "succeeded");
+			}
+			// Fold the tally into the phase chip the tool result already renders,
+			// rather than adding a second surface for it.
+			if (span.phaseIndex !== undefined && span.itemStatus) {
+				let ok = 0;
+				let failed = 0;
+				for (const status of span.itemStatus.values()) {
+					if (status === "completed") ok += 1;
+					else if (status === "failed") failed += 1;
+				}
+				const base = ctx.phases[span.phaseIndex];
+				if (base && ok + failed > 0) {
+					ctx.phases[span.phaseIndex] = failed > 0 ? `${base} (${ok} ok, ${failed} failed)` : `${base} (${ok} ok)`;
+				}
+			}
 			if (args.outcome === "succeeded") span.operation.succeed(undefined);
 			else {
 				span.operation.fail(

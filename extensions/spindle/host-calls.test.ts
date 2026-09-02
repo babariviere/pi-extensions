@@ -114,3 +114,72 @@ test("a span with no item count still names a phase", async () => {
 	assert.equal(run.phases[0]!.name, "fan-out");
 	assert.equal(run.phases[0]!.total, undefined);
 });
+
+const endSpan = async (context: HostCallContext, id: string, outcome: "succeeded" | "failed") =>
+	handlerFor("spindle.$spanEnd")({ id, outcome }, context, undefined as never);
+
+test("a finished fan-out completes its phase instead of waiting for the run", async () => {
+	const store = new SpindleActivityStore();
+	const { context } = contextWith(store);
+	await startSpan(context, "span-0", 4);
+	const phaseId = store.get(RUN_ID)!.currentPhaseId!;
+	await endSpan(context, "span-0", "succeeded");
+
+	const run = store.get(RUN_ID)!;
+	assert.equal(run.phases[0]!.status, "completed");
+	assert.ok(run.phases[0]!.finishedAt);
+	// Left pointing at the finished phase so the widget keeps its totals.
+	assert.equal(run.currentPhaseId, phaseId);
+});
+
+test("a failed fan-out marks its phase failed", async () => {
+	const store = new SpindleActivityStore();
+	const { context } = contextWith(store);
+	await startSpan(context, "span-0", 4);
+	await endSpan(context, "span-0", "failed");
+	assert.equal(store.get(RUN_ID)!.phases[0]!.status, "failed");
+});
+
+test("the phase chip carries the fan-out tally", async () => {
+	const store = new SpindleActivityStore();
+	const { context } = contextWith(store);
+	await startSpan(context, "span-0", 4);
+	await sendItems(context, [
+		{ id: "span-0-0", label: "a", status: "running", total: 4 },
+		{ id: "span-0-1", label: "b", status: "running", total: 4 },
+	]);
+	// A later transition for the same id replaces the earlier one.
+	await sendItems(context, [
+		{ id: "span-0-0", label: "a", status: "completed", total: 4 },
+		{ id: "span-0-1", label: "b", status: "failed", total: 4 },
+		{ id: "span-0-2", label: "c", status: "completed", total: 4 },
+	]);
+	await endSpan(context, "span-0", "failed");
+
+	assert.deepEqual(context.phases, ["fan-out \u00d74 (2 ok, 1 failed)"]);
+});
+
+test("a clean fan-out reports only its successes", async () => {
+	const store = new SpindleActivityStore();
+	const { context } = contextWith(store);
+	await startSpan(context, "span-0", 4);
+	await sendItems(context, [
+		{ id: "span-0-0", label: "a", status: "completed", total: 4 },
+		{ id: "span-0-1", label: "b", status: "completed", total: 4 },
+	]);
+	await endSpan(context, "span-0", "succeeded");
+	assert.deepEqual(context.phases, ["fan-out \u00d74 (2 ok)"]);
+});
+
+test("a nested fan-out's items are tallied against the visible fan-out", async () => {
+	const store = new SpindleActivityStore();
+	const { context } = contextWith(store);
+	await startSpan(context, "span-outer", 4);
+	await startSpan(context, "span-inner", 8);
+	await sendItems(context, [{ id: "span-inner-0", label: "n", status: "completed", total: 8 }]);
+	await endSpan(context, "span-inner", "succeeded");
+	await endSpan(context, "span-outer", "succeeded");
+
+	// One chip, and the nested completion counted toward it.
+	assert.deepEqual(context.phases, ["fan-out \u00d74 (1 ok)"]);
+});
