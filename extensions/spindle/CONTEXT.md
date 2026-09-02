@@ -98,6 +98,33 @@ Globals inside `spindle_exec`:
 - `tools.*` — cross-provider discovery and generic dispatch (full code mode only): `providers` / `catalog` / `list` / `search` / `describe` / `call` over every registered provider
 - `mcp.*` — MCP tools through the `pi-mcp-adapter` `mcp` gateway tool, via `providers/mcp-bridge-provider.ts`
 - `agents.*` — custom markdown subagents, via `providers/agents-provider.ts` + `agents/`
+- Host APIs, via `runtime/guest-polyfills.ts`: `TextEncoder`/`TextDecoder`,
+  `URL`/`URLSearchParams`, `atob`/`btoa`, `structuredClone`, `crypto`
+  (`getRandomValues`/`randomUUID` only), `queueMicrotask`, `performance`, and
+  `AbortController`/`AbortSignal`. The engine ships none of these, so each is
+  guest source injected only when the program text mentions it. There is
+  deliberately no `fetch`, `crypto.subtle` or `WebAssembly`: they are
+  capabilities rather than conveniences, and the host-call table (behind the
+  filesystem sandbox and the MCP read-only policy) has to remain the only route
+  out of the sandbox.
+
+  `Intl` and `Atomics` are absent and unfixable by lib choice, since `lib.es5`
+  declares both. They are replaced by objects that throw a named
+  `NotSupportedError`, and the `toLocaleString` family throws when handed a
+  locale rather than silently ignoring it, because the engine is built without
+  ICU and a wrong answer that looks right is worse than no answer.
+
+  A signal passed to a host call is not just a local promise race: the runtime
+  tags the call with a guest-generated id, gives it its own host-side
+  `AbortController` chained to the program-wide one, and an abort sends
+  `spindle.$cancel` back through the bridge, so the in-flight work is really
+  cancelled and its siblings are not. `mapLimit` takes a signal too and stops
+  launching further items.
+
+  The language level is ES2025, matching what the engine actually implements
+  (see `runtime/engine-lib.test.ts`); the declared `lib` was ES2022 while the
+  engine was already ahead, which did not make the newer APIs unavailable, only
+  untyped, since TS2339 is filtered.
 - `mapLimit(items, fn, N)` — bounded-concurrency fan-out, the one concurrency
   primitive `Promise.all` cannot express (its inputs have already started, so it
   can never cap width). A bare global: there is no `workflow` namespace.
@@ -382,6 +409,12 @@ risk/approval hunks by hand.
 | `runtime/guest-host-refs.test.ts` | The guest/host ref contract: runs a probe program through a real sandbox with a recording bridge, asserts every emitted ref is handled and every static `spindle.$*` table entry is reachable, and that no `fabric.$` names survive a port. |
 | `execution-service.test.ts` | Headless execution-service tests over a stub-provider registry: type errors, extension calls, discovery dispatch, phases, agent budget, and source-mapped runtime errors. |
 | `runtime/quickjs-runtime.test.ts` | Runtime integration tests: host-call marshalling and rejection, concurrency, logs and truncation, deadline, abort (pre-start and mid-host-call), memory limit, timers, `π` strings, `process` shim, and error-position mapping. |
+| `runtime/guest-polyfills.ts` | The host APIs the engine does not ship, as guest source: `TextEncoder`/`TextDecoder`, `URL`/`URLSearchParams`, `atob`/`btoa`, `structuredClone`, `crypto`, `queueMicrotask`, `performance`, `AbortController`, and the loud-failure guard for the absent `Intl`/`Atomics`. Each polyfill declares the identifiers that imply it and is injected only when the program text mentions one, because `newContext()` runs per `execute()` call and every byte would otherwise be re-parsed on every invocation. Deliberately no `fetch`, `crypto.subtle` or `WebAssembly`: those are capabilities, and the audited host-call table has to stay the only route out. Must be kept in step with the declarations in `runtime/guest-types.ts`, since these globals are not in `lib.es2025` and TS2304 is not filtered. |
+| `runtime/guest-baseline.test.ts` | Locks the engine baseline. The pinned variant is bellard/quickjs `2025-09-13+f1139494` (`@jitl/quickjs-singlefile-mjs-release-sync@0.32.0`: release, sync, singlefile), whose global surface is not covered by the package's semver, so a `quickjs-emscripten-core` bump can add or remove intrinsics silently. Pins `globalThis`, asserts the ES2024/ES2025 features the engine does implement, and asserts the absences the polyfill layer covers. |
+| `runtime/engine-lib.test.ts` | Guards the type-checker `lib` tier against that baseline from both sides: the ES2025 APIs the engine has must resolve to real signatures, and the ones it lacks (`Array.fromAsync`, `JSON.rawJSON`) must stay untyped so the tier cannot creep to `esnext`. Discriminates on arity (TS2554, unfiltered) rather than property existence, because TS2339 is filtered and so cannot tell "typed" from `any`. |
+| `runtime/guest-polyfills.test.ts` | Behavioural tests for the polyfill layer, plus the conditional-injection contract (a program that mentions nothing gets nothing). |
+| `runtime/guest-abort.test.ts` | Cancellation end to end: the `AbortController` shape, that a signal never reaches a tool's argument schema, that aborting one call really aborts the host work and leaves its siblings running, and that `mapLimit` stops launching items. |
+| `runtime/guest-intl.test.ts` | That the absent locale APIs fail loudly: `Intl`/`Atomics` name the missing property, a locale argument to `toLocaleString` throws instead of being ignored, and the same methods still work without one. |
 | `sandbox/policy.ts` | Pure filesystem policy: modes, writable roots, deny patterns, and the config object `@anthropic-ai/sandbox-runtime` expects. |
 | `sandbox/manager.ts` | Runtime plumbing: loading `srt`, initializing it for a policy, and the late-bound `bash` operations (supervised by `sandbox/supervised-spawn.ts`). |
 | `sandbox/supervised-spawn.ts` | The one supervised process-tree spawn: detached process group, kill-tree on timeout/abort, stdin piping, and the `timeout:<seconds>` / `aborted` error contract, behind one small interface. Two adapters ride on it: the OS-sandbox wrap (`sandbox/manager.ts`) and the `pi.bash` stdin extras (`providers/spindle-bash-tool.ts`), which previously carried two private copies of these mechanics. |
