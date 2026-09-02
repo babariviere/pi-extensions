@@ -1,6 +1,7 @@
 import releaseSyncVariant from "@jitl/quickjs-singlefile-mjs-release-sync";
 import { newQuickJSWASMModuleFromVariant } from "quickjs-emscripten-core";
 import { runAbortable, settleWithin } from "../async-settlement.ts";
+import { piBashExitMetadata } from "../core/pi-bash-error.ts";
 import { mapGuestErrorText, parseGuestSourceMap, type GuestSourceMap } from "./source-map.ts";
 import { transpileSpindleCode } from "./type-checker.ts";
 
@@ -169,7 +170,20 @@ globalThis.pi = new Proxy({}, {
       const call = __call("pi." + name, __normalizePiArgs(name, args));
       if (!settle) return call;
       return call.catch((error) => {
-        const message = error instanceof Error ? error.message : String(error);
+        const message = typeof error?.message === "string" ? error.message : String(error);
+        const exit = error && error.__spindleBashExit;
+        if (exit && Number.isSafeInteger(exit.exitCode) && exit.exitCode > 0 &&
+            typeof exit.output === "string") {
+          return {
+            ok: false,
+            output: exit.output,
+            details: null,
+            exitCode: exit.exitCode,
+            error: message,
+          };
+        }
+        // Fallback for a bash result that never reached the classifier (an
+        // extension-owned override, for example).
         const match = /(?:^|\\n\\n)Command exited with code (\\d+)$/.exec(message);
         if (!match) throw error;
         return {
@@ -617,6 +631,14 @@ export class QuickJsRuntime {
 					.catch((error) => {
 						if (closing || promise.alive === false) return;
 						const errorHandle = context.newError(error instanceof Error ? error.message : String(error));
+						// A classified bash exit crosses as structured metadata so the guest
+						// settle envelope never depends on the rendered error text.
+						const exit = reference === "pi.bash" ? piBashExitMetadata(error) : undefined;
+						if (exit) {
+							const metadata = jsonHandle(context, jsonObject, jsonParse, exit);
+							context.setProp(errorHandle, "__spindleBashExit", metadata);
+							metadata.dispose();
+						}
 						promise.reject(errorHandle);
 						errorHandle.dispose();
 					})

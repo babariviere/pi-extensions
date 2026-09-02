@@ -13,6 +13,7 @@ import {
 import { isAbsolute, resolve } from "node:path";
 import { createSpindleBashToolDefinition } from "./spindle-bash-tool.ts";
 import { runAbortable, throwIfAborted } from "../async-settlement.ts";
+import { classifyPiBashError, piBashResultError } from "../core/pi-bash-error.ts";
 import { CapturedToolCatalog } from "../capture/catalog.ts";
 import { PI_CORE_TOOL_NAMES, type PiCoreToolName } from "../core/pi-tools.ts";
 import { SpindleToolGate } from "../core/tool-allowlist.ts";
@@ -329,7 +330,9 @@ export class PiToolsProvider implements SpindleProvider {
 				),
 			)) as PiToolResult;
 		} catch (error) {
-			thrown = error;
+			// Classify an ordinary bash exit here, before any tool_result middleware
+			// can rewrite the message the settle envelope is derived from.
+			thrown = name === "bash" ? classifyPiBashError(error) : error;
 			isError = true;
 			result = {
 				content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }],
@@ -382,6 +385,9 @@ export class PiToolsProvider implements SpindleProvider {
 
 		if (isError) {
 			const text = textContent(result.content).trim();
+			// bash keeps its classified exit status across middleware so settle:true
+			// still yields an { ok: false, exitCode } envelope in the sandbox.
+			if (name === "bash") throw piBashResultError(thrown, text);
 			throw new Error(text || (thrown instanceof Error ? thrown.message : `Pi tool ${name} failed`));
 		}
 		this.#attachPreview(name, result, args, context);

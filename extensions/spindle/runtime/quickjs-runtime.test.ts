@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
+import { classifyPiBashError, piBashResultError } from "../core/pi-bash-error.ts";
 import { QuickJsRuntime } from "./quickjs-runtime.ts";
 
 const unexpectedHostCall = async () => {
@@ -217,4 +218,38 @@ test("unbounded guest recursion raises a guest error instead of crashing the hos
 	);
 	assert.equal(result.terminationReason, "completed");
 	assert.match(String(result.value), /stack/i);
+});
+
+test("a classified bash exit settles through the host bridge", async () => {
+	const runtime = new QuickJsRuntime();
+	const result = await runtime.execute(
+		"return await pi.bash({ command: 'exit 3', settle: true });",
+		async () => {
+			throw classifyPiBashError(new Error("boom\n\nCommand exited with code 3"));
+		},
+		baseOptions,
+	);
+	assert.equal(result.terminationReason, "completed");
+	assert.deepEqual(result.value, {
+		ok: false,
+		output: "boom",
+		details: null,
+		exitCode: 3,
+		error: "boom\n\nCommand exited with code 3",
+	});
+});
+
+test("a settled bash exit survives a rewritten error message", async () => {
+	const runtime = new QuickJsRuntime();
+	const result = await runtime.execute(
+		"const r = await pi.bash({ command: 'exit 7', settle: true }); return [r.exitCode, r.output, r.error].join('|');",
+		async () => {
+			// The classified exit crosses the bridge even though middleware replaced
+			// the text the old message-parsing path depended on.
+			const classified = classifyPiBashError(new Error("boom\n\nCommand exited with code 7"));
+			throw piBashResultError(classified, "[redacted by middleware]");
+		},
+		baseOptions,
+	);
+	assert.equal(result.value, "7|[redacted by middleware]|[redacted by middleware]");
 });
