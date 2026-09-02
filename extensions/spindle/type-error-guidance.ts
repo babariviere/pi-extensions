@@ -20,8 +20,10 @@ const PI_CALL_PATTERN = /\bpi\.(\w+)\s*\(/g;
 
 // spindle_exec envelope arguments that are commonly misplaced inside `code`.
 const SPINDLE_EXEC_ARGUMENT_NOTES: Readonly<Record<string, string>> = {
+	payloads:
+		"named `payloads` belong in the outer `spindle_exec` arguments, then become available inside `code` as `\u03c0.key`.",
 	strings:
-		"named `strings` belong in the outer `spindle_exec` arguments, then become available inside `code` as `\u03c0.key`.",
+		"`strings` is the legacy alias for outer `payloads`; named values belong in the outer `spindle_exec` arguments, then become available inside `code` as `\u03c0.key`.",
 	agentBudget: "`agentBudget` belongs to the outer `spindle_exec` call, not inside `code`.",
 	timeoutMs: "`timeoutMs` belongs to the outer `spindle_exec` call, not inside `code`.",
 	display: "the `display` objective belongs to the outer `spindle_exec` call, not inside `code`.",

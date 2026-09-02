@@ -48,7 +48,7 @@ import { HiddenRowBorrowingComponent, observeResultRows, type ResultRowBalance }
 import { type SpinnerTimerState, updateSpinner } from "./ui/spinner.ts";
 import { formatSpindleValue } from "./ui/structured.ts";
 import { countNewlines, truncateMiddle } from "./util.ts";
-import { prepareSpindleExecArguments, resolveSpindleExecStrings } from "./spindle-exec-arguments.ts";
+import { prepareSpindleExecArguments, resolveSpindleExecPayloads } from "./spindle-exec-arguments.ts";
 import { normalizeRunDisplay } from "./run-display.ts";
 import { typeErrorRecoveryHint } from "./type-error-guidance.ts";
 import { formatFailureProgress } from "./failure-progress.ts";
@@ -85,7 +85,7 @@ export const createSpindleExecTool = (
 			promptSnippet: "Pi core tools, extension tools, MCP, and custom subagents",
 			promptGuidelines: [
 				"Batch independent operations in one `spindle_exec` program, not one call per tool; keep dependent/conditional steps sequential. Use `Promise.all` for a few independent calls; reach for `workflow.parallel(items, fn, N)` when fanning out over many items (cap concurrency with N), and `workflow.pipeline(items, ...stages)` for repeated read->transform->write stages. Return only the compact final value; intermediate results stay in the sandbox.",
-				"Awkward payloads MUST go through `strings` and be read as `π.key`, never inlined in `code`: multi-line file content, JSON blobs, long prose, and strings with literal `${...}`. Inlining multi-line content nests it through three escape layers and the model emits literal `\\n`, corrupting the file; template literals also interpolate `${...}`. E.g. `strings: { body }` then `pi.write({ path, content: π.body })`; JSON-encode data and `JSON.parse(π.key)`.",
+				"Awkward payloads MUST go through `payloads` and be read as `π.key`, never inlined in `code`: multi-line file content, JSON blobs, long prose, and strings with literal `${...}`. Inlining multi-line content nests it through three escape layers and the model emits literal `\\n`, corrupting the file; template literals also interpolate `${...}`. E.g. `payloads: { body }` then `pi.write({ path, content: π.body })`; JSON-encode data and `JSON.parse(π.key)`.",
 				"`process.env` exposes an allowlisted host environment (HOME, USER, SHELL, PWD, PATH, LANG, LC_*, TERM, TMPDIR, XDG_*); sensitive variables are never exposed. `pi.bash` accepts per-call `cwd` (absolute working directory), `env` (merged over the shell environment), and `stdin` (text piped to the command) — e.g. `pi.bash({ command: 'ssh host bash -s', stdin: π.script })` runs a multiline remote script without quoting tricks.",
 			],
 			// The model-facing schema is intentionally flat: one large `code` string
@@ -101,10 +101,15 @@ export const createSpindleExecTool = (
 					description:
 						"TypeScript function body. Top-level await and return are supported. Globals include `mcp`, `agents`, `workflow`, `print`, `π`, and `process` (allowlisted `process.env`, `process.cwd()`); full-code mode adds `pi` and `extensions`. `pi.bash` also takes `cwd`, `env`, and `stdin`. See session guidance / `spindle-exec` skill for exact signatures.",
 				}),
-				strings: Type.Optional(
+				payloads: Type.Optional(
 					Type.Record(Type.String(), Type.String(), {
 						description:
-							"Named strings exposed as π.key. Use for any awkward payload: multi-line file content, JSON blobs, long prose, and strings with literal ${...}. JSON-encode structured data and JSON.parse(π.key) in the sandbox.",
+							"Named payloads exposed as π.key. Use for any awkward payload: multi-line file content, JSON blobs, long prose, and strings with literal ${...}. JSON-encode structured data and JSON.parse(π.key) in the sandbox. Legacy alias: strings.",
+					}),
+				),
+				strings: Type.Optional(
+					Type.Record(Type.String(), Type.String(), {
+						description: "Legacy alias for payloads; prefer payloads.",
 					}),
 				),
 				resultFormat: Type.Optional(Type.Union(RESULT_FORMATS.map((value) => Type.Literal(value)))),
@@ -158,7 +163,7 @@ export const createSpindleExecTool = (
 					: renderSpindleWriteArgumentPreview(
 							{
 								bindings: rendererState.spindleWriteBindings ?? [],
-								strings: resolveSpindleExecStrings(params),
+								strings: resolveSpindleExecPayloads(params),
 								expanded: context.expanded,
 								cwd: context.cwd,
 								settings: codePreviewSettings,
@@ -598,7 +603,7 @@ export const createSpindleExecTool = (
 				// the same coercions here for direct internal invocations.
 				const joined = Array.isArray(params.code) ? params.code.join("\n") : params.code;
 				const code = repairSpindleGuestCode(joined);
-				const strings = resolveSpindleExecStrings(params);
+				const strings = resolveSpindleExecPayloads(params);
 				const runDisplay = normalizeRunDisplay(params.display);
 				const result = await state.execution.execute({
 					code,

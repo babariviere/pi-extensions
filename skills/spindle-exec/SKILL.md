@@ -2,7 +2,7 @@
 name: spindle-exec
 description: >-
   Reference for `spindle_exec` TypeScript programs: Pi core tool signatures,
-  extension/MCP/subagent namespaces, workflow helpers, named strings, return
+  extension/MCP/subagent namespaces, workflow helpers, named payloads, return
   shapes, and error recovery. Load before the first `spindle_exec` call or after an
   argument-shape error.
 ---
@@ -41,16 +41,16 @@ Aliases (normalized to canonical before the host validates args): `cmd`/`shell`/
 
 Env values and stdin are redacted from recorded surfaces (audits, previews, session files); the live command still receives them.
 
-When a program needs a string containing literal `${...}` (shell snippets, tool arguments, or grep patterns), do not use a TypeScript template literal: TypeScript will interpolate it. Use a plain quoted string or pass the content through the `strings` parameter and read it from `π.key`.
+When a program needs a string containing literal `${...}` (shell snippets, tool arguments, or grep patterns), do not use a TypeScript template literal: TypeScript will interpolate it. Use a plain quoted string or pass the content through the `payloads` parameter and read it from `π.key`.
 
-### Awkward payloads — always use `strings`/`π`
+### Awkward payloads — always use `payloads`/`π`
 
-MUST pass through `strings` and read as `π.key`, never inline in `code`: multi-line file content (writes, edits, heredocs), JSON blobs, long prose (agent prompts, task text), and strings with literal `${...}`.
+MUST pass through `payloads` and read as `π.key`, never inline in `code`: multi-line file content (writes, edits, heredocs), JSON blobs, long prose (agent prompts, task text), and strings with literal `${...}`.
 
-Inlining multi-line content nests it through three escape layers (file → JS `"..."` → JSON `code`); at that depth the model emits literal `\n`/`\t` instead of newlines, silently corrupting the file. Template literals also interpolate `${...}` you meant to keep literal. `strings` values cross only one JSON boundary and survive intact.
+Inlining multi-line content nests it through three escape layers (file → JS `"..."` → JSON `code`); at that depth the model emits literal `\n`/`\t` instead of newlines, silently corrupting the file. Template literals also interpolate `${...}` you meant to keep literal. `payloads` values cross only one JSON boundary and survive intact.
 
 ```ts
-// strings: { body: "line1\nline2", panel: '[{"model":"..."}]', task: "analyze ..." }
+// payloads: { body: "line1\nline2", panel: '[{"model":"..."}]', task: "analyze ..." }
 await pi.write({ path: "/x.ts", content: π.body });
 await pi.edit({ path: "/y.ts", oldText: π.oldChunk, newText: π.newChunk });
 const panel = JSON.parse(π.panel) as Array<{ model: string }>;

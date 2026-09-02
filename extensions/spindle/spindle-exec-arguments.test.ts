@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { prepareSpindleExecArguments, resolveSpindleExecStrings } from "./spindle-exec-arguments.ts";
+import { prepareSpindleExecArguments, resolveSpindleExecPayloads } from "./spindle-exec-arguments.ts";
 import { repairSpindleGuestCode } from "./runtime/guest-code-repair.ts";
 
 test("a code array joins into one program", () => {
@@ -9,28 +9,37 @@ test("a code array joins into one program", () => {
 	assert.equal(prepared.code, "const a = 1;\nreturn a;");
 });
 
-test("a JSON-encoded strings map parses back to a record", () => {
+test("a JSON-encoded payload map parses back to a record", () => {
 	const prepared = prepareSpindleExecArguments({
 		code: "return 1;",
-		strings: JSON.stringify({ body: "line\nline" }),
-	}) as { strings: Record<string, string> };
-	assert.deepEqual(prepared.strings, { body: "line\nline" });
+		payloads: JSON.stringify({ body: "line\nline" }),
+	}) as { payloads: Record<string, string> };
+	assert.deepEqual(prepared.payloads, { body: "line\nline" });
 });
 
-test("a double-encoded strings map parses back to a record", () => {
-	const prepared = prepareSpindleExecArguments({
-		code: "return 1;",
-		strings: JSON.stringify(JSON.stringify({ body: "x" })),
-	}) as { strings: Record<string, string> };
-	assert.deepEqual(prepared.strings, { body: "x" });
-});
-
-test("nullish optionals are dropped", () => {
-	const prepared = prepareSpindleExecArguments({ code: "return 1;", strings: null, display: null }) as Record<
+test("the legacy strings alias is remapped to payloads", () => {
+	const prepared = prepareSpindleExecArguments({ code: "return 1;", strings: { body: "x" } }) as Record<
 		string,
 		unknown
 	>;
+	assert.deepEqual(prepared.payloads, { body: "x" });
 	assert.equal(Object.hasOwn(prepared, "strings"), false);
+});
+
+test("a double-encoded payload map parses back to a record", () => {
+	const prepared = prepareSpindleExecArguments({
+		code: "return 1;",
+		payloads: JSON.stringify(JSON.stringify({ body: "x" })),
+	}) as { payloads: Record<string, string> };
+	assert.deepEqual(prepared.payloads, { body: "x" });
+});
+
+test("nullish optionals are dropped", () => {
+	const prepared = prepareSpindleExecArguments({ code: "return 1;", payloads: null, display: null }) as Record<
+		string,
+		unknown
+	>;
+	assert.equal(Object.hasOwn(prepared, "payloads"), false);
 	assert.equal(Object.hasOwn(prepared, "display"), false);
 });
 
@@ -54,8 +63,9 @@ test("already quoted arguments are left alone", () => {
 	assert.equal(repairSpindleGuestCode(code), code);
 });
 
-test("resolveSpindleExecStrings accepts records and JSON strings", () => {
-	assert.deepEqual(resolveSpindleExecStrings({ strings: { a: "b" } }), { a: "b" });
-	assert.deepEqual(resolveSpindleExecStrings({ strings: '{"a":"b"}' }), { a: "b" });
-	assert.equal(resolveSpindleExecStrings({ strings: 42 }), undefined);
+test("resolveSpindleExecPayloads accepts records, JSON strings, and the alias", () => {
+	assert.deepEqual(resolveSpindleExecPayloads({ payloads: { a: "b" } }), { a: "b" });
+	assert.deepEqual(resolveSpindleExecPayloads({ payloads: '{"a":"b"}' }), { a: "b" });
+	assert.deepEqual(resolveSpindleExecPayloads({ strings: { a: "b" } }), { a: "b" });
+	assert.equal(resolveSpindleExecPayloads({ payloads: 42 }), undefined);
 });

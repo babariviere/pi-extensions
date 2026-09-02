@@ -9,7 +9,7 @@
 import { normalizeRunDisplay } from "./run-display.ts";
 import { repairSpindleGuestCode } from "./runtime/guest-code-repair.ts";
 
-const OPTIONAL_SPINDLE_EXEC_KEYS = ["strings", "resultFormat", "agentBudget", "timeoutMs", "display"] as const;
+const OPTIONAL_SPINDLE_EXEC_KEYS = ["payloads", "strings", "resultFormat", "agentBudget", "timeoutMs", "display"] as const;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
 	typeof value === "object" && value !== null && !Array.isArray(value);
@@ -43,7 +43,8 @@ const asStringRecord = (record: Record<string, unknown>): Record<string, string>
 // Silent repair for the named-payload map. The declared shape is
 // Record<string, string>, but models stringify nested maps (the highest-entropy
 // escaped field in an otherwise flat tool), which strict schema validation
-// rejects at the cost of a zero-work round trip.
+// rejects at the cost of a zero-work round trip. `strings` is the legacy alias:
+// the name collides with the JSON string type and taught models to pass one.
 const normalizeNamedStrings = (input: unknown): Record<string, string> | undefined => {
 	if (isRecord(input)) return asStringRecord(input);
 	if (typeof input !== "string") return undefined;
@@ -51,8 +52,11 @@ const normalizeNamedStrings = (input: unknown): Record<string, string> | undefin
 	return parsed ? asStringRecord(parsed) : undefined;
 };
 
-export const resolveSpindleExecStrings = (params: { strings?: unknown }): Record<string, string> | undefined =>
-	normalizeNamedStrings(params.strings);
+export const resolveSpindleExecPayloads = (params: {
+	payloads?: unknown;
+	strings?: unknown;
+}): Record<string, string> | undefined =>
+	normalizeNamedStrings(params.payloads) ?? normalizeNamedStrings(params.strings);
 
 /**
  * Coerce the model-facing `spindle_exec` arguments into the declared shape
@@ -90,9 +94,17 @@ export const prepareSpindleExecArguments = (input: unknown): unknown => {
 		else delete writable().display;
 	}
 
-	if (Object.hasOwn(prepared, "strings")) {
-		const normalized = normalizeNamedStrings(prepared.strings);
-		if (normalized && prepared.strings !== normalized) writable().strings = normalized;
+	const hasPayloads = Object.hasOwn(prepared, "payloads");
+	const hasStrings = Object.hasOwn(prepared, "strings");
+	if (hasPayloads || hasStrings) {
+		const raw = hasPayloads ? prepared.payloads : prepared.strings;
+		const normalized = normalizeNamedStrings(raw);
+		if (normalized) {
+			if (prepared.payloads !== normalized) writable().payloads = normalized;
+		} else if (!hasPayloads) {
+			writable().payloads = raw;
+		}
+		if (hasStrings) delete writable().strings;
 	}
 
 	return prepared;
