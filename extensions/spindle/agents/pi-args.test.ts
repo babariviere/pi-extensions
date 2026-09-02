@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { type DiscoveredAgent } from "./discovery.ts";
 import { SPINDLE_EXEC_TOOL } from "./constants.ts";
-import { ALLOWED_TOOLS_FLAG } from "./constants.ts";
+import { ALLOWED_TOOLS_FLAG, SANDBOX_MODE_FLAG } from "./constants.ts";
 import {
 	buildChildArgs,
 	childExtensionPath,
@@ -249,4 +249,30 @@ test("buildChildArgs adds --no-skills only when inheritSkills is false", () => {
 	assert.ok(buildChildArgs(agent({ inheritSkills: false }), "t", opts).includes("--no-skills"));
 	assert.ok(!buildChildArgs(agent({ inheritSkills: true }), "t", opts).includes("--no-skills"));
 	assert.ok(!buildChildArgs(agent({}), "t", opts).includes("--no-skills"));
+});
+
+test("buildChildArgs forwards a declared sandbox mode as the floor flag", () => {
+	const args = buildChildArgs(agent({ sandbox: "read-only" }), "do it", opts);
+	const flagIdx = args.indexOf(`--${SANDBOX_MODE_FLAG}`);
+	assert.ok(flagIdx !== -1);
+	assert.equal(args[flagIdx + 1], "read-only");
+	// The child extension is what makes pi accept the flag at all.
+	assert.ok(args.includes("--extension"));
+	assert.equal(args[args.indexOf("--extension") + 1], childExtensionPath());
+	// A sandboxed agent keeps every tool: the kernel does the restricting.
+	assert.equal(args.includes("--tools"), false);
+	assert.equal(args.includes(`--${ALLOWED_TOOLS_FLAG}`), false);
+});
+
+test("buildChildArgs loads the child extension once when both restrictions apply", () => {
+	const args = buildChildArgs(agent({ tools: ["read"], sandbox: "read-only" }), "do it", opts);
+	assert.equal(args.filter((a) => a === "--extension").length, 1);
+	assert.ok(args.includes(`--${ALLOWED_TOOLS_FLAG}`));
+	assert.ok(args.includes(`--${SANDBOX_MODE_FLAG}`));
+});
+
+test("buildChildArgs sends no sandbox flag when the agent declares no mode", () => {
+	const args = buildChildArgs(agent(), "do it", opts);
+	assert.equal(args.includes(`--${SANDBOX_MODE_FLAG}`), false);
+	assert.equal(args.includes("--extension"), false);
 });

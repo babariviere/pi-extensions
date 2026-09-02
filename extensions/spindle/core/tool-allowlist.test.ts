@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { guestTypeDeclarations } from "../runtime/guest-types.ts";
-import { parseToolAllowlist, readToolAllowlistArgument, SpindleToolGate } from "./tool-allowlist.ts";
+import { parseToolAllowlist, SpindleToolGate } from "./tool-allowlist.ts";
 
 test("parseToolAllowlist treats an absent or blank flag as unrestricted", () => {
 	assert.equal(parseToolAllowlist(undefined), undefined);
@@ -19,20 +19,6 @@ test("parseToolAllowlist splits, trims and drops the transport tool", () => {
 test("parseToolAllowlist yields an empty set when only the transport tool is declared", () => {
 	const allowlist = parseToolAllowlist("spindle_exec");
 	assert.deepEqual([...allowlist!], []);
-});
-
-test("readToolAllowlistArgument accepts both --flag value and --flag=value", () => {
-	const flag = "spindle-allowed-tools";
-	assert.equal(readToolAllowlistArgument(flag, ["pi", "--spindle-allowed-tools", "read,grep"]), "read,grep");
-	assert.equal(readToolAllowlistArgument(flag, ["pi", "--spindle-allowed-tools=read,grep"]), "read,grep");
-	assert.equal(readToolAllowlistArgument(flag, ["pi", "--other", "x"]), undefined);
-	// A following flag is not swallowed as the value.
-	assert.equal(readToolAllowlistArgument(flag, ["pi", "--spindle-allowed-tools", "--no-skills"]), undefined);
-	// Last occurrence wins.
-	assert.equal(
-		readToolAllowlistArgument(flag, ["pi", "--spindle-allowed-tools", "read", "--spindle-allowed-tools", "grep"]),
-		"grep",
-	);
 });
 
 test("an unrestricted gate allows everything and never throws", () => {

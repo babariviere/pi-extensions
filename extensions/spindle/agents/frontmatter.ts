@@ -11,6 +11,8 @@
  * single malformed field never crashes discovery.
  */
 
+import { isSandboxMode, type SandboxMode } from "../sandbox/policy.ts";
+
 export type FrontmatterValue = string | string[] | boolean;
 
 export interface ParsedFrontmatter {
@@ -29,6 +31,12 @@ export interface AgentConfig {
 	inheritSkills?: boolean;
 	output?: string;
 	defaultReads?: string[];
+	/**
+	 * Filesystem guardrail the child runs under (`read-only`,
+	 * `workspace-write`, `full`, `off`). Applied as a floor in the child, so a
+	 * research agent can keep `bash` while the kernel refuses its writes.
+	 */
+	sandbox?: SandboxMode;
 }
 
 const FRONTMATTER_RE = /^---\s*\r?\n([\s\S]*?)\r?\n---\s*\r?\n?/;
@@ -102,6 +110,16 @@ function asPathString(value: FrontmatterValue | undefined): string | undefined {
 	return typeof value === "string" ? value : undefined;
 }
 
+/**
+ * Coerce a `sandbox:` field. An unknown mode is dropped rather than defaulted:
+ * silently running a typo (`sandbox: readonly`) under the ambient policy is
+ * better than refusing to launch, and the mode is visible in `/sandbox`.
+ */
+function asSandboxMode(value: FrontmatterValue | undefined): SandboxMode | undefined {
+	const raw = typeof value === "string" ? value.trim() : undefined;
+	return isSandboxMode(raw) ? raw : undefined;
+}
+
 function asStringList(value: FrontmatterValue | undefined): string[] | undefined {
 	if (value === undefined) return undefined;
 	if (Array.isArray(value)) return value.length ? value : undefined;
@@ -139,5 +157,6 @@ export function toAgentConfig(data: Record<string, FrontmatterValue>, fallbackNa
 		inheritSkills: asBool(data.inheritSkills),
 		output: asPathString(data.output)?.trim(),
 		defaultReads: asStringList(data.defaultReads),
+		sandbox: asSandboxMode(data.sandbox),
 	};
 }

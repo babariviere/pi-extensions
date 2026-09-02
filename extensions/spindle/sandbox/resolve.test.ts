@@ -124,3 +124,54 @@ test("denied domains stay config-only, so the kill switch survives", () => {
 	});
 	assert.deepEqual(effective.network.deniedDomains, ["github.com"]);
 });
+
+test("an agent definition floors the mode: a subagent cannot loosen it", () => {
+	const effective = effectiveSandbox({
+		settings: settings("off"),
+		requested: { mode: "off" },
+		agent: { mode: "read-only" },
+	});
+	assert.equal(effective.mode, "read-only");
+	assert.equal(effective.source, "agent");
+	assert.deepEqual(effective.refused, { asked: "off", enforced: "read-only" });
+});
+
+test("a request may tighten past the agent floor", () => {
+	const effective = effectiveSandbox({
+		settings: settings("off"),
+		requested: { mode: "read-only" },
+		agent: { mode: "workspace-write" },
+	});
+	assert.equal(effective.mode, "read-only");
+	assert.equal(effective.source, "request");
+	assert.equal(effective.refused, undefined);
+});
+
+test("the tightest of the night and agent floors wins", () => {
+	const nightTighter = effectiveSandbox({
+		settings: settings("off"),
+		night: { mode: "read-only" },
+		agent: { mode: "workspace-write" },
+	});
+	assert.equal(nightTighter.mode, "read-only");
+	assert.equal(nightTighter.source, "night");
+
+	const agentTighter = effectiveSandbox({
+		settings: settings("off"),
+		night: { mode: "workspace-write", allowWrite: ["/sandboxes/run"] },
+		agent: { mode: "read-only" },
+	});
+	assert.equal(agentTighter.mode, "read-only");
+	assert.equal(agentTighter.source, "agent");
+	// The night's roots survive a tightening floor, so its report stays writable.
+	assert.ok(agentTighter.allowWrite.includes("/sandboxes/run"));
+});
+
+test("an agent floor with extra roots keeps them writable", () => {
+	const effective = effectiveSandbox({
+		settings: settings("off"),
+		agent: { mode: "read-only", allowWrite: ["/runs/artifacts"] },
+	});
+	assert.equal(effective.mode, "read-only");
+	assert.deepEqual(effective.allowWrite, ["/runs/artifacts"]);
+});

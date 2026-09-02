@@ -30,6 +30,7 @@ import { McpBridgeProvider } from "./providers/mcp-bridge-provider.ts";
 import { PiToolsProvider } from "./providers/pi-tools-provider.ts";
 import { SandboxController } from "./sandbox/controller.ts";
 import { SpindleSessionStore } from "./session-store.ts";
+import { agentSandboxFloor } from "./sandbox/agent-floor.ts";
 import { activeNightSandboxRequest } from "./sandbox/night-bridge.ts";
 import { runNightPreflight } from "./sandbox/preflight-bridge.ts";
 import { applyNightRunEnv } from "../night-mode/night-run.ts";
@@ -70,6 +71,12 @@ export class SpindleState {
 	 * request refused by an active night run does not resurface when the run ends.
 	 */
 	#sandboxRequest: SandboxRequest | undefined;
+	/**
+	 * Sandbox floor the parent imposed on this process via the agent's
+	 * `sandbox:` frontmatter. Set only when this pi process is a Spindle
+	 * subagent; undefined for a normal session.
+	 */
+	#agentSandbox: SandboxRequest | undefined;
 	readonly #externalProviders = new Map<string, SpindleProvider>();
 	readonly activity = new SpindleActivityStore();
 	readonly agentRuns = new SpindleAgentRunRegistry();
@@ -141,6 +148,7 @@ export class SpindleState {
 		this.agentRuns.reset();
 		this.#cwd = context.cwd;
 		this.#gate = SpindleToolGate.fromArgv(ALLOWED_TOOLS_FLAG);
+		this.#agentSandbox = agentSandboxFloor();
 		// A new session must not inherit the previous one's children, nor its state.
 		this.agentRunBook.reset();
 		this.sessionStore.reset();
@@ -254,6 +262,7 @@ export class SpindleState {
 		this.#execution = undefined;
 		this.#cwd = undefined;
 		this.#gate = SpindleToolGate.of(undefined);
+		this.#agentSandbox = undefined;
 		this.activity.reset();
 		this.agentRuns.reset();
 		this.sessionStore.reset();
@@ -262,12 +271,14 @@ export class SpindleState {
 	}
 
 	/**
-	 * Resolve the effective policy from `spindle.json`, the last request, and the
-	 * floor an active night run imposes (see `sandbox/resolve.ts`).
+	 * Resolve the effective policy from `spindle.json`, the last request, and two
+	 * floors: an active night run, and the agent definition this process was
+	 * launched from (see `sandbox/resolve.ts`).
 	 *
 	 * The night policy is read from the handshake file rather than passed in, so a
 	 * subagent process (which never sees the parent's event bus) inherits it just
-	 * by starting up, and it survives a `/reload`.
+	 * by starting up, and it survives a `/reload`. The agent floor arrives the
+	 * same way, on argv.
 	 */
 	#resolveSandbox(cwd: string) {
 		// Same reason, for the environment: a participant adopts the run's
@@ -281,6 +292,8 @@ export class SpindleState {
 			// Session identity, so only participants of the run inherit its policy:
 			// the handshake file is global, and a session opened mid-run is a bystander.
 			night: activeNightSandboxRequest({ sessionId: this.#sessionRef.sessionId, cwd }),
+			// The parent's floor for this subagent, read from argv at initialize().
+			agent: this.#agentSandbox,
 		});
 		const policy = resolveSandboxPolicy(
 			{
@@ -369,8 +382,9 @@ export class SpindleState {
 				// Diagnostics only: a failed probe must never fail the run.
 			});
 		if (effective.refused) {
+			const holder = effective.source === "agent" ? "this subagent's definition" : "an active night run";
 			context.ui.notify(
-				`spindle: '${effective.refused.asked}' refused, an active night run holds the sandbox at ` +
+				`spindle: '${effective.refused.asked}' refused, ${holder} holds the sandbox at ` +
 					`'${effective.refused.enforced}'. ${controller.describe()}`,
 				"warning",
 			);

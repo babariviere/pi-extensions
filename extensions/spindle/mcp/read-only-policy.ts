@@ -394,10 +394,10 @@ const policyFor = (server: string | undefined, config: McpReadOnlyConfig): McpSe
 	const builtin = server ? BUILTIN_MCP_SERVER_POLICIES[server] : undefined;
 	const configured = server ? config.servers[server] : undefined;
 	return {
-		...(configured?.default ?? builtin?.default ? { default: configured?.default ?? builtin?.default } : {}),
+		...((configured?.default ?? builtin?.default) ? { default: configured?.default ?? builtin?.default } : {}),
 		allow: [...(builtin?.allow ?? []), ...(configured?.allow ?? [])],
 		deny: [...(builtin?.deny ?? []), ...(configured?.deny ?? [])],
-		...(configured?.unknownToolPolicy ?? builtin?.unknownToolPolicy
+		...((configured?.unknownToolPolicy ?? builtin?.unknownToolPolicy)
 			? { unknownToolPolicy: configured?.unknownToolPolicy ?? builtin?.unknownToolPolicy }
 			: {}),
 	};
@@ -569,7 +569,9 @@ const asRecord = (value: unknown): Record<string, unknown> =>
 
 const stringList = (value: unknown): string[] | undefined =>
 	Array.isArray(value)
-		? value.filter((entry): entry is string => typeof entry === "string" && Boolean(entry.trim())).map((e) => e.trim())
+		? value
+				.filter((entry): entry is string => typeof entry === "string" && Boolean(entry.trim()))
+				.map((e) => e.trim())
 		: undefined;
 
 const serverDefault = (value: unknown): McpServerDefault | undefined =>
@@ -598,7 +600,8 @@ export const normalizeMcpReadOnlyConfig = (input: unknown): McpReadOnlyConfig =>
 	return {
 		readOnly: typeof record.readOnly === "boolean" ? record.readOnly : DEFAULT_MCP_READ_ONLY_CONFIG.readOnly,
 		unknownToolPolicy: unknownPolicy(record.unknownToolPolicy) ?? DEFAULT_MCP_READ_ONLY_CONFIG.unknownToolPolicy,
-		defaultServerPolicy: serverDefault(record.defaultServerPolicy) ?? DEFAULT_MCP_READ_ONLY_CONFIG.defaultServerPolicy,
+		defaultServerPolicy:
+			serverDefault(record.defaultServerPolicy) ?? DEFAULT_MCP_READ_ONLY_CONFIG.defaultServerPolicy,
 		servers,
 	};
 };

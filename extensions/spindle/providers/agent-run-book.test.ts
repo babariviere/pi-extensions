@@ -1,12 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import {
-	AgentRunBook,
-	type AgentCompletionEvent,
-	SETTLED_HISTORY,
-	type SpindleAgentResult,
-} from "./agent-run-book.ts";
+import { AgentRunBook, type AgentCompletionEvent, SETTLED_HISTORY, type SpindleAgentResult } from "./agent-run-book.ts";
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 

@@ -9,7 +9,14 @@
 import { normalizeRunDisplay } from "./run-display.ts";
 import { repairSpindleGuestCode } from "./runtime/guest-code-repair.ts";
 
-const OPTIONAL_SPINDLE_EXEC_KEYS = ["payloads", "strings", "resultFormat", "agentBudget", "timeoutMs", "display"] as const;
+const OPTIONAL_SPINDLE_EXEC_KEYS = [
+	"payloads",
+	"strings",
+	"resultFormat",
+	"agentBudget",
+	"timeoutMs",
+	"display",
+] as const;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
 	typeof value === "object" && value !== null && !Array.isArray(value);

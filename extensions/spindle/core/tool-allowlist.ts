@@ -24,6 +24,8 @@
  * tools in that sense and stay available.
  */
 
+import { readFlagArgument } from "./argv-flag.ts";
+
 /**
  * Transport tools: `spindle_exec` is the child's only tool path in full code
  * mode, so it is kept in the child's `--tools` regardless of the allowlist. It
@@ -50,27 +52,6 @@ export const parseToolAllowlist = (raw: unknown): SpindleToolAllowlist | undefin
 };
 
 /**
- * Read the allowlist straight off the process arguments, accepting both
- * `--flag value` and `--flag=value`. The last occurrence wins, matching how a
- * CLI parser would treat a repeated flag.
- */
-export const readToolAllowlistArgument = (flag: string, argv: readonly string[] = process.argv): string | undefined => {
-	const long = `--${flag}`;
-	const assigned = `${long}=`;
-	let value: string | undefined;
-	for (let index = 0; index < argv.length; index++) {
-		const argument = argv[index];
-		if (argument === long) {
-			const next = argv[index + 1];
-			if (next !== undefined && !next.startsWith("--")) value = next;
-			continue;
-		}
-		if (argument.startsWith(assigned)) value = argument.slice(assigned.length);
-	}
-	return value;
-};
-
-/**
  * The tool gate: the single owner of "may this tool be called". An unrestricted
  * gate (built from an absent allowlist) permits everything and never throws; a
  * restricted gate permits only its members plus the always-allowed transport
@@ -91,7 +72,7 @@ export class SpindleToolGate {
 
 	/** Build from the process arguments: read the flag, parse it, wrap it. */
 	static fromArgv(flag: string, argv?: readonly string[]): SpindleToolGate {
-		return new SpindleToolGate(parseToolAllowlist(readToolAllowlistArgument(flag, argv)));
+		return new SpindleToolGate(parseToolAllowlist(readFlagArgument(flag, argv)));
 	}
 
 	/** True when a subagent's `tools:` list narrowed what may be called. */

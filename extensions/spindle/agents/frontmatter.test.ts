@@ -95,3 +95,12 @@ test("toAgentConfig ignores boolean output (no bogus 'false' path)", () => {
 	assert.equal(toAgentConfig({ name: "a", output: false }, "a").output, undefined);
 	assert.equal(toAgentConfig({ name: "b", output: true }, "b").output, undefined);
 });
+
+test("toAgentConfig reads a sandbox mode and drops an unknown one", () => {
+	assert.equal(toAgentConfig({ sandbox: "read-only" }, "librarian").sandbox, "read-only");
+	assert.equal(toAgentConfig({ sandbox: " workspace-write " }, "librarian").sandbox, "workspace-write");
+	// A typo must not make the agent unlaunchable; it just falls back to ambient.
+	assert.equal(toAgentConfig({ sandbox: "readonly" }, "librarian").sandbox, undefined);
+	assert.equal(toAgentConfig({ sandbox: true }, "librarian").sandbox, undefined);
+	assert.equal(toAgentConfig({}, "librarian").sandbox, undefined);
+});

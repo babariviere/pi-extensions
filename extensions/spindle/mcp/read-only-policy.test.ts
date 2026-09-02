@@ -214,9 +214,12 @@ test("normalization ignores junk and keeps the defaults", () => {
 		defaultServerPolicy: "deny-writes",
 		servers: {},
 	});
-	assert.deepEqual(normalizeMcpReadOnlyConfig({ servers: { slack: { allow: ["a", 2, " b "], deny: null } } }).servers, {
-		slack: { allow: ["a", "b"] },
-	});
+	assert.deepEqual(
+		normalizeMcpReadOnlyConfig({ servers: { slack: { allow: ["a", 2, " b "], deny: null } } }).servers,
+		{
+			slack: { allow: ["a", "b"] },
+		},
+	);
 });
 
 /**

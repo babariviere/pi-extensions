@@ -8,35 +8,35 @@ import type { SpindleRunDisplay } from "./activity/types.ts";
 // flat-tool-schema note in spindle-exec-tool.ts.
 
 const recordDisplay = (record: Record<string, unknown>): SpindleRunDisplay | undefined => {
-  const display: SpindleRunDisplay = {};
-  if (typeof record.name === "string") display.name = record.name;
-  if (typeof record.description === "string") display.description = record.description;
-  return display.name !== undefined || display.description !== undefined ? display : undefined;
+	const display: SpindleRunDisplay = {};
+	if (typeof record.name === "string") display.name = record.name;
+	if (typeof record.description === "string") display.description = record.description;
+	return display.name !== undefined || display.description !== undefined ? display : undefined;
 };
 
 const parseObjectString = (text: string): Record<string, unknown> | undefined => {
-  if (!text.startsWith("{") || !text.endsWith("}")) return undefined;
-  try {
-    const parsed: unknown = JSON.parse(text);
-    return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : undefined;
-  } catch {
-    return undefined;
-  }
+	if (!text.startsWith("{") || !text.endsWith("}")) return undefined;
+	try {
+		const parsed: unknown = JSON.parse(text);
+		return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
+			? (parsed as Record<string, unknown>)
+			: undefined;
+	} catch {
+		return undefined;
+	}
 };
 
 export const normalizeRunDisplay = (input: unknown): SpindleRunDisplay | undefined => {
-  if (typeof input === "string") {
-    const text = input.trim();
-    if (!text) return undefined;
-    const parsed = text.startsWith("{") ? parseObjectString(text) : undefined;
-    // Fall back to the raw string as the name: intent preservation beats shape
-    // pedantry for a cosmetic label.
-    return (parsed && recordDisplay(parsed)) ?? { name: input };
-  }
-  if (typeof input === "object" && input !== null && !Array.isArray(input)) {
-    return recordDisplay(input as Record<string, unknown>);
-  }
-  return undefined;
+	if (typeof input === "string") {
+		const text = input.trim();
+		if (!text) return undefined;
+		const parsed = text.startsWith("{") ? parseObjectString(text) : undefined;
+		// Fall back to the raw string as the name: intent preservation beats shape
+		// pedantry for a cosmetic label.
+		return (parsed && recordDisplay(parsed)) ?? { name: input };
+	}
+	if (typeof input === "object" && input !== null && !Array.isArray(input)) {
+		return recordDisplay(input as Record<string, unknown>);
+	}
+	return undefined;
 };

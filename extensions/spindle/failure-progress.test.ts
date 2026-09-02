@@ -36,7 +36,9 @@ test("completed calls are named with their paths", () => {
 });
 
 test("the completed-call list is bounded", () => {
-	const operations = Array.from({ length: 12 }, (_value, index) => operation(`pi.write`, "succeeded", `/tmp/${index}`));
+	const operations = Array.from({ length: 12 }, (_value, index) =>
+		operation(`pi.write`, "succeeded", `/tmp/${index}`),
+	);
 	const text = String(formatFailureProgress(trace({ operations })));
 	assert.match(text, /\+4 more/);
 });

@@ -23,14 +23,14 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
 import { buildNightContract, readActiveNightRun } from "../../night-mode/night-run.ts";
-import { ALLOWED_TOOLS_FLAG, SPINDLE_EXEC_TOOL } from "./constants.ts";
+import { ALLOWED_TOOLS_FLAG, SANDBOX_MODE_FLAG, SPINDLE_EXEC_TOOL } from "./constants.ts";
 import { type DiscoveredAgent } from "./discovery.ts";
 import { injectOutputInstruction } from "./paths.ts";
 
 /**
  * Absolute path to the child-side extension, next to this file. It only
- * registers the allowlist flag, so the parent loads it only when restricting
- * the agent's tools (see buildChildArgs).
+ * registers the parent-set flags, so the parent loads it only when restricting
+ * the agent's tools or its sandbox (see buildChildArgs).
  */
 export function childExtensionPath(): string {
 	return join(dirname(fileURLToPath(import.meta.url)), "child-extension.ts");
@@ -166,12 +166,23 @@ export function buildChildArgs(agent: DiscoveredAgent, task: string, opts: Child
 	// extension is loaded here only to register that flag; a child with no
 	// allowlist needs no injected extension at all. With no allowlist all tools
 	// are enabled, so nothing to add.
-	if (agent.config.tools && agent.config.tools.length > 0) {
-		const declared = agent.config.tools;
+	const restrictsTools = !!agent.config.tools && agent.config.tools.length > 0;
+	// The sandbox mode travels the same way, and is a floor the child cannot
+	// loosen (see `sandbox/agent-floor.ts`). It is the preferred way to bound a
+	// research agent: it keeps `bash` available for reads instead of removing the
+	// tool and letting the agent discover the restriction by failing.
+	const sandboxMode = agent.config.sandbox;
+	if (restrictsTools || sandboxMode) {
+		args.push("--extension", childExtensionPath());
+	}
+	if (restrictsTools) {
+		const declared = agent.config.tools ?? [];
 		const tools = declared.includes(SPINDLE_EXEC_TOOL) ? [...declared] : [...declared, SPINDLE_EXEC_TOOL];
 		args.push("--tools", tools.join(","));
-		args.push("--extension", childExtensionPath());
 		args.push(`--${ALLOWED_TOOLS_FLAG}`, declared.join(","));
+	}
+	if (sandboxMode) {
+		args.push(`--${SANDBOX_MODE_FLAG}`, sandboxMode);
 	}
 
 	if (opts.systemPromptFile && agent.systemPrompt.trim().length > 0) {

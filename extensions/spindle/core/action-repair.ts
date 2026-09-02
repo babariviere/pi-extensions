@@ -65,8 +65,7 @@ const camelTokens = (name: string): string[] =>
 		.filter((token) => token.length > 0);
 
 // Singular/plural near-misses collapse to one form.
-const singularActionForm = (form: string): string =>
-	form.length > 3 && form.endsWith("s") ? form.slice(0, -1) : form;
+const singularActionForm = (form: string): string => (form.length > 3 && form.endsWith("s") ? form.slice(0, -1) : form);
 
 const levenshtein = (left: string, right: string): number => {
 	if (left === right) return 0;
@@ -77,11 +76,7 @@ const levenshtein = (left: string, right: string): number => {
 		const current = [i];
 		for (let j = 1; j <= right.length; j++) {
 			current.push(
-				Math.min(
-					previous[j]! + 1,
-					current[j - 1]! + 1,
-					previous[j - 1]! + (left[i - 1] === right[j - 1] ? 0 : 1),
-				),
+				Math.min(previous[j]! + 1, current[j - 1]! + 1, previous[j - 1]! + (left[i - 1] === right[j - 1] ? 0 : 1)),
 			);
 		}
 		previous = current;

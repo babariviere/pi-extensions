@@ -67,7 +67,10 @@ export async function runNightPreflight(deps: PreflightDeps): Promise<string | u
 	});
 	const path =
 		run.preflightPath ??
-		preflightPathFor({ reportPath: run.reportPath, ...(run.workspacePath ? { workspacePath: run.workspacePath } : {}) });
+		preflightPathFor({
+			reportPath: run.reportPath,
+			...(run.workspacePath ? { workspacePath: run.workspacePath } : {}),
+		});
 	const body = formatPreflightReport(results, {
 		startedAt: deps.now ?? new Date(run.startedAt),
 		...(run.workspacePath ? { workspacePath: run.workspacePath } : {}),

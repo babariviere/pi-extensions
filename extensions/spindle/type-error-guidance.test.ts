@@ -14,19 +14,17 @@ test("core tool names and properties derive from the guest declarations", () => 
 });
 
 test("a property owned by another tool names its owner", () => {
-	const hint = typeErrorRecoveryHint(
-		"return await pi.read({ path: '/x', settle: true });",
-		[error("'settle' does not exist in type '{ path: string }'")],
-	);
+	const hint = typeErrorRecoveryHint("return await pi.read({ path: '/x', settle: true });", [
+		error("'settle' does not exist in type '{ path: string }'"),
+	]);
 	assert.match(String(hint), /`settle` is not a `pi\.read` property/);
 	assert.match(String(hint), /`pi\.bash`/);
 });
 
 test("a misplaced envelope argument points back at spindle_exec", () => {
-	const hint = typeErrorRecoveryHint(
-		"return await pi.write({ path: '/x', strings: {} });",
-		[error("'strings' does not exist in type '{ path: string }'")],
-	);
+	const hint = typeErrorRecoveryHint("return await pi.write({ path: '/x', strings: {} });", [
+		error("'strings' does not exist in type '{ path: string }'"),
+	]);
 	assert.match(String(hint), /`strings` is a `spindle_exec` argument/);
 });
 

@@ -2,11 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import type { CapturedToolCatalog, CapturedToolEntry } from "../capture/catalog.ts";
-import {
-	DEFAULT_MCP_READ_ONLY_CONFIG,
-	effectiveMcpReadOnlyConfig,
-	McpReadOnlyGate,
-} from "../mcp/read-only-policy.ts";
+import { DEFAULT_MCP_READ_ONLY_CONFIG, effectiveMcpReadOnlyConfig, McpReadOnlyGate } from "../mcp/read-only-policy.ts";
 import { CapturedToolsProvider } from "./captured-tools-provider.ts";
 import { McpBridgeProvider } from "./mcp-bridge-provider.ts";
 
@@ -27,7 +23,11 @@ const gatewayCatalog = (name = "mcp"): GatewaySpy => {
 		name,
 		definition: { name, description: "mcp gateway", parameters: { type: "object" } },
 		sourceInfo: { path: "/npm/node_modules/pi-mcp-adapter/index.ts", source: "cli", scope: "user" },
-		runner: { emit: async () => undefined, emitToolCall: async () => undefined, emitToolResult: async () => undefined },
+		runner: {
+			emit: async () => undefined,
+			emitToolCall: async () => undefined,
+			emitToolResult: async () => undefined,
+		},
 		wrappedTool: {
 			execute: async (_id: string, params: Record<string, unknown>) => {
 				calls.push(params);

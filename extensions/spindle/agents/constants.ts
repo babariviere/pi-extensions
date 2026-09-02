@@ -19,3 +19,14 @@ export const SPINDLE_EXEC_TOOL = "spindle_exec";
  * native args after `--` but cannot inject environment variables.
  */
 export const ALLOWED_TOOLS_FLAG = "spindle-allowed-tools";
+
+/**
+ * CLI flag carrying the sandbox mode the agent's `sandbox:` frontmatter asks
+ * for into the child. The child's Spindle applies it as a *floor*: `/sandbox`
+ * inside a subagent can tighten it but never loosen it, the same way an active
+ * night run holds the sandbox for its whole duration.
+ *
+ * This is the enforcement a research agent wants instead of having `bash`
+ * removed from its tools: reads stay available, the kernel refuses the writes.
+ */
+export const SANDBOX_MODE_FLAG = "spindle-sandbox";

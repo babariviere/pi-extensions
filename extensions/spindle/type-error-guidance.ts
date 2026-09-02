@@ -31,7 +31,8 @@ const SPINDLE_EXEC_ARGUMENT_NOTES: Readonly<Record<string, string>> = {
 };
 
 const PROPERTY_NOTES: Readonly<Record<string, string>> = {
-	settle: "`settle:true` settles nonzero `pi.bash` exits into an `ok:false` envelope instead of rejecting; other `pi.*` calls reject failures normally.",
+	settle:
+		"`settle:true` settles nonzero `pi.bash` exits into an `ok:false` envelope instead of rejecting; other `pi.*` calls reject failures normally.",
 	timeout: "`timeout` is measured in seconds; `timeoutMs` is converted from milliseconds.",
 };
 

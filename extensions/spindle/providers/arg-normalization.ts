@@ -127,7 +127,10 @@ const deriveAction = (
 	explicit: ArgNormalizationSpec | undefined,
 ): DerivedAction => {
 	const properties =
-		inputSchema && typeof inputSchema === "object" && inputSchema.properties && typeof inputSchema.properties === "object"
+		inputSchema &&
+		typeof inputSchema === "object" &&
+		inputSchema.properties &&
+		typeof inputSchema.properties === "object"
 			? (inputSchema.properties as Record<string, unknown>)
 			: undefined;
 	const declared = new Set(Object.keys(properties ?? {}));
@@ -243,7 +246,10 @@ export const actionArgNormalizer = (
 ): ActionArgNormalizer => {
 	const derived = new Map<string, DerivedAction>();
 	for (const descriptor of describeActions()) {
-		derived.set(descriptor.name, deriveAction(descriptor.inputSchema as JsonSchemaObject | undefined, table[descriptor.name]));
+		derived.set(
+			descriptor.name,
+			deriveAction(descriptor.inputSchema as JsonSchemaObject | undefined, table[descriptor.name]),
+		);
 	}
 	return (actionName, args) => {
 		if (!args || typeof args !== "object" || Array.isArray(args)) return args;

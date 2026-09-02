@@ -20,9 +20,6 @@ test("an unrestricted policy gets a hook that approves any host", async () => {
 });
 
 test("an allowlisted policy gets no hook, so srt denies what it does not name", () => {
-	const policy = resolveSandboxPolicy(
-		{ network: { allowedDomains: ["github.com", "*.github.com"] } },
-		environment(),
-	);
+	const policy = resolveSandboxPolicy({ network: { allowedDomains: ["github.com", "*.github.com"] } }, environment());
 	assert.equal(sandboxAskCallback(policy), undefined);
 });

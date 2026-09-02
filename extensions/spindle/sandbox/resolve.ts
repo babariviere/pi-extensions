@@ -3,7 +3,8 @@
  *
  *  - `spindle.json`, the session's baseline,
  *  - a request from `/sandbox` or another extension,
- *  - the floor an active night run imposes.
+ *  - the floor an active night run imposes,
+ *  - the floor the parent imposed on a subagent (its `sandbox:` frontmatter).
  *
  * The night floor is not advisory. An unattended run is sandboxed for its whole
  * duration, so a request can only ever *tighten* it: `/sandbox off` during a
@@ -40,6 +41,12 @@ export interface EffectiveSandboxInput {
 	requested?: SandboxRequest | undefined;
 	/** Policy an active night run demands. Acts as a floor, never as a ceiling. */
 	night?: SandboxRequest | undefined;
+	/**
+	 * Policy the parent imposed on this subagent process (the agent's `sandbox:`
+	 * frontmatter, read from argv). Also a floor: an agent bounded to
+	 * `read-only` cannot `/sandbox workspace-write` its way out.
+	 */
+	agent?: SandboxRequest | undefined;
 }
 
 export interface EffectiveSandbox {
@@ -49,7 +56,7 @@ export interface EffectiveSandbox {
 	denyRead: string[];
 	network: { allowedDomains: string[]; deniedDomains: string[] };
 	/** Where the mode came from. */
-	source: "config" | "request" | "night";
+	source: "config" | "request" | "night" | "agent";
 	/**
 	 * Set when a request asked for something looser than the night floor. The
 	 * caller reports this, so a refused `/sandbox off` says so instead of silently
@@ -61,17 +68,32 @@ export interface EffectiveSandbox {
 const dedupe = (values: string[]): string[] => [...new Set(values.map((value) => value.trim()).filter(Boolean))];
 
 export function effectiveSandbox(input: EffectiveSandboxInput): EffectiveSandbox {
-	const { settings, requested, night } = input;
+	const { settings, requested, night, agent } = input;
 	const asked = requested?.mode ?? settings.mode;
-	const mode = night ? tighterMode(asked, night.mode) : asked;
+	// Both floors tighten, never loosen; the tightest of the three wins.
+	let mode = asked;
+	if (night) mode = tighterMode(mode, night.mode);
+	if (agent) mode = tighterMode(mode, agent.mode);
 
-	const source = night && mode === night.mode && mode !== asked ? "night" : requested ? "request" : "config";
+	const source =
+		night && mode === night.mode && mode !== asked
+			? "night"
+			: agent && mode === agent.mode && mode !== asked
+				? "agent"
+				: requested
+					? "request"
+					: "config";
 
 	return {
 		mode,
 		// The night's roots are always present: a tightening request must not cut
 		// the run's own report or ledger out of the writable set.
-		allowWrite: dedupe([...settings.allowWrite, ...(night?.allowWrite ?? []), ...(requested?.allowWrite ?? [])]),
+		allowWrite: dedupe([
+			...settings.allowWrite,
+			...(night?.allowWrite ?? []),
+			...(agent?.allowWrite ?? []),
+			...(requested?.allowWrite ?? []),
+		]),
 		denyWrite: [...settings.denyWrite],
 		denyRead: [...settings.denyRead],
 		network: {
