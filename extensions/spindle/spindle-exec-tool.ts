@@ -52,6 +52,7 @@ import { prepareSpindleExecArguments, resolveSpindleExecStrings } from "./spindl
 import { normalizeRunDisplay } from "./run-display.ts";
 import { typeErrorRecoveryHint } from "./type-error-guidance.ts";
 import { formatFailureProgress } from "./failure-progress.ts";
+import { boundModelOutput, modelOutputBudget } from "./output-budget.ts";
 import { repairSpindleGuestCode } from "./runtime/guest-code-repair.ts";
 
 const RESULT_FORMATS = ["auto", "yaml", "json", "text"] as const;
@@ -630,7 +631,8 @@ export const createSpindleExecTool = (
 				// name them so the model inspects before repeating the work.
 				if (failureProgress) sections.push(failureProgress);
 				const rawOutput = sections.join("\n\n");
-				const outputWillTruncate = rawOutput.length > state.config.executor.maxOutputChars;
+				const outputBudget = modelOutputBudget(state.config.executor.maxOutputChars, result.success);
+				const outputWillTruncate = rawOutput.length > outputBudget;
 				const outputFormat =
 					formattedValue.language && formattedValue.text && (result.logs.length === 0 || !outputWillTruncate)
 						? formattedValue.language
@@ -654,19 +656,20 @@ export const createSpindleExecTool = (
 						)
 						.join("\n");
 					const recoveryHint = typeErrorRecoveryHint(code, result.typeErrors);
+					const bounded = await boundModelOutput(
+						`Type errors; code was not executed:\n${text}${recoveryHint ? `\n\n${recoveryHint}` : ""}`,
+						outputBudget,
+					);
 					return {
-						content: [
-							{
-								type: "text",
-								text: `Type errors; code was not executed:\n${text}${recoveryHint ? `\n\n${recoveryHint}` : ""}`,
-							},
-						],
+						content: [{ type: "text", text: bounded.text }],
 						details: persistedDetails,
 						isError: true,
 					};
 				}
 
-				const output = truncateMiddle(rawOutput || "(no output)", state.config.executor.maxOutputChars);
+				// Oversized output spills to a temp artifact instead of vanishing in the
+				// middle of a truncation, so the full text stays reachable by path.
+				const output = (await boundModelOutput(rawOutput || "(no output)", outputBudget)).text;
 				const terminate =
 					result.success &&
 					typeof result.value === "object" &&
