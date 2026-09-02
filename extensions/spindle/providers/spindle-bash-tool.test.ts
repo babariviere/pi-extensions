@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import { test } from "node:test";
 
 import { createSpindleBashToolDefinition, MAX_STDIN_CHARS } from "./spindle-bash-tool.ts";
@@ -72,7 +73,8 @@ test("stdin, cwd, and env combine", async () => {
 		undefined,
 		undefined as never,
 	);
-	assert.match(text(result), /^x\n\/tmp/);
+	// macOS resolves /tmp to /private/tmp, so compare against the real path.
+	assert.match(text(result), new RegExp(`^x\\n${fs.realpathSync("/tmp")}`));
 });
 
 test("rejects a cwd that is not an existing directory", async () => {
