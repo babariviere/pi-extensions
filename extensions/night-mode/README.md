@@ -396,6 +396,7 @@ believed (`verifyEvidence`, called through `verifyLedger`):
 
 | Kind | Written as | Checked by |
 |------|------------|------------|
+| `command` | `Evidence: command npm test -- parser (repo: /abs/repo)` | the check is re-run and must exit 0 |
 | `file` | `Evidence: file /abs/path` | the path exists and is non-empty |
 | `commit` | `Evidence: commit <id> (repo: /abs/repo)` | `jj show` resolves it in that repo |
 | `pr` | `Evidence: pr https://…/pull/12` | well-formed pull request URL (never fetched) |
@@ -404,6 +405,27 @@ believed (`verifyEvidence`, called through `verifyLedger`):
 
 Nothing here touches the network: a night with no egress must still be able to
 close an item, and a change that only exists locally is still evidence.
+
+#### Why `command` is the strong one
+
+Every other kind points at an artifact, which only says something was produced.
+A file can exist and be wrong; a commit can resolve and revert nothing. `command`
+is a predicate the claim has to survive: it runs at verification time, in the
+run's working copy (or the `repo:` it names), and the item is demoted unless it
+exits 0. "The parser handles trailing commas" backed by `npm test -- parser` is a
+claim that decays on its own the moment it stops being true.
+
+Three consequences worth knowing:
+
+- **No-op checks are refused at write time.** `true`, `:`, `exit 0` and bare
+  `echo` let an item certify itself, which is the failure the typed format
+  exists to stop.
+- **Verdicts are memoized for five minutes** (`COMMAND_CACHE_TTL_MS`). The ledger
+  is re-verified on every nudge tick, on `/night status` and at run end, so an
+  uncached suite would be re-run every few minutes.
+- **The commands come from the night's own todos** and run with the authority of
+  whoever verifies. `/night todos` therefore lists them unchecked
+  (`runCommands: false`): listing is for queueing work, not judging it.
 
 A claim that fails its check does not silently reopen. The item becomes
 `needs-review`, keeps counting against the run, and the failure detail is written

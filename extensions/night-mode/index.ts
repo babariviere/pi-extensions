@@ -1002,7 +1002,12 @@ export default function (pi: ExtensionAPI): void {
 				// configured rather than derived from the run.
 				const cwd = process.cwd();
 				const dir = run?.ledgerDir ?? resolveLedgerDir(readNightConfig(cwd), cwd);
-				const items = verifyLedger(readLedger(dir), { cwd: run?.workspacePath ?? cwd });
+				// Listing is for queueing work, not judging it, so `command` evidence is
+				// reported unchecked here rather than blocking the TUI on a test suite.
+				const items = verifyLedger(readLedger(dir), {
+					cwd: run?.workspacePath ?? cwd,
+					runCommands: false,
+				});
 				const tally = ledgerCounts(items);
 				ctx.ui.notify(
 					[

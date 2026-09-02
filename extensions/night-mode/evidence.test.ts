@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it } from "node:test";
 import {
+	clearEvidenceCommandCache,
+	COMMAND_CACHE_TTL_MS,
 	formatEvidenceLine,
 	parseEvidence,
 	parseEvidenceValue,
@@ -160,5 +162,128 @@ describe("verifyEvidence: urls and prose", () => {
 	it("accepts a stated absence and passes unstructured evidence through", () => {
 		assert.equal(verifyEvidence({ kind: "none-with-reason", value: "no egress tonight", raw: "" }).ok, true);
 		assert.equal(verifyEvidence({ kind: "unstructured", value: "done on Friday", raw: "" }).ok, true);
+	});
+});
+
+describe("command evidence", () => {
+	it("parses with its repository", () => {
+		const evidence = parseEvidence("Evidence: command npm test -- parser (repo: /src/app)");
+		assert.equal(evidence?.kind, "command");
+		assert.equal(evidence?.value, "npm test -- parser");
+		assert.equal(evidence?.repo, "/src/app");
+	});
+
+	it("certifies the claim when the check passes", () => {
+		clearEvidenceCommandCache();
+		const evidence = parseEvidence("Evidence: command npm test")!;
+		const verification = verifyEvidence(evidence, {
+			cwd: "/work",
+			now: () => 0,
+			runCommand: () => ({ exitCode: 0, output: "12 passing" }),
+		});
+		assert.equal(verification.ok, true);
+		assert.match(verification.detail, /command exited 0 in \/work: npm test/);
+	});
+
+	it("demotes the claim and reports the tail when the check fails", () => {
+		clearEvidenceCommandCache();
+		const evidence = parseEvidence("Evidence: command npm test")!;
+		const verification = verifyEvidence(evidence, {
+			cwd: "/work",
+			now: () => 0,
+			runCommand: () => ({ exitCode: 1, output: "ok\n1 failing: parser drops trailing commas" }),
+		});
+		assert.equal(verification.ok, false);
+		assert.match(verification.detail, /command exited 1/);
+		assert.match(verification.detail, /1 failing: parser drops trailing commas/);
+	});
+
+	it("fails closed when the check cannot run", () => {
+		clearEvidenceCommandCache();
+		const evidence = parseEvidence("Evidence: command npm test (repo: /gone)")!;
+		const verification = verifyEvidence(evidence, {
+			cwd: "/work",
+			now: () => 0,
+			runCommand: () => ({ exitCode: null, output: "", error: "spawn ENOENT" }),
+		});
+		assert.equal(verification.ok, false);
+		assert.match(verification.detail, /did not run in \/gone: spawn ENOENT/);
+	});
+
+	it("fails closed when the check is killed", () => {
+		clearEvidenceCommandCache();
+		const evidence = parseEvidence("Evidence: command sleep 900")!;
+		const verification = verifyEvidence(evidence, {
+			cwd: "/work",
+			now: () => 0,
+			runCommand: () => ({ exitCode: null, output: "" }),
+		});
+		assert.equal(verification.ok, false);
+		assert.match(verification.detail, /was killed \(timeout\?\)/);
+	});
+
+	it("refuses a no-op check at write time", () => {
+		for (const command of ["true", ":", "exit 0", "echo done"]) {
+			const check = validateClosure({ status: "done", body: `Evidence: command ${command}` });
+			assert.equal(check.ok, false, command);
+			if (!check.ok) assert.match(check.error, /proves nothing/);
+		}
+	});
+
+	it("accepts a real check at write time", () => {
+		assert.equal(validateClosure({ status: "done", body: "Evidence: command npm test -- parser" }).ok, true);
+	});
+
+	it("reuses a verdict inside the cache window", () => {
+		clearEvidenceCommandCache();
+		const evidence = parseEvidence("Evidence: command npm test")!;
+		let runs = 0;
+		let clock = 0;
+		const opts = {
+			cwd: "/work",
+			now: () => clock,
+			runCommand: () => {
+				runs++;
+				return { exitCode: 0, output: "" };
+			},
+		};
+		verifyEvidence(evidence, opts);
+		verifyEvidence(evidence, opts);
+		assert.equal(runs, 1);
+		clock = COMMAND_CACHE_TTL_MS + 1;
+		verifyEvidence(evidence, opts);
+		assert.equal(runs, 2);
+	});
+
+	it("can be reported unchecked for a listing", () => {
+		clearEvidenceCommandCache();
+		const evidence = parseEvidence("Evidence: command npm test")!;
+		let runs = 0;
+		const verification = verifyEvidence(evidence, {
+			cwd: "/work",
+			runCommands: false,
+			runCommand: () => {
+				runs++;
+				return { exitCode: 1, output: "" };
+			},
+		});
+		assert.equal(runs, 0);
+		assert.equal(verification.ok, true);
+		assert.match(verification.detail, /not replayed by request/);
+	});
+
+	it("runs a real shell check", () => {
+		clearEvidenceCommandCache();
+		const passing = verifyEvidence(parseEvidence("Evidence: command test 1 -eq 1")!, {
+			cwd: process.cwd(),
+			commandTimeoutMs: 10_000,
+		});
+		assert.equal(passing.ok, true);
+		clearEvidenceCommandCache();
+		const failing = verifyEvidence(parseEvidence("Evidence: command test 1 -eq 2")!, {
+			cwd: process.cwd(),
+			commandTimeoutMs: 10_000,
+		});
+		assert.equal(failing.ok, false);
 	});
 });

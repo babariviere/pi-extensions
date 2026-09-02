@@ -9,20 +9,26 @@
  * item was closed with a file path that did not exist, which then travelled into
  * the report as a link to nothing.
  *
- * So evidence is typed (`file`, `commit`, `pr`, `url`, `none-with-reason`),
- * required at write time, and verified rather than believed. Reading stays
- * lenient: a todo written before any of this still loads, and its prose evidence
- * is kept as `unstructured` rather than rewritten or rejected. Only new closures
- * are held to the format.
+ * So evidence is typed (`file`, `commit`, `command`, `pr`, `url`,
+ * `none-with-reason`), required at write time, and verified rather than
+ * believed. Reading stays lenient: a todo written before any of this still
+ * loads, and its prose evidence is kept as `unstructured` rather than rewritten
+ * or rejected. Only new closures are held to the format.
+ *
+ * Every kind except `command` points at an artifact, which only shows that
+ * something was produced. `command` is a predicate the claim has to survive:
+ * the check is re-run at verification time and the item is demoted unless it
+ * exits 0. That is the difference between "a file exists" and "the tests that
+ * were supposed to pass still pass".
  */
 
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, resolve } from "node:path";
 
 /** Kinds a closure may claim. Each one has a matching check in `verifyEvidence`. */
-export const EVIDENCE_KINDS = ["file", "commit", "pr", "url", "none-with-reason"] as const;
+export const EVIDENCE_KINDS = ["file", "commit", "command", "pr", "url", "none-with-reason"] as const;
 
 export type EvidenceKind = (typeof EVIDENCE_KINDS)[number];
 
@@ -36,9 +42,9 @@ export type ParsedEvidenceKind = EvidenceKind | typeof UNSTRUCTURED;
 
 export interface Evidence {
 	kind: ParsedEvidenceKind;
-	/** Path, revision, URL or reason, depending on the kind. */
+	/** Path, revision, shell command, URL or reason, depending on the kind. */
 	value: string;
-	/** Repository a `commit` resolves in. Defaults to the run's working copy. */
+	/** Directory a `commit` resolves in, or a `command` runs in. Defaults to the run's working copy. */
 	repo?: string;
 	/** The `Evidence:` line as written, for reporting. */
 	raw: string;
@@ -90,6 +96,7 @@ function inferKind(value: string): EvidenceKind | undefined {
  * Accepted forms, in order of preference:
  *   `file /abs/path`
  *   `commit 069262f8 (repo: /src/phishing)`
+ *   `command npm test -- parser (repo: /src/phishing)`
  *   `pr https://github.com/o/r/pull/12`
  *   `none-with-reason no egress tonight, so no PR could be opened`
  * and, for files written before the format existed, a bare path/URL/revision.
@@ -129,8 +136,16 @@ export function formatEvidenceLine(evidence: Evidence): string {
 /** What a rejected close is told to write instead. */
 export const EVIDENCE_FORMAT_HELP =
 	"Use one of: `Evidence: file /abs/path`, `Evidence: commit <change-or-commit-id> (repo: /abs/repo)`, " +
+	"`Evidence: command <shell check that exits 0> (repo: /abs/repo)`, " +
 	"`Evidence: pr https://github.com/owner/repo/pull/1`, `Evidence: url https://...`, " +
-	"`Evidence: none-with-reason <why there is nothing to point at>`.";
+	"`Evidence: none-with-reason <why there is nothing to point at>`. " +
+	"Prefer `command` when the claim is about behaviour: it is re-run at verification time.";
+
+/**
+ * Commands that pass no matter what the night did. Accepting one would let an
+ * item certify itself, which is the failure the typed format exists to stop.
+ */
+const NO_OP_COMMANDS = /^(?:true|:|exit\s+0|echo\b.*|printf\b.*|\/bin\/true)$/i;
 
 export type ClosureCheck = { ok: true; evidence?: Evidence; reason?: string } | { ok: false; error: string };
 
@@ -177,6 +192,12 @@ export function validateClosure(input: { status: string; body: string }): Closur
 	if (evidence.kind === "none-with-reason" && evidence.value.length < 8) {
 		return { ok: false, error: "`none-with-reason` needs an actual reason, not a placeholder." };
 	}
+	if (evidence.kind === "command" && NO_OP_COMMANDS.test(evidence.value.trim())) {
+		return {
+			ok: false,
+			error: `"${evidence.value}" passes whatever the night did, so it proves nothing. Use a check that fails when the work is undone.`,
+		};
+	}
 	return { ok: true, evidence };
 }
 
@@ -186,13 +207,55 @@ export interface Verification {
 	detail: string;
 }
 
+/** The outcome of replaying a `command` evidence check. */
+export interface CommandOutcome {
+	exitCode: number | null;
+	/** Tail of the combined output, bounded for reporting. */
+	output: string;
+	error?: string;
+}
+
 export interface VerifyOptions {
-	/** Base for relative paths and default repository for `commit`. */
+	/** Base for relative paths and default directory for `commit` and `command`. */
 	cwd?: string;
 	/** Injected for tests. `undefined` means the path does not exist. */
 	statPath?: (path: string) => { size: number } | undefined;
 	/** Injected for tests. Returns false when the revision does not resolve. */
 	resolveCommit?: (revision: string, repo: string) => boolean;
+	/** Injected for tests. Replays a `command` evidence check. */
+	runCommand?: (command: string, cwd: string, timeoutMs: number) => CommandOutcome;
+	/** Per-command ceiling. A check that needs longer than this is not a check. */
+	commandTimeoutMs?: number;
+	/** Injected for tests. Clock behind the replay cache. */
+	now?: () => number;
+	/**
+	 * Set false to report `command` evidence unchecked instead of running it.
+	 * The commands come from the night's own todos, so they carry the authority
+	 * of whoever verifies; a caller that does not want that says so here.
+	 */
+	runCommands?: boolean;
+}
+
+/** Long enough for a test suite, short enough that a wedged check still reports. */
+export const DEFAULT_COMMAND_TIMEOUT_MS = 300_000;
+
+/**
+ * How long a replayed check's verdict is reused.
+ *
+ * The ledger is re-read and re-verified on every nudge tick, on `/night status`
+ * and at run end, so an uncached `command` kind would re-run every suite in the
+ * ledger every few minutes. The window is short enough that a check which starts
+ * failing is noticed within one report cycle.
+ */
+export const COMMAND_CACHE_TTL_MS = 5 * 60_000;
+
+const COMMAND_OUTPUT_MAX_CHARS = 2_000;
+
+const commandCache = new Map<string, { at: number; outcome: CommandOutcome }>();
+
+/** Drop memoized command verdicts (run boundaries and tests). */
+export function clearEvidenceCommandCache(): void {
+	commandCache.clear();
 }
 
 function expandPath(value: string, cwd: string): string {
@@ -231,6 +294,49 @@ const defaultResolveCommit = (revision: string, repo: string): boolean => {
 	}
 };
 
+/**
+ * Run a check through the shell, like the night itself would. Combined output
+ * is captured and bounded: the report needs the reason it failed, not the log.
+ */
+const defaultRunCommand = (command: string, cwd: string, timeoutMs: number): CommandOutcome => {
+	const result = spawnSync(command, {
+		cwd,
+		shell: true,
+		timeout: timeoutMs,
+		encoding: "utf-8",
+		maxBuffer: 8 * 1024 * 1024,
+	});
+	const combined = `${result.stdout ?? ""}${result.stderr ?? ""}`.trim();
+	const output = combined.length > COMMAND_OUTPUT_MAX_CHARS ? combined.slice(-COMMAND_OUTPUT_MAX_CHARS) : combined;
+	return {
+		exitCode: result.status,
+		output,
+		...(result.error ? { error: result.error.message } : {}),
+	};
+};
+
+const memoizedRun = (
+	runCommand: NonNullable<VerifyOptions["runCommand"]>,
+	command: string,
+	cwd: string,
+	timeoutMs: number,
+	now: () => number,
+): CommandOutcome => {
+	const key = `${cwd}\u0000${command}`;
+	const cached = commandCache.get(key);
+	const at = now();
+	if (cached && at - cached.at <= COMMAND_CACHE_TTL_MS) return cached.outcome;
+	const outcome = runCommand(command, cwd, timeoutMs);
+	commandCache.set(key, { at, outcome });
+	return outcome;
+};
+
+/** The bit of command output worth putting on a report line. */
+const lastLine = (output: string): string => {
+	const lines = output.split("\n").filter((line) => line.trim());
+	return lines[lines.length - 1]?.trim() ?? "";
+};
+
 function verifyUrl(value: string): URL | undefined {
 	try {
 		const url = new URL(value);
@@ -263,6 +369,27 @@ export function verifyEvidence(evidence: Evidence, opts: VerifyOptions = {}): Ve
 				return { ok: false, detail: `revision ${evidence.value} does not resolve in ${repo}` };
 			}
 			return { ok: true, detail: `revision ${evidence.value} resolves in ${repo}` };
+		}
+		case "command": {
+			if (opts.runCommands === false) {
+				return { ok: true, detail: `command not replayed by request: ${evidence.value}` };
+			}
+			const timeoutMs = opts.commandTimeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS;
+			const runCommand = opts.runCommand ?? defaultRunCommand;
+			const where = expandPath(evidence.repo ?? cwd, cwd);
+			const outcome = memoizedRun(runCommand, evidence.value, where, timeoutMs, opts.now ?? Date.now);
+			if (outcome.error !== undefined) {
+				return { ok: false, detail: `command did not run in ${where}: ${outcome.error}` };
+			}
+			if (outcome.exitCode !== 0) {
+				const tail = lastLine(outcome.output);
+				const exit = outcome.exitCode === null ? "was killed (timeout?)" : `exited ${outcome.exitCode}`;
+				return {
+					ok: false,
+					detail: `command ${exit} in ${where}: ${evidence.value}${tail ? ` — ${tail}` : ""}`,
+				};
+			}
+			return { ok: true, detail: `command exited 0 in ${where}: ${evidence.value}` };
 		}
 		case "pr": {
 			const url = verifyUrl(evidence.value);

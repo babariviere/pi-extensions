@@ -84,8 +84,10 @@ export function composeNightPrompt(input: NightPromptInput): string {
 		"",
 		"Closing an item takes typed evidence, and the todo tool refuses the write without it:",
 		"",
-		"- `done` plus one of `Evidence: file /abs/path`, `Evidence: commit <id> (repo: /abs/repo)`, " +
-			"`Evidence: pr <url>`, `Evidence: url <url>`, `Evidence: none-with-reason <why there is nothing to point at>`,",
+		"- `done` plus one of `Evidence: command <check that exits 0> (repo: /abs/repo)`, `Evidence: file /abs/path`, " +
+			"`Evidence: commit <id> (repo: /abs/repo)`, `Evidence: pr <url>`, `Evidence: url <url>`, " +
+			"`Evidence: none-with-reason <why there is nothing to point at>`. Prefer `command` for a behavioural claim: " +
+			"it is re-run at verification time, so a check that only passes tonight demotes the item,",
 		"- or `skipped` plus a `Reason:` line.",
 		"",
 		"The evidence is then checked: a `file` that does not exist or is empty, or a `commit` that does not resolve, " +
@@ -154,8 +156,9 @@ export function composeNudge(input: {
 		input.unresolved,
 		"",
 		"Pick the next one and finish it. To close an item, set its status to `done` and put a typed `Evidence:` line " +
-			"in the todo body (`file /abs/path`, `commit <id> (repo: /abs/repo)`, `pr <url>`, `url <url>`, " +
-			"`none-with-reason <why>`). To drop one, set its status to `skipped` and put a `Reason:` line. The write is " +
+			"in the todo body (`command <check that exits 0> (repo: /abs/repo)`, `file /abs/path`, " +
+			"`commit <id> (repo: /abs/repo)`, `pr <url>`, `url <url>`, `none-with-reason <why>`). To drop one, set its " +
+			"status to `skipped` and put a `Reason:` line. The write is " +
 			"refused without one, and evidence that does not check out keeps the item open.",
 		"You are still the orchestrator: delegate the item to a subagent with `night: true` rather than implementing " +
 			"it yourself, and append to the report from what it hands back.",
