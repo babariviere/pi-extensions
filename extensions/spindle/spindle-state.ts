@@ -58,6 +58,7 @@ export class SpindleState {
 	#sandbox: SandboxController | undefined;
 	/** Spindle's own MCP client, created on first `mcp.*` use or first `/mcp` command. */
 	#mcpHub: McpClientHub | undefined;
+	#mcpStatusListener: (() => void) | undefined;
 	/** Unsubscribe for the mid-session sandbox request listener. */
 	#unsubscribeSandbox: (() => void) | undefined;
 	/**
@@ -392,8 +393,18 @@ export class SpindleState {
 	 * immediately visible to `mcp.*` without a reload.
 	 */
 	mcpClient(cwd: string): McpClientHub {
-		this.#mcpHub ??= new McpClientHub({ cwd });
+		this.#mcpHub ??= new McpClientHub({ cwd, onStatusChange: () => this.#mcpStatusListener?.() });
 		return this.#mcpHub;
+	}
+
+	/**
+	 * Observe MCP connection changes (footer indicator).
+	 *
+	 * The hub is created on first use, so the listener is held here and read
+	 * through the closure above rather than passed at construction time.
+	 */
+	onMcpStatusChange(listener: (() => void) | undefined): void {
+		this.#mcpStatusListener = listener;
 	}
 
 	/** Current sandbox state, or undefined when there is no sandbox. */

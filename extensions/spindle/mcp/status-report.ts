@@ -44,6 +44,39 @@ export const formatMcpStatus = (servers: McpServerStatus[], errors: string[] = [
 	return ["spindle MCP client", "", ...lines, ...problems, ...footer].join("\n");
 };
 
+/**
+ * Footer summary of the configured servers.
+ *
+ * Only servers that could be connected count: `disabled` and `unsupported`
+ * entries are noise in a one-line indicator.
+ */
+export interface McpFooterSummary {
+	connected: number;
+	total: number;
+	needsAuth: number;
+	failed: number;
+}
+
+export const mcpFooterSummary = (servers: McpServerStatus[]): McpFooterSummary | undefined => {
+	const usable = servers.filter((server) => server.state !== "disabled" && server.state !== "unsupported");
+	if (usable.length === 0) return undefined;
+	const count = (state: McpServerStatus["state"]): number => usable.filter((server) => server.state === state).length;
+	return {
+		connected: count("connected"),
+		total: usable.length,
+		needsAuth: count("needs-auth"),
+		failed: count("failed"),
+	};
+};
+
+/** One-line footer text, e.g. `mcp 2/3` with `!auth` when a server needs authorizing. */
+export const formatMcpFooterStatus = (summary: McpFooterSummary): string => {
+	const flags = [summary.needsAuth > 0 ? "!auth" : "", summary.failed > 0 ? `\u2717${summary.failed}` : ""].filter(
+		Boolean,
+	);
+	return `mcp ${summary.connected}/${summary.total}${flags.length > 0 ? ` ${flags.join(" ")}` : ""}`;
+};
+
 export const formatMcpTools = (tools: McpToolSummary[], server?: string): string => {
 	if (tools.length === 0) {
 		return server

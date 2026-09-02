@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import type { McpServerStatus, McpToolSummary } from "./client-hub.ts";
-import { formatMcpStatus, formatMcpTools } from "./status-report.ts";
+import { formatMcpFooterStatus, formatMcpStatus, formatMcpTools, mcpFooterSummary } from "./status-report.ts";
 
 const status = (overrides: Partial<McpServerStatus> = {}): McpServerStatus => ({
 	name: "slack",
@@ -40,6 +40,31 @@ test("config problems are reported under the table", () => {
 test("an unsupported entry keeps its reason", () => {
 	const text = formatMcpStatus([status({ state: "unsupported", detail: "socket transport is not implemented" })]);
 	assert.match(text, /unsupported.*socket transport/s);
+});
+
+test("the footer summary counts only connectable servers", () => {
+	const summary = mcpFooterSummary([
+		status({ name: "slack", state: "connected" }),
+		status({ name: "linear", state: "idle" }),
+		status({ name: "old", state: "disabled" }),
+		status({ name: "sock", state: "unsupported" }),
+	]);
+	assert.deepEqual(summary, { connected: 1, total: 2, needsAuth: 0, failed: 0 });
+	assert.equal(formatMcpFooterStatus(summary!), "mcp 1/2");
+});
+
+test("no connectable server yields no footer item", () => {
+	assert.equal(mcpFooterSummary([]), undefined);
+	assert.equal(mcpFooterSummary([status({ state: "disabled" })]), undefined);
+});
+
+test("the footer flags servers needing auth and failures", () => {
+	const summary = mcpFooterSummary([
+		status({ name: "slack", state: "needs-auth" }),
+		status({ name: "linear", state: "failed" }),
+		status({ name: "local", state: "connected" }),
+	]);
+	assert.equal(formatMcpFooterStatus(summary!), "mcp 1/3 !auth \u27171");
 });
 
 test("tools group per server with their first description line", () => {

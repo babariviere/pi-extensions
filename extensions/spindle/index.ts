@@ -14,13 +14,15 @@ import { SANDBOX_STATE_EVENT, type SandboxStateEvent } from "./sandbox/protocol.
 
 /** Footer key for the sandbox indicator. */
 const SANDBOX_STATUS_KEY = "spindle-sandbox";
+/** Footer key for the MCP connection indicator. */
+const MCP_STATUS_KEY = "spindle-mcp";
 import { loadCodePreviewSettings } from "./ui/code-preview.ts";
 import { type SpindleToolShellDecorator, withCodePreviewShell } from "./ui/code-preview-shell.ts";
 import { cleanupOldRuns } from "./agents/paths.ts";
 import { CapturedToolCatalog } from "./capture/catalog.ts";
 import { authorizeMcpServer, logoutMcpServer } from "./mcp/auth-flow.ts";
 import { loadMcpServerConfig } from "./mcp/server-config.ts";
-import { formatMcpStatus, formatMcpTools } from "./mcp/status-report.ts";
+import { formatMcpFooterStatus, formatMcpStatus, formatMcpTools, mcpFooterSummary } from "./mcp/status-report.ts";
 import { installRegisteredToolCapture } from "./capture/interceptor.ts";
 import { DEFAULT_SPINDLE_CONFIG, effectiveToolCaptureConfig } from "./config.ts";
 import { SpindleToolLifecycle, SpindleToolOwnership, ownsSpindleToolSource } from "./core/tool-ownership.ts";
@@ -137,6 +139,10 @@ export default async function spindle(pi: ExtensionAPI): Promise<void> {
 		spindleUi.start(context);
 		sandboxContext = context;
 		renderSandboxStatus(context, state.sandboxState());
+		state.onMcpStatusChange(() => {
+			if (sandboxContext) renderMcpStatus(sandboxContext);
+		});
+		renderMcpStatus(context);
 		// Throttled, best-effort prune of stale persisted subagent runs so they do
 		// not accumulate forever next to the parent sessions.
 		try {
@@ -164,6 +170,26 @@ export default async function spindle(pi: ExtensionAPI): Promise<void> {
 		// write and Spindle refusing one it can see.
 		const degraded = state.osEnforced ? "" : " (paths only)";
 		context.ui.setStatus(SANDBOX_STATUS_KEY, context.ui.theme.fg("accent", `\u{1F512} ${state.mode}${degraded}`));
+	};
+
+	/**
+	 * Footer indicator for MCP: how many configured servers this session actually
+	 * holds a connection to. Reading it never connects anything, so the count
+	 * starts at 0 and rises as lazy connects happen.
+	 */
+	const renderMcpStatus = (context: ExtensionContext): void => {
+		let summary: ReturnType<typeof mcpFooterSummary>;
+		try {
+			summary = mcpFooterSummary(state.mcpClient(context.cwd).status());
+		} catch {
+			summary = undefined;
+		}
+		if (!summary) {
+			context.ui.setStatus(MCP_STATUS_KEY, undefined);
+			return;
+		}
+		const color = summary.failed > 0 ? "error" : summary.needsAuth > 0 ? "warning" : "dim";
+		context.ui.setStatus(MCP_STATUS_KEY, context.ui.theme.fg(color, formatMcpFooterStatus(summary)));
 	};
 
 	pi.events.on(SANDBOX_STATE_EVENT, (payload) => {
@@ -291,6 +317,8 @@ export default async function spindle(pi: ExtensionAPI): Promise<void> {
 				);
 			} catch (error) {
 				context.ui.notify(`spindle: ${error instanceof Error ? error.message : String(error)}`, "error");
+			} finally {
+				renderMcpStatus(context);
 			}
 		},
 	});
@@ -306,7 +334,9 @@ export default async function spindle(pi: ExtensionAPI): Promise<void> {
 			if (!serverName) {
 				const names = mcpServerNames(context.cwd);
 				context.ui.notify(
-					names.length > 0 ? `spindle: /mcp-auth <server> — one of: ${names.join(", ")}` : "spindle: no MCP server is configured",
+					names.length > 0
+						? `spindle: /mcp-auth <server> — one of: ${names.join(", ")}`
+						: "spindle: no MCP server is configured",
 					"warning",
 				);
 				return;

@@ -136,6 +136,8 @@ export interface McpClientHubOptions {
 	cache?: McpToolCache;
 	loadConfig?: (cwd: string) => McpServerConfig;
 	fingerprint?: (cwd: string) => string;
+	/** Called whenever a connection is opened, dropped or fails, so a UI can refresh. */
+	onStatusChange?: () => void;
 }
 
 export class McpClientHub implements McpToolHub {
@@ -148,6 +150,15 @@ export class McpClientHub implements McpToolHub {
 
 	constructor(options: McpClientHubOptions) {
 		this.#options = options;
+	}
+
+	/** Best-effort notification; a broken listener must never break a call. */
+	#statusChanged(): void {
+		try {
+			this.#options.onStatusChange?.();
+		} catch {
+			// A UI refresh is cosmetic.
+		}
 	}
 
 	#fingerprint(): string {
@@ -230,11 +241,13 @@ export class McpClientHub implements McpToolHub {
 			this.#connections.set(serverName, connection);
 			this.#failures.delete(serverName);
 			this.#toolCache().set(serverName, serverTarget(definition), this.#fingerprint(), connection.tools);
+			this.#statusChanged();
 			return connection;
 		} catch (error) {
 			const detail = error instanceof Error ? error.message : String(error);
 			const needsAuth = error instanceof UnauthorizedError || error instanceof McpAuthorizationRequiredError;
 			this.#failures.set(serverName, { state: needsAuth ? "needs-auth" : "failed", detail });
+			this.#statusChanged();
 			throw error;
 		}
 	}
@@ -284,6 +297,7 @@ export class McpClientHub implements McpToolHub {
 		const connection = this.#connections.get(serverName);
 		this.#connections.delete(serverName);
 		if (!connection) return;
+		this.#statusChanged();
 		try {
 			await connection.client.close();
 		} catch {
