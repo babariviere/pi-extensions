@@ -34,6 +34,11 @@ const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"] as 
 interface SpindleExecutorConfig {
 	runtime: SpindleExecutorRuntime;
 	timeoutMs: number;
+	/**
+	 * Policy ceiling for a per-invocation `timeoutMs` request: a single
+	 * `spindle_exec` call may raise (never lower) `timeoutMs` up to this value.
+	 */
+	maxTimeoutMs: number;
 	memoryLimitBytes: number;
 	maxOutputChars: number;
 	maxNestedResultChars: number;
@@ -127,6 +132,7 @@ export const DEFAULT_SPINDLE_CONFIG: SpindleConfig = {
 	executor: {
 		runtime: "quickjs",
 		timeoutMs: 120_000,
+		maxTimeoutMs: 900_000,
 		memoryLimitBytes: 64 * 1024 * 1024,
 		maxOutputChars: 100_000,
 		maxNestedResultChars: 2_000_000,
@@ -246,6 +252,10 @@ export const normalizeSpindleConfig = (input: Record<string, unknown>): SpindleC
 		executor: {
 			runtime: "quickjs",
 			timeoutMs: boundedInteger(executor.timeoutMs, DEFAULT_SPINDLE_CONFIG.executor.timeoutMs, 1_000, 900_000),
+			maxTimeoutMs: Math.max(
+				boundedInteger(executor.timeoutMs, DEFAULT_SPINDLE_CONFIG.executor.timeoutMs, 1_000, 900_000),
+				boundedInteger(executor.maxTimeoutMs, DEFAULT_SPINDLE_CONFIG.executor.maxTimeoutMs, 1_000, 3_600_000),
+			),
 			memoryLimitBytes: boundedInteger(
 				executor.memoryLimitBytes,
 				DEFAULT_SPINDLE_CONFIG.executor.memoryLimitBytes,

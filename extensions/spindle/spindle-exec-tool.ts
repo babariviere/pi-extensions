@@ -114,6 +114,13 @@ export const createSpindleExecTool = (
 						description: "Optional agent-call cap, bounded by Spindle configuration",
 					}),
 				),
+				timeoutMs: Type.Optional(
+					Type.Number({
+						minimum: 1,
+						description:
+							"Optional whole-program deadline in ms for this invocation; raises (never lowers) the configured executor.timeoutMs, capped by executor.maxTimeoutMs",
+					}),
+				),
 				display: Type.Optional(
 					Type.Union([
 						Type.Object({
@@ -600,6 +607,7 @@ export const createSpindleExecTool = (
 					parentToolCallId: toolCallId,
 					context,
 					...(params.agentBudget !== undefined ? { maxAgentCalls: params.agentBudget } : {}),
+					...(params.timeoutMs !== undefined ? { requestedTimeoutMs: params.timeoutMs } : {}),
 					...(runDisplay
 						? {
 								display: {

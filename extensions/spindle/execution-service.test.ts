@@ -162,3 +162,35 @@ test("print output reaches the result logs", async () => {
 	const result = await execute(service, "print('hello'); return 1;");
 	assert.deepEqual(result.logs, ["hello"]);
 });
+
+test("a per-invocation timeout request raises the program deadline", async () => {
+	const service = serviceWith([], { executor: { ...configWith().executor, timeoutMs: 1_000, maxTimeoutMs: 900_000 } });
+	const sleep = "await new Promise((resolve) => setTimeout(resolve, 1_800)); return 'done';";
+
+	const timedOut = await execute(service, sleep);
+	assert.equal(timedOut.success, false);
+
+	const raised = await service.execute({
+		code: sleep,
+		signal: undefined,
+		parentToolCallId: "raised",
+		context: { cwd: "/tmp" } as never,
+		requestedTimeoutMs: 20_000,
+		onPartial: () => {},
+	});
+	assert.equal(raised.success, true, raised.error ?? "");
+	assert.equal(raised.value, "done");
+});
+
+test("a per-invocation timeout request never lowers the configured deadline", async () => {
+	const service = serviceWith([], { executor: { ...configWith().executor, timeoutMs: 15_000, maxTimeoutMs: 900_000 } });
+	const result = await service.execute({
+		code: "await new Promise((resolve) => setTimeout(resolve, 1_200)); return 'done';",
+		signal: undefined,
+		parentToolCallId: "lowered",
+		context: { cwd: "/tmp" } as never,
+		requestedTimeoutMs: 10,
+		onPartial: () => {},
+	});
+	assert.equal(result.success, true, result.error ?? "");
+});

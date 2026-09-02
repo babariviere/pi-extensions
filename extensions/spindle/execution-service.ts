@@ -93,6 +93,11 @@ export interface SpindleExecutionOptions {
 	parentToolCallId: string;
 	context: ExtensionContext;
 	maxAgentCalls?: number;
+	/**
+	 * Whole-program deadline requested by this invocation. It raises (never
+	 * lowers) `executor.timeoutMs` and is capped by `executor.maxTimeoutMs`.
+	 */
+	requestedTimeoutMs?: number;
 	display?: SpindleRunDisplay;
 	onPartial(snapshot: SpindleExecutionPartial): void;
 }
@@ -238,9 +243,16 @@ export class SpindleExecutionService {
 		const orchestrationTimeoutMs =
 			Math.max(this.config.executor.timeoutMs, this.config.agents.timeoutMs, this.config.agents.waitMs) +
 			BLOCKING_HOST_CALL_SLACK_MS;
+		// A caller may ask for a longer deadline for this one program; the request
+		// only ever raises the configured default and stops at the policy ceiling.
+		const requestedProgramTimeoutMs =
+			typeof options.requestedTimeoutMs === "number" && Number.isFinite(options.requestedTimeoutMs)
+				? Math.min(Math.max(1, Math.floor(options.requestedTimeoutMs)), this.config.executor.maxTimeoutMs)
+				: 0;
+		const baseTimeoutMs = Math.max(this.config.executor.timeoutMs, requestedProgramTimeoutMs);
 		const effectiveTimeoutMs = codeUsesOrchestration(options.code)
-			? orchestrationTimeoutMs
-			: this.config.executor.timeoutMs;
+			? Math.max(orchestrationTimeoutMs, baseTimeoutMs)
+			: baseTimeoutMs;
 		const minimumTimeoutMsForHostCall = (ref: string, args: Record<string, unknown>): number | undefined => {
 			const requested = requestedBlockingTimeoutMs(ref, args);
 			if (isBlockingOrchestrationRef(ref)) {
@@ -255,7 +267,7 @@ export class SpindleExecutionService {
 			// its own timeout instead of the executor killing the whole program.
 			if (isBlockingHostTimeoutRef(ref) && requested > 0) {
 				const requestedTimeoutMs = Math.min(Math.floor(requested), MAX_AGENT_TIMEOUT_MS);
-				return Math.max(this.config.executor.timeoutMs, requestedTimeoutMs + BLOCKING_HOST_CALL_SLACK_MS);
+				return Math.max(baseTimeoutMs, requestedTimeoutMs + BLOCKING_HOST_CALL_SLACK_MS);
 			}
 			return undefined;
 		};
