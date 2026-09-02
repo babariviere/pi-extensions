@@ -801,6 +801,85 @@ globalThis.AbortSignal = __SpindleAbortSignal;
 globalThis.AbortController = __SpindleAbortController;
 `;
 
+/**
+ * Intl and Atomics are absent from the engine, and lib.es5 declares both, so a
+ * program can reference either, type-check clean, and then fail at runtime. Intl
+ * is the worse of the two: `Number.prototype.toLocaleString` and friends *do*
+ * exist, and they accept a locale argument and silently ignore it, so
+ * `(1234.5).toLocaleString("de-DE")` returns "1234.5" rather than "1.234,5".
+ * A wrong answer that looks right is worse than no answer.
+ *
+ * This replaces both silent failures with an actionable one. Intl and Atomics
+ * become objects whose every property access throws, and the toLocale* family
+ * throws only when a locale is actually supplied: called with no arguments they
+ * are equivalent to their non-locale counterparts, which is legitimate and
+ * worth keeping.
+ *
+ * Deliberately not a real Intl. The two ways to get one are a host bridge (the
+ * host has a full Intl, but every host call here is async, and an async
+ * `format()` is the wrong shape) or shipping a polyfill plus locale data (large
+ * against a 64 MiB heap and re-parsed on every invocation, since newContext()
+ * runs per call). Neither is worth paying for before a program actually needs
+ * locale-aware output; formatting explicitly, or returning raw values and
+ * letting the host format them, covers the cases seen so far.
+ */
+const MISSING_INTL = `
+const __spindleUnsupported = (feature, hint) => {
+  const error = new Error(
+    feature + " is not available in this sandbox: the engine is built without ICU, so it carries no locale data. " + hint,
+  );
+  error.name = "NotSupportedError";
+  return error;
+};
+const __spindleThrowingNamespace = (namespace, hint) =>
+  new Proxy(Object.create(null), {
+    get: (unusedTarget, property) => {
+      throw __spindleUnsupported(namespace + "." + String(property), hint);
+    },
+    has: () => true,
+  });
+if (typeof globalThis.Intl === "undefined") {
+  globalThis.Intl = __spindleThrowingNamespace(
+    "Intl",
+    "Format the value explicitly, or return it raw and let the host format it.",
+  );
+}
+if (typeof globalThis.Atomics === "undefined") {
+  globalThis.Atomics = __spindleThrowingNamespace(
+    "Atomics",
+    "The sandbox is single-threaded, so there is nothing to synchronise with.",
+  );
+}
+const __spindleLocaleMethods = [
+  [Number.prototype, ["toLocaleString"]],
+  [BigInt.prototype, ["toLocaleString"]],
+  [Date.prototype, ["toLocaleString", "toLocaleDateString", "toLocaleTimeString"]],
+  [String.prototype, ["toLocaleLowerCase", "toLocaleUpperCase"]],
+  [Array.prototype, ["toLocaleString"]],
+];
+for (const entry of __spindleLocaleMethods) {
+  const prototype = entry[0];
+  for (const name of entry[1]) {
+    const original = prototype[name];
+    if (typeof original !== "function") continue;
+    Object.defineProperty(prototype, name, {
+      configurable: true,
+      writable: true,
+      value: function (...args) {
+        if (args.length > 0 && args[0] !== undefined) {
+          throw __spindleUnsupported(
+            name + " with a locale",
+            "Without it the locale argument is ignored and the result is wrong rather than merely unlocalised. " +
+              "Format the value explicitly, or return it raw and let the host format it.",
+          );
+        }
+        return original.apply(this, args);
+      },
+    });
+  }
+}
+`;
+
 /** The polyfill that draws on host-injected entropy. */
 export const CRYPTO_POLYFILL_NAME = "crypto";
 
@@ -816,6 +895,7 @@ export const SPINDLE_GUEST_POLYFILLS: readonly SpindleGuestPolyfill[] = [
 	{ name: CRYPTO_POLYFILL_NAME, triggers: ["crypto"], source: CRYPTO },
 	{ name: "url", triggers: ["URL", "URLSearchParams"], source: URL_POLYFILL },
 	{ name: "abort", triggers: ["AbortController", "AbortSignal"], source: ABORT },
+	{ name: "missingIntl", triggers: ["Intl", "Atomics", "toLocale"], source: MISSING_INTL },
 ];
 
 /** The polyfills a program's text implies, in declaration order. */

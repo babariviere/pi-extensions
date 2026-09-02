@@ -32,7 +32,9 @@ These are polyfilled, and injected only when your program mentions them by name 
 
 There is deliberately no `fetch`, no `crypto.subtle` and no `WebAssembly`: the audited host-call table (`pi.*`, `extensions.*`, `mcp.*`) is meant to be the only route out of the sandbox. For network access use a `pi.bash` command or an MCP tool.
 
-`Intl` and `Atomics` do not exist. TypeScript's `lib.es5` declares both, so they type-check and then fail at runtime; `Intl` in particular is absent because the engine ships no ICU data. Do not use `toLocaleString` for locale-aware output, it ignores the locale argument.
+`Intl` and `Atomics` do not exist, and TypeScript's `lib.es5` declares both, so they type-check and then fail at runtime. Both now fail with a `NotSupportedError` naming the property rather than an undefined-property `TypeError`.
+
+`Intl` is absent because the engine is built without ICU, so it carries no locale data. The `toLocaleString` family does exist and would silently ignore a locale argument, which turns a wrong answer into one that looks right, so passing a locale throws instead. Calling them with no arguments still works and is equivalent to the non-locale form. For locale-aware output, format the value explicitly or return it raw and let the host format it.
 
 `process` is a minimal shim: `process.env` is an allowlisted host snapshot (HOME, USER, LOGNAME, SHELL, PWD, PATH, LANG, LC_*, TERM, TMPDIR, XDG_*), `process.platform`/`process.arch` are host facts, and `process.cwd()` returns the session working directory. Sensitive variables are never exposed; for secrets in bash use the `<\\secret:NAME>` reference path.
 
