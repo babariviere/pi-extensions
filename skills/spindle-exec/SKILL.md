@@ -11,7 +11,27 @@ description: >-
 
 One type-checked TS program in a fresh isolated QuickJS sandbox. Only the `return` value reaches the model; `print()`/`console.log` go to the activity widget. `π` is not a tool.
 
-Available globals: `pi`, `extensions`, and `tools` (full code mode only), `mcp`, `agents`, `mapLimit`, `print`, `console`, `π`, `process`, and the timer family (`setTimeout` / `clearTimeout` / `setInterval` / `clearInterval`). Nothing else exists: there is no `memory`, `state`, `schema`, `compact`, `mesh`, `council`, `rlm`, `agent()`, `budget`, or `workflow` (and no bare `parallel` / `pipeline` / `phase` / `log` aliases).
+Available globals: `pi`, `extensions`, and `tools` (full code mode only), `mcp`, `agents`, `mapLimit`, `print`, `console`, `π`, `process`, the timer family (`setTimeout` / `clearTimeout` / `setInterval` / `clearInterval`), and the host APIs listed below. Nothing else exists: there is no `memory`, `state`, `schema`, `compact`, `mesh`, `council`, `rlm`, `agent()`, `budget`, or `workflow` (and no bare `parallel` / `pipeline` / `phase` / `log` aliases).
+
+The language level is ES2025: `Object.groupBy`, `Map.groupBy`, `Promise.withResolvers`, `Promise.try`, the `Set` combinators (`union`, `intersection`, `difference`, `isSubsetOf`), the iterator helpers (`values().map(...).toArray()`), `RegExp.escape`, `Array.prototype.toSorted`/`with`/`toSpliced`, `Float16Array` and `Error.isError` are all available and typed. `Array.fromAsync`, `JSON.rawJSON`, `Symbol.dispose` and `Temporal` are not.
+
+## Host APIs
+
+These are polyfilled, and injected only when your program mentions them by name (so reaching one dynamically through `globalThis["Text" + "Encoder"]` will not work).
+
+| API | Notes |
+|------|-------|
+| `TextEncoder` / `TextDecoder` | utf-8 only; `TextDecoder` does not stream and rejects any other label |
+| `URL` / `URLSearchParams` | pragmatic, not WHATWG-conformant: authority parsing needs an explicit `//`, hostnames are lowercased but not punycode-normalized |
+| `atob` / `btoa` | `btoa` throws on input outside Latin-1; encode with `TextEncoder` first |
+| `structuredClone` | a real clone: keeps `Map`, `Set`, `Date`, `RegExp`, typed arrays, handles cycles, throws on functions and promises |
+| `crypto.getRandomValues` / `crypto.randomUUID` | draws on a 4096-byte pool of host entropy and throws once drained, because a synchronous call cannot reach the async host bridge. No `crypto.subtle` |
+| `queueMicrotask` | |
+| `performance.now` | milliseconds since program start, wall clock, not monotonic |
+
+There is deliberately no `fetch`, no `crypto.subtle` and no `WebAssembly`: the audited host-call table (`pi.*`, `extensions.*`, `mcp.*`) is meant to be the only route out of the sandbox. For network access use a `pi.bash` command or an MCP tool.
+
+`Intl` and `Atomics` do not exist. TypeScript's `lib.es5` declares both, so they type-check and then fail at runtime; `Intl` in particular is absent because the engine ships no ICU data. Do not use `toLocaleString` for locale-aware output, it ignores the locale argument.
 
 `process` is a minimal shim: `process.env` is an allowlisted host snapshot (HOME, USER, LOGNAME, SHELL, PWD, PATH, LANG, LC_*, TERM, TMPDIR, XDG_*), `process.platform`/`process.arch` are host facts, and `process.cwd()` returns the session working directory. Sensitive variables are never exposed; for secrets in bash use the `<\\secret:NAME>` reference path.
 

@@ -202,10 +202,17 @@ const ABSENT_FROM_ENGINE = [
 ];
 
 test("the bare engine ships none of the host APIs Spindle polyfills", async () => {
-	const value = await probe(
+	// polyfills: false keeps this a statement about the engine. The probe names
+	// the polyfilled globals as literals, which would otherwise trigger the
+	// text-scan injection in runtime/guest-polyfills.ts and install them.
+	const runtime = new QuickJsRuntime();
+	const result = await runtime.execute(
 		`return ${JSON.stringify(ABSENT_FROM_ENGINE)}.filter((name) => typeof globalThis[name] !== "undefined");`,
+		unexpectedHostCall,
+		{ ...baseOptions, polyfills: false },
 	);
-	assert.deepEqual(value, []);
+	assert.equal(result.terminationReason, "completed", result.error ?? "");
+	assert.deepEqual(result.value, []);
 });
 
 test("the engine ships no ES2024+ features Spindle must not promise", async () => {

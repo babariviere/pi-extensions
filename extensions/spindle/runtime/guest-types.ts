@@ -259,6 +259,79 @@ declare const process: {
   cwd(): string;
 };
 declare function print(...args: unknown[]): void;
+// Host APIs the engine does not ship, supplied by runtime/guest-polyfills.ts.
+// The runtime injects each one only when the program text mentions it, so
+// these declarations and that module's trigger lists must stay in step. There
+// is deliberately no fetch, no crypto.subtle and no WebAssembly: those are
+// capabilities rather than conveniences, and the audited host-call table is
+// meant to be the only route out of the sandbox.
+declare function queueMicrotask(callback: () => void): void;
+declare function atob(data: string): string;
+declare function btoa(data: string): string;
+declare const performance: {
+  /** Milliseconds since context creation. Wall clock, not monotonic. */
+  now(): number;
+  readonly timeOrigin: number;
+};
+// utf-8 only. TextDecoder rejects any other label and does not stream.
+declare class TextEncoder {
+  readonly encoding: "utf-8";
+  encode(input?: string): Uint8Array;
+  encodeInto(source: string, destination: Uint8Array): { read: number; written: number };
+}
+declare class TextDecoder {
+  constructor(label?: string, options?: { fatal?: boolean; ignoreBOM?: boolean });
+  readonly encoding: string;
+  readonly fatal: boolean;
+  readonly ignoreBOM: boolean;
+  decode(input?: ArrayBuffer | ArrayBufferView): string;
+}
+// A real structured clone: preserves Map, Set, Date, RegExp and typed arrays,
+// tolerates cycles, and throws on functions, symbols and promises.
+declare function structuredClone<T>(value: T): T;
+// getRandomValues draws from a fixed pool of host entropy and throws once it is
+// exhausted, because a synchronous call cannot reach the async host bridge.
+declare const crypto: {
+  getRandomValues<T extends Int8Array | Uint8Array | Uint8ClampedArray | Int16Array | Uint16Array | Int32Array | Uint32Array | BigInt64Array | BigUint64Array>(array: T): T;
+  randomUUID(): string;
+};
+// A pragmatic URL, not a WHATWG-conformant one: authority parsing needs an
+// explicit "//", hostnames are lowercased but not punycode-normalized, and
+// percent-encoding is left as written.
+declare class URLSearchParams {
+  constructor(init?: string | Record<string, string> | Array<[string, string]> | URLSearchParams);
+  readonly size: number;
+  append(name: string, value: string): void;
+  delete(name: string, value?: string): void;
+  get(name: string): string | null;
+  getAll(name: string): string[];
+  has(name: string, value?: string): boolean;
+  set(name: string, value: string): void;
+  sort(): void;
+  forEach(callback: (value: string, name: string, params: URLSearchParams) => void, thisArg?: unknown): void;
+  keys(): IterableIterator<string>;
+  values(): IterableIterator<string>;
+  entries(): IterableIterator<[string, string]>;
+  [Symbol.iterator](): IterableIterator<[string, string]>;
+  toString(): string;
+}
+declare class URL {
+  constructor(url: string | URL, base?: string | URL);
+  hash: string;
+  host: string;
+  hostname: string;
+  href: string;
+  readonly origin: string;
+  password: string;
+  pathname: string;
+  port: string;
+  protocol: string;
+  search: string;
+  readonly searchParams: URLSearchParams;
+  username: string;
+  toString(): string;
+  toJSON(): string;
+}
 declare function setTimeout(handler: (...args: any[]) => void, timeout?: number): number;
 declare function clearTimeout(handle: number): void;
 declare function setInterval(handler: (...args: any[]) => void, timeout?: number): number;

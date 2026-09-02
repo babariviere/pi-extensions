@@ -1,5 +1,7 @@
+import { randomBytes } from "node:crypto";
 import releaseSyncVariant from "@jitl/quickjs-singlefile-mjs-release-sync";
 import { newQuickJSWASMModuleFromVariant } from "quickjs-emscripten-core";
+import { ENTROPY_POOL_BYTES, guestPolyfillPlan } from "./guest-polyfills.ts";
 import { runAbortable, settleWithin } from "../async-settlement.ts";
 import { piBashExitMetadata } from "../core/pi-bash-error.ts";
 import { mapGuestErrorText, parseGuestSourceMap, type GuestSourceMap } from "./source-map.ts";
@@ -33,6 +35,11 @@ export interface SpindleSandboxOptions {
 		cwd: string;
 	};
 	signal?: AbortSignal;
+	/**
+	 * Install the host-API polyfill layer (runtime/guest-polyfills.ts). Defaults
+	 * to true. Tests that assert what the bare engine ships set it to false.
+	 */
+	polyfills?: boolean;
 	minimumTimeoutMsForHostCall?(ref: string, args: Record<string, unknown>): number | undefined;
 	transpiledCode?: string;
 }
@@ -769,7 +776,20 @@ export class QuickJsRuntime {
 			context.setProp(context.global, "__spindleProcess", processInfo);
 			processInfo.dispose();
 
-			const setupResult = context.evalCode(GUEST_SETUP, "spindle-setup.js");
+			// The polyfill layer is selected from the program text and evaluated as
+			// part of setup, so a program that never mentions URL never pays to
+			// parse a URL parser (newContext() runs per execute() call).
+			const polyfills =
+				options.polyfills === false ? { source: "", names: [], needsEntropy: false } : guestPolyfillPlan(code);
+			if (polyfills.needsEntropy) {
+				// crypto.getRandomValues must be synchronous and every host call here
+				// is async, so real entropy is injected up front rather than fetched
+				// on demand. The guest deletes the global as it reads it.
+				const entropy = context.newString(randomBytes(ENTROPY_POOL_BYTES).toString("hex"));
+				context.setProp(context.global, "__spindleEntropy", entropy);
+				entropy.dispose();
+			}
+			const setupResult = context.evalCode(GUEST_SETUP + polyfills.source, "spindle-setup.js");
 			if (setupResult.error) {
 				const deadlineExceeded = interruptedByDeadline || Date.now() > executionDeadlineAt;
 				if (deadlineExceeded) timedOut = true;
