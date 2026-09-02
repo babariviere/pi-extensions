@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createTaskDeliverer, isInitialSession, readTaskFile } from "./task-delivery.ts";
+import { createTaskDeliverer, isInitialSession, readTaskFile, TASK_DELIVERY_DELAY_MS } from "./task-delivery.ts";
 
 function deliverer(taskFile: string | undefined, opts: { task?: string | undefined } = { task: "Task: do it" }) {
 	const task = opts.task;
@@ -15,6 +15,7 @@ function deliverer(taskFile: string | undefined, opts: { task?: string | undefin
 		},
 		send: (text) => sent.push(text),
 		onError: (message) => errors.push(message),
+		defer: (run) => run(),
 	});
 	return { deliver, sent, errors, reads };
 }
@@ -65,6 +66,31 @@ test("reports an unreadable task instead of starting an empty turn", () => {
 	// Claimed even though it failed: a broken task is reported once, not retried.
 	deliver("startup");
 	assert.equal(errors.length, 1);
+});
+
+test("the send is deferred out of session_start, and claimed before it runs", () => {
+	// A turn started inside session_start leaves the TUI thinking the session is
+	// idle, and the human's first keystroke is then refused by pi.
+	const sent: string[] = [];
+	const scheduled: (() => void)[] = [];
+	const deliver = createTaskDeliverer({
+		taskFile: () => "/run/worker-0.task.md",
+		read: () => "Task: do it",
+		send: (text) => sent.push(text),
+		defer: (run) => scheduled.push(run),
+	});
+
+	deliver("startup");
+	assert.deepEqual(sent, []);
+	assert.equal(scheduled.length, 1);
+
+	// A second startup before the deferred send runs must not queue it twice.
+	deliver("startup");
+	assert.equal(scheduled.length, 1);
+
+	for (const run of scheduled) run();
+	assert.deepEqual(sent, ["Task: do it"]);
+	assert.ok(TASK_DELIVERY_DELAY_MS > 0);
 });
 
 test("readTaskFile treats a blank or unreadable file as no task", () => {

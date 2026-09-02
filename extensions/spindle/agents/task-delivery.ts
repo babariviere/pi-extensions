@@ -13,6 +13,16 @@
  *
  * Delivery happens once, on the `startup` session only: a `/new`, `/resume`,
  * `fork` or reload later in the same process must not re-send the task.
+ *
+ * It is also deferred out of the `session_start` handler rather than sent from
+ * inside it. A turn that begins while pi is still starting up is invisible to
+ * the TUI's own state: the session then holds an active run while the editor
+ * still believes it is idle, so the first thing a watching human types is
+ * submitted down the `prompt()` path and pi refuses it with "Agent is already
+ * processing a prompt". The pane looks wedged - you cannot type into a night
+ * subagent at all until its turn ends. Handing the send to a later macrotask
+ * lets startup finish first, which is also what makes it behave like a typed
+ * message rather than a startup side effect.
  */
 
 import { readFileSync } from "node:fs";
@@ -61,7 +71,19 @@ export interface TaskDeliveryDeps {
 	read?: (path: string) => string | undefined;
 	/** Reports a task that was promised but could not be read. */
 	onError?: (message: string) => void;
+	/**
+	 * Schedules the send. Defaults to a timer, so the turn starts after pi has
+	 * finished starting up; tests pass a synchronous runner.
+	 */
+	defer?: (run: () => void) => void;
 }
+
+/**
+ * How long after `session_start` the task is sent. Long enough for pi to finish
+ * its startup (the TUI attaches, extensions settle), short enough that nobody
+ * watching a pane notices the child pausing before its first turn.
+ */
+export const TASK_DELIVERY_DELAY_MS = 250;
 
 /**
  * Build the `session_start` hook that delivers the task, closing over its
@@ -70,19 +92,22 @@ export interface TaskDeliveryDeps {
  */
 export function createTaskDeliverer(deps: TaskDeliveryDeps): (reason: string | undefined) => void {
 	let delivered = false;
+	const defer = deps.defer ?? ((run: () => void) => void setTimeout(run, TASK_DELIVERY_DELAY_MS));
 	return (reason) => {
 		if (delivered || !isInitialSession(reason)) return;
 		const path = deps.taskFile()?.trim();
 		if (!path) return;
-		// Claimed before reading: an unreadable task is reported once, not retried
-		// on the next session_start.
+		// Claimed before the deferred send runs: a second session_start (or an
+		// unreadable task) must not queue the task twice.
 		delivered = true;
-		const task = (deps.read ?? readTaskFile)(path);
-		if (task === undefined) {
-			deps.onError?.(`[spindle] task file is missing or empty, the subagent has no task: ${path}`);
-			return;
-		}
-		deps.send(task);
+		defer(() => {
+			const task = (deps.read ?? readTaskFile)(path);
+			if (task === undefined) {
+				deps.onError?.(`[spindle] task file is missing or empty, the subagent has no task: ${path}`);
+				return;
+			}
+			deps.send(task);
+		});
 	};
 }
 

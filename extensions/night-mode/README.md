@@ -125,9 +125,18 @@ filesystem-specific and any of them can fail on a given machine:
 
 | Strategy | Command | Platform |
 |---|---|---|
-| `apfs` | `cp -c -R -p` clone-on-write | macOS |
+| `clonefile` | one recursive `clonefile(2)` on the directory | macOS APFS |
+| `apfs` | `cp -c -R -p` clone-on-write, file by file | macOS |
 | `reflink` | `cp -a --reflink=always` | Linux btrfs / XFS |
 | `copy` | `cp -R -p` | anywhere |
+
+The first rung exists because `cp -c` pays a syscall per file, so the clone
+costs what the file *count* costs, not what the bytes cost. A 3.8G repo of 291k
+files (a colocated `.git` and `.jj` are 230k of them) took 64s with `cp -c -R`
+and 14s through `clonefile(2)`, which is a minute of `/night start` doing
+nothing visible. No CLI exposes a recursive `clonefile`, so it is reached
+through the `python3` macOS ships; when that is missing or the volume is not
+APFS, the rung fails and the ladder drops to `cp -c` as before.
 
 `jj workspace add` and `git clone --shared` are deliberately **not** in the
 ladder: they drop untracked and ignored files, which is exactly where local

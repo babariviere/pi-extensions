@@ -5,8 +5,10 @@ import { join } from "node:path";
 import { afterEach, beforeEach, test } from "node:test";
 import {
 	type CloneCommand,
+	CLONEFILE_SCRIPT,
 	cloneCommand,
 	createRunSandbox,
+	destinationMustBeAbsent,
 	detectSharedStateWarnings,
 	type PrepareCommand,
 	prepareCommands,
@@ -147,9 +149,70 @@ test("cloneCommand uses reflink on Linux and plain copy as the floor", () => {
 });
 
 test("strategyOrder is platform specific and always ends in copy", () => {
-	assert.deepEqual(strategyOrder("darwin"), ["apfs", "copy"]);
+	assert.deepEqual(strategyOrder("darwin"), ["clonefile", "apfs", "copy"]);
 	assert.deepEqual(strategyOrder("linux"), ["reflink", "copy"]);
 	assert.deepEqual(strategyOrder("win32"), ["copy"]);
+});
+
+test("cloneCommand reaches clonefile through python3, with paths as arguments", () => {
+	const command = cloneCommand("clonefile", "/src/my repo", "/dest/run 1");
+	assert.equal(command.command, "python3");
+	assert.deepEqual(command.args, ["-c", CLONEFILE_SCRIPT, "/src/my repo", "/dest/run 1"]);
+	// The bare destination, not the `/.` contents form: clonefile creates it.
+	assert.ok(!command.args.some((arg) => arg.endsWith("/.")));
+	assert.match(CLONEFILE_SCRIPT, /lib\.clonefile\(/);
+});
+
+test("only clonefile needs an absent destination", () => {
+	assert.equal(destinationMustBeAbsent("clonefile"), true);
+	for (const strategy of ["apfs", "reflink", "copy"] as const) {
+		assert.equal(destinationMustBeAbsent(strategy), false);
+	}
+});
+
+test("createRunSandbox hands clonefile an absent destination, and cp an existing one", async () => {
+	const source = join(dir, "repo");
+	mkdirSync(source, { recursive: true });
+	const destination = join(dir, "sandbox");
+	// The caller's run directory already exists (and is empty), which is the case
+	// clonefile would otherwise refuse with EEXIST.
+	mkdirSync(destination, { recursive: true });
+
+	const existedAtRun: Record<string, boolean> = {};
+	const run = (command: CloneCommand): void => {
+		const strategy = command.command === "python3" ? "clonefile" : "apfs";
+		existedAtRun[strategy] = existsSync(destination);
+		if (strategy === "clonefile") throw new Error("clonefile failed: Operation not supported");
+		mkdirSync(destination, { recursive: true });
+	};
+
+	const result = await createRunSandbox({ source, destination, platform: "darwin", run });
+
+	assert.equal(result.strategy, "apfs");
+	assert.deepEqual(existedAtRun, { clonefile: false, apfs: true });
+});
+
+test("createRunSandbox skips clonefile when the destination is not empty", async () => {
+	const source = join(dir, "repo");
+	mkdirSync(source, { recursive: true });
+	const destination = join(dir, "sandbox");
+	mkdirSync(destination, { recursive: true });
+	writeFileSync(join(destination, "leftover.txt"), "x");
+
+	const attempted: string[] = [];
+	const result = await createRunSandbox({
+		source,
+		destination,
+		platform: "darwin",
+		run: (command) => {
+			attempted.push(command.command === "python3" ? "clonefile" : command.args[0]);
+		},
+	});
+
+	// Never spawned: the rung is skipped before the syscall, and reported.
+	assert.deepEqual(attempted, ["-c"]);
+	assert.equal(result.strategy, "apfs");
+	assert.match(result.fallbacks[0], /clonefile: .*already exists and is not empty/);
 });
 
 test("sandboxPathFor groups by repo name", () => {
@@ -165,7 +228,8 @@ test("createRunSandbox falls back to the next strategy and reports the failure",
 	writeFileSync(join(source, "a.txt"), "hello");
 	const attempted: string[] = [];
 	const run = (command: CloneCommand): void => {
-		attempted.push(command.args[0]);
+		attempted.push(command.command === "python3" ? "clonefile" : command.args[0]);
+		if (command.command === "python3") throw new Error("clonefile failed: Operation not supported");
 		if (command.args[0] === "-c") throw new Error("cp: --clone not supported\nmore detail");
 	};
 
@@ -177,8 +241,11 @@ test("createRunSandbox falls back to the next strategy and reports the failure",
 	});
 
 	assert.equal(result.strategy, "copy");
-	assert.deepEqual(attempted, ["-c", "-R"]);
-	assert.deepEqual(result.fallbacks, ["apfs: cp: --clone not supported"]);
+	assert.deepEqual(attempted, ["clonefile", "-c", "-R"]);
+	assert.deepEqual(result.fallbacks, [
+		"clonefile: clonefile failed: Operation not supported",
+		"apfs: cp: --clone not supported",
+	]);
 });
 
 test("createRunSandbox rejects with every failure when nothing works", async () => {

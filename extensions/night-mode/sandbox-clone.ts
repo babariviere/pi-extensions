@@ -10,10 +10,20 @@
  * Copy strategy is a ladder, because the cheap options are filesystem- and
  * VCS-specific and every one of them can fail on a given machine:
  *
- *   1. `apfs`     - `cp -c` clone-on-write. Instant on macOS, keeps ignored
- *                   files, build outputs and `.git`/`.jj` intact.
- *   2. `reflink`  - the same trick on Linux btrfs/XFS.
- *   3. `copy`     - a plain recursive copy. Slow, always works.
+ *   1. `clonefile` - one recursive `clonefile(2)` on the directory. macOS only,
+ *                    and the only rung that does not pay a syscall per file.
+ *   2. `apfs`      - `cp -c` clone-on-write, file by file. Same result, ~5x the
+ *                    wall clock on a real repository.
+ *   3. `reflink`   - the same trick on Linux btrfs/XFS.
+ *   4. `copy`      - a plain recursive copy. Slow, always works.
+ *
+ * Why the first rung exists: `cp -c -R` clones each file with its own syscall,
+ * so the cost tracks the file *count*, not the size. A 3.8G repo whose tree is
+ * 291k files (a colocated `.git` at 153k and `.jj` at 77k of them) took 64s
+ * with `cp -c -R`, 45s with eight parallel `cp -c`, and 11.7s as a single
+ * recursive `clonefile(2)` - identical file count and bytes in the result.
+ * `/night start` sat there for a minute before the agent got its first turn,
+ * which is why the syscall is worth reaching for.
  *
  * `cp -a --link` used to sit between reflink and copy. It is gone: hardlinks
  * share the inode, so a tool that rewrites a file in place (rather than writing
@@ -54,7 +64,7 @@ import { promisify } from "node:util";
  */
 const execFileAsync = promisify(execFile);
 
-export const CLONE_STRATEGIES = ["apfs", "reflink", "copy"] as const;
+export const CLONE_STRATEGIES = ["clonefile", "apfs", "reflink", "copy"] as const;
 export type CloneStrategy = (typeof CLONE_STRATEGIES)[number];
 
 export interface CloneCommand {
@@ -63,11 +73,38 @@ export interface CloneCommand {
 }
 
 /**
- * The `cp` invocation for a strategy. Both paths are passed as arguments, never
+ * Recursive APFS clone of a directory in one syscall.
+ *
+ * `clonefile(2)` clones a whole hierarchy copy-on-write when handed a
+ * directory, which is what makes it ~5x faster than `cp -c -R` on a repository
+ * with hundreds of thousands of files. No CLI exposes it (BSD `cp` needs `-R`
+ * and then clones file by file), so it is reached through the one interpreter
+ * macOS ships: a failure here - no python3, not APFS, cross-volume - is just
+ * the next rung of the ladder.
+ *
+ * Kept as a source string rather than a script file so there is no temp file to
+ * write, sandbox or clean up.
+ */
+export const CLONEFILE_SCRIPT = [
+	"import ctypes, os, sys",
+	'lib = ctypes.CDLL("/usr/lib/libSystem.dylib", use_errno=True)',
+	"lib.clonefile.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint32]",
+	"lib.clonefile.restype = ctypes.c_int",
+	"if lib.clonefile(os.fsencode(sys.argv[1]), os.fsencode(sys.argv[2]), 0) != 0:",
+	'    sys.exit("clonefile failed: %s" % os.strerror(ctypes.get_errno()))',
+].join("\n");
+
+/**
+ * The invocation for a strategy. Every path is passed as an argument, never
  * interpolated into a shell string, so a path with spaces or quotes is safe.
  */
 export function cloneCommand(strategy: CloneStrategy, source: string, destination: string): CloneCommand {
-	const flags: Record<CloneStrategy, string[]> = {
+	if (strategy === "clonefile") {
+		// clonefile creates the destination itself, so it gets the bare paths
+		// rather than the `/.` contents form the `cp` rungs use.
+		return { command: "python3", args: ["-c", CLONEFILE_SCRIPT, source, destination] };
+	}
+	const flags: Record<Exclude<CloneStrategy, "clonefile">, string[]> = {
 		apfs: ["-c", "-R", "-p"],
 		reflink: ["-a", "--reflink=always"],
 		copy: ["-R", "-p"],
@@ -79,9 +116,38 @@ export function cloneCommand(strategy: CloneStrategy, source: string, destinatio
 
 /** Strategies to try, best first, for a platform. */
 export function strategyOrder(platform: NodeJS.Platform): CloneStrategy[] {
-	if (platform === "darwin") return ["apfs", "copy"];
+	if (platform === "darwin") return ["clonefile", "apfs", "copy"];
 	if (platform === "linux") return ["reflink", "copy"];
 	return ["copy"];
+}
+
+/**
+ * True when the strategy creates the destination itself and fails if it is
+ * already there (`clonefile` returns EEXIST), rather than copying into an
+ * existing directory like the `cp` rungs do.
+ */
+export function destinationMustBeAbsent(strategy: CloneStrategy): boolean {
+	return strategy === "clonefile";
+}
+
+/**
+ * Put the destination in the shape the strategy needs: the directory itself for
+ * the `cp` rungs, only its parent for `clonefile`. An existing but empty
+ * destination is removed (that is the normal case - the caller creates the run
+ * directory before asking); a non-empty one throws, so the rung is skipped
+ * instead of half-populating a directory someone else owns.
+ */
+function prepareDestination(strategy: CloneStrategy, destination: string): void {
+	if (!destinationMustBeAbsent(strategy)) {
+		mkdirSync(destination, { recursive: true });
+		return;
+	}
+	mkdirSync(dirname(destination), { recursive: true });
+	if (!existsSync(destination)) return;
+	if (readdirSync(destination).length > 0) {
+		throw new Error(`${destination} already exists and is not empty`);
+	}
+	rmSync(destination, { recursive: true, force: true });
 }
 
 /** `<root>/<repo>/<stamp>`, the layout `workspaces` already uses for jj workspaces. */
@@ -128,7 +194,13 @@ export async function createRunSandbox(input: CreateSandboxInput): Promise<Creat
 	const fallbacks: string[] = [];
 
 	for (const strategy of strategyOrder(platform)) {
-		mkdirSync(destination, { recursive: true });
+		try {
+			prepareDestination(strategy, destination);
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			fallbacks.push(`${strategy}: ${message.split("\n")[0]}`);
+			continue;
+		}
 		try {
 			await run(cloneCommand(strategy, source, destination));
 		} catch (error) {
