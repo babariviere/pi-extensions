@@ -48,6 +48,9 @@ import { HiddenRowBorrowingComponent, observeResultRows, type ResultRowBalance }
 import { type SpinnerTimerState, updateSpinner } from "./ui/spinner.ts";
 import { formatSpindleValue } from "./ui/structured.ts";
 import { countNewlines, truncateMiddle } from "./util.ts";
+import { prepareSpindleExecArguments, resolveSpindleExecStrings } from "./spindle-exec-arguments.ts";
+import { normalizeRunDisplay } from "./run-display.ts";
+import { repairSpindleGuestCode } from "./runtime/guest-code-repair.ts";
 
 const RESULT_FORMATS = ["auto", "yaml", "json", "text"] as const;
 const MAX_SPINDLE_CODE_TRANSFER_LINES = 12;
@@ -109,16 +112,28 @@ export const createSpindleExecTool = (
 					}),
 				),
 				display: Type.Optional(
-					Type.Object({
-						name: Type.Optional(
-							Type.String({ description: "Human-readable name for the Spindle activity widget" }),
-						),
-						description: Type.Optional(
-							Type.String({ description: "Compact objective shown in the Spindle widget" }),
-						),
-					}),
+					Type.Union([
+						Type.Object({
+							name: Type.Optional(
+								Type.String({ description: "Human-readable name for the Spindle activity widget" }),
+							),
+							description: Type.Optional(
+								Type.String({ description: "Compact objective shown in the Spindle widget" }),
+							),
+						}),
+						Type.String({
+							description:
+								"Objective shorthand normalized to { name } (a JSON-object string is parsed). Prefer the object form.",
+						}),
+					]),
 				),
 			}),
+			// Pi validates custom-tool arguments before `tool_call` and `execute`, so
+			// compatibility coercions for the model-facing boundary must live in the
+			// official prepareArguments hook rather than execute-time fallbacks.
+			prepareArguments(args) {
+				return prepareSpindleExecArguments(args) as any;
+			},
 			renderCall(params, theme, context) {
 				const code = Array.isArray(params.code) ? params.code.join("\n") : params.code;
 				const rendererState = context.state as SpindleRendererState;
@@ -133,7 +148,7 @@ export const createSpindleExecTool = (
 					: renderSpindleWriteArgumentPreview(
 							{
 								bindings: rendererState.spindleWriteBindings ?? [],
-								strings: params.strings,
+								strings: resolveSpindleExecStrings(params),
 								expanded: context.expanded,
 								cwd: context.cwd,
 								settings: codePreviewSettings,
@@ -144,7 +159,8 @@ export const createSpindleExecTool = (
 						);
 
 				const lines = safeTerminalText(code).split("\n");
-				const displayName = params.display?.name ? safeTerminalText(params.display.name) : "";
+				const runDisplayName = normalizeRunDisplay(params.display)?.name;
+				const displayName = runDisplayName ? safeTerminalText(runDisplayName) : "";
 				const title = `${theme.fg("toolTitle", theme.bold("spindle"))}${
 					displayName ? ` ${theme.fg("accent", displayName)}` : ""
 				} ${theme.fg("dim", `TypeScript · ${countLabel(lines.length, "line")}`)}`;
@@ -567,19 +583,25 @@ export const createSpindleExecTool = (
 				// join before type-checking so the program runs instead of failing on a
 				// non-string code param. Strict providers reject an array upstream
 				// against the Type.String schema, so this branch is a no-op there.
-				const code = Array.isArray(params.code) ? params.code.join("\n") : params.code;
+				// prepareArguments joins code arrays, quotes unquoted pi path arguments and
+				// parses a JSON-encoded `strings` map before Pi validates this call; keep
+				// the same coercions here for direct internal invocations.
+				const joined = Array.isArray(params.code) ? params.code.join("\n") : params.code;
+				const code = repairSpindleGuestCode(joined);
+				const strings = resolveSpindleExecStrings(params);
+				const runDisplay = normalizeRunDisplay(params.display);
 				const result = await state.execution.execute({
 					code,
-					...(params.strings ? { strings: params.strings } : {}),
+					...(strings ? { strings } : {}),
 					signal,
 					parentToolCallId: toolCallId,
 					context,
 					...(params.agentBudget !== undefined ? { maxAgentCalls: params.agentBudget } : {}),
-					...(params.display
+					...(runDisplay
 						? {
 								display: {
-									...(params.display.name !== undefined && { name: params.display.name }),
-									...(params.display.description !== undefined && { description: params.display.description }),
+									...(runDisplay.name !== undefined && { name: runDisplay.name }),
+									...(runDisplay.description !== undefined && { description: runDisplay.description }),
 								},
 							}
 						: {}),
