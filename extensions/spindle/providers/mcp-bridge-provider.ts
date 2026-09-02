@@ -16,6 +16,7 @@
 
 import { runAbortable } from "../async-settlement.ts";
 import { McpReadOnlyGate } from "../mcp/read-only-policy.ts";
+import { McpDescriptorCache } from "../mcp/descriptor-cache.ts";
 import type { CapturedToolCatalog, CapturedToolEntry } from "../capture/catalog.ts";
 import type {
 	SpindleActionDescriptor,
@@ -163,6 +164,11 @@ export class McpBridgeProvider implements SpindleProvider {
 		 * unrestricted gate for a normal session.
 		 */
 		readonly readOnlyGate: () => McpReadOnlyGate = () => McpReadOnlyGate.unrestricted(),
+		/**
+		 * Short-lived memo for the metadata reads ($list / $search / $describe).
+		 * Tool calls are never cached; a $connect clears it.
+		 */
+		readonly descriptors: McpDescriptorCache = new McpDescriptorCache(),
 	) {}
 
 	async list(
@@ -190,6 +196,18 @@ export class McpBridgeProvider implements SpindleProvider {
 	}
 
 	async invoke(
+		actionName: string,
+		args: Record<string, unknown>,
+		context: SpindleInvocationContext,
+	): Promise<unknown> {
+		const cached = this.descriptors.get(actionName, args, context.cwd);
+		if (cached) return cached.value;
+		const value = await this.#invokeUncached(actionName, args, context);
+		this.descriptors.set(actionName, args, context.cwd, value);
+		return value;
+	}
+
+	async #invokeUncached(
 		actionName: string,
 		args: Record<string, unknown>,
 		context: SpindleInvocationContext,
@@ -228,6 +246,8 @@ export class McpBridgeProvider implements SpindleProvider {
 			case "$describe":
 				return this.#gatewayCall({ describe: String(args.tool ?? "") }, context);
 			case "$connect":
+				// A connect changes what every metadata read reports.
+				this.descriptors.clear();
 				return this.#gatewayCall({ connect: String(args.server ?? "") }, context);
 			default: {
 				const qualified = parseQualifiedAction(actionName);

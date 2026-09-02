@@ -146,3 +146,31 @@ test("the mcp__<server> namespace proxy is gated like the gateway", async () => 
 	);
 	assert.equal(spy.calls.length, 1);
 });
+
+test("repeated metadata reads hit the gateway once", async () => {
+	const spy = gatewayCatalog();
+	const provider = new McpBridgeProvider(() => spy.catalog);
+	const cwdContext = { ...context, cwd: "/tmp" };
+	await provider.invoke("$list", {}, cwdContext);
+	await provider.invoke("$list", {}, cwdContext);
+	assert.equal(spy.calls.length, 1);
+});
+
+test("a tool call is never served from the descriptor cache", async () => {
+	const spy = gatewayCatalog();
+	const provider = new McpBridgeProvider(() => spy.catalog);
+	const cwdContext = { ...context, cwd: "/tmp" };
+	await provider.invoke("$call", { server: "s", tool: "read_thing", args: {} }, cwdContext);
+	await provider.invoke("$call", { server: "s", tool: "read_thing", args: {} }, cwdContext);
+	assert.equal(spy.calls.length, 2);
+});
+
+test("a connect invalidates cached metadata reads", async () => {
+	const spy = gatewayCatalog();
+	const provider = new McpBridgeProvider(() => spy.catalog);
+	const cwdContext = { ...context, cwd: "/tmp" };
+	await provider.invoke("$list", {}, cwdContext);
+	await provider.invoke("$connect", { server: "s" }, cwdContext);
+	await provider.invoke("$list", {}, cwdContext);
+	assert.equal(spy.calls.filter((call) => call.connect === undefined).length, 2);
+});
