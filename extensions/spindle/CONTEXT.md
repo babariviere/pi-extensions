@@ -18,6 +18,30 @@ The fork was taken from a local clone at `/tmp/pf-probe` checked out at that
 tag. Nothing here is generated: every file below was copied and then edited by
 hand.
 
+## Backports taken after the pin
+
+Upstream moved on (0.76.x at the time of writing). These behaviors were ported
+or adapted by hand on top of the pinned fork; each is a self-contained module
+plus its wiring, and none pulls in a dropped subsystem.
+
+| Local file | Upstream origin | What it buys |
+|---|---|---|
+| `runtime/quickjs-runtime.ts` (`setMaxStackSize`) | same call upstream | runaway guest recursion raises a guest error instead of walking the host stack |
+| `spindle-exec-arguments.ts`, `run-display.ts`, `runtime/guest-code-repair.ts` | `src/fabric-exec-arguments.ts`, `src/run-display.ts`, `src/runtime/guest-code-repair.ts` | `prepareArguments` repairs code arrays, unquoted path heads, JSON-encoded payload maps, nullish optionals and a bare `display` string before Pi validates the call |
+| `type-error-guidance.ts`, `runtime/core-tool-properties.ts` | same names upstream (property table adapted to spindle's inline `PiToolsApi`) | one actionable recovery hint next to type-check diagnostics |
+| `failure-progress.ts` | `src/failure-progress.ts` | a failed program names the calls that already succeeded |
+| `output-budget.ts` | `src/output-budget.ts` | oversized output spills to a temp artifact instead of losing its middle |
+| `config.ts` (`executor.maxTimeoutMs`), `execution-service.ts` (`requestedTimeoutMs`) | same fields upstream | a per-invocation `timeoutMs` raises (never lowers) the program deadline |
+| `runtime/dynamic-guest-types.ts` | `src/runtime/dynamic-guest-types.ts` (mcp section dropped) | `extensions.<tool>` is typed from the live captured catalog; `mcp` stays loose because the bridge never pre-fetches tool lists |
+| `core/action-repair.ts`, `providers/arg-normalization.ts` | same names upstream | near-miss action names and argument keys repair from the declared catalog/schema, with didactic failures |
+| `mcp/descriptor-cache.ts` | `src/providers/mcp-descriptor-cache.ts` (rewritten: spindle owns no MCP client) | in-process memo for `mcp.$list` / `$search` / `$describe`, invalidated by config fingerprint, `$connect` and TTL |
+| `core/pi-bash-error.ts` | `src/core/pi-bash-error.ts` | `pi.bash({ settle: true })` keeps its exit status across `tool_result` middleware |
+| `core/core-override-guidance.ts` | `src/core/core-override-guidance.ts` | an exact-name core override keeps its authored prompt text in full code mode |
+| `ui/highlight.ts` (dynamic `import("shiki")`) | upstream's startup-perf change | the full shiki entry stays out of extension startup |
+
+The `spindle_exec` named-payload argument is `payloads`; `strings` remains as a
+silently remapped legacy alias.
+
 ## Sandbox surface
 
 Globals inside `spindle_exec`:
@@ -29,7 +53,7 @@ Globals inside `spindle_exec`:
 - `agents.*` — custom markdown subagents, via `providers/agents-provider.ts` + `agents/`
 - `workflow.{parallel,pipeline,phase,item,event,log,configure}` plus the bare aliases `parallel` / `pipeline` / `phase` / `log`
 - `process` — minimal shim built from `env-snapshot.ts`: allowlisted `process.env` (HOME, USER, LOGNAME, SHELL, PWD, PATH, LANG, LC_*, TERM, TMPDIR, XDG_*), `process.platform` / `process.arch`, `process.cwd()`. No secret ever enters the guest.
-- `print`, `console`, `π` (named strings), `setTimeout` / `setInterval` / `clearTimeout` / `clearInterval`
+- `print`, `console`, `π` (named payloads; the `payloads` argument, legacy alias `strings`), `setTimeout` / `setInterval` / `clearTimeout` / `clearInterval`
 
 Deliberately absent: `memory`, `state`, `schema`, `compact`, `mesh`,
 `council`, `rlm`, `agent()`, `budget`, `workflow.agent`, `workflow.budget`.
