@@ -41,6 +41,7 @@ import type {
 	SpindleProvider,
 	SpindleProviderListRequest,
 } from "../protocol.ts";
+import { actionArgNormalizer } from "./arg-normalization.ts";
 import { AgentRunBook, type AgentWaitOutcome, type SpindleAgentResult } from "./agent-run-book.ts";
 import { RunProgressMonitor, SpindleAgentRunRegistry } from "./agent-run-monitor.ts";
 
@@ -176,6 +177,8 @@ const descriptors: SpindleActionDescriptor[] = [
 	},
 ];
 
+const normalizeAgentArgs = actionArgNormalizer(() => descriptors);
+
 const stringOrUndefined = (value: unknown): string | undefined =>
 	typeof value === "string" && value.trim() ? value : undefined;
 
@@ -274,6 +277,14 @@ export class SpindleAgentsProvider implements SpindleProvider {
 		_context: SpindleInvocationContext,
 	): Promise<SpindleActionDescriptor | undefined> {
 		return descriptors.find((descriptor) => descriptor.name === actionName);
+	}
+
+	/**
+	 * Canonicalize near-miss argument spellings (prompt -> task, id -> runId,
+	 * "5000" -> 5000) from the declared schemas before validation rejects them.
+	 */
+	prepareArguments(actionName: string, args: Record<string, unknown>): Record<string, unknown> {
+		return normalizeAgentArgs(actionName, args);
 	}
 
 	async invoke(

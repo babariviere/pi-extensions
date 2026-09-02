@@ -19,6 +19,7 @@ import {
 	type SpindleProviderListRequest,
 } from "../protocol.ts";
 import type { SpindleNestedToolResultProxy } from "./tool-result-proxy.ts";
+import { formatUnknownActionMessage, repairActionName } from "./action-repair.ts";
 
 export interface ResolvedSpindleAction extends SpindleActionDescriptor {
 	ref: string;
@@ -422,9 +423,40 @@ export class ActionRegistry {
 
 	async describe(ref: string, context: SpindleInvocationContext): Promise<ResolvedSpindleAction> {
 		const { provider, actionName } = this.#parseRef(ref);
+		const resolved = await this.#resolveDescriptorWithRepair(provider, actionName, ref, context);
+		return resolveDescriptor(provider, resolved.descriptor);
+	}
+
+	/**
+	 * Resolve one action, canonicalizing a near-miss spelling first (see
+	 * core/action-repair.ts). An unmatched name fails with the closest declared
+	 * candidates named instead of a bare "Unknown Spindle action".
+	 */
+	async #resolveDescriptorWithRepair(
+		provider: SpindleProvider,
+		actionName: string,
+		ref: string,
+		context: SpindleInvocationContext,
+	): Promise<{ descriptor: SpindleActionDescriptor; actionName: string }> {
 		const descriptor = await provider.describe(actionName, context);
-		if (!descriptor) throw new Error(`Unknown Spindle action: ${ref}`);
-		return resolveDescriptor(provider, descriptor);
+		if (descriptor) return { descriptor, actionName };
+		let declared: string[] = [];
+		try {
+			declared = (await provider.list({ limit: 1_000 }, context)).map((entry) => entry.name);
+		} catch {
+			declared = [];
+		}
+		const repair = repairActionName(declared, actionName);
+		if (repair.repaired !== undefined) {
+			const repaired = await provider.describe(repair.repaired, context);
+			if (repaired) return { descriptor: repaired, actionName: repair.repaired };
+		}
+		throw new Error(
+			formatUnknownActionMessage(
+				ref,
+				repair.suggestions.map((name) => `${provider.name}.${name}`),
+			),
+		);
 	}
 
 	async invoke(
@@ -437,10 +469,12 @@ export class ActionRegistry {
 		let audit: SpindleCallAudit | undefined;
 		let invocationActive = false;
 		try {
-			const { provider, actionName } = this.#parseRef(ref);
-			const descriptor = await runAbortable(context.signal, () => provider.describe(actionName, context));
-			if (!descriptor) throw new Error(`Unknown Spindle action: ${ref}`);
-			const action = resolveDescriptor(provider, descriptor);
+			const { provider, actionName: requestedName } = this.#parseRef(ref);
+			const resolved = await runAbortable(context.signal, () =>
+				this.#resolveDescriptorWithRepair(provider, requestedName, ref, context),
+			);
+			const actionName = resolved.actionName;
+			const action = resolveDescriptor(provider, resolved.descriptor);
 			traceOperation?.resolved(action.provider, action.name);
 
 			failureStage = "guard";
