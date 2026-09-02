@@ -1,5 +1,10 @@
 import { basename, extname } from "node:path";
-import { bundledLanguages, bundledThemesInfo, createHighlighter, type Highlighter } from "shiki";
+// The light shiki subpath entries carry only catalog metadata. The full shiki
+// entry (createHighlighter) is dynamic-imported lazily inside initHighlighting
+// so extension startup stays off the shiki graph.
+import { bundledLanguages } from "shiki/langs";
+import { bundledThemesInfo } from "shiki/themes";
+import type { Highlighter } from "shiki";
 
 const configuredMaxHighlightChars = Number.parseInt(process.env.CODE_PREVIEW_MAX_HIGHLIGHT_CHARS ?? "", 10);
 const MAX_HIGHLIGHT_CHARS =
@@ -245,6 +250,7 @@ export async function initHighlighting(theme: string, syntaxEnabled = true): Pro
 	const version = ++initVersion;
 	initializingTheme = theme;
 	try {
+		const { createHighlighter } = await import("shiki");
 		const next = await createHighlighter({
 			themes: [theme],
 			langs: [...PRELOADED_LANGUAGES],
