@@ -226,6 +226,13 @@ test("τ state survives between programs and is echoed on the result", async () 
 		(first.stateKeys ?? []).map((entry) => entry.key),
 		["index"],
 	);
+	// Each operation is reported for its own row, with the value it moved.
+	assert.deepEqual(
+		(first.stateNotes ?? []).map((note) => note.ref),
+		["spindle.state.set", "spindle.state.keys"],
+	);
+	assert.equal(first.stateNotes?.[0]?.key, "index");
+	assert.match(first.stateNotes?.[0]?.preview ?? "", /"files":\["a\.ts"\]/);
 
 	const second = await execute(service, "return await τ.get('index');", "test-call-2");
 	assert.equal(second.success, true, second.error ?? "");
@@ -234,7 +241,25 @@ test("τ state survives between programs and is echoed on the result", async () 
 	const third = await execute(service, "await τ.delete('index'); return await τ.get('index');", "test-call-3");
 	assert.equal(third.success, true, third.error ?? "");
 	assert.equal(third.value, undefined);
+	// The store is empty again, so there are no keys to report, but the two
+	// operations still are.
 	assert.equal(third.stateKeys, undefined);
+	assert.deepEqual(
+		(third.stateNotes ?? []).map((note) => `${note.ref}:${note.detail ?? note.preview ?? ""}`),
+		["spindle.state.delete:deleted", "spindle.state.get:not held"],
+	);
+});
+
+test("a program that never touches τ is told nothing about it", async () => {
+	const service = serviceWith([]);
+	const seeded = await execute(service, "await τ.set('held', 1); return 'ok';");
+	assert.equal(seeded.success, true, seeded.error ?? "");
+	assert.equal(seeded.stateKeys?.length, 1);
+
+	const untouched = await execute(service, "return 1 + 1;", "test-call-b");
+	assert.equal(untouched.success, true, untouched.error ?? "");
+	assert.equal(untouched.stateKeys, undefined);
+	assert.equal(untouched.stateNotes, undefined);
 });
 
 test("a τ write that cannot be honored fails the call, not silently", async () => {

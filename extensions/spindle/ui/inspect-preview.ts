@@ -34,13 +34,6 @@ const MAX_SUMMARY_KEYS = 8;
 /** Hard cap on one previewed line, before the renderer wraps it. */
 const MAX_LINE_CHARS = 400;
 
-/** One τ key as carried in the persisted details. */
-export interface SpindleRenderStateEntry {
-	key: string;
-	bytes: number;
-	preview?: string;
-}
-
 const clip = (value: string): string =>
 	value.length > MAX_LINE_CHARS ? `${value.slice(0, MAX_LINE_CHARS - 1)}\u2026` : value;
 
@@ -81,12 +74,15 @@ export const payloadInspectorLines = (input: {
 	const lines = [summary("\u03c0", entries, expanded, theme)];
 	if (!expanded) return lines;
 
-	for (const entry of entries.slice(0, MAX_EXPANDED_KEYS)) {
+	for (const [index, entry] of entries.slice(0, MAX_EXPANDED_KEYS).entries()) {
 		const all = safeTerminalText(entry.value).split("\n");
 		while (all.length > 0 && all[all.length - 1] === "") all.pop();
 		const shown = all.slice(0, MAX_PAYLOAD_LINES);
+		// A blank line and a bold key: with several payloads in a row, the header
+		// is the only thing separating one body from the next.
+		if (index > 0) lines.push("");
 		lines.push(
-			theme.fg("muted", `\u03c0.${entry.key}`) +
+			theme.fg("toolTitle", theme.bold(`\u03c0.${entry.key}`)) +
 				theme.fg(
 					"dim",
 					` \u00b7 ${formatSessionStoreBytes(entry.bytes)} \u00b7 ${all.length} ${all.length === 1 ? "line" : "lines"}`,
@@ -103,29 +99,6 @@ export const payloadInspectorLines = (input: {
 	return lines;
 };
 
-/** The `τ` block for `renderResult`: what the scratchpad holds after the run. */
-export const stateInspectorLines = (input: {
-	entries: SpindleRenderStateEntry[] | undefined;
-	expanded: boolean;
-	theme: Theme;
-}): string[] => {
-	const { entries, expanded, theme } = input;
-	if (!entries || entries.length === 0) return [];
-
-	const lines = [summary("\u03c4", entries, expanded, theme)];
-	if (!expanded) return lines;
-
-	for (const entry of entries.slice(0, MAX_EXPANDED_KEYS)) {
-		const header =
-			theme.fg("muted", `\u03c4.${entry.key}`) + theme.fg("dim", ` \u00b7 ${formatSessionStoreBytes(entry.bytes)}`);
-		lines.push(header);
-		if (entry.preview) lines.push(theme.fg("toolOutput", clip(safeTerminalText(entry.preview))));
-	}
-	const hiddenKeys = entries.length - Math.min(entries.length, MAX_EXPANDED_KEYS);
-	if (hiddenKeys > 0) lines.push(theme.fg("dim", `\u2026 ${hiddenKeys} more key${hiddenKeys === 1 ? "" : "s"}`));
-	return lines;
-};
-
 const componentOf = (lines: string[], theme: Theme): Component | null =>
 	lines.length === 0 ? null : renderBoundedLines(lines, theme);
 
@@ -136,8 +109,53 @@ export const renderPayloadInspector = (input: {
 	theme: Theme;
 }): Component | null => componentOf(payloadInspectorLines(input), input.theme);
 
-export const renderStateInspector = (input: {
-	entries: SpindleRenderStateEntry[] | undefined;
-	expanded: boolean;
-	theme: Theme;
-}): Component | null => componentOf(stateInspectorLines(input), input.theme);
+/**
+ * One τ operation as reported by the live execution (see `host-calls.ts`
+ * `SpindleStateNote`). Redeclared structurally rather than imported so the
+ * renderer keeps no dependency on the execution side.
+ */
+export interface SpindleStateNoteView {
+	ref: string;
+	key?: string;
+	preview?: string;
+	detail?: string;
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+	typeof value === "object" && value !== null && !Array.isArray(value);
+
+/**
+ * Reads τ notes off a *partial* tool-update payload.
+ *
+ * They arrive on the live channel only: the stored value must not reach the
+ * durable trace (audit/projection.ts keeps the key and the size, nothing else),
+ * so this is the same route the write previews take.
+ */
+export const readSpindleStateNotes = (value: unknown): SpindleStateNoteView[] => {
+	if (!isRecord(value) || !Array.isArray(value.stateNotes)) return [];
+	return value.stateNotes.filter(
+		(note): note is SpindleStateNoteView => isRecord(note) && typeof note.ref === "string",
+	);
+};
+
+/**
+ * Fills in the body of each τ row from the notes captured while the program ran.
+ *
+ * The trace gives every operation a row and its key; the value lives only here.
+ * Notes are consumed in order, which is safe because the trace records τ
+ * operations in the order they happened. A reloaded transcript has no notes, so
+ * the rows keep their key and size and simply show no value.
+ */
+export const applySpindleStateNotes = <T extends { ref: string; result?: unknown }>(
+	audits: T[],
+	notes: SpindleStateNoteView[] | undefined,
+): T[] => {
+	if (!notes || notes.length === 0) return audits;
+	const queue = [...notes];
+	return audits.map((audit) => {
+		if (!audit.ref.startsWith("spindle.state.")) return audit;
+		const note = queue.shift();
+		const body = note?.preview ?? note?.detail;
+		return body === undefined ? audit : { ...audit, result: body };
+	});
+};

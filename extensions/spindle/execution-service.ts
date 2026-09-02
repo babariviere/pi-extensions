@@ -10,7 +10,7 @@ import {
 import { SpindleActivityStore } from "./activity/store.ts";
 import type { SpindleRunDisplay } from "./activity/types.ts";
 import { MAX_AGENT_TIMEOUT_MS, MIN_AGENT_TIMEOUT_MS, type SpindleConfig } from "./config.ts";
-import { fullCodeProvider, hostCallTable, type HostCallContext } from "./host-calls.ts";
+import { fullCodeProvider, hostCallTable, type HostCallContext, type SpindleStateNote } from "./host-calls.ts";
 import { ActionRegistry, type SpindleCallAudit, type SpindleRegistryActivityEvent } from "./core/action-registry.ts";
 import type { SpindleToolGate } from "./core/tool-allowlist.ts";
 import { redactRecordedArgs } from "./core/arg-redaction.ts";
@@ -83,17 +83,21 @@ export interface SpindleExecutionResult {
 	error?: string;
 	usage?: Usage;
 	/**
-	 * Keys the session scratchpad holds after the program ran (see
-	 * session-store.ts). Echoed to the model on every result: state it cannot
-	 * see is state it will guess at.
+	 * Keys the session scratchpad holds, reported only when this program actually
+	 * touched τ. A program that never mentions the scratchpad should not be told
+	 * about it; one that does needs to know what it left behind.
 	 */
 	stateKeys?: SpindleSessionStoreKey[];
+	/** Live-only τ operation notes for the TUI rows (never persisted). */
+	stateNotes?: SpindleStateNote[];
 }
 
 interface SpindleExecutionPartial {
 	audits: SpindleCallAudit[];
 	phases: string[];
 	progress?: string | undefined;
+	/** τ operations so far, in order, for the live rows. */
+	stateNotes: SpindleStateNote[];
 }
 
 export interface SpindleExecutionOptions {
@@ -214,6 +218,7 @@ export class SpindleExecutionService {
 				`Spindle full code mode is disabled; call ${provider === "pi" ? "Pi core" : "registered extension"} tools directly outside spindle_exec`,
 			);
 		};
+		const stateNotes: SpindleStateNote[] = [];
 		let currentProgress: string | undefined;
 		let emitPending = false;
 		let emitTimer: NodeJS.Timeout | undefined;
@@ -223,6 +228,7 @@ export class SpindleExecutionService {
 				audits: audits.slice(),
 				phases: phases.slice(),
 				progress: currentProgress,
+				stateNotes: stateNotes.slice(),
 			});
 		};
 		const flushEmit = (): void => {
@@ -326,7 +332,10 @@ export class SpindleExecutionService {
 				const value = await run((nextStage) => {
 					stage = nextStage;
 				});
-				operation.succeed(undefined);
+				// The projection allowlist decides what (if anything) of this is kept;
+				// handing it the value is what lets a τ operation record its size and
+				// outcome instead of an empty row.
+				operation.succeed(value);
 				return value;
 			} catch (error) {
 				operation.fail(stage, error, executionOutcomeFromError(error, signal));
@@ -364,6 +373,10 @@ export class SpindleExecutionService {
 			phases,
 			workflowSpans,
 			store: this.store,
+			noteState: (note) => {
+				stateNotes.push(note);
+				emit();
+			},
 			registryContext: (signal) => ({ ...baseContext, signal }),
 			update,
 			guardFullCodeRef,
@@ -417,7 +430,8 @@ export class SpindleExecutionService {
 			trace: traceRecorder.seal(runOutcome, phases, sandboxResult.error),
 			elapsedMs: performance.now() - startedAt,
 			...(sandboxResult.error ? { error: sandboxResult.error } : {}),
-			...(this.store.size > 0 ? { stateKeys: this.store.snapshot() } : {}),
+			...(stateNotes.length > 0 ? { stateNotes } : {}),
+			...(stateNotes.length > 0 && this.store.size > 0 ? { stateKeys: this.store.keys() } : {}),
 		};
 	}
 }

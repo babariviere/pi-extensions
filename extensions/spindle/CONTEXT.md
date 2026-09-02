@@ -204,12 +204,20 @@ Globals inside `spindle_exec`:
   start and teardown and never persisted.
 
   Discoverability is half the feature and does not live in the store: the model
-  cannot see state it did not write this turn, so `execution-service.ts` reads
-  `snapshot()` into `SpindleExecutionResult.stateKeys` and `spindle-exec-tool.ts`
-  appends a `τ keys: name (size)` line to every result. Expanding the call adds
-  the `ui/inspect-preview.ts` block, whose value previews travel in the persisted
-  details (`audit/details.ts`) rather than being read from the live store, so an
-  old transcript shows what that run held and not the store's current contents. Without that echo the
+  cannot see state it did not write this turn, so a program that **touched** τ
+  gets `SpindleExecutionResult.stateKeys` and a `τ keys: name (size)` line on its
+  result. A program that never mentions the scratchpad is told nothing about it.
+
+  Each operation reports itself for the TUI, and that report is split across two
+  channels on purpose. The **durable trace** keeps the key (an identifier the
+  program chose) and the shape of what happened — bytes, `replaced` / `found` /
+  `deleted` / `cleared` — through explicit `spindle.state.*` cases in
+  `audit/projection.ts`. The **value** never enters it: that allowlist is the
+  trace's confidentiality boundary, and a τ value can be anything the program
+  read. So the preview rides the live partial-update channel instead
+  (`SpindleStateNote` → `readSpindleStateNotes` → `applySpindleStateNotes`), the
+  same route the write previews take. A reloaded transcript therefore keeps the
+  row, the key and the size, and loses only the content. Without that echo the
   namespace is a set of names the model has to remember, which is how a hidden
   store becomes a source of guessed keys. The `$stateSet` trace records the key
   only, never the value.
@@ -435,9 +443,8 @@ risk/approval hunks by hand.
 | `providers/spindle-bash-tool.ts` | Spindle's `pi.bash` definition: wraps pi's bash tool with per-call `cwd` / `env` / `stdin` extras (validated, then applied via per-call `BashOperations`); extras-free calls delegate to the base tool unchanged. The `stdin` path delegates to the shared supervised spawn (`sandbox/supervised-spawn.ts`) and routes through the OS-sandbox wrap. |
 | `env-snapshot.ts` | The allowlisted environment snapshot injected as the guest's `process` global; secrets never enter the sandbox. |
 | `session-store.ts` | The session-scoped JSON scratchpad behind the guest's `τ` namespace: key validation, per-value/total byte budgets, the held-key listing the result envelope echoes, and the `describe()` summary a limit error names. Owned by `SpindleState`, so it outlives one program; throws rather than evicting. |
-| `ui/inspect-preview.ts` | The expand-to-inspect blocks: `π` payload content on the call and `τ` keys on the result. Both were invisible before — `payloads` is where a program is told to put every awkward value, and the code preview then shows `π.body` with no way to see what `body` is (the sole exception being a payload bound to a `pi.write`, which the write preview renders while composing). Collapsed each block costs one dim summary line; expanded it shows bounded content. A local module because `ui/spindle-render.ts` is in the render parity set. |
-| `ui/inspect-preview.test.ts` | Line-level tests over a pass-through theme: collapsed summaries, expanded bounds and elision counts, write-preview de-duplication, and that nothing renders when there is nothing to show. |
-| `audit/details.test.ts` | The persisted-details contract: `state` round-trips, previews are bounded per key and are the **first** thing shed when the details object is over budget (keys and sizes survive), and a malformed `state` field is ignored. |
+| `ui/inspect-preview.ts` | Two things the rendered call was hiding. The `π` block: `payloads` is where a program is told to put every awkward value, and the code preview then shows `π.body` with no way to see what `body` is (the sole exception being a payload bound to a `pi.write`, which the write preview renders while composing, and which the block therefore skips). Collapsed it is one dim summary line; expanded, a bold `π.key` header per payload with bounded content. And the τ helpers: `readSpindleStateNotes` / `applySpindleStateNotes` put each operation's value into its own trace row. A local module because `ui/spindle-render.ts` is in the render parity set. |
+| `ui/inspect-preview.test.ts` | Line-level tests over a pass-through theme: collapsed summaries, expanded bounds and elision counts, header separation, write-preview de-duplication, τ note parsing and in-order application, and that a reloaded transcript (no notes) leaves its rows untouched. |
 | `session-store.test.ts` | Round-tripping, snapshot semantics (a stored value is not a live reference), miss vs stored `null`, refused values (undefined, functions, cycles), key validation, and that each limit throws and names what is held. |
 | `core/arg-redaction.ts` | Redacts `pi.bash` `env` values and `stdin` from recorded surfaces (audits, previews, traces); the live call keeps raw values. |
 | `runtime/source-map.ts` | Minimal source-map consumer: decodes the transpile map and rewrites `pi-spindle-guest.js:L:C` stack positions to `program.ts:L:C` in the program the model wrote. |

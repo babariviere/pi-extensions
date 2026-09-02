@@ -168,6 +168,15 @@ export const projectSpindleAuditArgs = (ref: string, args: Record<string, unknow
 				copyIdentifier(output, args, "namespace");
 				copyNumber(output, args, "limit");
 			});
+		// τ scratchpad operations keep the key, which is a plain identifier the
+		// program chose, and nothing else. The value never enters the trace.
+		case "spindle.state.get":
+		case "spindle.state.set":
+		case "spindle.state.delete":
+			return projected(args, (output) => copyIdentifier(output, args, "key"));
+		case "spindle.state.keys":
+		case "spindle.state.clear":
+			return emptyProjection(args);
 		case "spindle.discovery.search":
 			return projected(args, (output) => copyNumber(output, args, "limit"));
 		case "spindle.discovery.describe":
@@ -253,13 +262,28 @@ export const projectSpindleAuditArgs = (ref: string, args: Record<string, unknow
 
 /**
  * Results are omitted except for the exact boolean creation outcome emitted by
- * pi.write. No provider details or output text accompany that flag.
+ * pi.write, and the shape of a τ scratchpad operation: how many bytes it moved
+ * and whether the key was there. The stored *value* never enters the durable
+ * trace; the TUI reads its preview from the live store instead (see
+ * session-store.ts `preview()`), so a reloaded transcript keeps the key and the
+ * size and loses only the content.
  */
 export const projectSpindleAuditResult = (ref: string, result: unknown): SpindleAuditProjection | undefined => {
 	if (typeof result !== "object" || result === null || Array.isArray(result)) {
 		return undefined;
 	}
 	const record = result as Record<string, unknown>;
+	if (ref.startsWith("spindle.state.")) {
+		const value: Record<string, SpindleTraceJsonValue> = {};
+		const bytes = finiteNumber(record.bytes);
+		if (bytes !== undefined) value.bytes = bytes;
+		const cleared = finiteNumber(record.cleared);
+		if (cleared !== undefined) value.cleared = cleared;
+		for (const flag of ["found", "replaced", "deleted"]) {
+			if (typeof record[flag] === "boolean") value[flag] = record[flag];
+		}
+		return { value, droppedValues: Math.max(0, topLevelKeyCount(record) - Object.keys(value).length) };
+	}
 	if (ref !== "pi.write") return undefined;
 	const details =
 		typeof record.details === "object" && record.details !== null && !Array.isArray(record.details)

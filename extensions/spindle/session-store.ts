@@ -56,18 +56,14 @@ export interface SpindleSessionStoreKey {
 	key: string;
 	bytes: number;
 	updatedAt: number;
-	/**
-	 * A bounded slice of the stored JSON, for the expand-to-inspect surface.
-	 * Present only on `snapshot()`: `keys()` answers the guest, which can read
-	 * the value itself and must not pay for a copy of it.
-	 */
-	preview?: string;
 }
 
 /** The outcome of a `τ.set`. */
 export interface SpindleSessionStoreWrite {
 	key: string;
 	bytes: number;
+	/** True when the write replaced an existing entry. */
+	replaced: boolean;
 	keys: string[];
 }
 
@@ -75,6 +71,8 @@ export interface SpindleSessionStoreWrite {
 export interface SpindleSessionStoreRead {
 	key: string;
 	found: boolean;
+	/** Serialized size of the value read; absent on a miss. */
+	bytes?: number;
 	value?: unknown;
 }
 
@@ -170,7 +168,7 @@ export class SpindleSessionStore {
 		}
 		this.#entries.set(name, { json, bytes, updatedAt: Date.now() });
 		this.#bytes = nextTotal;
-		return { key: name, bytes, keys: this.keyNames() };
+		return { key: name, bytes, replaced: Boolean(previous), keys: this.keyNames() };
 	}
 
 	/**
@@ -182,7 +180,7 @@ export class SpindleSessionStore {
 		const name = this.#key(key, "get");
 		const entry = this.#entries.get(name);
 		if (!entry) return { key: name, found: false };
-		return { key: name, found: true, value: JSON.parse(entry.json) };
+		return { key: name, found: true, bytes: entry.bytes, value: JSON.parse(entry.json) };
 	}
 
 	delete(key: unknown): { key: string; deleted: boolean; keys: string[] } {
@@ -211,17 +209,14 @@ export class SpindleSessionStore {
 	}
 
 	/**
-	 * Held keys with a bounded preview of each value, for the TUI. The preview
-	 * travels in the persisted details rather than being read at render time, so
-	 * an old transcript still renders what the run actually held.
+	 * A bounded slice of one value's JSON, for the TUI row that reports the
+	 * operation. Never persisted: the durable trace records the key and the size,
+	 * not the content (see audit/projection.ts).
 	 */
-	snapshot(previewChars = 200): SpindleSessionStoreKey[] {
-		return [...this.#entries.entries()].map(([key, entry]) => ({
-			key,
-			bytes: entry.bytes,
-			updatedAt: entry.updatedAt,
-			preview: entry.json.length > previewChars ? `${entry.json.slice(0, previewChars - 1)}\u2026` : entry.json,
-		}));
+	preview(key: string, previewChars = 300): string | undefined {
+		const entry = this.#entries.get(String(key));
+		if (!entry) return undefined;
+		return entry.json.length > previewChars ? `${entry.json.slice(0, previewChars - 1)}\u2026` : entry.json;
 	}
 
 	keyNames(): string[] {

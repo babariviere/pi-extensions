@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { payloadInspectorLines, stateInspectorLines } from "./inspect-preview.ts";
+import { applySpindleStateNotes, payloadInspectorLines, readSpindleStateNotes } from "./inspect-preview.ts";
 
-/** A theme that returns its text unchanged, so assertions read as plain lines. */
-const theme = { fg: (_name: string, text: string) => text } as never;
+/** A theme that marks bold with «» and passes colors through, so lines read plainly. */
+const theme = {
+	fg: (_name: string, text: string) => text,
+	bold: (text: string) => `«${text}»`,
+} as never;
 
 test("collapsed payloads cost one line naming every key and size", () => {
 	const lines = payloadInspectorLines({
@@ -16,13 +19,29 @@ test("collapsed payloads cost one line naming every key and size", () => {
 	assert.match(lines[0]!, /^π body \(5 B\) · task \(2\.0 KB\)/);
 });
 
-test("expanded payloads show bounded content per key", () => {
+test("expanded payloads show a bold key header and bounded content", () => {
 	const lines = payloadInspectorLines({
-		payloads: { body: ["one", "two", "three"].join("\n") },
+		payloads: { body: ["one", "two"].join("\n") },
 		expanded: true,
 		theme,
 	});
-	assert.deepEqual(lines, ["π body (13 B)", "π.body · 13 B · 3 lines", "one", "two", "three"]);
+	assert.deepEqual(lines, ["π body (7 B)", "«π.body» · 7 B · 2 lines", "one", "two"]);
+});
+
+test("consecutive payloads are separated by a blank line", () => {
+	const lines = payloadInspectorLines({
+		payloads: { a: "first", b: "second" },
+		expanded: true,
+		theme,
+	});
+	assert.deepEqual(lines, [
+		"π a (5 B) · b (6 B)",
+		"«π.a» · 5 B · 1 line",
+		"first",
+		"",
+		"«π.b» · 6 B · 1 line",
+		"second",
+	]);
 });
 
 test("a long payload is elided with a count, not truncated silently", () => {
@@ -54,21 +73,35 @@ test("no payloads renders nothing at all", () => {
 	);
 });
 
-test("τ keys summarize collapsed and preview expanded", () => {
-	const entries = [
-		{ key: "index", bytes: 20002, preview: '{"files":["a.ts"]}' },
-		{ key: "probe", bytes: 63 },
-	];
-	assert.deepEqual(stateInspectorLines({ entries, expanded: false, theme }).length, 1);
-	assert.deepEqual(stateInspectorLines({ entries, expanded: true, theme }), [
-		"τ index (19.5 KB) · probe (63 B)",
-		"τ.index · 19.5 KB",
-		'{"files":["a.ts"]}',
-		"τ.probe · 63 B",
+test("τ notes are read off a partial update and ignored otherwise", () => {
+	assert.deepEqual(readSpindleStateNotes({ stateNotes: [{ ref: "spindle.state.set", key: "a" }] }), [
+		{ ref: "spindle.state.set", key: "a" },
 	]);
+	assert.deepEqual(readSpindleStateNotes({ stateNotes: ["nope", { key: "no ref" }] }), []);
+	assert.deepEqual(readSpindleStateNotes({}), []);
+	assert.deepEqual(readSpindleStateNotes(undefined), []);
 });
 
-test("an empty scratchpad renders nothing", () => {
-	assert.deepEqual(stateInspectorLines({ entries: [], expanded: true, theme }), []);
-	assert.deepEqual(stateInspectorLines({ entries: undefined, expanded: true, theme }), []);
+test("τ notes fill in each operation's body, in order", () => {
+	const audits = [
+		{ ref: "spindle.state.set" },
+		{ ref: "pi.read", result: "file" },
+		{ ref: "spindle.state.get" },
+		{ ref: "spindle.state.delete" },
+	];
+	const applied = applySpindleStateNotes(audits, [
+		{ ref: "spindle.state.set", key: "a", preview: '{"n":1}' },
+		{ ref: "spindle.state.get", key: "a", preview: '{"n":1}' },
+		{ ref: "spindle.state.delete", key: "a", detail: "deleted" },
+	]);
+	assert.deepEqual(
+		applied.map((audit) => audit.result),
+		['{"n":1}', "file", '{"n":1}', "deleted"],
+	);
+});
+
+test("a reloaded transcript has no notes and keeps its rows unchanged", () => {
+	const audits = [{ ref: "spindle.state.set" }];
+	assert.equal(applySpindleStateNotes(audits, undefined), audits);
+	assert.equal(applySpindleStateNotes(audits, []), audits);
 });

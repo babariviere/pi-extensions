@@ -7,18 +7,20 @@ test("a value survives round-tripping through JSON", () => {
 	const store = new SpindleSessionStore();
 	const write = store.set("index", { files: ["a.ts", "b.ts"], count: 2 });
 	assert.equal(write.key, "index");
+	assert.equal(write.replaced, false);
 	assert.deepEqual(write.keys, ["index"]);
-	assert.deepEqual(store.get("index"), {
-		key: "index",
-		found: true,
-		value: { files: ["a.ts", "b.ts"], count: 2 },
-	});
+	const read = store.get("index");
+	assert.equal(read.found, true);
+	assert.deepEqual(read.value, { files: ["a.ts", "b.ts"], count: 2 });
+	assert.equal(read.bytes, write.bytes);
+	// A second write to the same key reports that it replaced one.
+	assert.equal(store.set("index", { files: [] }).replaced, true);
 });
 
 test("a miss is distinguishable from a stored null", () => {
 	const store = new SpindleSessionStore();
 	store.set("nothing", null);
-	assert.deepEqual(store.get("nothing"), { key: "nothing", found: true, value: null });
+	assert.deepEqual(store.get("nothing"), { key: "nothing", found: true, bytes: 4, value: null });
 	assert.deepEqual(store.get("absent"), { key: "absent", found: false });
 });
 
@@ -77,6 +79,16 @@ test("limits throw and name what is held, rather than evicting", () => {
 	store.set("a", "z".repeat(190));
 	assert.throws(() => store.set("b", "z".repeat(190)), /over its 350 B session limit/);
 	assert.equal(store.size, 2);
+});
+
+test("preview is a bounded slice of the stored JSON, and only for held keys", () => {
+	const store = new SpindleSessionStore();
+	store.set("small", { n: 1 });
+	store.set("big", "x".repeat(1000));
+	assert.equal(store.preview("small"), '{"n":1}');
+	assert.equal(store.preview("big", 20)?.length, 20);
+	assert.ok(store.preview("big", 20)?.endsWith("\u2026"));
+	assert.equal(store.preview("absent"), undefined);
 });
 
 test("describe summarizes what a result envelope should echo", () => {
