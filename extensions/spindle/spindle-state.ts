@@ -93,6 +93,7 @@ export class SpindleState {
 		sessionId: undefined,
 		sessionFile: undefined,
 		cwd: process.cwd(),
+		projectTrusted: false,
 	};
 	#widgetDismissedAt = 0;
 
@@ -154,6 +155,7 @@ export class SpindleState {
 			projectTrusted,
 		});
 		this.#sessionRef.cwd = context.cwd;
+		this.#sessionRef.projectTrusted = projectTrusted;
 		try {
 			this.#sessionRef.sessionId = context.sessionManager.getSessionId() || undefined;
 		} catch {

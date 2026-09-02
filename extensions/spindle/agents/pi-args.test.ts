@@ -221,6 +221,21 @@ test("buildChildArgs omits the system prompt flag when body is empty", () => {
 	assert.ok(!args.includes("--append-system-prompt"));
 });
 
+test("buildChildArgs always sends a project-trust verdict, so the child never prompts", () => {
+	// pi trusts project-local files by path: a child in a fresh working copy would
+	// otherwise stop on the trust prompt with no tty to answer it.
+	const trusted = buildChildArgs(agent(), "t", { ...opts, projectTrusted: true });
+	assert.ok(trusted.includes("--approve"));
+	assert.ok(!trusted.includes("--no-approve"));
+
+	const untrusted = buildChildArgs(agent(), "t", { ...opts, projectTrusted: false });
+	assert.ok(untrusted.includes("--no-approve"));
+	assert.ok(!untrusted.includes("--approve"));
+
+	// Unknown reads as untrusted, and still sends a flag rather than nothing.
+	assert.ok(buildChildArgs(agent(), "t", opts).includes("--no-approve"));
+});
+
 test("buildChildArgs adds --no-skills only when inheritSkills is false", () => {
 	assert.ok(buildChildArgs(agent({ inheritSkills: false }), "t", opts).includes("--no-skills"));
 	assert.ok(!buildChildArgs(agent({ inheritSkills: true }), "t", opts).includes("--no-skills"));

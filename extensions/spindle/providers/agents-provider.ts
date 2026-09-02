@@ -50,6 +50,11 @@ export interface SessionRef {
 	sessionId: string | undefined;
 	sessionFile: string | undefined;
 	cwd: string;
+	/**
+	 * The session's own project-trust verdict (`context.isProjectTrusted()`),
+	 * inherited by every child run so it never raises pi's trust prompt.
+	 */
+	projectTrusted?: boolean;
 }
 
 /** What the caller is told when a wait window expires on a live batch. */
@@ -424,6 +429,9 @@ export class SpindleAgentsProvider implements SpindleProvider {
 			sessionFile: ref.sessionFile,
 			runId,
 			cwd: ref.cwd,
+			// Inherited, not re-derived: a child in a fresh working copy would
+			// otherwise stop on pi's project-trust prompt with no tty to answer.
+			projectTrusted: ref.projectTrusted === true,
 			// The configured timeout is a cap, not a default a caller can raise.
 			timeoutMs: boundedMs(args.timeoutMs, configuredTimeoutMs, MIN_AGENT_TIMEOUT_MS, configuredTimeoutMs),
 			signal: controller.signal,

@@ -806,7 +806,8 @@ and docs aligned with these.)
   leak as bare optionals into the shared type; `run.ts`'s `baseResult` builds the
   shared fields both adapters populate.
 - **run context** (`RunContext`): the ambient inputs a backend needs for a batch
-  (session id/file, runId, cwd, timeout, abort signal, status callback). The
+  (session id/file, runId, cwd, timeout, project-trust verdict, abort signal,
+  status callback). The
   signal is the *batch's* own `AbortController`, not the invocation signal, so a
   batch can outlive the program that launched it (see "Run lifetime and
   cancellation").

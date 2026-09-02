@@ -89,6 +89,13 @@ export interface RunContext {
 	runId: string;
 	cwd: string;
 	timeoutMs: number;
+	/**
+	 * Whether the parent session trusts the project-local files at its cwd,
+	 * forwarded to the child as `--approve` / `--no-approve`. Inherited rather
+	 * than re-derived, because pi trusts by path: a child started in a fresh
+	 * working copy is untrusted and would stop on the prompt.
+	 */
+	projectTrusted?: boolean;
 	signal?: AbortSignal;
 	onStatus?: OnStatus;
 }
@@ -211,6 +218,8 @@ export function prepareChildRun(
 		modelOverride: req.overrides?.model,
 		thinkingOverride: req.overrides?.thinking,
 		...framing,
+		// Forward the parent's project-trust verdict so the child never prompts.
+		projectTrusted: ctx.projectTrusted === true,
 		includeTask: opts.taskDelivery === "inline",
 		...(taskPath ? { taskFile: taskPath } : {}),
 	});

@@ -13,6 +13,11 @@
  * below), not from replacing the prompt. Inherited context/skills are controlled
  * with native flags (`--no-skills`, `--no-context-files`).
  *
+ * Project trust: pi trusts project-local files by path, so a child spawned in a
+ * fresh working copy would raise the trust prompt with no tty to answer it. The
+ * parent's verdict travels down as `--approve` / `--no-approve` (see
+ * `ChildInvocationOpts.projectTrusted`).
+ *
  * Model provider: agent frontmatter often uses a bare model name. We qualify it
  * with the caller-resolved default provider (e.g. `anthropic/claude-opus-4-8`)
  * BEFORE the thinking suffix, because pi resolves a bare, thinking-suffixed name
@@ -95,6 +100,14 @@ export interface ChildInvocationOpts {
 	reads?: string[];
 	/** Inherit the night-mode contract (unattended run, no outbound messages, draft PRs). */
 	night?: boolean;
+	/**
+	 * Whether the parent session trusts the project-local files at the child's
+	 * cwd. Decided by the parent (`context.isProjectTrusted()`) and forwarded as
+	 * `--approve` / `--no-approve`; one of the two is always sent, so a child can
+	 * never sit on pi's trust prompt. Undefined means "not trusted", the safe
+	 * reading for a caller that could not tell.
+	 */
+	projectTrusted?: boolean;
 	/**
 	 * The child's own working copy, when the host gave it one. Changes what the
 	 * night contract tells it about where to work.
@@ -192,6 +205,12 @@ export function buildChildArgs(agent: DiscoveredAgent, task: string, opts: Child
 	if (agent.config.inheritProjectContext === false) {
 		args.push("--no-context-files");
 	}
+
+	// Project trust is per path, so a child started in a fresh clone or jj
+	// workspace is untrusted even when the original path was, and pi stops to ask.
+	// A subagent has no tty to answer with, so the parent's own verdict is
+	// forwarded and one of the two flags is always sent: never a prompt.
+	args.push(opts.projectTrusted ? "--approve" : "--no-approve");
 
 	// Deliver the task inline as the initial message (headless spawn: any chars
 	// are safe). The herdr backend omits it here and submits it via `agent prompt`
