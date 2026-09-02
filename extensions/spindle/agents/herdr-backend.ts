@@ -32,10 +32,12 @@
  * the task sitting in the composer, so a stalled submission replays the key
  * instead of reporting a running run that will never produce anything.
  *
- * Completion: each run races the transcript becoming stable against a blocking
- * `herdr agent wait` (idle-after-working, or pane gone) rather than polling, so
- * we finalize promptly whether the agent finished its turn or was terminated by
- * the user.
+ * Completion: each run waits on a blocking `herdr agent wait`
+ * (idle-after-working, or pane gone) rather than polling, then confirms the turn
+ * really ended by checking that the child transcript ends on a terminal
+ * assistant message. herdr cannot see turn boundaries, so an idle report alone
+ * would cut off a child that was merely between a tool result and its next model
+ * stream, and closing the tab would kill it mid-generation.
  */
 
 import { computeGrid } from "./grid.ts";
@@ -45,7 +47,7 @@ import { currentWorkspaceId } from "./herdr-transport.ts";
 import { waitForAgentFinish } from "./pane-lifecycle.ts";
 import { formatTaskMessage } from "./pi-args.ts";
 import { readDefaultProvider } from "./settings.ts";
-import { resolveRunOutput } from "./output.ts";
+import { hasTerminalAssistantMessage, resolveRunOutput } from "./output.ts";
 import { outcomeError, type RunOutcome, waitForRunCompletion } from "./herdr-completion.ts";
 import { baseResult, prepareChildRun, runCwd, type RunContext, type RunRequest, type RunResult } from "./run.ts";
 
@@ -302,15 +304,23 @@ async function settleRun(s: SpawnedRun, ctx: RunContext): Promise<RunResult> {
 	// AbortController tears down the lingering `herdr wait` once the run settles.
 	const paneId = s.paneId;
 	const ac = new AbortController();
-	const agentSignal = paneId
-		? waitForAgentFinish(herdr.statusProbe(paneId), ctx.timeoutMs, { signal: ac.signal })
+	// Re-armable: an idle report is not a turn boundary, so a false idle (a quiet
+	// pane between a tool result and the next model stream) starts another wait
+	// instead of ending the run.
+	const armAgentWait = paneId
+		? () => waitForAgentFinish(herdr.statusProbe(paneId), ctx.timeoutMs, { signal: ac.signal })
 		: undefined;
 
 	let outcome: RunOutcome;
 	try {
-		// The child writes its transcript live at sessionPath; waiting for it to
-		// stop growing (or for the agent to go idle) tells us the turn is done.
-		outcome = await waitForRunCompletion(s.sessionPath, { timeoutMs: ctx.timeoutMs, agentSignal });
+		// The child writes its transcript live at sessionPath; the run is done when
+		// the agent goes idle AND that transcript ends on a terminal assistant
+		// message.
+		outcome = await waitForRunCompletion(s.sessionPath, {
+			timeoutMs: ctx.timeoutMs,
+			...(armAgentWait ? { agentSignal: armAgentWait(), rearmAgentSignal: armAgentWait } : {}),
+			isTurnComplete: () => hasTerminalAssistantMessage(s.sessionPath),
+		});
 	} finally {
 		ac.abort();
 	}

@@ -92,6 +92,21 @@ export function outputPathFor(cwd: string, runDirDefault: string, override?: str
  * (tool-only final turns fall back to the previous text turn), or undefined
  * when the transcript is unreadable or has no assistant text.
  */
+function assistantText(content: unknown): string {
+	if (!Array.isArray(content)) return "";
+	return content
+		.filter(
+			(c): c is { type: string; text: string } =>
+				!!c &&
+				typeof c === "object" &&
+				(c as { type?: unknown }).type === "text" &&
+				typeof (c as { text?: unknown }).text === "string",
+		)
+		.map((c) => c.text)
+		.join("")
+		.trim();
+}
+
 export function readLastAssistantText(sessionPath: string): string | undefined {
 	let raw: string;
 	try {
@@ -110,21 +125,48 @@ export function readLastAssistantText(sessionPath: string): string | undefined {
 			continue;
 		}
 		const msg = (obj as { message?: { role?: unknown; content?: unknown } }).message;
-		if (!msg || msg.role !== "assistant" || !Array.isArray(msg.content)) continue;
-		const text = msg.content
-			.filter(
-				(c): c is { type: string; text: string } =>
-					!!c &&
-					typeof c === "object" &&
-					(c as { type?: unknown }).type === "text" &&
-					typeof (c as { text?: unknown }).text === "string",
-			)
-			.map((c) => c.text)
-			.join("")
-			.trim();
+		if (!msg || msg.role !== "assistant") continue;
+		const text = assistantText(msg.content);
 		if (text.length > 0) last = text;
 	}
 	return last;
+}
+
+/**
+ * True when the transcript's last message is a *terminal* assistant turn: an
+ * assistant message carrying text whose stop reason is not `toolUse`.
+ *
+ * This is the only reliable turn boundary the parent can observe. herdr's agent
+ * status cannot see turns (`herdr agent wait` documents as much): a pi pane also
+ * looks `idle` in the gap between a tool result and the next model stream, so an
+ * `idle` report alone must not end a run. A transcript that ends on a
+ * `toolResult`, or on an assistant message that stopped to call a tool, means
+ * the child is still mid-turn.
+ */
+export function hasTerminalAssistantMessage(sessionPath: string): boolean {
+	let raw: string;
+	try {
+		raw = readFileSync(sessionPath, "utf-8");
+	} catch {
+		return false;
+	}
+	let last: { role?: unknown; content?: unknown; stopReason?: unknown } | undefined;
+	for (const line of raw.split(/\r?\n/)) {
+		const trimmed = line.trim();
+		if (!trimmed.startsWith("{")) continue;
+		let obj: unknown;
+		try {
+			obj = JSON.parse(trimmed);
+		} catch {
+			continue;
+		}
+		const rec = obj as { type?: unknown; message?: { role?: unknown; content?: unknown; stopReason?: unknown } };
+		// Non-message records (session header, model/thinking changes) are not turns.
+		if (rec.type !== "message" || !rec.message) continue;
+		last = rec.message;
+	}
+	if (!last || last.role !== "assistant" || last.stopReason === "toolUse") return false;
+	return assistantText(last.content).length > 0;
 }
 
 /**

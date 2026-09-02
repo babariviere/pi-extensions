@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import {
+	hasTerminalAssistantMessage,
 	indexOutputOverride,
 	normalizeOutputOverride,
 	outputPathFor,
@@ -185,4 +186,73 @@ test("resolveRunOutput reports no outputPath when nothing was produced", async (
 	const r = await resolveRunOutput(tmpFile(), tmpFile(), { fallback: () => undefined, finishedCleanly: true });
 	assert.equal(r.outputPath, undefined);
 	assert.equal(r.writeError, undefined);
+});
+
+test("hasTerminalAssistantMessage is false for a transcript ending mid-turn", () => {
+	const dir = mkdtempSync(join(tmpdir(), "turn-boundary-"));
+	const path = join(dir, "session.jsonl");
+	// The failure this guards: the child had just received tool results and was
+	// about to generate, while the pane read as idle.
+	writeFileSync(
+		path,
+		[
+			JSON.stringify({ type: "session", id: "s" }),
+			JSON.stringify({ type: "message", message: { role: "user", content: [{ type: "text", text: "task" }] } }),
+			JSON.stringify({
+				type: "message",
+				message: { role: "assistant", stopReason: "toolUse", content: [{ type: "text", text: "let me grep" }] },
+			}),
+			JSON.stringify({
+				type: "message",
+				message: { role: "toolResult", content: [{ type: "text", text: "hits" }] },
+			}),
+		].join("\n"),
+	);
+	assert.equal(hasTerminalAssistantMessage(path), false);
+});
+
+test("hasTerminalAssistantMessage is false when the last assistant turn stopped to call a tool", () => {
+	const dir = mkdtempSync(join(tmpdir(), "turn-boundary-"));
+	const path = join(dir, "session.jsonl");
+	writeFileSync(
+		path,
+		JSON.stringify({
+			type: "message",
+			message: { role: "assistant", stopReason: "toolUse", content: [{ type: "text", text: "calling a tool" }] },
+		}),
+	);
+	assert.equal(hasTerminalAssistantMessage(path), false);
+});
+
+test("hasTerminalAssistantMessage is true for a final assistant message", () => {
+	const dir = mkdtempSync(join(tmpdir(), "turn-boundary-"));
+	const path = join(dir, "session.jsonl");
+	writeFileSync(
+		path,
+		[
+			JSON.stringify({
+				type: "message",
+				message: { role: "toolResult", content: [{ type: "text", text: "hits" }] },
+			}),
+			JSON.stringify({
+				type: "message",
+				message: {
+					role: "assistant",
+					stopReason: "endTurn",
+					content: [{ type: "text", text: "## Research\nfindings" }],
+				},
+			}),
+			// Trailing non-message records must not hide the terminal turn.
+			JSON.stringify({ type: "thinking_level_change", thinkingLevel: "off" }),
+		].join("\n"),
+	);
+	assert.equal(hasTerminalAssistantMessage(path), true);
+});
+
+test("hasTerminalAssistantMessage is false for a missing or empty transcript", () => {
+	const dir = mkdtempSync(join(tmpdir(), "turn-boundary-"));
+	assert.equal(hasTerminalAssistantMessage(join(dir, "nope.jsonl")), false);
+	const empty = join(dir, "empty.jsonl");
+	writeFileSync(empty, "");
+	assert.equal(hasTerminalAssistantMessage(empty), false);
 });

@@ -28,6 +28,11 @@ export interface StatusProbe {
  * `done`. So we first wait for `working` (skipping the startup `idle`), then wait
  * for `idle` or `done`.
  *
+ * A resolved wait is NOT a turn boundary: herdr cannot see turns, and a pi pane
+ * also reads as `idle` in the gap between a tool result and the next model
+ * stream. Callers must confirm the turn ended from the child transcript (see
+ * `herdr-completion.ts`) and re-arm this wait on a false idle.
+ *
  * Termination handling: `waitUntil` reports `not_running` when the pane closes,
  * but it can also report that transiently while pi is still starting up (before
  * it's detected as an agent). To tell those apart we cap each wait at `chunkMs`
