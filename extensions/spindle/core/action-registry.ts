@@ -368,8 +368,8 @@ export class ActionRegistry {
 			}));
 			if (extensionTools.length > 0) sources.extensionTools = extensionTools;
 		}
-		// The MCP section is optional and independent: the bridge provider cannot
-		// supply schemas, and a cache miss must leave the loose declarations rather
+		// The MCP section is optional and independent: an MCP provider that cannot
+		// supply schemas, or a cache miss, must leave the loose declarations rather
 		// than fail the execution or provoke a connect.
 		const mcp = this.#providers.get("mcp");
 		if (isMcpTypeSourceProvider(mcp)) {

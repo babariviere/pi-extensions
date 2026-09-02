@@ -348,13 +348,13 @@ globalThis.agents = Object.freeze({
     __call("agents.cancel", typeof args === "string" ? { runId: args } : (args || {})),
 });
 // One way in: mcp.call({ server, tool, args }), or the positional form
-// mcp.call(server, tool, args). Every route lands on the pi-mcp-adapter
-// gateway, which connects lazily.
+// mcp.call(server, tool, args). Every route lands on the in-tree MCP client
+// (mcp/client-hub.ts), which connects a server on first use.
 //
-// Discovery deliberately lives here rather than on tools.*: pi-mcp-adapter
-// connects servers on demand, so an MCP tool list only exists after a gateway
-// round-trip and cannot be folded into the static action registry without
-// forcing every configured server to connect.
+// Discovery deliberately lives here rather than on tools.*: servers connect on
+// demand, so a server's tool list is known only from the on-disk schema cache
+// or after a connect, and folding it into the static action registry would mean
+// connecting every configured server at startup.
 globalThis.mcp = Object.freeze({
   call: (serverName, tool, args) =>
     __call(

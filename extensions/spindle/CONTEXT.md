@@ -34,7 +34,6 @@ plus its wiring, and none pulls in a dropped subsystem.
 | `config.ts` (`executor.maxTimeoutMs`), `execution-service.ts` (`requestedTimeoutMs`) | same fields upstream | a per-invocation `timeoutMs` raises (never lowers) the program deadline |
 | `runtime/dynamic-guest-types.ts` | `src/runtime/dynamic-guest-types.ts` (mcp section rewritten) | `extensions.<tool>` is typed from the live captured catalog; `mcp` is typed from the on-disk MCP tool cache as an indexed tool map, so generation never connects a server |
 | `core/action-repair.ts`, `providers/arg-normalization.ts` | same names upstream | near-miss action names and argument keys repair from the declared catalog/schema, with didactic failures |
-| `mcp/descriptor-cache.ts` | `src/providers/mcp-descriptor-cache.ts` (rewritten: spindle owns no MCP client) | in-process memo for `mcp.list` / `search` / `describe`, invalidated by config fingerprint, `connect` and TTL |
 | `core/pi-bash-error.ts` | `src/core/pi-bash-error.ts` | `pi.bash({ settle: true })` keeps its exit status across `tool_result` middleware |
 | `core/core-override-guidance.ts` | `src/core/core-override-guidance.ts` | an exact-name core override keeps its authored prompt text in full code mode |
 | `ui/highlight.ts` (dynamic `import("shiki")`) | upstream's startup-perf change | the full shiki entry stays out of extension startup |
@@ -96,7 +95,7 @@ Globals inside `spindle_exec`:
 - `pi.*` — Pi core tools (full code mode only), via `providers/pi-tools-provider.ts`
 - `extensions.*` — tools registered by sibling extensions, via `capture/` + `providers/captured-tools-provider.ts`
 - `tools.*` — cross-provider discovery and generic dispatch (full code mode only): `providers` / `catalog` / `list` / `search` / `describe` / `call` over every registered provider
-- `mcp.*` — MCP tools from `mcp.json`, served by `providers/mcp-client-provider.ts` (spindle's own MCP client, default). `SPINDLE_MCP_CLIENT=0` falls back to `providers/mcp-bridge-provider.ts` (the `pi-mcp-adapter` `mcp` gateway tool). Identical sandbox surface either way
+- `mcp.*` — MCP tools from `~/.pi/agent/mcp.json`, served by spindle's own MCP client (`mcp/client-hub.ts` behind `providers/mcp-client-provider.ts`)
 - `agents.*` — custom markdown subagents, via `providers/agents-provider.ts` + `agents/`
 - Host APIs, via `runtime/guest-polyfills.ts`: `TextEncoder`/`TextDecoder`,
   `URL`/`URLSearchParams`, `atob`/`btoa`, `structuredClone`, `crypto`
@@ -369,7 +368,7 @@ fd -e ts . extensions/spindle -x perl -pi -e 's{(from\s+")(\.\.?/[^"]*)\.js(")}{
 | `src/prewalk/` | Handoff-at-boundary prewalk; out of scope |
 | `src/commands/` | Upstream's slash command and its dashboard entry point |
 | `src/storage/`, `src/worker/`, `src/worker.ts`, `src/main-agent.ts`, `src/log-tail.ts` | Only reachable from dropped subsystems |
-| `src/providers/mcp-provider.ts` | Upstream's own embeddable MCP client (the `createRuntime` package listed in upstream `package.json`); replaced by the pi-mcp-adapter bridge. **That package is deliberately not a dependency of this repo.** |
+| `src/providers/mcp-provider.ts` | Upstream's own embeddable MCP client (the `createRuntime` package listed in upstream `package.json`); replaced by `mcp/client-hub.ts`, which is written here against `@modelcontextprotocol/client`. **Upstream's package is deliberately not a dependency of this repo.** |
 | `src/providers/{agents,memory,mesh,state,schema,compact}-provider.ts` | Providers for dropped subsystems |
 | `src/runtime/node-process-runtime.ts`, `src/runtime/node-process-child-source.ts` | Unsafe trusted-code escape hatch; imports `src/agents/transports/` and needs `cross-spawn`. `executor.runtime` is therefore fixed at `"quickjs"`. |
 | `src/core/compact-controller.ts` | Imports `src/compaction/instructions.ts` |
@@ -434,7 +433,7 @@ risk/approval hunks by hand.
 
 | File | Purpose |
 |---|---|
-| `providers/mcp-bridge-provider.ts` | `mcp.*` → the `pi-mcp-adapter` `mcp` gateway tool. **Upstream has a file with the same provider name (`mcp`) that is deliberately not vendored.** |
+| `providers/mcp-client-provider.ts` | `mcp.*` → `mcp/client-hub.ts`. **Upstream has a file with the same provider name (`mcp`) that is deliberately not vendored; this one is written here.** |
 | `providers/agents-provider.ts` | `agents.*` → the absorbed subagents code. `#launch` is the pipeline (`#resolveRequests` → start monitor → own `AbortController` → invoke the run launcher → register in the run book); every action then either waits on the book or queries it. **Upstream also ships `src/providers/agents-provider.ts`, fronting its own RLM/handoff agent runtime; that file is NOT vendored, and this file is unrelated to it.** |
 | `providers/agent-run-book.ts` | New. The live book of batches: bounded waits, detachment, the completion sink, and cancellation (see "Run lifetime and cancellation"). |
 | `providers/agent-run-monitor.ts` | The widget-facing projection: `SpindleAgentRunRegistry` (the widget's data source) and `RunProgressMonitor`, which turns backend status updates into registry rows + the one-line ticker behind a `start`/`onStatus`/`stop` interface. |
@@ -817,36 +816,55 @@ and docs aligned with these.)
   pane-lifecycle machine polls to decide when a run has finished or its pane is
   gone.
 
-## MCP bridge contract
+## MCP client contract
 
-`providers/mcp-bridge-provider.ts` resolves the `mcp` registered tool lazily
-through `CapturedToolCatalog.get("mcp")` and invokes `entry.wrappedTool.execute`
-with `ctx.signal` and `ctx.nestedToolCallId`.
+`mcp.*` is served in-process. `providers/mcp-client-provider.ts` holds the five
+management actions and the `mcp.<server>.<tool>` ref form; `mcp/client-hub.ts`
+owns the `@modelcontextprotocol/client` connections, one per configured server,
+opened on first use.
 
-| Spindle action | Sandbox call | pi-mcp-adapter gateway params |
+| Spindle action | Sandbox call | Hub call |
 |---|---|---|
-| `mcp.call` | `mcp.call(server, tool, args)` / `mcp.call({ server?, tool, args? })` | `{ tool, args, server? }` |
-| `mcp.list` | `mcp.list(server)` / `mcp.list({ server? })` | `{}` or `{ server }` |
-| `mcp.search` | `mcp.search({ query, server?, regex?, includeSchemas? })` | `{ search, server?, regex?, includeSchemas? }` |
-| `mcp.describe` | `mcp.describe({ tool })` | `{ describe }` |
-| `mcp.connect` | `mcp.connect(server)` | `{ connect: server }` |
+| `mcp.call` | `mcp.call(server, tool, args)` / `mcp.call({ server?, tool, args? })` | `callTool(tool, args, ctx, server?)` |
+| `mcp.list` | `mcp.list(server)` / `mcp.list({ server? })` | `status(server?)`, config + cache only |
+| `mcp.search` | `mcp.search({ query, server?, regex?, includeSchemas? })` | `searchTools(query, opts)`, cache only |
+| `mcp.describe` | `mcp.describe({ tool, server? })` | `describeTool(ref, server?)`, cache only |
+| `mcp.connect` | `mcp.connect(server)` | `connect(server)`, reconnect + refresh schemas |
 
-Two invariants:
+Four invariants:
 
-1. **Fail at use, never at startup.** The constructor does not touch the
-   catalog. A missing `pi-mcp-adapter` surfaces as an actionable error thrown
-   inside the sandbox on the first call, so a session always starts and a
-   program that never touches `mcp.*` is unaffected.
-2. **No pre-fetch.** `pi-mcp-adapter` connects servers lazily. `list()` and
-   `describe()` return four static descriptors and never call the gateway;
-   eagerly enumerating tools would force every configured server to connect and
-   could trigger interactive OAuth flows.
+1. **Fail at use, never at startup.** The hub is constructed on the first
+   `mcp.*` call and its constructor touches nothing: no config read, no
+   credential-store read, no connection. A session with no MCP program pays
+   nothing, and a broken `mcp.json` layer is reported as an error string on
+   `mcp.list` rather than killing the session.
+2. **No pre-fetch.** `list`, `search` and `describe` answer from
+   `mcp/tool-cache.ts` and never connect. A server whose tools have never been
+   listed simply contributes nothing until `mcp.connect` or a call warms it.
+   This is also what makes guest type generation safe (`runtime/dynamic-guest-types.ts`
+   reads the same cache).
+3. **Authorization is the user's, never the tool's.** A refresh-token grant runs
+   headless. Anything that would need a consent screen throws
+   `McpAuthorizationRequiredError`, whose message tells the model to stop and ask
+   the user to run `/mcp-auth <server>`. There is no option to open a browser;
+   `redirectToAuthorization` returns `never`.
+4. **One credential-store item per server.** `mcp/token-store.ts` writes a
+   record as a single item and compacts a chunked pi-mcp-adapter record on read.
+   The adapter chunks anything over 1280 chars into 1000-char items for the
+   Windows Credential Manager blob cap, which on macOS means one server becomes
+   six keychain items, six ACLs and six prompts.
 
-Results are normalized to `{ text, content, structuredContent }` using a copy of
-the deleted `src/providers/mcp-provider.ts`'s `normalizeMcpResult` semantics; a
-gateway error is rethrown with the gateway's text. `AgentToolResult` carries no
-`isError`, so failure detection relies on the gateway throwing (with a
-defensive check on `details.isError`).
+Results are normalized to `{ text, content, structuredContent }`, and an
+`isError` result is rethrown with its text so a failed tool call rejects instead
+of returning quietly.
+
+`mcp.json` compatibility is deliberate and load-bearing: the same file, the same
+`mcpServers` schema, the same `includeTools` / `excludeTools` glob rules, the
+same `mcp_<server>_<tool>` prefix the read-only policy keys off, and the same
+credential-store service and account as pi-mcp-adapter, so switching between the
+two needs no config edit and no re-authentication. Entries the client cannot run
+(`socket`, `requestHeadersCommand`) are surfaced by `mcp.list` as
+`state: "unsupported"` with a reason instead of being dropped.
 
 ## Dependencies added to the repo
 

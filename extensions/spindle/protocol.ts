@@ -118,7 +118,8 @@ export interface SpindleMcpServerTypeSource {
 
 /**
  * Implemented by an MCP provider that can hand over cached tool schemas. Duck
- * typed so the bridge provider (which has no schemas to give) needs no change.
+ * typed so an MCP provider without schemas to give (an external one registered
+ * through the discovery event) needs no change.
  */
 export interface SpindleMcpTypeSourceProvider {
 	mcpGuestTypeSources(context: SpindleInvocationContext): Promise<SpindleMcpServerTypeSource[]>;

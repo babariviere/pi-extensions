@@ -6,9 +6,9 @@
  * a Linear ticket, never to touch a Datadog monitor. Prose is not enforcement: a
  * confused subagent can still post to a customer channel. This module is the
  * enforcement, applied at the only two places an MCP tool call can leave the
- * sandbox (`providers/mcp-bridge-provider.ts` for `mcp.*`, and
- * `providers/captured-tools-provider.ts` for the pi-mcp-adapter gateway and its
- * direct tools reached as `extensions.*`).
+ * sandbox (`providers/mcp-client-provider.ts` for `mcp.*`, and
+ * `providers/captured-tools-provider.ts` for a pi-mcp-adapter gateway or direct
+ * tool reached as `extensions.*` when that extension is also installed).
  *
  * Classification never asks the model at call time. It is decided, in order, by:
  *

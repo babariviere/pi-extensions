@@ -1,13 +1,16 @@
 /**
  * `mcp.*` on top of Spindle's own MCP client (`mcp/client-hub.ts`).
  *
- * Drop-in replacement for `providers/mcp-bridge-provider.ts`: the same five
- * management actions, the same `mcp.<server>.<tool>` sugar, the same
- * `{ text, content, structuredContent }` result shape and the same read-only
- * gate, so a sandbox program cannot tell the difference. What changes is the
- * inside: no gateway tool call, no `pi-mcp-adapter` dependency, and `describe`
- * returns the server's real input schema instead of a permissive stub, because
- * schemas come from the on-disk tool cache rather than a forced connect.
+ * Five management actions (`call`, `list`, `search`, `describe`, `connect`) plus
+ * the `mcp.<server>.<tool>` ref form, all gated by `McpReadOnlyGate`.
+ *
+ * This replaced a bridge that forwarded to the pi-mcp-adapter `mcp` gateway
+ * tool. The sandbox-visible surface is unchanged from that bridge on purpose
+ * (same actions, same refs, same `{ text, content, structuredContent }` shape),
+ * so no program had to change. What the in-tree client adds: no gateway hop, no
+ * dependency on another extension being loaded, and a `describe` that returns
+ * the server's real input schema instead of a permissive stub, because schemas
+ * come from the on-disk tool cache rather than a forced connect.
  */
 
 import type { CallToolResult } from "@modelcontextprotocol/client";

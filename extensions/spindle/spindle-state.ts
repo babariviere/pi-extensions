@@ -24,7 +24,6 @@ import { SpindleAgentsProvider, type SessionRef } from "./providers/agents-provi
 import { CapturedToolsProvider } from "./providers/captured-tools-provider.ts";
 import { activeNightMcpReadOnly } from "./mcp/night-bridge.ts";
 import { effectiveMcpReadOnlyConfig, McpReadOnlyGate } from "./mcp/read-only-policy.ts";
-import { McpBridgeProvider } from "./providers/mcp-bridge-provider.ts";
 import { McpClientHub } from "./mcp/client-hub.ts";
 import { McpClientProvider } from "./providers/mcp-client-provider.ts";
 import { PiToolsProvider } from "./providers/pi-tools-provider.ts";
@@ -46,13 +45,6 @@ import {
 import { SPINDLE_PROVIDER_DISCOVER_EVENT, type SpindleProvider, type SpindleProviderDiscovery } from "./protocol.ts";
 
 const RESERVED_PROVIDER_NAMES = ["pi", "mcp", "agents", "extensions", "spindle"];
-
-/**
- * Spindle's own MCP client is the default. `SPINDLE_MCP_CLIENT=0` falls back to
- * the pi-mcp-adapter gateway bridge, which stays vendored as the escape hatch
- * for a server the client cannot yet run (unix socket, `requestHeadersCommand`).
- */
-const useSpindleMcpClient = (): boolean => process.env.SPINDLE_MCP_CLIENT !== "0";
 
 /** How long session teardown waits for cancelled subagent children to die. */
 const AGENT_DRAIN_TIMEOUT_MS = 5_000;
@@ -190,20 +182,14 @@ export class SpindleState {
 			);
 		}
 		if (capturedToolsProvider) this.#registry.register(capturedToolsProvider);
-		// `mcp.*` has two implementations over the same ~/.pi/agent/mcp.json:
-		// Spindle's own MCP client (default) and the historical bridge to the
-		// pi-mcp-adapter gateway tool (`SPINDLE_MCP_CLIENT=0`). Both expose an
-		// identical sandbox surface, so the switch is invisible to a program.
+		// `mcp.*` is served by Spindle's own MCP client over ~/.pi/agent/mcp.json.
+		// The hub is built on first use so a session with no MCP program pays
+		// nothing and never touches the credential store.
 		this.#registry.register(
-			useSpindleMcpClient()
-				? new McpClientProvider(
-						() => (this.#mcpHub ??= new McpClientHub({ cwd: context.cwd })),
-						() => this.#mcpReadOnlyGate(),
-					)
-				: new McpBridgeProvider(
-						() => this.capturedTools,
-						() => this.#mcpReadOnlyGate(),
-					),
+			new McpClientProvider(
+				() => (this.#mcpHub ??= new McpClientHub({ cwd: context.cwd })),
+				() => this.#mcpReadOnlyGate(),
+			),
 		);
 		this.#registry.register(
 			new SpindleAgentsProvider(
