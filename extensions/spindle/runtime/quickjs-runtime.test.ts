@@ -207,3 +207,14 @@ test("a caller-supplied map is honored for caller-supplied code", async () => {
 	assert.equal(result.terminationReason, "runtime_error");
 	assert.match(result.error ?? "", /program\.ts:1:\d+/);
 });
+
+test("unbounded guest recursion raises a guest error instead of crashing the host", async () => {
+	const runtime = new QuickJsRuntime();
+	const result = await runtime.execute(
+		"const recurse = (depth) => recurse(depth + 1); try { recurse(0); } catch (error) { return String(error); } return 'no error';",
+		unexpectedHostCall,
+		baseOptions,
+	);
+	assert.equal(result.terminationReason, "completed");
+	assert.match(String(result.value), /stack/i);
+});

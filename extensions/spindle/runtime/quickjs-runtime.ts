@@ -471,6 +471,12 @@ const jsonHandle = (context: any, jsonObject: any, jsonParse: any, value: unknow
 
 const HOST_TASK_SETTLE_GRACE_MS = 250;
 
+/**
+ * QuickJS call-stack ceiling for a guest program. Without it a deeply recursive
+ * program exhausts the host stack instead of raising a guest RangeError.
+ */
+const QUICKJS_MAX_STACK_SIZE_BYTES = 256 * 1024;
+
 export class QuickJsRuntime {
 	async execute(
 		code: string,
@@ -507,6 +513,9 @@ export class QuickJsRuntime {
 		let executionDeadlineAt = executionStartedAt + effectiveTimeoutMs;
 		let interruptedByDeadline = false;
 		runtime.setMemoryLimit(options.memoryLimitBytes);
+		// Runaway guest recursion otherwise walks the host stack until the process
+		// crashes; a bounded QuickJS stack turns it into a catchable guest error.
+		runtime.setMaxStackSize(QUICKJS_MAX_STACK_SIZE_BYTES);
 		runtime.setInterruptHandler(() => {
 			if (options.signal?.aborted === true) return true;
 			if (Date.now() <= executionDeadlineAt) return false;
