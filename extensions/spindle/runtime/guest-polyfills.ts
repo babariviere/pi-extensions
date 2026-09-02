@@ -687,6 +687,120 @@ globalThis.URL = __SpindleURL;
 globalThis.URLSearchParams = __SpindleURLSearchParams;
 `;
 
+/**
+ * AbortController is the one polyfill here that is not purely local: the guest
+ * `__call` bridge understands a `signal` argument, tags the call with an id and
+ * sends `spindle.$cancel` when the signal fires, so aborting really does cancel
+ * the in-flight host call rather than just abandoning the promise.
+ *
+ * Deliberately not a full EventTarget. Only the "abort" event exists, listeners
+ * added after the fact never fire (matching the platform, where the event has
+ * already been dispatched), and there is no capture/bubble phase to model.
+ */
+const ABORT = `
+const __spindleSignalKey = Symbol("AbortSignal");
+const __spindleSignalState = new WeakMap();
+const __spindleSignalOf = (receiver) => {
+  const state = __spindleSignalState.get(receiver);
+  if (!state) throw new TypeError("AbortSignal: the receiver is not an AbortSignal");
+  return state;
+};
+const __spindleDefaultAbortReason = () => {
+  const error = new Error("This operation was aborted");
+  error.name = "AbortError";
+  return error;
+};
+const __spindleDispatchAbort = (signal, reason) => {
+  const state = __spindleSignalOf(signal);
+  if (state.aborted) return;
+  state.aborted = true;
+  state.reason = reason !== undefined ? reason : __spindleDefaultAbortReason();
+  const listeners = state.listeners.slice();
+  state.listeners.length = 0;
+  const event = { type: "abort", target: signal };
+  if (typeof state.onabort === "function") {
+    try { state.onabort.call(signal, event); } catch { /* a listener must not break the abort */ }
+  }
+  for (const listener of listeners) {
+    try { listener.call(signal, event); } catch { /* same */ }
+  }
+};
+class __SpindleAbortSignal {
+  constructor(key) {
+    if (key !== __spindleSignalKey) {
+      throw new TypeError("Illegal constructor: create a signal with new AbortController()");
+    }
+    __spindleSignalState.set(this, { aborted: false, reason: undefined, listeners: [], onabort: null });
+  }
+  get aborted() { return __spindleSignalOf(this).aborted; }
+  get reason() { return __spindleSignalOf(this).reason; }
+  get onabort() { return __spindleSignalOf(this).onabort; }
+  set onabort(handler) { __spindleSignalOf(this).onabort = typeof handler === "function" ? handler : null; }
+  throwIfAborted() {
+    const state = __spindleSignalOf(this);
+    if (state.aborted) throw state.reason;
+  }
+  addEventListener(type, listener, _options) {
+    if (type !== "abort" || typeof listener !== "function") return;
+    const state = __spindleSignalOf(this);
+    // Already aborted means the event has been dispatched; a new listener for
+    // it would never fire on the platform either.
+    if (state.aborted || state.listeners.includes(listener)) return;
+    state.listeners.push(listener);
+  }
+  removeEventListener(type, listener) {
+    if (type !== "abort") return;
+    const state = __spindleSignalOf(this);
+    const at = state.listeners.indexOf(listener);
+    if (at >= 0) state.listeners.splice(at, 1);
+  }
+  static abort(reason) {
+    const controller = new __SpindleAbortController();
+    controller.abort(reason);
+    return controller.signal;
+  }
+  static timeout(milliseconds) {
+    const controller = new __SpindleAbortController();
+    setTimeout(() => {
+      const error = new Error("The operation timed out");
+      error.name = "TimeoutError";
+      controller.abort(error);
+    }, Math.max(0, Number(milliseconds) || 0));
+    return controller.signal;
+  }
+  static any(signals) {
+    const controller = new __SpindleAbortController();
+    const list = Array.from(signals);
+    for (const signal of list) {
+      if (signal.aborted) {
+        controller.abort(signal.reason);
+        return controller.signal;
+      }
+    }
+    for (const signal of list) {
+      signal.addEventListener("abort", () => controller.abort(signal.reason), { once: true });
+    }
+    return controller.signal;
+  }
+}
+const __spindleControllerSignals = new WeakMap();
+class __SpindleAbortController {
+  constructor() {
+    __spindleControllerSignals.set(this, new __SpindleAbortSignal(__spindleSignalKey));
+  }
+  get signal() {
+    const signal = __spindleControllerSignals.get(this);
+    if (!signal) throw new TypeError("AbortController: the receiver is not an AbortController");
+    return signal;
+  }
+  abort(reason) { __spindleDispatchAbort(this.signal, reason); }
+}
+Object.defineProperty(__SpindleAbortSignal, "name", { value: "AbortSignal" });
+Object.defineProperty(__SpindleAbortController, "name", { value: "AbortController" });
+globalThis.AbortSignal = __SpindleAbortSignal;
+globalThis.AbortController = __SpindleAbortController;
+`;
+
 /** The polyfill that draws on host-injected entropy. */
 export const CRYPTO_POLYFILL_NAME = "crypto";
 
@@ -701,6 +815,7 @@ export const SPINDLE_GUEST_POLYFILLS: readonly SpindleGuestPolyfill[] = [
 	{ name: "structuredClone", triggers: ["structuredClone"], source: STRUCTURED_CLONE },
 	{ name: CRYPTO_POLYFILL_NAME, triggers: ["crypto"], source: CRYPTO },
 	{ name: "url", triggers: ["URL", "URLSearchParams"], source: URL_POLYFILL },
+	{ name: "abort", triggers: ["AbortController", "AbortSignal"], source: ABORT },
 ];
 
 /** The polyfills a program's text implies, in declaration order. */

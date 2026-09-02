@@ -26,6 +26,7 @@ These are polyfilled, and injected only when your program mentions them by name 
 | `atob` / `btoa` | `btoa` throws on input outside Latin-1; encode with `TextEncoder` first |
 | `structuredClone` | a real clone: keeps `Map`, `Set`, `Date`, `RegExp`, typed arrays, handles cycles, throws on functions and promises |
 | `crypto.getRandomValues` / `crypto.randomUUID` | draws on a 4096-byte pool of host entropy and throws once drained, because a synchronous call cannot reach the async host bridge. No `crypto.subtle` |
+| `AbortController` / `AbortSignal` | real cancellation, see below. `AbortSignal.abort` / `timeout` / `any` included |
 | `queueMicrotask` | |
 | `performance.now` | milliseconds since program start, wall clock, not monotonic |
 

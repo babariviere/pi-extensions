@@ -59,7 +59,51 @@ export const GUEST_SETUP = `
 (() => {
 const __spindleBridge = globalThis.__spindleHostCall;
 delete globalThis.__spindleHostCall;
-const __call = async (ref, args) => __spindleBridge(ref, args ?? {});
+const __spindleAbortReason = (signal) => {
+  if (signal.reason !== undefined) return signal.reason;
+  const error = new Error("This operation was aborted");
+  error.name = "AbortError";
+  return error;
+};
+let __spindleNextCallId = 1;
+// A guest AbortSignal cannot cross the JSON boundary, so a call carrying one is
+// tagged with an id instead: the host gives that call its own AbortController,
+// and an abort on the guest side sends spindle.$cancel with the same id. The
+// signal key is stripped here so it never reaches a tool's argument schema.
+const __call = async (ref, args) => {
+  const payload = args ?? {};
+  const signal =
+    payload !== null && typeof payload === "object" && !Array.isArray(payload) ? payload.signal : undefined;
+  if (!signal || typeof signal !== "object" || typeof signal.aborted !== "boolean") {
+    return __spindleBridge(ref, payload);
+  }
+  if (signal.aborted) throw __spindleAbortReason(signal);
+  const rest = {};
+  for (const key of Object.keys(payload)) if (key !== "signal") rest[key] = payload[key];
+  const callId = __spindleNextCallId++;
+  rest.__spindleCallId = callId;
+  // The bridge promise always gets a handler: when the abort wins the race, the
+  // call's own later rejection must not surface as an unhandled rejection.
+  const settled = __spindleBridge(ref, rest).then(
+    (value) => ({ ok: true, value }),
+    (error) => ({ ok: false, error }),
+  );
+  let onAbort;
+  const aborted = new Promise((resolve) => {
+    onAbort = () => {
+      void __call("spindle.$cancel", { callId });
+      resolve({ ok: false, error: __spindleAbortReason(signal) });
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+  try {
+    const outcome = await Promise.race([settled, aborted]);
+    if (outcome.ok) return outcome.value;
+    throw outcome.error;
+  } finally {
+    if (onAbort) signal.removeEventListener("abort", onAbort);
+  }
+};
 const __spindleProcessInfo = globalThis.__spindleProcess ?? { env: {}, platform: "unknown", arch: "unknown", cwd: "" };
 delete globalThis.__spindleProcess;
 // Minimal process shim: the host injects an allowlisted env snapshot
@@ -411,9 +455,15 @@ const __runPool = async (thunks, options) => {
   }
   const concurrency = Math.max(1, Math.min(thunks.length || 1, Math.floor(requestedConcurrency)));
   const results = new Array(thunks.length);
+  const signal = concurrencyOpt.signal;
+  if (signal && signal.aborted) throw __spindleAbortReason(signal);
   let cursor = 0;
   await __nativePromiseAll(Array.from({ length: concurrency }, async () => {
     while (cursor < thunks.length) {
+      // Checked before each item rather than mid-flight: an aborted fan-out
+      // stops launching new work, and the in-flight items cancel themselves if
+      // they were handed the same signal.
+      if (signal && signal.aborted) throw __spindleAbortReason(signal);
       const index = cursor++;
       results[index] = await thunks[index]();
     }
@@ -690,6 +740,12 @@ export class QuickJsRuntime {
 			scheduleDeadline();
 		};
 
+		/**
+		 * In-flight host calls the guest may cancel, keyed by the id the guest
+		 * generated. Only calls that carried a signal appear here.
+		 */
+		const callControllers = new Map<number, AbortController>();
+
 		try {
 			const hostFunction = context.newFunction("__spindleHostCall", (referenceHandle: any, argsHandle: any) => {
 				const reference = context.getString(referenceHandle);
@@ -698,6 +754,9 @@ export class QuickJsRuntime {
 					typeof dumpedArgs === "object" && dumpedArgs !== null && !Array.isArray(dumpedArgs)
 						? (dumpedArgs as Record<string, unknown>)
 						: {};
+				const callIdValue = args.__spindleCallId;
+				const callId = typeof callIdValue === "number" ? callIdValue : undefined;
+				if (callId !== undefined) delete args.__spindleCallId;
 				extendExecutionTimeout(reference, args);
 				const promise = context.newPromise();
 				pendingHostPromises.add(promise);
@@ -714,9 +773,37 @@ export class QuickJsRuntime {
 					void promise.settled.then(() => pendingTimers.delete(timer));
 					return promise.handle;
 				}
-				const task = runAbortable(hostAbortController.signal, () =>
-					hostCall(reference, args, hostAbortController.signal),
-				)
+				// Guest-initiated cancellation of one in-flight call. Resolved through a
+				// zero-delay timer for the same reason spindle.$timer is: settling a
+				// promise from inside newFunction needs a pending-jobs pump afterwards.
+				if (reference === "spindle.$cancel") {
+					callControllers.get(Number(args.callId))?.abort(new Error("The host call was cancelled by the guest"));
+					const timer = setTimeout(() => {
+						if (closing || promise.alive === false) return;
+						promise.resolve(context.undefined);
+						runtime.executePendingJobs();
+					}, 0);
+					timer.unref?.();
+					pendingTimers.add(timer);
+					void promise.settled.then(() => pendingTimers.delete(timer));
+					return promise.handle;
+				}
+				// A cancellable call gets its own controller, chained to the
+				// program-wide one so a deadline or an outer abort still reaches it.
+				let callSignal = hostAbortController.signal;
+				if (callId !== undefined) {
+					const controller = new AbortController();
+					const onProgramAbort = (): void => controller.abort(hostAbortController.signal.reason);
+					if (hostAbortController.signal.aborted) onProgramAbort();
+					else hostAbortController.signal.addEventListener("abort", onProgramAbort, { once: true });
+					callControllers.set(callId, controller);
+					callSignal = controller.signal;
+					void promise.settled.then(() => {
+						callControllers.delete(callId);
+						hostAbortController.signal.removeEventListener("abort", onProgramAbort);
+					});
+				}
+				const task = runAbortable(callSignal, () => hostCall(reference, args, callSignal))
 					.then((value) => {
 						if (closing || promise.alive === false) return;
 						const handle = jsonHandle(context, jsonObject, jsonParse, value);

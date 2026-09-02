@@ -108,6 +108,8 @@ interface SpindleToolsApi {
 // merged over the shell environment), and stdin (text piped to the command,
 // e.g. pi.bash({ command: 'ssh host bash -s', stdin: π.script })).
 type SpindleBashOptions = {
+  /** Cancels this command. See AbortController. */
+  signal?: AbortSignal;
   timeout?: number;
   timeoutMs?: number;
   settle?: boolean;
@@ -154,6 +156,8 @@ interface SpindleAgentRequest {
  * timeoutMs how long the children may live (clamped to the configured cap).
  */
 interface SpindleAgentBatchTiming {
+  /** Cancels the batch. See AbortController. */
+  signal?: AbortSignal;
   /**
    * How long to block before handing back a running handle (default: the
    * configured wait window). 0 returns as soon as the run is launched. An
@@ -239,8 +243,10 @@ declare const mcp: SpindleMcpApi;
 // independent calls; mapLimit is for a wide list, because Promise.all receives
 // promises that have already started and therefore cannot cap how many run at
 // once. Defaults to unbounded when concurrency is omitted.
-declare function mapLimit<T, R>(items: T[], mapper: (item: T, index: number) => Promise<R> | R, concurrency?: number | { concurrency?: number }): Promise<R[]>;
-declare function mapLimit<T>(thunks: Array<() => Promise<T> | T>, concurrency?: number | { concurrency?: number }): Promise<T[]>;
+// A signal stops the pool launching further items and rejects; in-flight items
+// cancel themselves only if they were handed the same signal.
+declare function mapLimit<T, R>(items: T[], mapper: (item: T, index: number) => Promise<R> | R, concurrency?: number | { concurrency?: number; signal?: AbortSignal }): Promise<R[]>;
+declare function mapLimit<T>(thunks: Array<() => Promise<T> | T>, concurrency?: number | { concurrency?: number; signal?: AbortSignal }): Promise<T[]>;
 interface SpindleConsole {
   log(...args: unknown[]): void;
   info(...args: unknown[]): void;
@@ -266,6 +272,32 @@ declare function print(...args: unknown[]): void;
 // capabilities rather than conveniences, and the audited host-call table is
 // meant to be the only route out of the sandbox.
 declare function queueMicrotask(callback: () => void): void;
+// Cancellation. Passing a signal to a host call is not just a local promise
+// race: the runtime tags the call, and an abort sends a cancel back through the
+// bridge, so the in-flight host work is really aborted. Accepted by pi.bash,
+// agents.run/runAll/start/wait, mapLimit, and any open-record namespace
+// (extensions.*, mcp.*, tools.call). The remaining pi.* core tools are local
+// filesystem operations that finish too fast to be worth cancelling and do not
+// declare it.
+interface SpindleAbortEvent {
+  type: "abort";
+  target: AbortSignal;
+}
+declare class AbortSignal {
+  readonly aborted: boolean;
+  readonly reason: unknown;
+  onabort: ((event: SpindleAbortEvent) => void) | null;
+  throwIfAborted(): void;
+  addEventListener(type: "abort", listener: (event: SpindleAbortEvent) => void, options?: { once?: boolean }): void;
+  removeEventListener(type: "abort", listener: (event: SpindleAbortEvent) => void): void;
+  static abort(reason?: unknown): AbortSignal;
+  static timeout(milliseconds: number): AbortSignal;
+  static any(signals: Iterable<AbortSignal>): AbortSignal;
+}
+declare class AbortController {
+  readonly signal: AbortSignal;
+  abort(reason?: unknown): void;
+}
 declare function atob(data: string): string;
 declare function btoa(data: string): string;
 declare const performance: {
