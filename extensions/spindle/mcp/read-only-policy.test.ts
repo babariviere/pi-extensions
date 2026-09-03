@@ -82,8 +82,9 @@ test("linear reads are allowed and linear mutations are refused", () => {
 	for (const tool of ["get_issue", "list_issues", "list_comments", "get_project", "list_teams", "get_user"]) {
 		assert.equal(allowed(tool, "linear"), true, `${tool} must be allowed`);
 	}
+	// `save_issue` is the exception, decided on its payload; see the create-only
+	// tests below.
 	for (const tool of [
-		"save_issue",
 		"save_comment",
 		"delete_comment",
 		"save_project",
@@ -185,7 +186,7 @@ test("a refusal names the tool, the server and the way out", () => {
 
 test("the gateway argument shape is gated, management shapes are not", () => {
 	const gate = nightGate();
-	assert.throws(() => assertMcpGatewayArguments(gate, { tool: "save_issue", args: {} }), /is refused/);
+	assert.throws(() => assertMcpGatewayArguments(gate, { tool: "save_issue", args: { id: "HS-829" } }), /is refused/);
 	assert.throws(
 		() => assertMcpGatewayArguments(gate, { tool: "slack_send_message", server: "slack", args: {} }),
 		/is refused/,
@@ -258,7 +259,6 @@ test("prefixing does not launder a write into a read", () => {
 		["slack_slack_add_reaction", "slack"],
 		["slack_slack_create_canvas", "slack"],
 		["mcp__slack_slack_send_message", "slack"],
-		["linear_save_issue", "linear"],
 		["linear_save_comment", "linear"],
 		["datadog_update_datadog_monitor", "datadog"],
 		["metabase_EXECUTE_SQL_QUERY", "metabase"],
@@ -278,4 +278,63 @@ test("variants peel known server prefixes and stop there", () => {
 	]);
 	// An unknown server prefix is not peeled: nothing says what it means.
 	assert.deepEqual(mcpToolNameVariants("acme_send_message", ["slack"]), ["acme_send_message"]);
+});
+
+/**
+ * 2026-09-01 #4: the night contract expects a ticket to be filed for anything
+ * surfaced overnight, and forbids touching an existing one. Linear spells both
+ * as `save_issue`, so the name cannot decide it and the payload has to.
+ */
+const createOnlyGate = () => McpReadOnlyGate.of(normalizeMcpReadOnlyConfig({ readOnly: true }));
+
+test("create-only allows filing a new issue", () => {
+	const decision = createOnlyGate().decide("save_issue", "linear", {
+		title: "HS: track-email defer loop",
+		team: "HS",
+	});
+	assert.equal(decision.allowed, true);
+	assert.equal(decision.rule, "create-only");
+	assert.match(decision.reason, /no identifier/);
+});
+
+test("create-only refuses editing an existing issue, naming the key that gave it away", () => {
+	const decision = createOnlyGate().decide("save_issue", "linear", { id: "HS-829", title: "renamed" });
+	assert.equal(decision.allowed, false);
+	assert.equal(decision.rule, "create-only");
+	assert.match(decision.reason, /carries 'id'/);
+});
+
+test("create-only treats a blank identifier as absent, the way a client spells 'new'", () => {
+	assert.equal(createOnlyGate().decide("save_issue", "linear", { id: "", title: "x" }).allowed, true);
+	assert.equal(createOnlyGate().decide("save_issue", "linear", { id: null, title: "x" }).allowed, true);
+});
+
+test("create-only leaves every other write refused, payload or not", () => {
+	assert.equal(createOnlyGate().decide("slack_post_message", "slack", { channel: "C1", text: "hi" }).allowed, false);
+	assert.equal(createOnlyGate().decide("delete_issue", "linear", { title: "x" }).allowed, false);
+});
+
+test("create-only gates the gateway path on the forwarded payload", () => {
+	assert.throws(
+		() =>
+			assertMcpGatewayArguments(createOnlyGate(), { tool: "save_issue", server: "linear", args: { id: "HS-829" } }),
+		/is refused/,
+	);
+	assertMcpGatewayArguments(createOnlyGate(), { tool: "save_issue", server: "linear", args: { title: "new" } });
+});
+
+test("create-only can be configured for another server", () => {
+	const configured = McpReadOnlyGate.of(
+		normalizeMcpReadOnlyConfig({ readOnly: true, servers: { notion: { createOnly: ["save_page"] } } }),
+	);
+	assert.equal(configured.decide("save_page", "notion", { title: "x" }).allowed, true);
+	assert.equal(configured.decide("save_page", "notion", { id: "abc" }).allowed, false);
+});
+
+test("create-only survives the adapter's prefixing", () => {
+	// `linear_save_issue` is the name the adapter actually publishes, so the rule
+	// has to match through the prefix or it would fall through to the write shape.
+	assert.equal(createOnlyGate().decide("linear_save_issue", "linear", { title: "new" }).allowed, true);
+	assert.equal(createOnlyGate().decide("linear_save_issue", "linear", { id: "HS-829" }).allowed, false);
+	assert.equal(createOnlyGate().decide("linear_save_issue").server, "linear");
 });

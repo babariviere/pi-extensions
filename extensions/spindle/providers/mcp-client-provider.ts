@@ -180,7 +180,9 @@ export class McpClientProvider implements SpindleProvider, SpindleMcpTypeSourceP
 				const tool = String(args.tool ?? "");
 				// The one place a sandbox program can reach a write on an MCP server:
 				// refused here, before the client is even asked to connect.
-				this.readOnlyGate().assert(tool, server);
+				// Arguments included: an upsert tool is a create or an edit depending on
+				// whether its payload names an existing record (`createOnly`).
+				this.readOnlyGate().assert(tool, server, objectArgs(args.args));
 				return normalizeResult(
 					await this.hub().callTool(tool, objectArgs(args.args), { signal: context.signal }, server),
 				);
@@ -212,7 +214,7 @@ export class McpClientProvider implements SpindleProvider, SpindleMcpTypeSourceP
 			default: {
 				const qualified = parseQualifiedAction(actionName);
 				if (!qualified) throw new Error(`Unknown mcp action: mcp.${actionName}`);
-				this.readOnlyGate().assert(qualified.tool, qualified.server);
+				this.readOnlyGate().assert(qualified.tool, qualified.server, objectArgs(args.args ?? args));
 				return normalizeResult(
 					await this.hub().callTool(
 						qualified.tool,

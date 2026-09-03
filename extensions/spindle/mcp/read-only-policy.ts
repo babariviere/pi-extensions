@@ -38,6 +38,17 @@ export interface McpServerPolicy {
 	allow?: readonly string[];
 	/** Known write tools. Wins over everything, including `default: "allow"`. */
 	deny?: readonly string[];
+	/**
+	 * Upsert tools allowed only while the payload carries no identifier.
+	 *
+	 * Some servers spell create and update as one tool (Linear's `save_issue`),
+	 * so the name cannot separate "file a new ticket", which a night run is
+	 * expected to do, from "edit the ticket someone is working in", which it must
+	 * never do. Allowing the tool wholesale permits both; denying it permits
+	 * neither. The identifier in the arguments is the only place the difference
+	 * exists, so it is decided there.
+	 */
+	createOnly?: readonly string[];
 	/** Per-server override of the global unknown-tool policy. */
 	unknownToolPolicy?: McpUnknownToolPolicy;
 }
@@ -100,6 +111,11 @@ export const BUILTIN_MCP_SERVER_POLICIES: Readonly<Record<string, McpServerPolic
 	},
 	linear: {
 		default: "deny-writes",
+		// Linear's issue write is an upsert: no id creates a ticket, an id edits
+		// someone's existing one. A night run is expected to file what it found and
+		// must not touch what is already there, and that difference is in the
+		// payload, not in the name.
+		createOnly: ["save_issue"],
 		allow: [
 			"get_attachment",
 			"list_agent_skills",
@@ -140,7 +156,9 @@ export const BUILTIN_MCP_SERVER_POLICIES: Readonly<Record<string, McpServerPolic
 			"get_status_updates",
 		],
 		deny: [
-			"save_issue",
+			// `save_issue` is not here: it is the upsert `createOnly` above decides on
+			// its payload. A deny entry would win over that and refuse filing tickets,
+			// which the night contract asks for.
 			"save_comment",
 			"delete_comment",
 			"save_document",
@@ -332,6 +350,27 @@ export const classifyMcpToolName = (tool: string): McpToolShape => {
 	return "unknown";
 };
 
+/**
+ * Keys that name an existing record. Their presence turns an upsert into an
+ * edit; `createOnly` tools are refused when one is set (see `McpServerPolicy`).
+ */
+const IDENTIFIER_KEYS = ["id", "issueid", "issue_id", "ticketid", "ticket_id", "documentid", "document_id"];
+
+/**
+ * The identifier key a payload carries, if any. A blank string or null counts as
+ * absent: that is how a client spells "new record" when the field is always sent.
+ */
+const payloadIdentifier = (args: Record<string, unknown> | undefined): string | undefined => {
+	if (!args) return undefined;
+	for (const [key, value] of Object.entries(args)) {
+		if (!IDENTIFIER_KEYS.includes(key.trim().toLowerCase())) continue;
+		if (value === undefined || value === null) continue;
+		if (typeof value === "string" && !value.trim()) continue;
+		return key;
+	}
+	return undefined;
+};
+
 const lower = (value: string): string => value.trim().toLowerCase();
 
 /**
@@ -397,6 +436,7 @@ const policyFor = (server: string | undefined, config: McpReadOnlyConfig): McpSe
 		...((configured?.default ?? builtin?.default) ? { default: configured?.default ?? builtin?.default } : {}),
 		allow: [...(builtin?.allow ?? []), ...(configured?.allow ?? [])],
 		deny: [...(builtin?.deny ?? []), ...(configured?.deny ?? [])],
+		createOnly: [...(builtin?.createOnly ?? []), ...(configured?.createOnly ?? [])],
 		...((configured?.unknownToolPolicy ?? builtin?.unknownToolPolicy)
 			? { unknownToolPolicy: configured?.unknownToolPolicy ?? builtin?.unknownToolPolicy }
 			: {}),
@@ -417,7 +457,11 @@ const inferServer = (tool: string, config: McpReadOnlyConfig): string | undefine
 	const variants = mcpToolNameVariants(tool, names);
 	for (const name of names) {
 		const policy = policyFor(name, config);
-		if (listHas(policy.deny, variants) || listHas(policy.allow, variants)) return name;
+		// `createOnly` counts as classification too: it is how a server's upsert is
+		// declared, and an unqualified `save_issue` still has to resolve to Linear.
+		if (listHas(policy.deny, variants) || listHas(policy.allow, variants) || listHas(policy.createOnly, variants)) {
+			return name;
+		}
 	}
 	// Nothing classified it, but the adapter's prefix still says who owns it:
 	// `slack_<anything>` is a Slack tool and must inherit Slack's total deny.
@@ -441,6 +485,7 @@ export type McpDecisionRule =
 	| "server-allow"
 	| "write-shape"
 	| "read-shape"
+	| "create-only"
 	| "unknown-tool";
 
 export interface McpCallDecision {
@@ -457,6 +502,8 @@ export const decideMcpCall = (input: {
 	tool: string;
 	server?: string | undefined;
 	config: McpReadOnlyConfig;
+	/** The call's own arguments, when the caller has them (see `createOnly`). */
+	args?: Record<string, unknown> | undefined;
 }): McpCallDecision => {
 	const tool = input.tool.trim();
 	const config = input.config;
@@ -473,6 +520,28 @@ export const decideMcpCall = (input: {
 	}
 	if (listHas(policy.allow, variants)) {
 		return { allowed: true, tool, server, rule: "tool-allow", reason: `it is on the allow list for ${where}` };
+	}
+	// An upsert tool with no identifier in its payload is a creation. Decided
+	// before the server default and before the name heuristics, because the name
+	// is the same either way and only the arguments carry the answer.
+	if (listHas(policy.createOnly, variants)) {
+		const identifier = payloadIdentifier(input.args);
+		if (identifier === undefined) {
+			return {
+				allowed: true,
+				tool,
+				server,
+				rule: "create-only",
+				reason: `its payload carries no identifier, so it creates a new record rather than modifying one, and ${where} allows that`,
+			};
+		}
+		return {
+			allowed: false,
+			tool,
+			server,
+			rule: "create-only",
+			reason: `its payload carries '${identifier}', so it would modify an existing record instead of creating one`,
+		};
 	}
 	if ((policy.default ?? config.defaultServerPolicy) === "allow") {
 		return { allowed: true, tool, server, rule: "server-allow", reason: `${where} is exempt from read-only mode` };
@@ -518,8 +587,8 @@ export class McpReadOnlyGate {
 		return this.config.readOnly;
 	}
 
-	decide(tool: string, server?: string): McpCallDecision {
-		return decideMcpCall({ tool, server, config: this.config });
+	decide(tool: string, server?: string, args?: Record<string, unknown>): McpCallDecision {
+		return decideMcpCall({ tool, server, config: this.config, args });
 	}
 
 	/**
@@ -527,8 +596,8 @@ export class McpReadOnlyGate {
 	 * the rule, and says how to allow it: a refusal an agent can report and act on,
 	 * never a silent no-op.
 	 */
-	assert(tool: string, server?: string): void {
-		const decision = this.decide(tool, server);
+	assert(tool: string, server?: string, args?: Record<string, unknown>): void {
+		const decision = this.decide(tool, server, args);
 		if (decision.allowed) return;
 		const label = decision.server ? `${decision.server}.${decision.tool}` : decision.tool;
 		const scope = decision.server ?? "<server>";
@@ -555,7 +624,9 @@ export const assertMcpGatewayArguments = (
 	const tool = typeof args.tool === "string" && args.tool.trim() ? args.tool.trim() : undefined;
 	if (!tool) return;
 	const server = typeof args.server === "string" && args.server.trim() ? args.server.trim() : defaultServer;
-	gate.assert(tool, server);
+	// The payload of the forwarded call, which is where a create is told apart
+	// from an update (see `createOnly`).
+	gate.assert(tool, server, asRecord(args.args));
 };
 
 /** `mcp__slack` -> `slack`; anything else is not a namespace proxy. */
@@ -588,12 +659,14 @@ export const normalizeMcpReadOnlyConfig = (input: unknown): McpReadOnlyConfig =>
 		const entry = asRecord(value);
 		const allow = stringList(entry.allow);
 		const deny = stringList(entry.deny);
+		const createOnly = stringList(entry.createOnly);
 		const fallback = serverDefault(entry.default);
 		const unknown = unknownPolicy(entry.unknownToolPolicy);
 		servers[name] = {
 			...(fallback ? { default: fallback } : {}),
 			...(allow ? { allow } : {}),
 			...(deny ? { deny } : {}),
+			...(createOnly ? { createOnly } : {}),
 			...(unknown ? { unknownToolPolicy: unknown } : {}),
 		};
 	}
