@@ -64,6 +64,7 @@ import {
 	formatClock,
 	formatDuration,
 	formatWindow,
+	isStalled,
 	isWithinWindow,
 	type NightWindow,
 	type PauseReason,
@@ -375,7 +376,14 @@ export default function (pi: ExtensionAPI): void {
 		}
 
 		const current = fingerprint(items);
-		if (run.nudges > 0 && current === run.lastFingerprint) {
+		if (
+			isStalled({
+				nudges: run.nudges,
+				fingerprint: current,
+				...(run.lastFingerprint === undefined ? {} : { lastFingerprint: run.lastFingerprint }),
+				elapsedMs: Date.now() - run.startedAt.getTime(),
+			})
+		) {
 			noteUnderHeading(
 				NEEDS_HUMAN_HEADING,
 				"night-mode stopped: the last automated continuation changed nothing in the ledger, so the run is stuck.",

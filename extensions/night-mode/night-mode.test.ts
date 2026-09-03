@@ -6,7 +6,9 @@ import {
 	formatClock,
 	formatDuration,
 	formatWindow,
+	isStalled,
 	isWithinWindow,
+	MIN_ELAPSED_BEFORE_STALL_MS,
 	shouldHoldCaffeinate,
 	windowStartingAt,
 	shouldPause,
@@ -193,5 +195,34 @@ describe("formatting", () => {
 	it("formats a local wall clock", () => {
 		assert.equal(formatClock(at(3, 7)), "03:07");
 		assert.equal(formatClock(at(21, 30)), "21:30");
+	});
+});
+
+describe("isStalled", () => {
+	const base = { nudges: 1, fingerprint: "a", lastFingerprint: "a", elapsedMs: 60 * 60 * 1000 };
+
+	it("is a stall when a continuation changed nothing and the run has had time", () => {
+		assert.equal(isStalled(base), true);
+	});
+
+	// The 2026-08-31 regression: the run ended three minutes in, while four
+	// subagents were still working and about to write their evidence.
+	it("is not a stall minutes into a run, however unchanged the ledger looks", () => {
+		assert.equal(isStalled({ ...base, elapsedMs: 3 * 60 * 1000 }), false);
+		assert.equal(isStalled({ ...base, elapsedMs: MIN_ELAPSED_BEFORE_STALL_MS - 1 }), false);
+		assert.equal(isStalled({ ...base, elapsedMs: MIN_ELAPSED_BEFORE_STALL_MS }), true);
+	});
+
+	it("is never a stall before the first continuation", () => {
+		assert.equal(isStalled({ ...base, nudges: 0 }), false);
+	});
+
+	it("is not a stall when the ledger moved", () => {
+		assert.equal(isStalled({ ...base, fingerprint: "b" }), false);
+		assert.equal(isStalled({ ...base, lastFingerprint: undefined }), false);
+	});
+
+	it("takes a caller-supplied floor, so the bound is testable and tunable", () => {
+		assert.equal(isStalled({ ...base, elapsedMs: 1_000, floorMs: 500 }), true);
 	});
 });

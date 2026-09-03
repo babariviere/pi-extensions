@@ -61,6 +61,34 @@ export function windowStartingAt(date: Date, window: NightWindow = DEFAULT_WINDO
 }
 
 /**
+ * How long a run must have been going before an unchanged ledger counts as a
+ * stall.
+ *
+ * The fingerprint check exists to stop a loop where continuation after
+ * continuation changes nothing. Without a floor it also fires on a run that has
+ * barely started: on 2026-08-31 it ended the night three minutes in, while four
+ * subagents were still working and about to write their evidence. A first pass
+ * takes tens of minutes, so anything under this is too early to call stuck.
+ */
+export const MIN_ELAPSED_BEFORE_STALL_MS = 15 * 60 * 1000;
+
+/**
+ * Is the run stuck? Only when a continuation was already sent, the ledger has
+ * not moved since, and the run has had time to move it.
+ */
+export function isStalled(input: {
+	nudges: number;
+	fingerprint: string;
+	lastFingerprint?: string;
+	elapsedMs: number;
+	floorMs?: number;
+}): boolean {
+	if (input.nudges <= 0) return false;
+	if (input.lastFingerprint === undefined || input.fingerprint !== input.lastFingerprint) return false;
+	return input.elapsedMs >= (input.floorMs ?? MIN_ELAPSED_BEFORE_STALL_MS);
+}
+
+/**
  * True when this session should hold a `caffeinate` process.
  *
  * Sleep is only suppressed while there is a reason for it: an agent run in
