@@ -145,8 +145,17 @@ test("an already-aborted signal skips execution entirely", async () => {
 
 test("the memory limit stops runaway allocation", async () => {
 	const runtime = new QuickJsRuntime();
+	// Each chunk is four times the whole limit, so the very first allocation is
+	// refused and the loop never gets to iterate.
+	//
+	// It used to push 4 KB strings at a 16 MB ceiling. That needs thousands of
+	// allocations, and every one of the last few triggers a full GC over an array
+	// that retains everything, so the run took ~4s on a laptop and longer than the
+	// 20s deadline on a CI runner: the test then read `timed_out` and failed on the
+	// assertion below, having measured the deadline rather than the memory limit.
+	// The size of the request is what this is about, not the number of requests.
 	const result = await runtime.execute(
-		"const chunks = []; for (;;) chunks.push('x'.repeat(4096));",
+		"const chunks = []; for (;;) chunks.push('x'.repeat(64 * 1024 * 1024));",
 		unexpectedHostCall,
 		{ ...baseOptions, timeoutMs: 20_000, memoryLimitBytes: 16 * 1024 * 1024 },
 	);
