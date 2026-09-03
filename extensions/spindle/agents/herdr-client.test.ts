@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { HerdrClient } from "./herdr-client.ts";
+import { AGENT_STARTUP_TIMEOUT_MS, HerdrClient } from "./herdr-client.ts";
 import type { HerdrCliResult } from "./herdr-parse.ts";
 import type { HerdrTransport } from "./herdr-transport.ts";
 
@@ -103,4 +103,38 @@ test("statusProbe wires peek to `pane get` for the same pane", async () => {
 	const state = await probe.peek();
 	assert.deepEqual(state, { exists: true, status: "working" });
 	assert.deepEqual(calls[0], ["pane", "get", "wA:p9"]);
+});
+
+test("startAgent reports a startup timeout as its own failure kind and does not retry", async () => {
+	const { transport, calls } = scriptedTransport([
+		{ ok: false, error: 'timed out waiting for agent startup (id "cli:agent:start")' },
+	]);
+	const res = await new HerdrClient(transport).startAgent("sub-0-abc", "pi", "wA:p1", ["--flag"], undefined, {
+		pollMs: 1,
+		readyTimeoutMs: 5000,
+	});
+	assert.equal(res.ok, false);
+	assert.equal(res.failure, "startup-timeout");
+	// Retrying would start a second child in the same pane.
+	assert.equal(calls.length, 1);
+});
+
+test("startAgent classifies a pane that never frees up apart from a fatal error", async () => {
+	const busy = await new HerdrClient(
+		scriptedTransport([{ ok: false, error: "agent_pane_busy" }]).transport,
+	).startAgent("sub-0-abc", "pi", "wA:p1", ["--flag"], undefined, { pollMs: 1, readyTimeoutMs: 20 });
+	assert.equal(busy.failure, "pane-busy");
+
+	const fatal = await new HerdrClient(
+		scriptedTransport([{ ok: false, error: "unsupported interactive agent kind foo" }]).transport,
+	).startAgent("sub-0-abc", "foo", "wA:p1", ["--flag"], undefined, { pollMs: 1, readyTimeoutMs: 20 });
+	assert.equal(fatal.failure, "fatal");
+});
+
+test("startAgent keeps herdr's readiness wait short by default", async () => {
+	const { transport, calls } = scriptedTransport([{ ok: true, result: {} }]);
+	await new HerdrClient(transport).startAgent("sub-0-abc", "pi", "wA:p1", ["--flag"]);
+	const timeout = calls[0][calls[0].indexOf("--timeout") + 1];
+	assert.equal(timeout, String(AGENT_STARTUP_TIMEOUT_MS));
+	assert.ok(AGENT_STARTUP_TIMEOUT_MS <= 15_000, "a long readiness wait is pure latency for a working child");
 });

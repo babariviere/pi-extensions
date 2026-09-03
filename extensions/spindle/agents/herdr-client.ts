@@ -12,6 +12,7 @@
 import { type StatusProbe } from "./pane-lifecycle.ts";
 import {
 	type AgentStatus,
+	isAgentStartupTimeoutError,
 	type AgentWaitResult,
 	type HerdrTab,
 	type PaneAgentState,
@@ -42,6 +43,23 @@ function delay(ms: number, signal?: AbortSignal): Promise<void> {
 }
 
 export type SplitDirection = "right" | "down";
+
+/**
+ * How long herdr may block waiting for a started agent to look
+ * interactive-ready. Short on purpose: the wait is pure latency for a subagent
+ * that starts working the moment it launches, and the caller verifies the child
+ * itself afterwards.
+ */
+export const AGENT_STARTUP_TIMEOUT_MS = 15_000;
+
+/** Why a `herdr agent start` failed, so callers can tell recoverable apart. */
+export type StartAgentFailure = "startup-timeout" | "pane-busy" | "fatal";
+
+export interface StartAgentResult {
+	ok: boolean;
+	failure?: StartAgentFailure;
+	error?: string;
+}
 
 export class HerdrClient {
 	readonly #transport: HerdrTransport;
@@ -102,17 +120,27 @@ export class HerdrClient {
 	 * nothing running, or herdr reports `agent_pane_busy`. A freshly split pane's
 	 * shell can still be initializing (or briefly busy), so this polls `agent
 	 * start` every `pollMs` until it takes, up to `readyTimeoutMs` (default 30s).
-	 * Any non-busy error is fatal. On timeout it returns an explicit error naming
-	 * the pane and the last herdr error.
+	 *
+	 * `timeoutMs` is herdr's own startup deadline, not the child's lifetime, and
+	 * it is deliberately short ({@link AGENT_STARTUP_TIMEOUT_MS}): herdr blocks
+	 * for all of it waiting for the started agent to look interactive-ready,
+	 * which a subagent that picks up its task immediately never does. Waiting
+	 * longer only delays the caller, so we take the timeout early and let it
+	 * verify the child directly.
+	 *
+	 * A failure is classified rather than flattened: `startup-timeout` is herdr's
+	 * readiness probe giving up (the child may well be running), `pane-busy` is a
+	 * pane that never freed up, `fatal` is everything else (bad name, unsupported
+	 * kind, pane gone).
 	 */
 	async startAgent(
 		name: string,
 		kind: string,
 		paneId: string,
 		childArgs: string[],
-		timeoutMs = 60000,
+		timeoutMs = AGENT_STARTUP_TIMEOUT_MS,
 		opts?: { readyTimeoutMs?: number; pollMs?: number; signal?: AbortSignal },
-	): Promise<{ ok: boolean; error?: string }> {
+	): Promise<StartAgentResult> {
 		const args = [
 			"agent",
 			"start",
@@ -133,13 +161,20 @@ export class HerdrClient {
 		for (;;) {
 			const res = await this.#transport.run(args, timeoutMs + 5000, opts?.signal);
 			if (res.ok) return { ok: true };
+			// Startup timeout: the launch command was accepted and pi was spawned;
+			// only herdr's readiness probe expired. Retrying would start a second
+			// child in the same pane, so report it and let the caller check liveness.
+			if (isAgentStartupTimeoutError(res.error)) {
+				return { ok: false, failure: "startup-timeout", error: res.error ?? "timed out waiting for agent startup" };
+			}
 			// Any non-busy error is fatal (bad name, unsupported kind, pane gone, ...).
-			if (!isPaneBusyError(res.error)) return { ok: false, error: res.error };
+			if (!isPaneBusyError(res.error)) return { ok: false, failure: "fatal", error: res.error };
 			lastBusy = res.error;
 			const remaining = deadline - Date.now();
 			if (remaining <= 0 || opts?.signal?.aborted) {
 				return {
 					ok: false,
+					failure: "pane-busy",
 					error: `pane ${paneId} did not become ready to start an agent within ${readyTimeoutMs}ms (last herdr error: ${lastBusy ?? "agent_pane_busy"})`,
 				};
 			}

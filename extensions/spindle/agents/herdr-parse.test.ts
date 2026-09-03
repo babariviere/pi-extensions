@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
 	findAgentStatus,
+	isAgentStartupTimeoutError,
 	isPaneBusyError,
 	lastJsonLine,
 	paneLabel,
@@ -97,4 +98,20 @@ test("isPaneBusyError matches herdr's pane-busy rejections only", () => {
 	assert.equal(isPaneBusyError("unsupported interactive agent kind foo"), false);
 	assert.equal(isPaneBusyError("agent target pane wA:p1 not found"), false);
 	assert.equal(isPaneBusyError(undefined), false);
+});
+
+test("isAgentStartupTimeoutError matches herdr's readiness deadline, not other faults", () => {
+	assert.equal(isAgentStartupTimeoutError("timed out waiting for agent startup"), true);
+	assert.equal(
+		isAgentStartupTimeoutError(
+			'{"error":{"code":"timeout","message":"timed out waiting for agent startup"},"id":"cli:agent:start"}',
+		),
+		true,
+	);
+	// Same command, timeout code, message the CLI phrased differently.
+	assert.equal(isAgentStartupTimeoutError('{"error":{"code":"timeout"},"id":"cli:agent:start"}'), true);
+	// A timeout from another command is somebody else's problem.
+	assert.equal(isAgentStartupTimeoutError('{"error":{"code":"timeout"},"id":"cli:agent:wait"}'), false);
+	assert.equal(isAgentStartupTimeoutError("agent target pane wA:p1 is not an available shell"), false);
+	assert.equal(isAgentStartupTimeoutError(undefined), false);
 });

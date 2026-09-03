@@ -14,7 +14,7 @@
  * contains.
  */
 
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join } from "node:path";
 
 // --- output override lifecycle ----------------------------------------------
@@ -244,4 +244,26 @@ export async function resolveRunOutput(
 		...(output !== undefined && !writeError ? { outputPath } : {}),
 		...(writeError ? { writeError } : {}),
 	};
+}
+
+/**
+ * One-line description of a child transcript, for a failure message: how many
+ * JSON records it holds and when it was last written. Undefined when the file is
+ * absent, which is itself the diagnosis — the child never got as far as writing.
+ *
+ * This exists because a launch-side failure used to be reported with nothing but
+ * herdr's error text, which sent a diagnosis chasing task content and personas
+ * for hours while the transcript on disk showed a child that had been working
+ * fine. Naming the transcript and its size turns that into one look.
+ */
+export function describeTranscript(sessionPath: string): string | undefined {
+	try {
+		const mtimeMs = statSync(sessionPath).mtimeMs;
+		const records = readFileSync(sessionPath, "utf-8")
+			.split(/\r?\n/)
+			.filter((line) => line.trim().startsWith("{")).length;
+		return `${records} record${records === 1 ? "" : "s"}, last write ${new Date(mtimeMs).toISOString()}`;
+	} catch {
+		return undefined;
+	}
 }

@@ -27,7 +27,7 @@
  */
 
 import { execFile } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, rmSync, statSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, rmdirSync, rmSync, statSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
@@ -249,7 +249,18 @@ export async function releaseAgentWorkspace(
 	} catch {
 		// Nothing to snapshot, or the workspace is already broken.
 	}
-	await copyWorkspaceArtifacts(workspace, opts.capture ? { capture: opts.capture } : {});
+	const copied = await copyWorkspaceArtifacts(workspace, opts.capture ? { capture: opts.capture } : {});
+	if (copied.length === 0) {
+		try {
+			// Nothing was rescued, so the directory is an empty husk. A night that
+			// runs a few hundred subagents left a few hundred of them behind.
+			// `rmdir` and not `rm -r`: a child that wrote straight into its
+			// artifacts directory leaves it non-empty, and that copy is the point.
+			rmdirSync(workspace.artifactsDir);
+		} catch {
+			// Non-empty (keep it) or already gone. Either way, nothing to do.
+		}
+	}
 	try {
 		await exec("jj", ["workspace", "forget", workspace.name], workspace.base);
 	} catch {

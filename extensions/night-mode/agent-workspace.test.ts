@@ -221,3 +221,35 @@ describe("releaseAgentWorkspace", () => {
 		assert.equal(existsSync(workspace.path), false);
 	});
 });
+
+describe("releaseAgentWorkspace artifacts hygiene", () => {
+	let dir: string;
+	beforeEach(() => {
+		dir = mkdtempSync(join(tmpdir(), "agent-artifacts-"));
+	});
+	afterEach(() => {
+		rmSync(dir, { recursive: true, force: true });
+	});
+
+	const workspaceAt = (root: string) => {
+		const path = join(root, "agent-ab12-0");
+		const artifactsDir = join(root, "agent-ab12-0.artifacts");
+		mkdirSync(path, { recursive: true });
+		mkdirSync(artifactsDir, { recursive: true });
+		return { name: "agent-ab12-0", path, base: root, artifactsDir };
+	};
+
+	test("removes the artifacts directory when there was nothing to rescue", async () => {
+		const workspace = workspaceAt(join(dir, "clone.agents"));
+		await releaseAgentWorkspace(workspace, { exec: () => {}, capture: () => "" });
+		// A night of a few hundred subagents used to leave a few hundred empty ones.
+		assert.equal(existsSync(workspace.artifactsDir), false);
+	});
+
+	test("keeps an artifacts directory the child wrote into itself", async () => {
+		const workspace = workspaceAt(join(dir, "clone.agents"));
+		writeFileSync(join(workspace.artifactsDir, "insights.md"), "kept");
+		await releaseAgentWorkspace(workspace, { exec: () => {}, capture: () => "" });
+		assert.equal(readFileSync(join(workspace.artifactsDir, "insights.md"), "utf-8"), "kept");
+	});
+});

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { type AgentWaitResult, type PaneAgentState } from "./herdr-parse.ts";
-import { type StatusProbe, waitForAgentFinish } from "./pane-lifecycle.ts";
+import { type StatusProbe, waitForAgentFinish, waitForChildEvidence } from "./pane-lifecycle.ts";
 
 /**
  * Scripted fake probe: `waits` are returned in order for successive
@@ -90,4 +90,68 @@ test("waitForAgentFinish fast-finishes when a between-chunk peek finds the pane 
 	assert.equal(await waitForAgentFinish(probe, 5000), "finished");
 	assert.equal(probe.waitCalls, 1);
 	assert.equal(probe.peekCalls, 1);
+});
+
+test("waitForChildEvidence accepts a transcript as proof the child is running", async () => {
+	const probe = fakeProbe({ waits: [], peeks: [{ exists: true, status: "unknown" }] });
+	const evidence = await waitForChildEvidence({
+		probe,
+		transcriptExists: () => true,
+		timeoutMs: 1000,
+		intervalMs: 1,
+	});
+	assert.equal(evidence, "alive");
+	assert.equal(probe.peekCalls, 0); // the transcript settles it; no herdr call needed
+});
+
+test("waitForChildEvidence accepts a real agent status when the transcript is not there yet", async () => {
+	const probe = fakeProbe({
+		waits: [],
+		peeks: [
+			{ exists: true, status: "unknown" },
+			{ exists: true, status: "working" },
+		],
+	});
+	const evidence = await waitForChildEvidence({
+		probe,
+		transcriptExists: () => false,
+		timeoutMs: 1000,
+		intervalMs: 1,
+	});
+	assert.equal(evidence, "alive");
+});
+
+test("waitForChildEvidence reports absent for a pane that is gone, without waiting", async () => {
+	const probe = fakeProbe({ waits: [], peeks: [{ exists: false }] });
+	const evidence = await waitForChildEvidence({
+		probe,
+		transcriptExists: () => false,
+		timeoutMs: 60_000,
+		intervalMs: 1,
+	});
+	assert.equal(evidence, "absent");
+	assert.equal(probe.peekCalls, 1);
+});
+
+test("waitForChildEvidence gives up on an empty pane at its deadline", async () => {
+	const probe = fakeProbe({ waits: [], peeks: [] }); // always { exists: true }, no status
+	const evidence = await waitForChildEvidence({
+		probe,
+		transcriptExists: () => false,
+		timeoutMs: 5,
+		intervalMs: 1,
+	});
+	assert.equal(evidence, "absent");
+});
+
+test("waitForChildEvidence stops on an aborted batch", async () => {
+	const probe = fakeProbe({ waits: [], peeks: [] });
+	const evidence = await waitForChildEvidence({
+		probe,
+		transcriptExists: () => true,
+		timeoutMs: 1000,
+		intervalMs: 1,
+		signal: AbortSignal.abort(),
+	});
+	assert.equal(evidence, "absent");
 });

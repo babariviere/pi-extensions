@@ -84,3 +84,39 @@ export async function waitForAgentFinish(
 	}
 	return "finished";
 }
+
+/**
+ * Does a pane actually have a live child in it?
+ *
+ * Asked after `herdr agent start` reports a startup timeout, which is not
+ * evidence either way (see `isAgentStartupTimeoutError`). Two things count as
+ * evidence of a child: the transcript file the parent named for it exists (the
+ * child's pi wrote to it, so it is running), or herdr reports the pane's agent
+ * in a real state. A pane that no longer exists is conclusive the other way.
+ *
+ * Bounded and cheap: a pane with no child in it resolves `absent` at the
+ * deadline, which is the failure path anyway.
+ */
+export async function waitForChildEvidence(opts: {
+	probe: StatusProbe;
+	/** Whether the child has written anything to its transcript yet. */
+	transcriptExists: () => boolean;
+	timeoutMs: number;
+	intervalMs?: number;
+	signal?: AbortSignal;
+}): Promise<"alive" | "absent"> {
+	const intervalMs = opts.intervalMs ?? 500;
+	const deadline = Date.now() + opts.timeoutMs;
+	const live = new Set(["working", "idle", "blocked", "done"]);
+	for (;;) {
+		if (opts.signal?.aborted) return "absent";
+		if (opts.transcriptExists()) return "alive";
+		const state = await opts.probe.peek();
+		if (!state.exists) return "absent";
+		if (state.status && live.has(state.status)) return "alive";
+		if (Date.now() >= deadline) return "absent";
+		await new Promise<void>((resolve) =>
+			setTimeout(resolve, Math.min(intervalMs, Math.max(0, deadline - Date.now()))),
+		);
+	}
+}

@@ -113,7 +113,10 @@ describe("ledger tallies", () => {
 
 describe("verifyLedger", () => {
 	const item = (evidence: string): LedgerItem[] => {
-		const parsed = parseLedgerItem("a1", todoFile({ id: "a1", title: "t", tags: ["night"], status: "done" }, evidence));
+		const parsed = parseLedgerItem(
+			"a1",
+			todoFile({ id: "a1", title: "t", tags: ["night"], status: "done" }, evidence),
+		);
 		return parsed ? [parsed] : [];
 	};
 
@@ -285,8 +288,28 @@ describe("ledgerDir", () => {
 		assert.equal(ledgerDir(withTodoPath("night-todos"), "/repo"), "/repo/night-todos");
 	});
 
+	/**
+	 * `todosDir` reads `PI_TODO_PATH`, and a night run sets it for the coordinator
+	 * and every child: with it set, both cases below compare one env-derived path
+	 * against itself. The cwd-derived fallback they are about only exists when it
+	 * is unset, so these two clear it rather than failing whenever the suite runs
+	 * inside a night run.
+	 */
+	const withoutTodoPathEnv = <T>(fn: () => T): T => {
+		const previous = process.env.PI_TODO_PATH;
+		delete process.env.PI_TODO_PATH;
+		try {
+			return fn();
+		} finally {
+			if (previous === undefined) delete process.env.PI_TODO_PATH;
+			else process.env.PI_TODO_PATH = previous;
+		}
+	};
+
 	it("falls back to the cwd-derived store when the path is empty", () => {
-		assert.equal(ledgerDir(withTodoPath(""), "/repo"), todosDir("/repo"));
+		withoutTodoPathEnv(() => {
+			assert.equal(ledgerDir(withTodoPath(""), "/repo"), todosDir("/repo"));
+		});
 	});
 
 	// The regression this store exists for: a run rewrites cwd for its clone and
@@ -300,7 +323,9 @@ describe("ledgerDir", () => {
 		assert.equal(clone, coordinator);
 		assert.equal(workspace, coordinator);
 		// And the cwd-derived store is what would have broken.
-		assert.notEqual(todosDir("/srv/night/sandboxes/repo/2026-08-29 2130.agents/agent-ab12-0"), todosDir("/repo"));
+		withoutTodoPathEnv(() => {
+			assert.notEqual(todosDir("/srv/night/sandboxes/repo/2026-08-29 2130.agents/agent-ab12-0"), todosDir("/repo"));
+		});
 	});
 
 	it("reads back an item a subagent wrote from its own workspace", () => {

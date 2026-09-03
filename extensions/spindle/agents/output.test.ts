@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import {
+	describeTranscript,
 	hasTerminalAssistantMessage,
 	indexOutputOverride,
 	normalizeOutputOverride,
@@ -255,4 +256,18 @@ test("hasTerminalAssistantMessage is false for a missing or empty transcript", (
 	const empty = join(dir, "empty.jsonl");
 	writeFileSync(empty, "");
 	assert.equal(hasTerminalAssistantMessage(empty), false);
+});
+
+test("describeTranscript counts records and dates the last write", () => {
+	const path = tmpFile();
+	writeFileSync(
+		path,
+		`${sessionLine("user", [{ type: "text", text: "go" }])}\n${sessionLine("assistant", [{ type: "text", text: "ok" }])}\n`,
+	);
+	const described = describeTranscript(path) ?? "";
+	assert.match(described, /^2 records, last write \d{4}-\d{2}-\d{2}T/);
+});
+
+test("describeTranscript says nothing about a transcript that was never written", () => {
+	assert.equal(describeTranscript(join(tmpdir(), "definitely-not-here.jsonl")), undefined);
 });

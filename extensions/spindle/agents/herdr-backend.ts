@@ -44,19 +44,37 @@
  * assistant message. herdr cannot see turn boundaries, so an idle report alone
  * would cut off a child that was merely between a tool result and its next model
  * stream, and closing the tab would kill it mid-generation.
+ *
+ * Startup is not a completion signal either. `herdr agent start` blocks until it
+ * judges the agent interactive-ready and reports `timed out waiting for agent
+ * startup` otherwise, but a subagent receives its task with the process and is
+ * therefore *working*, not idling at a prompt: only children that finished
+ * inside herdr's window ever "started". That error is now tolerated whenever a
+ * child can be shown to exist (`childIsAlive`), and the transcript decides the
+ * run's fate. A launch that really did fail still reads its transcript before
+ * giving up (`failedLaunchResult`), so a child that worked is never discarded
+ * unreported, and the error names the pane and the transcript.
  */
 
+import { existsSync } from "node:fs";
 import { computeGrid } from "./grid.ts";
 import { herdr } from "./herdr-client.ts";
 import { paneLabel } from "./herdr-parse.ts";
 import { currentWorkspaceId } from "./herdr-transport.ts";
-import { waitForAgentFinish } from "./pane-lifecycle.ts";
+import { waitForAgentFinish, waitForChildEvidence } from "./pane-lifecycle.ts";
 import { readDefaultProvider } from "./settings.ts";
-import { hasTerminalAssistantMessage, resolveRunOutput } from "./output.ts";
+import { describeTranscript, hasTerminalAssistantMessage, resolveRunOutput } from "./output.ts";
 import { outcomeError, type RunOutcome, waitForRunCompletion } from "./herdr-completion.ts";
 import { baseResult, prepareChildRun, runCwd, type RunContext, type RunRequest, type RunResult } from "./run.ts";
 
 export const SUBAGENTS_TAB_LABEL = "subagents";
+
+/**
+ * How long to look for evidence of a child after herdr's `agent start` reports a
+ * startup timeout. A pi child writes its transcript within seconds of spawning,
+ * so this only has to outlast process start, not the task.
+ */
+const CHILD_EVIDENCE_TIMEOUT_MS = 20_000;
 
 export async function runInHerdr(reqs: RunRequest[], ctx: RunContext): Promise<RunResult[]> {
 	const workspaceId = currentWorkspaceId();
@@ -212,6 +230,11 @@ interface SpawnedRun {
 	paneId?: string;
 	error?: string;
 	/**
+	 * Launch anomaly that did not stop the run (a tolerated herdr startup
+	 * timeout). Reported only if the run then ends badly.
+	 */
+	note?: string;
+	/**
 	 * Pane scrollback captured before an aborted batch's tab was closed. It is
 	 * the fallback output source for a run whose transcript never landed, and it
 	 * has to be read while the pane still exists.
@@ -257,15 +280,31 @@ async function launchRun(p: PreparedRun, ctx: RunContext): Promise<SpawnedRun> {
 	const started = await herdr.startAgent(agentName(p.req.index), "pi", p.paneId, p.childArgs, undefined, {
 		signal: ctx.signal,
 	});
+
+	// A startup timeout is not a launch failure. herdr blocks until it judges the
+	// started agent interactive-ready, and a subagent never looks like that: its
+	// task arrives with the process, so it is working from its first second
+	// instead of waiting at a prompt. Trivial children happened to finish and go
+	// idle inside the window and "started"; every child doing real work timed out
+	// and had its pane torn down mid-task with a full transcript on disk.
+	//
+	// So when herdr's probe expires we ask whether a child exists at all, and only
+	// an empty pane fails the run. Everything else (bad name, unsupported kind,
+	// pane gone, a pane that never freed up) still fails immediately.
+	let note: string | undefined;
 	if (!started.ok) {
-		ctx.onStatus?.(p.req.index, { state: "failed", paneId: p.paneId, outputPath: p.outputPath });
-		return {
-			req: p.req,
-			outputPath: p.outputPath,
-			sessionPath: p.sessionPath,
-			paneId: p.paneId,
-			error: started.error,
-		};
+		const tolerable = started.failure === "startup-timeout" && (await childIsAlive(p, ctx));
+		if (!tolerable) {
+			ctx.onStatus?.(p.req.index, { state: "failed", paneId: p.paneId, outputPath: p.outputPath });
+			return {
+				req: p.req,
+				outputPath: p.outputPath,
+				sessionPath: p.sessionPath,
+				paneId: p.paneId,
+				error: started.error,
+			};
+		}
+		note = `herdr reported "${started.error}" while the child was already running; waited on its transcript instead`;
 	}
 
 	// Label the pane with the task so a watcher can tell panes apart. The task
@@ -280,12 +319,30 @@ async function launchRun(p: PreparedRun, ctx: RunContext): Promise<SpawnedRun> {
 		outputPath: p.outputPath,
 		sessionPath: p.sessionPath,
 		paneId: p.paneId,
+		...(note ? { note } : {}),
 	};
+}
+
+/**
+ * Is there a child in this pane? Evidence is the transcript the parent named for
+ * it appearing, or herdr reporting the pane's agent in a real state; a pane that
+ * has gone away is conclusive the other way. Bounded by
+ * `CHILD_EVIDENCE_TIMEOUT_MS`, and never longer than the run's own timeout.
+ */
+async function childIsAlive(p: PreparedRun, ctx: RunContext): Promise<boolean> {
+	if (!p.paneId) return false;
+	const evidence = await waitForChildEvidence({
+		probe: herdr.statusProbe(p.paneId),
+		transcriptExists: () => existsSync(p.sessionPath),
+		timeoutMs: Math.min(CHILD_EVIDENCE_TIMEOUT_MS, ctx.timeoutMs),
+		...(ctx.signal ? { signal: ctx.signal } : {}),
+	});
+	return evidence === "alive";
 }
 
 async function settleRun(s: SpawnedRun, ctx: RunContext): Promise<RunResult> {
 	if (s.error) {
-		return failResult(s.req, s.error, s.paneId);
+		return await failedLaunchResult(s, ctx);
 	}
 	const report = (ok: boolean) =>
 		ctx.onStatus?.(s.req.index, { state: ok ? "done" : "failed", paneId: s.paneId, outputPath: s.outputPath });
@@ -326,11 +383,45 @@ async function settleRun(s: SpawnedRun, ctx: RunContext): Promise<RunResult> {
 		placeholder: "(no output produced before the pane finished or was terminated)",
 	});
 	report(resolved.ok);
+	// A tolerated startup timeout is only worth mentioning when the run ended
+	// badly; a run that produced its output does not need the launch trivia.
+	const failure = resolved.ok ? undefined : [s.note, outcomeError(outcome), whereToLook(s)].filter(Boolean).join("; ");
 	return {
-		...baseResult(s.req, resolved, resolved.ok ? undefined : outcomeError(outcome)),
+		...baseResult(s.req, resolved, failure),
 		backend: "herdr",
 		paneId: s.paneId,
 	};
+}
+
+/**
+ * Settle a run whose launch failed — without throwing its transcript away.
+ *
+ * A launch-side error does not mean nothing ran: the child may have been working
+ * for minutes when herdr's call failed. Reading the transcript here is what
+ * turns a discarded run into a reported one. It still counts as failed (nobody
+ * observed the turn end), but the text is preserved and the error names the pane
+ * and the transcript so the next diagnosis is one look rather than a night of
+ * bisecting.
+ */
+async function failedLaunchResult(s: SpawnedRun, ctx: RunContext): Promise<RunResult> {
+	const resolved = await resolveRunOutput(s.outputPath, s.sessionPath, {
+		fallback: () => s.scrollback ?? (s.paneId ? herdr.readPane(s.paneId) : undefined),
+		finishedCleanly: false,
+		placeholder: `(failed to run in herdr: ${s.error})`,
+	});
+	ctx.onStatus?.(s.req.index, { state: "failed", paneId: s.paneId, outputPath: s.outputPath });
+	return {
+		...baseResult(s.req, resolved, [s.error, whereToLook(s)].filter(Boolean).join("; ")),
+		backend: "herdr",
+		...(s.paneId ? { paneId: s.paneId } : {}),
+	};
+}
+
+/** Where to look when a run failed: the pane, the transcript, and its state. */
+function whereToLook(s: SpawnedRun): string {
+	return [s.paneId ? `pane ${s.paneId}` : undefined, `transcript ${s.sessionPath}`, describeTranscript(s.sessionPath)]
+		.filter((v): v is string => !!v)
+		.join(", ");
 }
 
 /** A run that never got far enough to produce (or persist) output. */

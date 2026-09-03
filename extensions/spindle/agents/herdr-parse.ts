@@ -57,6 +57,27 @@ export function isTimeoutError(error: string | undefined): boolean {
 }
 
 /**
+ * True when a `herdr agent start` error is herdr's own startup deadline
+ * expiring: it blocks until it judges the started agent interactive-ready and
+ * reports `{"error":{"code":"timeout","message":"timed out waiting for agent
+ * startup"},"id":"cli:agent:start"}` when that never happens.
+ *
+ * This says nothing about the child. A pi subagent receives its task with the
+ * process (`--spindle-task-file`) and starts working immediately, so it is busy
+ * rather than sitting at a ready prompt, and herdr's probe never fires however
+ * healthy the run is. Callers must therefore check whether a child exists
+ * instead of treating this as a launch failure; see `launchRun`.
+ *
+ * Matches the message and, since the transport may surface the raw envelope,
+ * a timeout carrying the `cli:agent:start` id.
+ */
+export function isAgentStartupTimeoutError(error: string | undefined): boolean {
+	const text = error ?? "";
+	if (/waiting for agent startup/i.test(text)) return true;
+	return /cli:agent:start/.test(text) && isTimeoutError(text);
+}
+
+/**
  * Parse the last JSON object line of herdr stdout (event- or result-shaped),
  * tolerating leading log lines. Returns undefined when no JSON line is present.
  * The single scanner both `parseHerdrJson` and the client's `waitAgentStatus`
