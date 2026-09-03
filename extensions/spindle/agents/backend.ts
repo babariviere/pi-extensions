@@ -15,6 +15,13 @@ import { execFileTransport, isInHerdr, type HerdrTransport } from "./herdr-trans
 import { runInHerdr } from "./herdr-backend.ts";
 import { type RunBackend, type RunContext, type RunRequest, type RunResult } from "./run.ts";
 
+/**
+ * How many children herdr may fail to launch, in a row, before the launcher
+ * stops choosing it. Two is enough to tell a broken runner from one bad pane,
+ * and cheap to be wrong about: the headless adapter runs the same children.
+ */
+export const LAUNCH_FAILURE_LIMIT = 2;
+
 /** The installed herdr's verdict on the dialect the adapter speaks. */
 export interface HerdrDialect {
 	/** True when herdr accepts the flags/subcommands the adapter passes. */
@@ -76,6 +83,9 @@ export interface RunLauncherDeps {
 export class RunLauncher {
 	readonly #deps: RunLauncherDeps;
 	#selection: Promise<BackendSelection> | undefined;
+	/** Consecutive launch-class failures on the herdr adapter. */
+	#launchFailures = 0;
+	#lastLaunchError: string | undefined;
 
 	constructor(deps: RunLauncherDeps = {}) {
 		this.#deps = deps;
@@ -87,12 +97,48 @@ export class RunLauncher {
 		return this.#selection;
 	}
 
-	/** Run a batch through the selected adapter. */
+	/** Run a batch through the selected adapter, then judge the adapter by it. */
 	async run(requests: RunRequest[], context: RunContext): Promise<RunResult[]> {
 		const selection = await this.selection();
 		const backend =
 			selection.backend === "herdr" ? (this.#deps.herdr ?? runInHerdr) : (this.#deps.headless ?? runHeadlessBatch);
-		return backend(requests, context);
+		const results = await backend(requests, context);
+		if (selection.backend === "herdr") this.#judgeHerdr(results);
+		return results;
+	}
+
+	/**
+	 * Demote a herdr session that has stopped launching children.
+	 *
+	 * The dialect probe only catches a herdr that no longer speaks the adapter's
+	 * CLI. It cannot catch a herdr that accepts every command and still never
+	 * produces a usable child, which is what happened on 2026-09-02: the selection
+	 * was made once at 20:48 and every batch for the next ten hours went to the
+	 * same broken adapter, while the headless one — no panes, no readiness probe,
+	 * a child process it waits on — sat unused.
+	 *
+	 * So the decision is revisited from evidence: `LAUNCH_FAILURE_LIMIT`
+	 * consecutive launch-class failures (see `RunFailure`) replace the cached
+	 * selection with headless, reason included, for the rest of the process. Only
+	 * `launch` counts — a child that ran and failed says nothing about the adapter
+	 * — and any run that got launched clears the streak.
+	 */
+	#judgeHerdr(results: RunResult[]): void {
+		for (const result of results) {
+			if (result.failure === "launch") {
+				this.#launchFailures++;
+				this.#lastLaunchError = result.error;
+			} else {
+				this.#launchFailures = 0;
+			}
+		}
+		if (this.#launchFailures < LAUNCH_FAILURE_LIMIT) return;
+		this.#selection = Promise.resolve({
+			backend: "headless",
+			degradedReason: `herdr failed to launch ${this.#launchFailures} children in a row (${
+				this.#lastLaunchError ?? "no reason reported"
+			})`,
+		});
 	}
 
 	async #resolve(): Promise<BackendSelection> {

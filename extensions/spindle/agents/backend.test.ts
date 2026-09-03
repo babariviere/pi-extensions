@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { probeHerdrDialect, RunLauncher, type BackendSelection } from "./backend.ts";
 import type { HerdrCliResult } from "./herdr-parse.ts";
 import type { HerdrTransport } from "./herdr-transport.ts";
-import type { RunBackend, RunContext } from "./run.ts";
+import type { RunBackend, RunContext, RunRequest, RunResult } from "./run.ts";
 
 /**
  * The launcher and the dialect probe, tested through their interfaces with an
@@ -70,6 +70,13 @@ test("probe rejects a CLI that cannot even show help", async () => {
 	const verdict = await probeHerdrDialect(transport);
 	assert.equal(verdict.compatible, false);
 	assert.match(verdict.reason ?? "", /unavailable/);
+});
+
+/** A minimal request; the fake backends only read the agent name off it. */
+const runRequest = (): RunRequest => ({
+	agent: { scope: "user", config: { name: "task", body: "" } } as unknown as RunRequest["agent"],
+	task: "do a thing",
+	index: 0,
 });
 
 const emptyContext = (): RunContext => ({
@@ -150,4 +157,78 @@ test("a drifted herdr falls back to headless and probes only once", async () => 
 	await launcher.run([], emptyContext());
 	assert.deepEqual(used, ["headless", "headless"]);
 	assert.equal(probes, 1);
+});
+
+test("a herdr that stops launching children is demoted to headless mid-session", async () => {
+	const used: string[] = [];
+	const launchFailure = (agent: string): RunResult => ({
+		agent,
+		scope: "user",
+		ok: false,
+		output: "(failed to run in herdr: timed out waiting for agent startup)",
+		backend: "herdr",
+		error: "timed out waiting for agent startup",
+		failure: "launch",
+	});
+	const launcher = new RunLauncher({
+		inHerdr: () => true,
+		probe: () => Promise.resolve({ compatible: true }),
+		herdr: async (reqs) => {
+			used.push("herdr");
+			return reqs.map((req) => launchFailure(req.agent.config.name));
+		},
+		headless: async (reqs) => {
+			used.push("headless");
+			return reqs.map((req) => ({
+				agent: req.agent.config.name,
+				scope: "user",
+				ok: true,
+				output: "done",
+				backend: "headless" as const,
+			}));
+		},
+	});
+
+	for (let i = 0; i < 3; i++) await launcher.run([runRequest()], emptyContext());
+
+	// Two launch failures are enough; the third batch goes elsewhere.
+	assert.deepEqual(used, ["herdr", "herdr", "headless"]);
+	const selection = await launcher.selection();
+	assert.equal(selection.backend, "headless");
+	assert.match(selection.degradedReason ?? "", /failed to launch 2 children in a row/);
+	assert.match(selection.degradedReason ?? "", /waiting for agent startup/);
+});
+
+test("a run that actually ran clears the launch-failure streak", async () => {
+	const used: string[] = [];
+	let call = 0;
+	const launcher = new RunLauncher({
+		inHerdr: () => true,
+		probe: () => Promise.resolve({ compatible: true }),
+		herdr: async (reqs) => {
+			used.push("herdr");
+			call++;
+			// fail, ran-but-empty, fail, fail
+			const failure = call === 2 ? ("run" as const) : ("launch" as const);
+			return reqs.map((req) => ({
+				agent: req.agent.config.name,
+				scope: "user",
+				ok: false,
+				output: "",
+				backend: "herdr" as const,
+				failure,
+			}));
+		},
+		headless: async () => {
+			used.push("headless");
+			return [];
+		},
+	});
+
+	for (let i = 0; i < 4; i++) await launcher.run([runRequest()], emptyContext());
+
+	// The `run` failure in the middle resets the count, so the demotion only
+	// lands after the two that follow it.
+	assert.deepEqual(used, ["herdr", "herdr", "herdr", "herdr"]);
+	assert.equal((await launcher.selection()).backend, "headless");
 });

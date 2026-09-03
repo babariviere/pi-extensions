@@ -433,7 +433,7 @@ export class SpindleAgentsProvider implements SpindleProvider {
 		// a drifted herdr CLI degrades to headless instead of failing the batch.
 		const selection = await this.launcher.selection();
 		const note = selection.degradedReason
-			? `herdr CLI drifted (${selection.degradedReason}); running headless`
+			? `herdr degraded (${selection.degradedReason}); running headless`
 			: undefined;
 
 		const monitor = new RunProgressMonitor(
