@@ -64,7 +64,9 @@ export async function runNightPreflight(deps: PreflightDeps): Promise<string | u
 	const exec = deps.exec ?? defaultExec;
 	const probes = nightPreflightProbes(run.workspacePath ? { workspacePath: run.workspacePath } : {});
 	const results = await runPreflight(probes, async (probe) => {
-		const command = await deps.wrap(probe.command);
+		// `wrapped: false` measures the boundary underneath the OS-level sandbox
+		// wrap (the host shell itself), so it deliberately skips `deps.wrap`.
+		const command = probe.wrapped === false ? probe.command : await deps.wrap(probe.command);
 		return exec(probe, command, run.workspacePath ?? deps.cwd);
 	});
 	const path =

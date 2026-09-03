@@ -41,6 +41,19 @@ export interface ProbeSpec {
 	meaning: string;
 	/** Defaults to "exit code 0". */
 	okWhen?: (outcome: ProbeOutcome) => boolean;
+	/**
+	 * Whether the executing bridge should wrap this command through the OS-level
+	 * sandbox (`srt`'s Seatbelt/bubblewrap wrap, the boundary `allowLoopback`
+	 * configures and every `pi.bash` call goes through). Defaults to true. A probe
+	 * that sets this to false runs unwrapped, measuring the boundary underneath
+	 * that wrap instead: the host shell the coordinator process itself runs in.
+	 *
+	 * The two loopback probes below exist because they answered differently on
+	 * 2026-09-03: the built `allowLoopback` fix (2026-09-01) only ever changed the
+	 * wrapped boundary, and a run has no other way to tell "the wrap denies it"
+	 * from "nothing here can bind a socket at all" without asking both.
+	 */
+	wrapped?: boolean;
 }
 
 export interface ProbeResult {
@@ -111,9 +124,21 @@ export function nightPreflightProbes(input: { workspacePath?: string } = {}): Pr
 		},
 		{
 			id: "loopback-tcp",
-			label: "loopback TCP",
-			meaning: "no loopback means no local database, no test container, no DB-backed test suite",
+			label: "loopback TCP (spindle sandbox)",
+			meaning:
+				"no loopback means no local database, no test container, no DB-backed test suite; this is the boundary " +
+				"a subagent's own `pi.bash` actually runs under, and the one `sandboxAllowLoopback` configures",
 			command: LOOPBACK_PROBE,
+		},
+		{
+			id: "loopback-tcp-host",
+			label: "loopback TCP (host shell)",
+			meaning:
+				"the boundary underneath the spindle sandbox wrap, i.e. what the coordinator process's own shell allows " +
+				"before any `srt` policy is applied; compare against the row above to tell a sandbox denial from a " +
+				"host-level one",
+			command: LOOPBACK_PROBE,
+			wrapped: false,
 		},
 	];
 	if (input.workspacePath) {

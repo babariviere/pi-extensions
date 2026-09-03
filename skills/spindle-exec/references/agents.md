@@ -106,6 +106,11 @@ A `start` run is deliberately **not** tied to the turn that launched it: cancell
 
 ## `agents.wait({ runId, waitMs? })`
 
+`timeoutMs` is also accepted here as an alias for `waitMs`: `run`/`start`/`runAll` use
+`timeoutMs` for the child's own lifetime cap, so it is an easy name to reach for
+by habit. On `wait` it means the same thing as `waitMs` instead (this call's own
+wait window); `waitMs` wins if both are set.
+
 Resumes waiting on a launched batch. Resolves to:
 
 ```ts
