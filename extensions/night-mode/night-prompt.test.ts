@@ -304,3 +304,44 @@ describe("capability-gated item selection", () => {
 		assert.match(ORCHESTRATOR_CONTRACT, /draft PR that cannot pass review is worse/);
 	});
 });
+
+describe("delegation rules earned from past nights", () => {
+	it("requires a number in the definition of done", () => {
+		// 2026-08-28e #4: a task with no number in its definition of done gets graded
+		// as done by the child.
+		assert.match(ORCHESTRATOR_CONTRACT, /definition of done carries a number/);
+		assert.match(ORCHESTRATOR_CONTRACT, /grades itself against what you wrote/);
+	});
+
+	it("sends retrieval-shaped children to the cheaper model", () => {
+		// 2026-08-28e #6, re-reported five passes running.
+		assert.match(ORCHESTRATOR_CONTRACT, /claude-sonnet-5/);
+		assert.match(ORCHESTRATOR_CONTRACT, /Keep the default for children that write code/);
+	});
+});
+
+describe("buildNightContract", () => {
+	const run = {
+		startedAt: Date.now(),
+		reportPath: "/notes/Reports/report.md",
+		maxPullRequests: 5,
+		ledgerDir: "/night/todos",
+	};
+
+	it("makes the child close its own ledger item", () => {
+		// 2026-08-31 #5: four of six carried-over items were finished, because
+		// nobody wrote the Evidence line.
+		const contract = buildNightContract(run);
+		assert.match(contract, /Close your own ledger item before you return/);
+		assert.match(contract, /`Evidence:` or `Reason:` line yourself/);
+	});
+
+	it("says nothing about the ledger when the run has no store", () => {
+		const { ledgerDir: _ledgerDir, ...withoutStore } = run;
+		assert.doesNotMatch(buildNightContract(withoutStore), /Close your own ledger item/);
+	});
+
+	it("forbids the side notes that used to litter the vault", () => {
+		assert.match(buildNightContract(run), /No dated note beside the report/);
+	});
+});

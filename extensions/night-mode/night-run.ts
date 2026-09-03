@@ -259,6 +259,17 @@ export function buildNightContract(run: ActiveNightRun, workspacePath?: string):
 				]
 			: []),
 		`- Night report: \`${run.reportPath}\`. Read it if you need what happened earlier. Do not rewrite it; the coordinator owns it. Put anything worth reporting in your final message instead.`,
+		...(run.ledgerDir
+			? [
+					"- Close your own ledger item before you return: set its `status` (`done` or `skipped`) and write the " +
+						"`Evidence:` or `Reason:` line yourself, with the todo tool. The coordinator cannot see what you did, " +
+						"only what you wrote: on 2026-08-31 six items were carried over as open and four of them were finished, " +
+						"because nobody wrote the line.",
+				]
+			: []),
+		"- Write no files outside the repository you were given and your own artifacts directory. No dated note beside " +
+			"the report, no scratch write-up in the user's notes: a long finding belongs in your final message or in your " +
+			"artifacts directory.",
 		"",
 	].join("\n");
 }

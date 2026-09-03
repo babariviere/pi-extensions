@@ -84,6 +84,36 @@ const prompt = `Objective:\n\n${π.task}`;
 
 Short single-line literals with no `${...}` are fine inline.
 
+### Large documents — write in chunks
+
+A payload big enough to be a document (a design note, a report section, a generated file over roughly 400 lines) is
+safer written in pieces than in one call: one oversized `payloads` value has taken a subagent down mid-write and left
+a half-file behind, with nothing in the transcript saying which half. Split the content into `π.part1`, `π.part2`,
+… and append:
+
+```ts
+await pi.write({ path: out, content: π.part1 });
+for (const part of [π.part2, π.part3]) await pi.bash({ cmd: `cat >> ${out}`, stdin: part });
+return (await pi.bash({ cmd: `wc -l ${out}` })).output;  // check the whole thing landed
+```
+
+Return a size or line count afterwards, so a truncated write is visible in the result instead of being discovered by
+the next reader.
+
+### Fetch in the parent, analyse in a child — hand over a manifest
+
+When a program pulls data down (an API dump, a log export, a set of transcripts) for a subagent to analyse, do not
+paste the data into the task: write the files, then write a manifest next to them and pass the manifest's path. A
+manifest is a small JSON or markdown file listing, per artefact, its absolute path, what it contains, its size and
+the command that produced it. The child reads the manifest first and opens only what it needs — the alternative is a
+task message the size of the dump, or a child guessing which of 40 files matters.
+
+```ts
+const manifest = items.map((item) => ({ path: item.path, rows: item.rows, source: item.command }));
+await pi.write({ path: `${dir}/manifest.json`, content: JSON.stringify(manifest, null, 2) });
+await agents.run({ task: `Analyse the dump described by ${dir}/manifest.json. Read it first.` });
+```
+
 ## `τ` — session scratchpad shared across calls
 
 `π` is this call's read-only payloads; `τ` is JSON state that outlives the program and dies with the session. `τ = 2π`, which is the whole mnemonic.
