@@ -265,6 +265,15 @@ executed by `spindle/sandbox/preflight-bridge.ts`, because only spindle can run
 a command through the same `srt` wrapper the children get. A probe run from the
 extension host would report an egress the children do not have.
 
+Loopback TCP is probed **twice**, as separate rows (`loopback-tcp` and
+`loopback-tcp-host`): once wrapped through the same `srt` policy a subagent's
+own `pi.bash` runs under (the boundary `sandboxAllowLoopback` actually
+configures), and once unwrapped, measuring the host shell underneath that wrap.
+The built `allowLoopback` fix only ever changed the first boundary, and the two
+answers diverged on 2026-09-03: without both rows a broken host-level socket and
+a denying sandbox policy report the same single "NO" and there is no way to
+tell which one a night is actually looking at.
+
 Not probed yet: one read call per configured MCP server, which would have caught
 the night the read-only gate denied every MCP read for subagents while the
 coordinator (the one process not subject to the gate) saw nothing wrong.

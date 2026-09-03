@@ -61,13 +61,40 @@ test("the coordinator probes once and the report is written where the handshake 
 	assert.equal(path, join(agentDir, "sandbox-capabilities.md"));
 	assert.equal(written.length, 1);
 	assert.match(written[0].body, /Night sandbox capability probe/);
-	// Every probe went through the sandbox wrapper, which is the whole point: a
-	// host-side probe would report an envelope the children do not have.
+	// Every wrapped probe went through the sandbox wrapper, which is the whole
+	// point: a host-side probe would report an envelope the children do not have.
 	assert.equal(wrapped.length > 0, true);
 
 	// Second call in the same run is a no-op.
 	assert.equal(await runNightPreflight(deps), undefined);
 	assert.equal(written.length, 1);
+});
+
+test("the host-shell loopback probe skips the sandbox wrap", async () => {
+	activeRun();
+	const wrapped: string[] = [];
+	const execCalls: Array<{ id: string; command: string }> = [];
+	const deps = {
+		wrap: async (command: string) => {
+			wrapped.push(command);
+			return `srt -- ${command}`;
+		},
+		sessionId: "coordinator",
+		cwd: agentDir,
+		exec: async (probe: { id: string }, command: string) => {
+			execCalls.push({ id: probe.id, command });
+			return { exitCode: 0, output: "" };
+		},
+		write: () => true,
+	};
+	await runNightPreflight(deps);
+	const sandboxCall = execCalls.find((call) => call.id === "loopback-tcp");
+	const hostCall = execCalls.find((call) => call.id === "loopback-tcp-host");
+	assert.equal(sandboxCall?.command.startsWith("srt -- "), true, "the sandboxed boundary goes through the wrap");
+	assert.equal(hostCall?.command.startsWith("srt -- "), false, "the host boundary runs unwrapped");
+	// Both probes share the same raw command text, so the wrap call count is what
+	// distinguishes them: only the sandboxed probe should have gone through it.
+	assert.equal(wrapped.filter((command) => command === hostCall?.command).length, 1, "only loopback-tcp is wrapped");
 });
 
 test("a subagent session does not probe", async () => {

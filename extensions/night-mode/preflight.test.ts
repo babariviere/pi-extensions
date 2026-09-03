@@ -23,9 +23,26 @@ import {
 	writePreflightReport,
 } from "./preflight.ts";
 
-test("the probe list covers the six answers a night run plans with", () => {
+test("the probe list covers the seven answers a night run plans with", () => {
 	const ids = nightPreflightProbes({ workspacePath: "/night/clone" }).map((probe) => probe.id);
-	assert.deepEqual(ids, ["https-egress", "raw-dns", "ssh-github", "gh-auth", "loopback-tcp", "jj-workspace"]);
+	assert.deepEqual(ids, [
+		"https-egress",
+		"raw-dns",
+		"ssh-github",
+		"gh-auth",
+		"loopback-tcp",
+		"loopback-tcp-host",
+		"jj-workspace",
+	]);
+});
+
+test("only the host-shell loopback probe skips the sandbox wrap", () => {
+	const probes = nightPreflightProbes();
+	const sandboxProbe = probes.find((probe) => probe.id === "loopback-tcp");
+	const hostProbe = probes.find((probe) => probe.id === "loopback-tcp-host");
+	assert.equal(sandboxProbe?.wrapped, undefined, "defaults to wrapped");
+	assert.equal(hostProbe?.wrapped, false);
+	assert.equal(sandboxProbe?.command, hostProbe?.command, "same probe, two boundaries");
 });
 
 test("the jj probe is skipped when the run has no working copy", () => {
@@ -103,6 +120,7 @@ test("the report states the answer and what it rules out", async () => {
 			"ssh-github": { exitCode: 255, output: "ssh: Could not resolve hostname github.com: -65563" },
 			"gh-auth": { exitCode: 0, output: "Logged in to github.com account babariviere (keyring)" },
 			"loopback-tcp": { exitCode: 1, output: "connect failed: connect EPERM 127.0.0.1:54123" },
+			"loopback-tcp-host": { exitCode: 0, output: "connected to 127.0.0.1:54123" },
 			"jj-workspace": { exitCode: 0, output: "Working copy changes:" },
 		}),
 	);
@@ -112,8 +130,9 @@ test("the report states the answer and what it rules out", async () => {
 	});
 	assert.match(report, /\| HTTPS egress \(api\.github\.com\) \| yes \|/);
 	assert.match(report, /\| SSH to github\.com \| NO \|/);
-	assert.match(report, /\| loopback TCP \| NO \|/);
-	assert.match(report, /\*\*loopback TCP\*\*: unavailable - no loopback means no local database/);
+	assert.match(report, /\| loopback TCP \(spindle sandbox\) \| NO \|/);
+	assert.match(report, /\| loopback TCP \(host shell\) \| yes \|/);
+	assert.match(report, /\*\*loopback TCP \(spindle sandbox\)\*\*: unavailable - no loopback means no local database/);
 	assert.match(report, /Working copy: `\/night\/clone`/);
 });
 

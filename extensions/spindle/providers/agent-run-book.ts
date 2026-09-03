@@ -166,6 +166,12 @@ export class AgentRunBook {
 	 * Block on a batch for at most `waitMs`. An expired window is a normal
 	 * outcome, not an error: the batch is marked detached (its parent-turn abort
 	 * link is dropped) and the caller gets a `running` snapshot to poll.
+	 *
+	 * `waitMs` is this method's only notion of timing; the public `agents.wait`
+	 * schema additionally accepts `timeoutMs` as a caller-facing alias for it
+	 * (resolved by `SpindleAgentsProvider` before it ever reaches here), because
+	 * `run`/`start`/`runAll` use `timeoutMs` for the child's own lifetime cap and
+	 * the two are easy to reach for interchangeably.
 	 */
 	async wait(runId: string, waitMs: number): Promise<AgentWaitOutcome> {
 		const batch = this.#batches.get(runId);

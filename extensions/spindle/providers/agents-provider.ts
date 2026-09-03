@@ -20,7 +20,11 @@
  * Every launch is registered in the run book (`agent-run-book.ts`), which owns
  * waiting, detachment and cancellation. Timing is per *batch*, not per task:
  * `waitMs` bounds how long the caller blocks, `timeoutMs` how long the children
- * may live (clamped to the configured cap).
+ * may live (clamped to the configured cap). `agents.wait` also accepts
+ * `timeoutMs` as an alias for `waitMs`: the same name means the child's
+ * lifetime cap on `run`/`start`/`runAll` but the caller's own wait window on
+ * `wait`, which is exactly the mixup that used to be a hard schema-validation
+ * error instead of a no-op rename.
  *
  * Progress does NOT go out as `progress.ts`'s ANSI block: each row is mirrored
  * into the spindle widget through the run registry, and `renderProgress` is
@@ -107,6 +111,20 @@ const timeoutSecProperty = {
 	description: "Same as `timeoutMs`, in seconds. Converted to `timeoutMs` (×1000); `timeoutMs` wins if both are set.",
 };
 
+/**
+ * `wait`-only alias: `run`/`start`/`runAll` all take a `timeoutMs` that caps the
+ * child's lifetime, so a caller reaches for the same name here out of habit. On
+ * `wait` it means the same thing as `waitMs` instead (the caller's own wait
+ * window); `waitMs` wins if both are set.
+ */
+const waitTimeoutMsAliasProperty = {
+	type: "number",
+	minimum: 0,
+	description:
+		"Alias for `waitMs`. Unlike `timeoutMs` on run/start/runAll (the child's lifetime cap), here it bounds how " +
+		"long this call blocks. `waitMs` wins if both are set.",
+};
+
 /** The single-run form: one task plus the batch's timing. */
 const runItemSchema = {
 	...taskItemSchema,
@@ -171,10 +189,10 @@ const descriptors: SpindleActionDescriptor[] = [
 	{
 		name: "wait",
 		description:
-			"Resume waiting on a launched batch for at most `waitMs`. Returns `{ state: 'running' }` when the window expires again (not an error), or the settled results.",
+			"Resume waiting on a launched batch for at most `waitMs`. Returns `{ state: 'running' }` when the window expires again (not an error), or the settled results. `timeoutMs` is also accepted here as an alias for `waitMs` (not the child's runtime cap that `run`/`start` use it for).",
 		inputSchema: {
 			type: "object",
-			properties: { runId: { type: "string" }, waitMs: waitMsProperty },
+			properties: { runId: { type: "string" }, waitMs: waitMsProperty, timeoutMs: waitTimeoutMsAliasProperty },
 			required: ["runId"],
 			additionalProperties: false,
 		},
@@ -385,7 +403,11 @@ export class SpindleAgentsProvider implements SpindleProvider {
 			case "wait": {
 				const runId = stringOrUndefined(args.runId);
 				if (!runId) throw new Error("agents.wait requires a runId");
-				const outcome = await this.runs.wait(runId, waitMs());
+				// `timeoutMs` is a wait-window alias here, not the child's lifetime cap
+				// that the same key means on run/start/runAll: `waitMs` wins if both
+				// are set.
+				const window = boundedMs(args.waitMs ?? args.timeoutMs, runtime.waitMs, 0, MAX_AGENT_TIMEOUT_MS);
+				const outcome = await this.runs.wait(runId, window);
 				return {
 					runId,
 					state: outcome.state,

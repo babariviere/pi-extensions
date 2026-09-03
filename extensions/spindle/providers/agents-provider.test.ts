@@ -117,6 +117,17 @@ test("wait resumes a launched batch and returns its settled results", async () =
 	assert.equal(waited.results[0]?.runId, handle.runId);
 });
 
+test("agents.wait accepts timeoutMs as an alias for waitMs", async () => {
+	const { provider } = harness(60_000);
+	const handle = (await provider.invoke("start", { task: "do a thing" }, invocationContext())) as { runId: string };
+	// The batch never settles; a 60s configured waitMs would otherwise mask a
+	// timeoutMs of 0 not being honored.
+	const waited = (await provider.invoke("wait", { runId: handle.runId, timeoutMs: 0 }, invocationContext())) as {
+		state: string;
+	};
+	assert.equal(waited.state, "running");
+});
+
 test("cancel aborts the run context and reports the batch as cancelled", async () => {
 	const { provider, contextOf } = harness();
 	const handle = (await provider.invoke("start", { task: "do a thing" }, invocationContext())) as { runId: string };
@@ -210,6 +221,7 @@ test("every descriptor schema accepts the payloads the guest can emit", async ()
 	await accepts("start", {});
 	await accepts("wait", { runId: "r" });
 	await accepts("wait", { runId: "r", waitMs: 0 });
+	await accepts("wait", { runId: "r", timeoutMs: 5_000 });
 	await accepts("status", {});
 	await accepts("cancel", {});
 	await accepts("cancel", { runId: "r" });
