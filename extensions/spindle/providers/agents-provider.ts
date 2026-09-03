@@ -99,10 +99,21 @@ const timeoutMsProperty = {
 		"Hard cap on the children's own lifetime; past it they are killed. Clamped to (and defaulting to) the configured timeout.",
 };
 
+const timeoutSecProperty = {
+	type: "number",
+	minimum: 0,
+	description: "Same as `timeoutMs`, in seconds. Converted to `timeoutMs` (×1000); `timeoutMs` wins if both are set.",
+};
+
 /** The single-run form: one task plus the batch's timing. */
 const runItemSchema = {
 	...taskItemSchema,
-	properties: { ...taskItemSchema.properties, waitMs: waitMsProperty, timeoutMs: timeoutMsProperty },
+	properties: {
+		...taskItemSchema.properties,
+		waitMs: waitMsProperty,
+		timeoutMs: timeoutMsProperty,
+		timeoutSec: timeoutSecProperty,
+	},
 };
 
 /**
@@ -116,6 +127,7 @@ const startSchema = {
 		...taskItemSchema.properties,
 		tasks: { type: "array", items: taskItemSchema },
 		timeoutMs: timeoutMsProperty,
+		timeoutSec: timeoutSecProperty,
 	},
 	additionalProperties: false,
 };
@@ -142,6 +154,7 @@ const descriptors: SpindleActionDescriptor[] = [
 				tasks: { type: "array", items: taskItemSchema },
 				waitMs: waitMsProperty,
 				timeoutMs: timeoutMsProperty,
+				timeoutSec: timeoutSecProperty,
 			},
 			required: ["tasks"],
 			additionalProperties: false,
@@ -194,6 +207,18 @@ const stringArrayOrUndefined = (value: unknown): string[] | undefined =>
 const boundedMs = (value: unknown, fallback: number, minimum: number, maximum: number): number => {
 	if (typeof value !== "number" || !Number.isFinite(value)) return Math.min(fallback, maximum);
 	return Math.max(minimum, Math.min(Math.floor(value), maximum));
+};
+
+/**
+ * Resolve a caller-supplied `timeoutMs`/`timeoutSec` pair to milliseconds.
+ * `timeoutMs` wins if both are set; `timeoutSec` is converted (×1000)
+ * otherwise. Neither present resolves to `undefined` so `boundedMs` falls
+ * back to its default.
+ */
+const resolveTimeoutMs = (args: Record<string, unknown>): unknown => {
+	if (typeof args.timeoutMs === "number" && Number.isFinite(args.timeoutMs)) return args.timeoutMs;
+	if (typeof args.timeoutSec === "number" && Number.isFinite(args.timeoutSec)) return args.timeoutSec * 1000;
+	return args.timeoutMs;
 };
 
 const normalizedItem = (value: unknown): NormalizedItem => {
@@ -433,7 +458,7 @@ export class SpindleAgentsProvider implements SpindleProvider {
 			// otherwise stop on pi's project-trust prompt with no tty to answer.
 			projectTrusted: ref.projectTrusted === true,
 			// The configured timeout is a cap, not a default a caller can raise.
-			timeoutMs: boundedMs(args.timeoutMs, configuredTimeoutMs, MIN_AGENT_TIMEOUT_MS, configuredTimeoutMs),
+			timeoutMs: boundedMs(resolveTimeoutMs(args), configuredTimeoutMs, MIN_AGENT_TIMEOUT_MS, configuredTimeoutMs),
 			signal: controller.signal,
 			onStatus: monitor.onStatus,
 		};
