@@ -47,7 +47,7 @@
     "yaml": "^2.9.0"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.5.11",
+    "@biomejs/biome": "2.5.12",
     "@types/node": "^26.0.0",
     "@types/ws": "^8.18.1",
     "@typescript/native-preview": "latest",
