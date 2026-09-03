@@ -19,16 +19,16 @@ import http from "node:http";
 import { auth as sdkAuth } from "@modelcontextprotocol/client";
 
 import { McpOAuthProvider } from "./oauth-provider.ts";
-import { loadMcpServerConfig, type McpServerConfig, type McpServerDefinition, usesOAuth } from "./server-config.ts";
+import {
+	loadMcpServerConfig,
+	MCP_REDIRECT_PATH,
+	mcpRedirectPort,
+	type McpServerConfig,
+	type McpServerDefinition,
+	usesOAuth,
+} from "./server-config.ts";
 import { defaultMcpKeyring, McpTokenStore } from "./token-store.ts";
 
-/**
- * Fixed by default: a dynamically registered OAuth client is bound to the exact
- * redirect URI it registered, so an ephemeral port would force a fresh client
- * registration on every authorization.
- */
-export const DEFAULT_MCP_REDIRECT_PORT = 33418;
-export const MCP_REDIRECT_PATH = "/callback";
 const DEFAULT_AUTH_TIMEOUT_MS = 5 * 60_000;
 
 export interface McpOAuthCallback {
@@ -202,14 +202,6 @@ const definitionFor = (config: McpServerConfig, serverName: string): McpServerDe
 	return definition;
 };
 
-const redirectPortFor = (definition: McpServerDefinition): number => {
-	const oauth = definition.oauth === false || definition.oauth === undefined ? undefined : definition.oauth;
-	const configured = oauth?.redirectPort;
-	if (configured) return configured;
-	const fromEnv = Number(process.env.SPINDLE_MCP_REDIRECT_PORT);
-	return Number.isInteger(fromEnv) && fromEnv > 0 ? fromEnv : DEFAULT_MCP_REDIRECT_PORT;
-};
-
 /**
  * A client registered against another redirect URI cannot be reused: the
  * authorization server matches `redirect_uri` exactly and would reject it. Drop
@@ -235,7 +227,7 @@ export const authorizeMcpServer = async (options: AuthorizeMcpServerOptions): Pr
 	const runAuth = options.runAuth ?? sdkAuth;
 	const timeoutMs = options.timeoutMs ?? DEFAULT_AUTH_TIMEOUT_MS;
 
-	const server = await listen(redirectPortFor(definition));
+	const server = await listen(mcpRedirectPort(definition));
 	try {
 		if (dropMismatchedClient(store, options.serverName, server.redirectUrl)) {
 			notify(`Registered client used a different redirect URI; registering a new one for ${server.redirectUrl}.`);

@@ -3,11 +3,13 @@ import path from "node:path";
 import { test } from "node:test";
 
 import {
+	DEFAULT_MCP_REDIRECT_PORT,
 	isToolAllowed,
 	loadMcpServerConfig,
-	type McpServerDefinition,
 	matchesToolSelector,
 	mcpConfigLayerPaths,
+	mcpRedirectUrl,
+	type McpServerDefinition,
 	prefixedToolName,
 	usesOAuth,
 } from "./server-config.ts";
@@ -149,4 +151,32 @@ test("includeTools allowlists and excludeTools subtracts", () => {
 	assert.equal(isToolAllowed(definition({ excludeTools: ["send_*"] }), "send_message"), false);
 	assert.equal(isToolAllowed(definition({ includeTools: ["*"], excludeTools: ["send_*"] }), "read_channel"), true);
 	assert.equal(isToolAllowed(definition(), "anything"), true);
+});
+
+test("the redirect URI falls back to the fixed loopback port", () => {
+	const previous = process.env.SPINDLE_MCP_REDIRECT_PORT;
+	delete process.env.SPINDLE_MCP_REDIRECT_PORT;
+	try {
+		assert.equal(mcpRedirectUrl(definition()), `http://127.0.0.1:${DEFAULT_MCP_REDIRECT_PORT}/callback`);
+		assert.equal(
+			mcpRedirectUrl(definition({ oauth: false })),
+			`http://127.0.0.1:${DEFAULT_MCP_REDIRECT_PORT}/callback`,
+		);
+		process.env.SPINDLE_MCP_REDIRECT_PORT = "4567";
+		assert.equal(mcpRedirectUrl(definition()), "http://127.0.0.1:4567/callback");
+	} finally {
+		if (previous === undefined) delete process.env.SPINDLE_MCP_REDIRECT_PORT;
+		else process.env.SPINDLE_MCP_REDIRECT_PORT = previous;
+	}
+});
+
+test("a configured redirect port wins over the environment", () => {
+	const previous = process.env.SPINDLE_MCP_REDIRECT_PORT;
+	process.env.SPINDLE_MCP_REDIRECT_PORT = "4567";
+	try {
+		assert.equal(mcpRedirectUrl(definition({ oauth: { redirectPort: 9999 } })), "http://127.0.0.1:9999/callback");
+	} finally {
+		if (previous === undefined) delete process.env.SPINDLE_MCP_REDIRECT_PORT;
+		else process.env.SPINDLE_MCP_REDIRECT_PORT = previous;
+	}
 });

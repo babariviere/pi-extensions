@@ -313,6 +313,32 @@ export const usesOAuth = (definition: McpServerDefinition): boolean => {
 	return true;
 };
 
+/**
+ * Fixed by default: a dynamically registered OAuth client is bound to the exact
+ * redirect URI it registered, so an ephemeral port would force a fresh client
+ * registration on every authorization.
+ */
+export const DEFAULT_MCP_REDIRECT_PORT = 33418;
+export const MCP_REDIRECT_PATH = "/callback";
+
+export const mcpRedirectPort = (definition: McpServerDefinition): number => {
+	const oauth = definition.oauth === false || definition.oauth === undefined ? undefined : definition.oauth;
+	const configured = oauth?.redirectPort;
+	if (configured) return configured;
+	const fromEnv = Number(process.env.SPINDLE_MCP_REDIRECT_PORT);
+	return Number.isInteger(fromEnv) && fromEnv > 0 ? fromEnv : DEFAULT_MCP_REDIRECT_PORT;
+};
+
+/**
+ * The loopback redirect URI for a server, identical whether it comes from the
+ * `/mcp-auth` flow or from a plain tool call. It must be set even when nobody
+ * can open a browser: the SDK reads `provider.redirectUrl` to pick a grant, and
+ * treats its absence as a client-credentials (`prepareTokenRequest`) provider,
+ * which skips the stored-token and refresh-token branches of `auth()` entirely.
+ */
+export const mcpRedirectUrl = (definition: McpServerDefinition): string =>
+	`http://127.0.0.1:${mcpRedirectPort(definition)}${MCP_REDIRECT_PATH}`;
+
 /** The adapter's prefixed tool name, kept identical so the read-only policy keys still match. */
 export const prefixedToolName = (serverName: string, toolName: string): string =>
 	`mcp_${serverName.replace(/-/g, "_")}_${toolName}`;

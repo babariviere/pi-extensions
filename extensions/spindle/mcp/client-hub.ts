@@ -19,9 +19,10 @@ import { McpAuthorizationRequiredError, McpOAuthProvider } from "./oauth-provide
 import {
 	isToolAllowed,
 	loadMcpServerConfig,
+	mcpConfigFingerprint,
+	mcpRedirectUrl,
 	type McpServerConfig,
 	type McpServerDefinition,
-	mcpConfigFingerprint,
 	prefixedToolName,
 	usesOAuth,
 } from "./server-config.ts";
@@ -285,6 +286,13 @@ export class McpClientHub implements McpToolHub {
 				serverName: definition.name,
 				serverUrl: url.toString(),
 				store: this.#tokenStore(),
+				// Required even though this path can never open a browser: the SDK
+				// reads `redirectUrl` to choose a grant, and without it treats the
+				// provider as client-credentials, skipping the refresh-token branch of
+				// `auth()` and failing an expired-but-refreshable server outright.
+				// Non-interactivity still holds: `redirectToAuthorization` throws
+				// `McpAuthorizationRequiredError` because no `onRedirect` is supplied.
+				redirectUrl: mcpRedirectUrl(definition),
 				...(oauthConfig ? { config: oauthConfig } : {}),
 			});
 			options.authProvider = provider;
