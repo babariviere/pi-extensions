@@ -81,28 +81,58 @@ test("a read the guard allows still executes", async () => {
  * written into the file as content. Inside the sandbox a short read must fail,
  * not read like a whole one.
  */
-test("a read past pi's limit fails instead of returning a silent head", async () => {
+const cappedProvider = (readMaxBytes: number) =>
+	new PiToolsProvider(process.cwd(), undefined, undefined, undefined, { readMaxBytes });
+
+test("a file past pi's read limit is returned whole, not as a head", async () => {
 	const dir = mkdtempSync(join(tmpdir(), "spindle-read-limit-"));
 	const file = join(dir, "big.md");
-	// 60 KB of short lines: past the 50 KB byte ceiling, under the 2000-line one.
-	writeFileSync(file, `${"x".repeat(200)}\n`.repeat(300));
+	// 60 KB of short lines: past pi's 50 KB byte ceiling, under its 2000-line one.
+	const content = `${"x".repeat(200)}\n`.repeat(300);
+	writeFileSync(file, content);
+	const result = await provider().invoke("read", { path: file }, context);
+	assert.equal(result, content, "the sandbox is not the context window");
+	assert.doesNotMatch(String(result), /Showing lines/);
+});
+
+test("a file past the sandbox ceiling is refused, with its size and the way out", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "spindle-read-ceiling-"));
+	const file = join(dir, "huge.md");
+	writeFileSync(file, `${"x".repeat(200)}\n`.repeat(600)); // ~120 KB
 	await assert.rejects(
-		() => provider().invoke("read", { path: file }, context),
+		() => cappedProvider(64 * 1024).invoke("read", { path: file }, context),
 		(error: Error) => {
-			assert.match(error.message, /was truncated by pi's read limit/);
-			assert.match(error.message, /254 of 300 lines/);
-			assert.match(error.message, /continue from offset \d+/);
+			assert.match(error.message, /past the sandbox's 64 KB read ceiling/);
+			assert.match(error.message, /executor\.readMaxBytes/);
 			assert.match(error.message, /pi\.bash \(rg\/sed\/jq\)/);
 			return true;
 		},
 	);
 });
 
-test("a line too long to return at all says so", async () => {
+test("offset and limit still slice a widened read", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "spindle-read-slice-"));
+	const file = join(dir, "big.md");
+	const lines = Array.from({ length: 500 }, (_, index) => `${index + 1}:${"x".repeat(200)}`);
+	writeFileSync(file, lines.join("\n"));
+	// The requested slice is itself ~60 KB, so pi truncates it and the sandbox
+	// widens it: the slice the caller asked for has to survive that.
+	const result = String(await provider().invoke("read", { path: file, offset: 10, limit: 300 }, context));
+	assert.deepEqual(result.split("\n"), lines.slice(9, 309));
+});
+
+test("a single line too long for pi is returned whole too", async () => {
 	const dir = mkdtempSync(join(tmpdir(), "spindle-read-line-"));
 	const file = join(dir, "one-line.json");
-	writeFileSync(file, "y".repeat(60 * 1024));
-	await assert.rejects(() => provider().invoke("read", { path: file }, context), /first line alone is \d+ KB/);
+	const content = "y".repeat(60 * 1024);
+	writeFileSync(file, content);
+	// pi returns nothing at all for this shape (`firstLineExceedsLimit`), which is
+	// what a minified JSON payload hits.
+	assert.equal(await provider().invoke("read", { path: file }, context), content);
+	await assert.rejects(
+		() => cappedProvider(50 * 1024).invoke("read", { path: file }, context),
+		/past the sandbox's 50 KB read ceiling/,
+	);
 });
 
 test("a file inside the limit is returned whole, with no truncation notice", async () => {

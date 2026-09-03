@@ -56,6 +56,8 @@ There is deliberately no `fetch`, no `crypto.subtle` and no `WebAssembly`: the a
 
 Aliases (normalized to canonical before the host validates args): `cmd`/`shell`/`cmdline`→`command`; `workdir`/`workingDir`/`workingDirectory`→`cwd`; Bash `timeout` is in seconds, while `timeoutMs` is converted from milliseconds to `timeout`; `query`/`regex`/`search`→`pattern`; `ic`/`caseInsensitive`→`ignoreCase`; `globPattern`→`glob`; `ctx`→`context`; `max`→`limit`; `file`/`dir`→`path`; `start`→`offset`; `old`→`oldText`; `new`/`replacement`→`newText`; `contents`/`body`/`text`→`content`. Misspelled keys still fail the excess-property type check.
 
+`pi.read` returns whole files, not the head pi's own `read` tool shows the model: pi truncates at 2000 lines / 50 KB to protect the context window, and a sandbox string is not context. Past `executor.readMaxBytes` (8 MB by default) the call **throws** with the size and this advice — it never hands back a short read that looks whole. For anything bigger, filter it where it lives (`pi.bash` with `rg`/`sed`/`jq`) instead of pulling the file into the guest heap.
+
 `pi.bash` per-call extras:
 
 - `cwd` — absolute working directory for this one command (must exist).

@@ -10,12 +10,14 @@ import {
 	type ExtensionRunner,
 	type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
+import { readFileSync, statSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 import { createSpindleBashToolDefinition } from "./spindle-bash-tool.ts";
 import { runAbortable, throwIfAborted } from "../async-settlement.ts";
 import { classifyPiBashError, piBashResultError } from "../core/pi-bash-error.ts";
 import { CapturedToolCatalog } from "../capture/catalog.ts";
 import { PI_CORE_TOOL_NAMES, type PiCoreToolName } from "../core/pi-tools.ts";
+import { DEFAULT_SPINDLE_CONFIG } from "../config.ts";
 import { expandSkillDirMarkersForRead } from "../core/skill-dir.ts";
 import type {
 	SpindleActionDescriptor,
@@ -188,15 +190,19 @@ export class PiToolsProvider implements SpindleProvider {
 	readonly #capturedTools: CapturedToolsProvider | undefined;
 	readonly #cwd: string;
 	readonly #readGuard: ((absolutePath: string) => void) | undefined;
+	/** Ceiling on a single `pi.read`; see `executor.readMaxBytes`. */
+	readonly #readMaxBytes: number;
 
 	constructor(
 		cwd: string,
 		catalog?: CapturedToolCatalog,
 		capturedTools?: CapturedToolsProvider,
 		sandbox?: PiToolsSandbox,
+		limits?: { readMaxBytes?: number },
 	) {
 		this.#cwd = cwd;
 		this.#readGuard = sandbox?.readGuard;
+		this.#readMaxBytes = limits?.readMaxBytes ?? DEFAULT_SPINDLE_CONFIG.executor.readMaxBytes;
 		// The mutating tools are gated: `bash` by the OS sandbox, `write` and
 		// `edit` by a path check. The read tools keep pi's definitions (image
 		// handling, truncation and offsets stay identical) but the sandbox's
@@ -452,8 +458,51 @@ export class PiToolsProvider implements SpindleProvider {
 	): unknown {
 		const normalized = normalizeResult(name, result);
 		if (name !== "read" || typeof normalized !== "string") return normalized;
-		assertReadNotTruncated(result.details, args);
-		return expandSkillDirMarkersForRead(normalized, args, this.#cwd);
+		// pi cut the file at its context budget. The sandbox is not context, so read
+		// the rest here rather than hand back a head (`#readWholeFile`), and only
+		// refuse when the file is past the guest's own ceiling.
+		const whole = this.#readWholeFile(result.details, args);
+		// Belt and braces: if the file could not be widened (no path to re-read),
+		// the cut still has to be loud rather than silently short.
+		if (whole === undefined) assertReadNotTruncated(result.details, args);
+		return expandSkillDirMarkersForRead(whole ?? normalized, args, this.#cwd);
+	}
+
+	/**
+	 * Re-read a file pi truncated, whole, up to `readMaxBytes`.
+	 *
+	 * Only reached when pi reported an involuntary cut, so an untruncated read
+	 * keeps pi's own code path (and its media handling) untouched. The read guard
+	 * already ran on this path in `invoke`, on the same resolved path.
+	 *
+	 * Returns undefined when there was nothing to widen. Throws when the file is
+	 * larger than the ceiling: a program that asked for 200 MB of log gets an
+	 * error naming the size, not a silent head and not an out-of-memory an hour
+	 * later.
+	 */
+	#readWholeFile(details: unknown, args: Record<string, unknown>): string | undefined {
+		const truncation = readTruncation(details);
+		if (!truncation || (!truncation.truncated && !truncation.firstLineExceedsLimit)) return undefined;
+		if (typeof args.path !== "string" || args.path === "") return undefined;
+		const absolute = isAbsolute(args.path) ? args.path : resolve(this.#cwd, args.path);
+
+		const size = truncation.totalBytes ?? statSync(absolute).size;
+		if (size > this.#readMaxBytes) {
+			throw new Error(
+				`pi.read(${args.path}) is ${formatBytes(size)}, past the sandbox's ${formatBytes(this.#readMaxBytes)} read ` +
+					"ceiling (executor.readMaxBytes). Filter it in pi.bash (rg/sed/jq) instead of pulling the whole file " +
+					"into the sandbox, or page it with offset and limit.",
+			);
+		}
+
+		const content = readFileSync(absolute, "utf-8");
+		// `offset` is 1-indexed and `limit` counts lines, as in pi's read tool.
+		const offset = typeof args.offset === "number" ? Math.max(1, Math.floor(args.offset)) : 1;
+		const limit = typeof args.limit === "number" ? Math.max(0, Math.floor(args.limit)) : undefined;
+		if (offset === 1 && limit === undefined) return content;
+		const lines = content.split("\n");
+		const start = offset - 1;
+		return lines.slice(start, limit === undefined ? undefined : start + limit).join("\n");
 	}
 
 	#attachPartialPreview(

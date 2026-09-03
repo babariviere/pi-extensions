@@ -175,13 +175,19 @@ export class SpindleState {
 			this.#sandbox = await this.#createSandbox(context);
 			const sandbox = this.#sandbox;
 			this.#registry.register(
-				new PiToolsProvider(context.cwd, this.capturedTools, capturedToolsProvider, {
-					bash: sandbox.bashOperations(),
-					wrapCommand: (command: string) => sandbox.wrapCommand(command),
-					edit: sandbox.editOperations(),
-					writeGuard: sandbox.writeGuard(),
-					readGuard: sandbox.readGuard(),
-				}),
+				new PiToolsProvider(
+					context.cwd,
+					this.capturedTools,
+					capturedToolsProvider,
+					{
+						bash: sandbox.bashOperations(),
+						wrapCommand: (command: string) => sandbox.wrapCommand(command),
+						edit: sandbox.editOperations(),
+						writeGuard: sandbox.writeGuard(),
+						readGuard: sandbox.readGuard(),
+					},
+					{ readMaxBytes: this.#config.executor.readMaxBytes },
+				),
 			);
 		}
 		if (capturedToolsProvider) this.#registry.register(capturedToolsProvider);
