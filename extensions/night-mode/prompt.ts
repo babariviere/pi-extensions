@@ -26,6 +26,8 @@ export interface NightPromptInput {
 	workspacePath?: string;
 	/** Where the sandbox capability probe writes what tonight actually allows. */
 	preflightPath?: string;
+	/** Where capability findings made during the run are appended. */
+	capabilityPath?: string;
 }
 
 /** True when a file body carries no actual instruction. */
@@ -84,6 +86,14 @@ export function composeNightPrompt(input: NightPromptInput): string {
 					`Sandbox capabilities: \`${input.preflightPath}\` - written a few seconds into the run by a probe of this ` +
 						"sandbox (HTTPS egress, DNS, SSH, `gh`, `jj`, loopback TCP). Read it before planning, and point " +
 						"subagents at it instead of letting them rediscover the envelope one burnt run at a time.",
+				]
+			: []),
+		...(input.capabilityPath
+			? [
+					`Capability journal: \`${input.capabilityPath}\` - one JSON line per capability finding, appended as the ` +
+						"run learns things the probe could not answer. Read it before planning and again before retrying " +
+						"anything: a capability recorded as `broken` is not worth another attempt, and a finding of your own " +
+						"belongs in it (append, never rewrite) so the rest of the night and tomorrow's run inherit it.",
 				]
 			: []),
 		"",

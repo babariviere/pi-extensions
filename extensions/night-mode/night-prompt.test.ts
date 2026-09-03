@@ -266,3 +266,32 @@ describe("buildNightContract", () => {
 		assert.doesNotMatch(contract, /Work in `/);
 	});
 });
+
+describe("capability journal", () => {
+	const compose = (capabilityPath?: string): string =>
+		composeNightPrompt({
+			prompt: "",
+			instructions: "",
+			reportPath: "/notes/2026-09-02 2048 - Night Report.md",
+			maxPullRequests: 5,
+			windowLabel: "20:00-09:00",
+			startedAt,
+			...(capabilityPath ? { capabilityPath } : {}),
+		});
+
+	it("points the coordinator at the journal and forbids retrying a broken capability", () => {
+		const prompt = compose("/sandboxes/repo.agents/capability-journal.jsonl");
+		assert.match(prompt, /Capability journal: `\/sandboxes\/repo\.agents\/capability-journal\.jsonl`/);
+		assert.match(prompt, /`broken` is not worth another attempt/);
+		assert.match(prompt, /append, never rewrite/);
+	});
+
+	it("says nothing about a journal when the run has no path for one", () => {
+		assert.doesNotMatch(compose(), /Capability journal/);
+	});
+
+	it("tells the coordinator a launch failure is a runner fault, not a task fault", () => {
+		assert.match(ORCHESTRATOR_CONTRACT, /failure: 'launch'/);
+		assert.match(ORCHESTRATOR_CONTRACT, /never rewrite, shorten or re-persona the task/);
+	});
+});

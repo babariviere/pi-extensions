@@ -83,6 +83,7 @@ import {
 	rewriteRemotesToHttps,
 	sandboxPathFor,
 } from "./sandbox-clone.ts";
+import { capabilityJournalPathFor } from "./capability-journal.ts";
 import { preflightPathFor } from "./preflight.ts";
 import { WakeLock, type WakeLockPreference } from "./wake-lock.ts";
 import {
@@ -470,6 +471,12 @@ export default function (pi: ExtensionAPI): void {
 		// in force (see `spindle/sandbox/preflight-bridge.ts`), but the prompt and the
 		// child contract are composed now and have to be able to point at it.
 		const preflightPath = preflightPathFor({ reportPath, ...(workspace ? { workspacePath: workspace } : {}) });
+		// Same placement rule, and also path-only: nothing is written until something
+		// is actually learned.
+		const capabilityPath = capabilityJournalPathFor({
+			reportPath,
+			...(workspace ? { workspacePath: workspace } : {}),
+		});
 
 		const sandbox = composeSandboxRequest({
 			config,
@@ -500,6 +507,7 @@ export default function (pi: ExtensionAPI): void {
 			// spawn path cannot hand an env to reads these back from the file.
 			...(prepared.configHome ? { configHome: prepared.configHome } : {}),
 			preflightPath,
+			capabilityPath,
 			...(sessionId ? { sessionId } : {}),
 			...(workspace ? { workspacePath: workspace } : {}),
 			...(sandbox ? { sandbox } : {}),
@@ -536,6 +544,7 @@ export default function (pi: ExtensionAPI): void {
 				startedAt,
 				...(workspace ? { workspacePath: workspace } : {}),
 				preflightPath,
+				capabilityPath,
 			}),
 			ctx,
 		);

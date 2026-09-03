@@ -30,6 +30,7 @@
 
 import { RunLauncher } from "../agents/backend.ts";
 import { CauseBreaker, type CauseVerdict } from "../agents/cause-breaker.ts";
+import { recordNightCapability } from "../agents/night-journal.ts";
 import { discoverAgentsForCwd } from "../agents/discovery.ts";
 import { newRunId } from "../agents/paths.ts";
 import { buildRunRequests, type NormalizedItem } from "../agents/request.ts";
@@ -320,6 +321,9 @@ export class SpindleAgentsProvider implements SpindleProvider {
 		readonly breaker: CauseBreaker = new CauseBreaker(),
 	) {}
 
+	/** Whether the launch fault is currently journaled, so it is logged once. */
+	#launchBroken = false;
+
 	async list(
 		_request: SpindleProviderListRequest,
 		_context: SpindleInvocationContext,
@@ -410,6 +414,17 @@ export class SpindleAgentsProvider implements SpindleProvider {
 		for (const result of results) {
 			if (result.failure === "launch") this.breaker.record(result.error);
 			else this.breaker.clear();
+		}
+		// Publish the transition, once each way, into the night run's capability
+		// journal: the finding that the runner is down is exactly what died with the
+		// run on 2026-09-02, leaving the next night to rediscover it.
+		const verdict = this.breaker.verdict();
+		if (verdict && !this.#launchBroken) {
+			this.#launchBroken = true;
+			recordNightCapability("subagent-launch", "broken", verdict.error);
+		} else if (!verdict && this.#launchBroken) {
+			this.#launchBroken = false;
+			recordNightCapability("subagent-launch", "working");
 		}
 	}
 

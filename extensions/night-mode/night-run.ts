@@ -78,6 +78,13 @@ export interface ActiveNightRun {
 	 */
 	preflightPath?: string;
 	/**
+	 * Where capability findings made *during* the run are appended (see
+	 * `capability-journal.ts`). The preflight answers six fixed questions once;
+	 * this is where everything learned afterwards goes, so a child and the next
+	 * run can read it instead of rediscovering it.
+	 */
+	capabilityPath?: string;
+	/**
 	 * Filesystem sandbox the run asks for. Spindle reads this to sandbox the
 	 * coordinator and every subagent process for the duration of the night; see
 	 * `spindle/sandbox/night-bridge.ts`. Structural on purpose: night-mode does
