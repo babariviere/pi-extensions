@@ -24,7 +24,7 @@ export interface SandboxRequest {
 	 * (see `resolve.ts`), which is the one case where widening beats failing
 	 * unattended.
 	 */
-	network?: { allowedDomains?: string[] };
+	network?: { allowedDomains?: string[]; allowLoopback?: boolean };
 }
 
 /**

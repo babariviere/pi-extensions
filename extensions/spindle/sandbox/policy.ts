@@ -32,6 +32,17 @@ export interface SandboxNetworkPolicy {
 	/** Domain patterns allowed through the sandbox proxy. `*` means unrestricted. */
 	allowedDomains: string[];
 	deniedDomains: string[];
+	/**
+	 * Whether local sockets are permitted: connecting to `localhost` and binding a
+	 * local port.
+	 *
+	 * Off, a Go test that dials `[::1]:5450` fails with "operation not permitted"
+	 * and every DB-backed suite is skipped, which is what shipped two untested
+	 * night PRs on 2026-09-01. Loopback reaches nothing outside the machine, so it
+	 * is not the egress this guardrail is about, and the filesystem rules still
+	 * apply to whatever a local service writes.
+	 */
+	allowLoopback?: boolean;
 }
 
 export interface SandboxPolicy {
@@ -303,13 +314,21 @@ export function toSandboxRuntimeConfig(policy: SandboxPolicy): {
 	network: SandboxNetworkPolicy;
 	filesystem: { allowWrite: string[]; denyWrite: string[]; denyRead: string[] };
 	enableWeakerNetworkIsolation?: boolean;
+	allowLocalBinding?: boolean;
 } {
 	const named = policy.network.allowedDomains.filter((domain) => domain !== UNRESTRICTED_DOMAIN);
+	// `srt` spells loopback as the literal host `localhost` in the allowlist, plus
+	// `allowLocalBinding` for the listener side (a test container, a temporary
+	// Postgres). Both are needed: dialling without binding covers a service that
+	// is already up, and the suites this exists for start their own.
+	const loopback = policy.network.allowLoopback === true;
+	const allowed = hasUnrestrictedEgress(policy) && named.length === 0 ? [UNRESTRICTED_PROXY_DOMAIN] : named;
 	return {
 		network: {
 			...policy.network,
-			allowedDomains: hasUnrestrictedEgress(policy) && named.length === 0 ? [UNRESTRICTED_PROXY_DOMAIN] : named,
+			allowedDomains: loopback && !allowed.includes("localhost") ? [...allowed, "localhost"] : allowed,
 		},
+		...(loopback ? { allowLocalBinding: true } : {}),
 		filesystem: {
 			allowWrite: policy.allowWrite,
 			denyWrite: policy.denyWrite,

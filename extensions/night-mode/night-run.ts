@@ -27,7 +27,16 @@ export interface NightSandboxRequest {
 	 * this sandbox is about. A domain in the config's `deniedDomains` still wins,
 	 * so the kill switch survives.
 	 */
-	network?: { allowedDomains?: string[] };
+	network?: {
+		allowedDomains?: string[];
+		/**
+		 * Permit local sockets, so a DB-backed test suite can start its own Postgres
+		 * and dial it. Loopback leaves the machine nowhere, and it is the difference
+		 * between a tested and an untested night PR (2026-09-01: both Go PRs shipped
+		 * with their DB tests deferred).
+		 */
+		allowLoopback?: boolean;
+	};
 }
 
 /**

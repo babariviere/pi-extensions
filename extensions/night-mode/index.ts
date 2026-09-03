@@ -595,8 +595,15 @@ export default function (pi: ExtensionAPI): void {
 			],
 			// Egress, unlike the writable set, is a widening: see the comment on
 			// `NightSandboxRequest.network`.
-			...(input.config.sandboxAllowedDomains.length
-				? { network: { allowedDomains: input.config.sandboxAllowedDomains } }
+			...(input.config.sandboxAllowedDomains.length || input.config.sandboxAllowLoopback
+				? {
+						network: {
+							...(input.config.sandboxAllowedDomains.length
+								? { allowedDomains: input.config.sandboxAllowedDomains }
+								: {}),
+							...(input.config.sandboxAllowLoopback ? { allowLoopback: true } : {}),
+						},
+					}
 				: {}),
 		};
 	}

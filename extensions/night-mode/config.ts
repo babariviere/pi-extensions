@@ -71,6 +71,11 @@ export interface NightConfig {
 	 * by path, so without this every `mise` command in the copy hard-fails with an
 	 * untrusted-config error.
 	 */
+	/**
+	 * Allow loopback sockets in the run's sandbox: connecting to `localhost` and
+	 * binding a local port, which is what a DB-backed test suite needs.
+	 */
+	sandboxAllowLoopback: boolean;
 	sandboxTrust: boolean;
 	/**
 	 * Refuse write-shaped MCP tool calls for the whole run: no Slack message, no
@@ -132,6 +137,7 @@ export const DEFAULT_NIGHT_CONFIG: NightConfig = {
 	sandboxMode: "workspace-write",
 	sandboxAllowWrite: [],
 	sandboxAllowedDomains: DEFAULT_NIGHT_DOMAINS,
+	sandboxAllowLoopback: true,
 	sandboxTrust: true,
 	mcpReadOnly: true,
 	wakeLock: "auto",
@@ -252,6 +258,8 @@ export function mergeNightConfig(raw: unknown, base: NightConfig = DEFAULT_NIGHT
 		sandboxMode: isNightSandboxMode(record.sandboxMode) ? record.sandboxMode : base.sandboxMode,
 		sandboxAllowWrite: allowWrite ?? base.sandboxAllowWrite,
 		sandboxAllowedDomains: allowedDomains ?? base.sandboxAllowedDomains,
+		sandboxAllowLoopback:
+			typeof record.sandboxAllowLoopback === "boolean" ? record.sandboxAllowLoopback : base.sandboxAllowLoopback,
 		sandboxTrust: typeof record.sandboxTrust === "boolean" ? record.sandboxTrust : base.sandboxTrust,
 		mcpReadOnly: typeof record.mcpReadOnly === "boolean" ? record.mcpReadOnly : base.mcpReadOnly,
 		wakeLock: isWakeLockPreference(record.wakeLock) ? record.wakeLock : base.wakeLock,

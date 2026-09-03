@@ -204,3 +204,30 @@ test("platform TLS verification can be turned off for the tighter profile", () =
 	assert.equal(policy.platformTlsVerification, false);
 	assert.equal(toSandboxRuntimeConfig(policy).enableWeakerNetworkIsolation, false);
 });
+
+test("loopback becomes srt's localhost allowance plus local binding", () => {
+	const config = toSandboxRuntimeConfig({
+		mode: "workspace-write",
+		allowWrite: ["/repo"],
+		denyWrite: [],
+		denyRead: [],
+		network: { allowedDomains: ["github.com"], deniedDomains: [], allowLoopback: true },
+		platformTlsVerification: false,
+	});
+	assert.deepEqual(config.network.allowedDomains, ["github.com", "localhost"]);
+	// A DB-backed suite starts its own Postgres, so the listener side matters too.
+	assert.equal(config.allowLocalBinding, true);
+});
+
+test("without loopback the allowlist and the binding permission are untouched", () => {
+	const config = toSandboxRuntimeConfig({
+		mode: "workspace-write",
+		allowWrite: ["/repo"],
+		denyWrite: [],
+		denyRead: [],
+		network: { allowedDomains: ["github.com"], deniedDomains: [] },
+		platformTlsVerification: false,
+	});
+	assert.deepEqual(config.network.allowedDomains, ["github.com"]);
+	assert.equal(config.allowLocalBinding, undefined);
+});

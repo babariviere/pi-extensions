@@ -120,3 +120,27 @@ test("an unknown mode in the handshake is ignored", () => {
 	process.env[NIGHT_RUN_ENV] = "1";
 	assert.equal(activeNightSandboxRequest(), undefined);
 });
+
+test("a night run's loopback permission reaches the sandbox request", () => {
+	writeActiveRun({
+		startedAt: 1,
+		reportPath: "/notes/Reports/r.md",
+		maxPullRequests: 5,
+		sandbox: { mode: "workspace-write", network: { allowLoopback: true } },
+	});
+	process.env[NIGHT_RUN_ENV] = "1";
+	assert.equal(activeNightSandboxRequest()?.network?.allowLoopback, true);
+});
+
+test("loopback stays off when the run did not ask for it", () => {
+	writeActiveRun({
+		startedAt: 1,
+		reportPath: "/notes/Reports/r.md",
+		maxPullRequests: 5,
+		sandbox: { mode: "workspace-write", network: { allowedDomains: ["github.com"] } },
+	});
+	process.env[NIGHT_RUN_ENV] = "1";
+	const request = activeNightSandboxRequest();
+	assert.equal(request?.network?.allowLoopback, undefined);
+	assert.deepEqual(request?.network?.allowedDomains, ["github.com"]);
+});

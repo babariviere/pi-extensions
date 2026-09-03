@@ -40,6 +40,13 @@ export function activeNightSandboxRequest(ref: NightSessionRef = {}): SandboxReq
 	return {
 		mode: requested.mode,
 		...(roots.length ? { allowWrite: roots } : {}),
-		...(domains.length ? { network: { allowedDomains: domains } } : {}),
+		...(domains.length || requested.network?.allowLoopback === true
+			? {
+					network: {
+						...(domains.length ? { allowedDomains: domains } : {}),
+						...(requested.network?.allowLoopback === true ? { allowLoopback: true } : {}),
+					},
+				}
+			: {}),
 	};
 }
