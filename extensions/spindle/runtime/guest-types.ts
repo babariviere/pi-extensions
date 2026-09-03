@@ -165,6 +165,8 @@ interface SpindleAgentBatchTiming {
   waitMs?: number;
   /** Hard cap on the children's own lifetime; past it they are killed. */
   timeoutMs?: number;
+  /** Same as timeoutMs, but in seconds. Converted to timeoutMs by multiplying by 1000; timeoutMs takes precedence if both are set. */
+  timeoutSec?: number;
 }
 interface SpindleAgentResult {
   agent: string;
