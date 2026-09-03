@@ -231,3 +231,20 @@ test("without loopback the allowlist and the binding permission are untouched", 
 	assert.deepEqual(config.network.allowedDomains, ["github.com"]);
 	assert.equal(config.allowLocalBinding, undefined);
 });
+
+test("resolveSandboxPolicy carries allowLoopback through to the runtime config", () => {
+	const policy = resolveSandboxPolicy(
+		{ mode: "workspace-write", network: { allowedDomains: ["*"], deniedDomains: [], allowLoopback: true } },
+		environment(),
+	);
+	assert.equal(policy.network.allowLoopback, true);
+	const runtime = toSandboxRuntimeConfig(policy);
+	assert.equal(runtime.allowLocalBinding, true);
+	assert.ok(runtime.network.allowedDomains.includes("localhost"));
+});
+
+test("resolveSandboxPolicy leaves loopback off by default", () => {
+	const policy = resolveSandboxPolicy({ mode: "workspace-write" }, environment());
+	assert.equal(policy.network.allowLoopback, undefined);
+	assert.equal(toSandboxRuntimeConfig(policy).allowLocalBinding, undefined);
+});

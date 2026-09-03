@@ -33,6 +33,8 @@ export interface SandboxSettings {
 	denyRead: string[];
 	allowedDomains: string[];
 	deniedDomains: string[];
+	/** Allow sandboxed processes to dial and bind loopback. */
+	allowLoopback?: boolean;
 	/** Allow macOS `trustd` access so Go CLIs can verify TLS chains. */
 	platformTlsVerification?: boolean;
 }
@@ -56,7 +58,7 @@ export interface EffectiveSandbox {
 	allowWrite: string[];
 	denyWrite: string[];
 	denyRead: string[];
-	network: { allowedDomains: string[]; deniedDomains: string[] };
+	network: { allowedDomains: string[]; deniedDomains: string[]; allowLoopback: boolean };
 	/** Allow macOS `trustd` access so Go CLIs can verify TLS chains. */
 	platformTlsVerification: boolean;
 	/** Where the mode came from. */
@@ -107,6 +109,12 @@ export function effectiveSandbox(input: EffectiveSandboxInput): EffectiveSandbox
 			// allowlist and denied all egress (see `toSandboxRuntimeConfig`).
 			allowedDomains: dedupe([...settings.allowedDomains, ...(night?.network?.allowedDomains ?? [])]),
 			deniedDomains: [...settings.deniedDomains],
+			// Loopback is granted, never revoked: config enables it for every run, and
+			// a night run can still turn it on for a session whose config leaves it off.
+			// It reaches nothing outside the machine, so widening it is not the egress
+			// this guardrail is about, and dropping it here is what made every
+			// DB-backed suite fail under a subagent sandbox.
+			allowLoopback: settings.allowLoopback === true || night?.network?.allowLoopback === true,
 		},
 		// Config-only: a request that tightens the mode must not be able to break
 		// every Go CLI in the session as a side effect.

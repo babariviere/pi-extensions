@@ -175,3 +175,20 @@ test("an agent floor with extra roots keeps them writable", () => {
 	assert.equal(effective.mode, "read-only");
 	assert.deepEqual(effective.allowWrite, ["/runs/artifacts"]);
 });
+
+test("config can enable loopback without a night run", () => {
+	const effective = effectiveSandbox({ settings: { ...settings("workspace-write"), allowLoopback: true } });
+	assert.equal(effective.network.allowLoopback, true);
+});
+
+test("a night run can enable loopback for a config that leaves it off", () => {
+	const effective = effectiveSandbox({
+		settings: settings("off"),
+		night: { mode: "workspace-write", network: { allowLoopback: true } },
+	});
+	assert.equal(effective.network.allowLoopback, true);
+});
+
+test("loopback stays off when neither config nor night asks for it", () => {
+	assert.equal(effectiveSandbox({ settings: settings("workspace-write") }).network.allowLoopback, false);
+});

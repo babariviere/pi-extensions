@@ -619,7 +619,15 @@ mode, not convenience: a narrowed allowlist breaks an unattended run at 3am with
 nobody awake to widen it, and reaching a forge is not the destructive path this
 guardrail exists for. `deniedDomains` stays config-only and the runtime checks
 denials first, so `deniedDomains: ["github.com"]` is still an absolute kill
-switch. A `/sandbox` request carries no network at all. A refused request is surfaced as a warning rather than silently
+switch. A `/sandbox` request carries no network at all.
+
+`sandbox.allowLoopback` (config, off by default) lets a sandboxed process dial
+and bind `localhost`, which is what a DB-backed suite that starts its own
+Postgres needs. A night run can turn it on for a session whose config leaves it
+off; it is granted, never revoked, because loopback reaches nothing outside the
+machine. Without it those suites fail with "operation not permitted", which is
+how an interactive subagent under a `sandbox:` floor ends up unable to run the
+verification gate it was asked to run. A refused request is surfaced as a warning rather than silently
 appearing to work, and it is not remembered: when the run ends, night-mode emits
 a revert that clears it.
 

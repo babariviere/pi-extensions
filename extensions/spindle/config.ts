@@ -95,6 +95,14 @@ export interface SpindleSandboxConfig {
 	allowedDomains: string[];
 	deniedDomains: string[];
 	/**
+	 * Let sandboxed processes dial and bind loopback, so a DB-backed suite that
+	 * starts its own Postgres on `localhost` still runs. Off by default, and
+	 * previously only reachable from a night run, which meant every interactive
+	 * subagent with a `sandbox:` floor failed those suites with
+	 * "operation not permitted".
+	 */
+	allowLoopback: boolean;
+	/**
 	 * Let sandboxed processes reach macOS `trustd`, which Go binaries need to
 	 * verify TLS chains (`gh`, `terraform`, `kubectl`, `gcloud`). Default true.
 	 */
@@ -170,6 +178,7 @@ export const DEFAULT_SPINDLE_CONFIG: SpindleConfig = {
 		denyRead: [],
 		allowedDomains: ["*"],
 		deniedDomains: [],
+		allowLoopback: false,
 		platformTlsVerification: true,
 	},
 	mcp: DEFAULT_MCP_READ_ONLY_CONFIG,
@@ -334,6 +343,7 @@ export const normalizeSpindleConfig = (input: Record<string, unknown>): SpindleC
 			denyRead: stringList(sandbox.denyRead),
 			allowedDomains: stringList(sandbox.allowedDomains, DEFAULT_SPINDLE_CONFIG.sandbox.allowedDomains),
 			deniedDomains: stringList(sandbox.deniedDomains),
+			allowLoopback: booleanValue(sandbox.allowLoopback, DEFAULT_SPINDLE_CONFIG.sandbox.allowLoopback),
 			platformTlsVerification: booleanValue(
 				sandbox.platformTlsVerification,
 				DEFAULT_SPINDLE_CONFIG.sandbox.platformTlsVerification,

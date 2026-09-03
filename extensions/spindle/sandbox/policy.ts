@@ -240,6 +240,9 @@ export function resolveSandboxPolicy(input: SandboxPolicyInput, environment: Pol
 		network: {
 			allowedDomains: input.network?.allowedDomains ?? DEFAULT_NETWORK.allowedDomains,
 			deniedDomains: input.network?.deniedDomains ?? DEFAULT_NETWORK.deniedDomains,
+			// Carried through explicitly: dropping it here silently disabled loopback
+			// even for a night run that asked for it.
+			...(input.network?.allowLoopback === true ? { allowLoopback: true } : {}),
 		},
 		platformTlsVerification: input.platformTlsVerification ?? true,
 	};

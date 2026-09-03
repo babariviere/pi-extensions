@@ -71,11 +71,19 @@ export function parseSandboxRequestEvent(value: unknown): SandboxRequestEvent | 
 		isRecord(network) && Array.isArray(network.allowedDomains)
 			? network.allowedDomains.filter((entry): entry is string => typeof entry === "string" && !!entry.trim())
 			: undefined;
+	const loopback = isRecord(network) && network.allowLoopback === true;
 	return {
 		policy: {
 			mode,
 			...(roots?.length ? { allowWrite: roots } : {}),
-			...(domains?.length ? { network: { allowedDomains: domains } } : {}),
+			...(domains?.length || loopback
+				? {
+						network: {
+							...(domains?.length ? { allowedDomains: domains } : {}),
+							...(loopback ? { allowLoopback: true } : {}),
+						},
+					}
+				: {}),
 		},
 		...(reason ? { reason } : {}),
 	};
