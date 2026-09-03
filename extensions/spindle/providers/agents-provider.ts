@@ -29,11 +29,12 @@
  */
 
 import { RunLauncher } from "../agents/backend.ts";
+import { CauseBreaker, type CauseVerdict } from "../agents/cause-breaker.ts";
 import { discoverAgentsForCwd } from "../agents/discovery.ts";
 import { newRunId } from "../agents/paths.ts";
 import { buildRunRequests, type NormalizedItem } from "../agents/request.ts";
 import { allocateNightWorkspaces, relocateWorkspacePaths, releaseNightWorkspaces } from "../agents/night-workspace.ts";
-import type { RunContext, RunRequest, RunResult } from "../agents/run.ts";
+import type { OnStatus, RunContext, RunRequest, RunResult } from "../agents/run.ts";
 import { DEFAULT_SPINDLE_CONFIG, MAX_AGENT_TIMEOUT_MS, MIN_AGENT_TIMEOUT_MS } from "../config.ts";
 import type {
 	SpindleActionDescriptor,
@@ -253,6 +254,27 @@ const agentResult = (result: RunResult, runId: string): SpindleAgentResult => ({
 	...(result.failure ? { failure: result.failure } : {}),
 });
 
+/**
+ * The result of a batch that was never launched, because the last attempts all
+ * failed the same way. It is a `launch` failure like any other, so the
+ * coordinator treats it as a runner fault rather than re-planning the task.
+ */
+const refusedResult = (request: RunRequest, verdict: CauseVerdict, onStatus: OnStatus): RunResult => {
+	onStatus(request.index, { state: "failed" });
+	const error =
+		`refusing to launch: the last ${verdict.count} launches failed with the same cause (${verdict.error}). ` +
+		"The runner is down, not this task; it will be retried once the breaker's window elapses.";
+	return {
+		agent: request.agent.config.name,
+		scope: request.agent.scope,
+		ok: false,
+		output: `(${error})`,
+		backend: "headless",
+		error,
+		failure: "launch",
+	};
+};
+
 /** The placeholder result a still-running run reports. */
 const pendingResult = (agent: string, runId: string, elapsedMs: number): SpindleAgentResult => ({
 	agent,
@@ -294,6 +316,8 @@ export class SpindleAgentsProvider implements SpindleProvider {
 		readonly runs: AgentRunBook = new AgentRunBook(),
 		/** Adapter selection and herdr drift containment (see agents/backend.ts). */
 		readonly launcher: RunLauncher = new RunLauncher(),
+		/** Refuses to relaunch into a fault that already proved itself. */
+		readonly breaker: CauseBreaker = new CauseBreaker(),
 	) {}
 
 	async list(
@@ -374,6 +398,18 @@ export class SpindleAgentsProvider implements SpindleProvider {
 				return { cancelled: this.runs.cancel(stringOrUndefined(args.runId)) };
 			default:
 				throw new Error(`Unknown agents action: agents.${actionName}`);
+		}
+	}
+
+	/**
+	 * Teach the breaker what this batch proved. Only launch-class failures count:
+	 * a child that ran and came back empty is a task problem, and relaunching is
+	 * exactly the right response to it.
+	 */
+	#recordCauses(results: RunResult[]): void {
+		for (const result of results) {
+			if (result.failure === "launch") this.breaker.record(result.error);
+			else this.breaker.clear();
 		}
 	}
 
@@ -466,7 +502,15 @@ export class SpindleAgentsProvider implements SpindleProvider {
 
 		const promise = (async (): Promise<SpindleAgentResult[]> => {
 			try {
-				const results = await this.launcher.run(requests, runContext);
+				// A cause that has already failed the last N launches is not paid for
+				// again: the batch is refused on the spot with the recorded reason, so a
+				// broken runner costs one timeout instead of a whole night of them. The
+				// breaker is half-open, so a probe goes through once its window elapses.
+				const refused = this.breaker.verdict();
+				const results = refused
+					? requests.map((request) => refusedResult(request, refused, monitor.onStatus))
+					: await this.launcher.run(requests, runContext);
+				this.#recordCauses(results);
 				// A night child names paths inside its workspace, which the release
 				// below deletes after copying its files out. Rewrite those paths to
 				// the surviving copies so the coordinator never reports a dead path.

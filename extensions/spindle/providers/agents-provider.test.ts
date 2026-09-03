@@ -13,6 +13,7 @@ import { test } from "node:test";
 import { Value } from "typebox/value";
 
 import { RunLauncher } from "../agents/backend.ts";
+import { CauseBreaker } from "../agents/cause-breaker.ts";
 import type { RunBackend, RunContext, RunResult } from "../agents/run.ts";
 import type { SpindleInvocationContext } from "../protocol.ts";
 import { AgentRunBook } from "./agent-run-book.ts";
@@ -239,4 +240,79 @@ test("a launch failure reaches the sandbox as its own class, not as prose", asyn
 	assert.equal(waited.results[0].state, "failed");
 	// The coordinator has to be able to tell a broken runner from a bad task.
 	assert.equal(waited.results[0].failure, "launch");
+});
+
+test("the breaker refuses to relaunch into a cause that already failed twice", async () => {
+	let launches = 0;
+	const headless: RunBackend = async (reqs) => {
+		launches++;
+		return reqs.map((req) => ({
+			agent: req.agent.config.name,
+			scope: "user",
+			ok: false,
+			output: "",
+			backend: "headless" as const,
+			error: `timed out waiting for agent startup (pane wA:p${launches})`,
+			failure: "launch" as const,
+		}));
+	};
+	const provider = new SpindleAgentsProvider(
+		() => ({ sessionId: undefined, sessionFile: undefined, cwd: tmpdir() }),
+		new SpindleAgentRunRegistry(),
+		() => ({ timeoutMs: 60_000, waitMs: 1_000 }),
+		new AgentRunBook({ announceDelayMs: 5 }),
+		new RunLauncher({ inHerdr: () => false, headless }),
+		new CauseBreaker({ limit: 2, retryAfterMs: 60_000, now: () => 1_000 }),
+	);
+
+	const run = async () =>
+		(await provider.invoke("run", { task: "do a thing" }, invocationContext())) as Record<string, unknown>;
+
+	await run();
+	await run();
+	assert.equal(launches, 2);
+
+	// Third time the cause is known: no child is started at all.
+	const refused = await run();
+	assert.equal(launches, 2, "a proven cause is not paid for again");
+	assert.equal(refused.state, "failed");
+	assert.equal(refused.failure, "launch");
+	assert.match(String(refused.error), /refusing to launch/);
+	assert.match(String(refused.error), /waiting for agent startup/);
+});
+
+test("a run that reaches its child clears the breaker", async () => {
+	let launches = 0;
+	const headless: RunBackend = async (reqs) => {
+		launches++;
+		return reqs.map((req) =>
+			launches === 1
+				? {
+						agent: req.agent.config.name,
+						scope: "user",
+						ok: false,
+						output: "",
+						backend: "headless" as const,
+						error: "timed out waiting for agent startup",
+						failure: "launch" as const,
+					}
+				: doneResult(req.agent.config.name),
+		);
+	};
+	const breaker = new CauseBreaker({ limit: 2, retryAfterMs: 60_000, now: () => 1_000 });
+	const provider = new SpindleAgentsProvider(
+		() => ({ sessionId: undefined, sessionFile: undefined, cwd: tmpdir() }),
+		new SpindleAgentRunRegistry(),
+		() => ({ timeoutMs: 60_000, waitMs: 1_000 }),
+		new AgentRunBook({ announceDelayMs: 5 }),
+		new RunLauncher({ inHerdr: () => false, headless }),
+		breaker,
+	);
+	const run = async () => await provider.invoke("run", { task: "do a thing" }, invocationContext());
+
+	await run(); // launch failure
+	await run(); // succeeded: the streak is broken
+	await run();
+	assert.equal(launches, 3);
+	assert.equal(breaker.verdict(), undefined);
 });
