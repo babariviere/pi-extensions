@@ -216,7 +216,9 @@ test("loopback becomes srt's localhost allowance plus local binding", () => {
 	});
 	assert.deepEqual(config.network.allowedDomains, ["github.com", "localhost"]);
 	// A DB-backed suite starts its own Postgres, so the listener side matters too.
-	assert.equal(config.allowLocalBinding, true);
+	// `allowLocalBinding` lives inside `network`: that is where srt's own schema
+	// declares it, and a sibling-of-network field silently vanishes (#see policy.ts).
+	assert.equal(config.network.allowLocalBinding, true);
 });
 
 test("without loopback the allowlist and the binding permission are untouched", () => {
@@ -229,7 +231,7 @@ test("without loopback the allowlist and the binding permission are untouched", 
 		platformTlsVerification: false,
 	});
 	assert.deepEqual(config.network.allowedDomains, ["github.com"]);
-	assert.equal(config.allowLocalBinding, undefined);
+	assert.equal(config.network.allowLocalBinding, undefined);
 });
 
 test("resolveSandboxPolicy carries allowLoopback through to the runtime config", () => {
@@ -239,12 +241,12 @@ test("resolveSandboxPolicy carries allowLoopback through to the runtime config",
 	);
 	assert.equal(policy.network.allowLoopback, true);
 	const runtime = toSandboxRuntimeConfig(policy);
-	assert.equal(runtime.allowLocalBinding, true);
+	assert.equal(runtime.network.allowLocalBinding, true);
 	assert.ok(runtime.network.allowedDomains.includes("localhost"));
 });
 
 test("resolveSandboxPolicy leaves loopback off by default", () => {
 	const policy = resolveSandboxPolicy({ mode: "workspace-write" }, environment());
 	assert.equal(policy.network.allowLoopback, undefined);
-	assert.equal(toSandboxRuntimeConfig(policy).allowLocalBinding, undefined);
+	assert.equal(toSandboxRuntimeConfig(policy).network.allowLocalBinding, undefined);
 });

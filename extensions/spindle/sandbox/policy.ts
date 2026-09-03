@@ -314,24 +314,33 @@ export function assertReadAllowed(policy: SandboxPolicy, absolutePath: string): 
  * unroutable placeholder host, which keeps the proxy up and the hook reachable.
  */
 export function toSandboxRuntimeConfig(policy: SandboxPolicy): {
-	network: SandboxNetworkPolicy;
+	network: SandboxNetworkPolicy & { allowLocalBinding?: boolean };
 	filesystem: { allowWrite: string[]; denyWrite: string[]; denyRead: string[] };
 	enableWeakerNetworkIsolation?: boolean;
-	allowLocalBinding?: boolean;
 } {
 	const named = policy.network.allowedDomains.filter((domain) => domain !== UNRESTRICTED_DOMAIN);
 	// `srt` spells loopback as the literal host `localhost` in the allowlist, plus
 	// `allowLocalBinding` for the listener side (a test container, a temporary
 	// Postgres). Both are needed: dialling without binding covers a service that
 	// is already up, and the suites this exists for start their own.
+	//
+	// `allowLocalBinding` belongs *inside* `network`: srt's own
+	// `NetworkConfigSchema` declares it there (`getAllowLocalBinding()` reads
+	// `config.network.allowLocalBinding`), and its top-level
+	// `SandboxRuntimeConfigSchema` has no such field. Zod strips unknown keys by
+	// default rather than rejecting them, so a sibling-of-`network`
+	// `allowLocalBinding` used to parse cleanly and vanish silently: `srt` never
+	// saw it, the seatbelt profile never grew the network-bind/inbound rules, and
+	// every loopback listen kept failing with EPERM even though this function's
+	// own unit tests (asserting the wrong, top-level shape) stayed green.
 	const loopback = policy.network.allowLoopback === true;
 	const allowed = hasUnrestrictedEgress(policy) && named.length === 0 ? [UNRESTRICTED_PROXY_DOMAIN] : named;
 	return {
 		network: {
 			...policy.network,
 			allowedDomains: loopback && !allowed.includes("localhost") ? [...allowed, "localhost"] : allowed,
+			...(loopback ? { allowLocalBinding: true } : {}),
 		},
-		...(loopback ? { allowLocalBinding: true } : {}),
 		filesystem: {
 			allowWrite: policy.allowWrite,
 			denyWrite: policy.denyWrite,
