@@ -14,7 +14,9 @@ import { test } from "node:test";
 import {
 	formatPreflightReport,
 	nightPreflightProbes,
+	preflightCapabilities,
 	preflightPathFor,
+	type ProbeResult,
 	type ProbeOutcome,
 	runPreflight,
 	shellQuote,
@@ -66,7 +68,10 @@ test("github's ssh greeting counts as success despite exit 1", async () => {
 	const [ssh] = await runPreflight(
 		nightPreflightProbes().filter((probe) => probe.id === "ssh-github"),
 		outcomes({
-			"ssh-github": { exitCode: 1, output: "Hi babariviere! You've successfully authenticated, but GitHub does not provide shell access." },
+			"ssh-github": {
+				exitCode: 1,
+				output: "Hi babariviere! You've successfully authenticated, but GitHub does not provide shell access.",
+			},
 		}),
 	);
 	assert.equal(ssh.ok, true);
@@ -129,4 +134,39 @@ test("writing the report creates its directory", () => {
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
 	}
+});
+
+test("preflightCapabilities turns probe results into journal entries", () => {
+	const entries = preflightCapabilities(
+		[
+			{
+				id: "loopback-tcp",
+				label: "loopback TCP",
+				meaning: "no local database",
+				ok: false,
+				exitCode: 1,
+				detail: "operation not permitted",
+			},
+			{
+				id: "gh-auth",
+				label: "gh auth status",
+				meaning: "the credential",
+				ok: true,
+				exitCode: 0,
+				detail: "Logged in",
+			},
+		],
+		1_700_000_000_000,
+	);
+	assert.deepEqual(
+		entries.map((entry: { capability: string; state: string }) => [entry.capability, entry.state]),
+		[
+			["loopback-tcp", "broken"],
+			["gh-auth", "working"],
+		],
+	);
+	assert.match(entries[0].detail ?? "", /loopback TCP: operation not permitted/);
+	const typed: ProbeResult[] = [];
+	assert.deepEqual(preflightCapabilities(typed, 0), []);
+	assert.equal(entries[0].at, 1_700_000_000_000);
 });

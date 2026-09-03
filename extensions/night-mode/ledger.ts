@@ -16,6 +16,7 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
+import { type CapabilityEntry, latestCapabilities } from "./capability-journal.ts";
 import { type NightConfig, resolvePath } from "./config.ts";
 import {
 	CLOSED_STATUSES,
@@ -79,6 +80,34 @@ export interface LedgerItem {
 	verification?: Verification;
 	/** Run the item belongs to, from its `run:<id>` tag. Absent on legacy items. */
 	runId?: string;
+	/**
+	 * Capabilities the item's plan depends on, from its `needs` field: probe ids
+	 * (`loopback-tcp`, `ssh-github`, ...) or anything else the capability journal
+	 * records. Declared so an item that cannot possibly finish tonight is surfaced
+	 * at claim time instead of delivered half-done.
+	 */
+	needs?: string[];
+}
+
+/**
+ * Which of an item's declared capabilities are known not to work.
+ *
+ * The point is to spend the discovery once. PR #6181 of 2026-09-02 is "draft,
+ * incomplete by design": the rename landed but `go generate` and `task
+ * dbmate-dump` could not run, because the sandbox had no local Postgres. That
+ * was already in the preflight at 20:52, before the item was claimed, and it
+ * still cost a review pass on a structurally unfinishable change.
+ *
+ * `degraded` does not block: it means slower or partial, not impossible.
+ */
+export function blockedCapabilities(item: LedgerItem, capabilities: CapabilityEntry[]): string[] {
+	if (!item.needs || item.needs.length === 0) return [];
+	const broken = new Set(
+		latestCapabilities(capabilities)
+			.filter((entry) => entry.state === "broken")
+			.map((entry) => entry.capability),
+	);
+	return item.needs.filter((need) => broken.has(need));
 }
 
 /** Same resolution as `todos.ts`, so both see one store. */
@@ -176,6 +205,13 @@ export function parseLedgerItem(id: string, content: string): LedgerItem | undef
 
 	const status = typeof parsed.status === "string" && parsed.status ? parsed.status : "open";
 	const { state, evidence, reason, evidenceRecord } = classify(status, body);
+	// `needs: "loopback-tcp, gh-auth"` or `needs: ["loopback-tcp"]`. Both, because
+	// the field is typed by hand at 2am.
+	const needs = Array.isArray(parsed.needs)
+		? parsed.needs.filter((need): need is string => typeof need === "string")
+		: typeof parsed.needs === "string"
+			? parsed.needs.split(/[,\s]+/).filter(Boolean)
+			: [];
 	const runTagValue = tags.find((tag) => tag.toLowerCase().startsWith(RUN_TAG_PREFIX));
 	const runId = runTagValue?.slice(RUN_TAG_PREFIX.length).trim();
 	return {
@@ -187,6 +223,7 @@ export function parseLedgerItem(id: string, content: string): LedgerItem | undef
 		...(reason ? { reason } : {}),
 		...(evidenceRecord ? { evidenceRecord } : {}),
 		...(runId ? { runId } : {}),
+		...(needs.length > 0 ? { needs } : {}),
 	};
 }
 

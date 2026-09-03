@@ -15,12 +15,14 @@ import {
 	formatPreflightReport,
 	nightPreflightProbes,
 	PROBE_TIMEOUT_SECONDS,
+	preflightCapabilities,
 	preflightPathFor,
 	type ProbeOutcome,
 	type ProbeSpec,
 	runPreflight,
 	writePreflightReport,
 } from "../../night-mode/preflight.ts";
+import { appendCapability } from "../../night-mode/capability-journal.ts";
 import { readActiveNightRun } from "../../night-mode/night-run.ts";
 import { supervisedSpawn } from "./supervised-spawn.ts";
 
@@ -76,7 +78,15 @@ export async function runNightPreflight(deps: PreflightDeps): Promise<string | u
 		...(run.workspacePath ? { workspacePath: run.workspacePath } : {}),
 	});
 	const write = deps.write ?? writePreflightReport;
-	return write(path, body) ? path : undefined;
+	const written = write(path, body) ? path : undefined;
+	// The same answers as journal entries, so the run has one place to consult and
+	// a ledger item can declare what it needs against it (see `blockedCapabilities`).
+	if (run.capabilityPath) {
+		for (const entry of preflightCapabilities(results, deps.now?.getTime() ?? Date.now())) {
+			appendCapability(run.capabilityPath, entry);
+		}
+	}
+	return written;
 }
 
 /** Run one probe as its own supervised process group, capturing all output. */

@@ -22,6 +22,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { agentWorkspacesRoot } from "./agent-workspace.ts";
+import type { CapabilityEntry } from "./capability-journal.ts";
 import { formatDateTimeStamp } from "./config.ts";
 
 /** Output of a probe command, as the caller's shell reports it. */
@@ -65,12 +66,12 @@ const MAX_DETAIL = 200;
  * arbitrary port cannot answer.
  */
 const LOOPBACK_PROBE =
-	"node -e 'const net=require(\"net\");" +
+	'node -e \'const net=require("net");' +
 	"const s=net.createServer(c=>c.end());" +
-	"s.on(\"error\",e=>{process.stdout.write(\"listen failed: \"+e.message);process.exit(1)});" +
-	"s.listen(0,\"127.0.0.1\",()=>{const p=s.address().port;" +
-	"const c=net.connect(p,\"127.0.0.1\",()=>{process.stdout.write(\"connected to 127.0.0.1:\"+p);c.end();s.close()});" +
-	"c.on(\"error\",e=>{process.stdout.write(\"connect failed: \"+e.message);process.exit(1)})})'";
+	's.on("error",e=>{process.stdout.write("listen failed: "+e.message);process.exit(1)});' +
+	's.listen(0,"127.0.0.1",()=>{const p=s.address().port;' +
+	'const c=net.connect(p,"127.0.0.1",()=>{process.stdout.write("connected to 127.0.0.1:"+p);c.end();s.close()});' +
+	'c.on("error",e=>{process.stdout.write("connect failed: "+e.message);process.exit(1)})})\'';
 
 /**
  * The probe list. Deliberately short and fixed: these are the six answers a
@@ -97,7 +98,8 @@ export function nightPreflightProbes(input: { workspacePath?: string } = {}): Pr
 			id: "ssh-github",
 			label: "SSH to github.com",
 			meaning: "when this fails, an inherited `git@github.com:` remote cannot push and must be HTTPS",
-			command: "ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 -T git@github.com 2>&1",
+			command:
+				"ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 -T git@github.com 2>&1",
 			// GitHub's SSH endpoint greets and exits 1 on success, so the text decides.
 			okWhen: ({ output }) => /successfully authenticated/i.test(output),
 		},
@@ -192,7 +194,9 @@ export function formatPreflightReport(
 		"",
 		"## What each answer rules out",
 		"",
-		...results.map((result) => `- **${result.label}**: ${result.ok ? "available" : "unavailable"} - ${result.meaning}`),
+		...results.map(
+			(result) => `- **${result.label}**: ${result.ok ? "available" : "unavailable"} - ${result.meaning}`,
+		),
 		"",
 		"Not probed: one read call per configured MCP server. See the night-mode README.",
 		"",
@@ -212,6 +216,20 @@ function escapeCell(value: string): string {
 export function preflightPathFor(input: { workspacePath?: string; reportPath: string }): string {
 	const dir = input.workspacePath ? agentWorkspacesRoot(input.workspacePath) : dirname(input.reportPath);
 	return join(dir, "sandbox-capabilities.md");
+}
+
+/**
+ * The probe results as capability-journal entries, so the journal is seeded
+ * with what the run starts out knowing and readers have one source to consult
+ * instead of a markdown table plus a JSONL file.
+ */
+export function preflightCapabilities(results: ProbeResult[], at: number): CapabilityEntry[] {
+	return results.map((result) => ({
+		at,
+		capability: result.id,
+		state: result.ok ? ("working" as const) : ("broken" as const),
+		detail: `${result.label}: ${result.detail}`,
+	}));
 }
 
 /** Write the report. Returns false when it could not be written. */

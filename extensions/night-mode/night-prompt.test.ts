@@ -295,3 +295,12 @@ describe("capability journal", () => {
 		assert.match(ORCHESTRATOR_CONTRACT, /never rewrite, shorten or re-persona the task/);
 	});
 });
+
+describe("capability-gated item selection", () => {
+	it("tells the coordinator to check an item's needs before claiming it", () => {
+		assert.match(ORCHESTRATOR_CONTRACT, /declares it/);
+		assert.match(ORCHESTRATOR_CONTRACT, /Reason: needs <capability>/);
+		// The 2026-09-02 outcome this exists to prevent.
+		assert.match(ORCHESTRATOR_CONTRACT, /draft PR that cannot pass review is worse/);
+	});
+});

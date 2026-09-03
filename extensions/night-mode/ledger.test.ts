@@ -9,6 +9,7 @@ import {
 	classify,
 	counts,
 	fingerprint,
+	blockedCapabilities,
 	formatLedger,
 	formatUnresolved,
 	type LedgerItem,
@@ -370,5 +371,50 @@ describe("formatLedger", () => {
 
 	it("is empty for an empty ledger", () => {
 		assert.equal(formatLedger([]), "");
+	});
+});
+
+describe("declared capabilities", () => {
+	const item = (needs: unknown): LedgerItem | undefined =>
+		parseLedgerItem(
+			"TODO-1",
+			todoFile({ id: "TODO-1", title: "rename simulation tables", status: "open", tags: ["night"], needs }),
+		);
+
+	it("reads a needs list written either way", () => {
+		assert.deepEqual(item(["loopback-tcp", "gh-auth"])?.needs, ["loopback-tcp", "gh-auth"]);
+		assert.deepEqual(item("loopback-tcp, gh-auth")?.needs, ["loopback-tcp", "gh-auth"]);
+		assert.equal(item(undefined)?.needs, undefined);
+	});
+
+	it("blocks an item on a capability recorded broken, not on a degraded one", () => {
+		const capabilities = [
+			{ at: 1, capability: "loopback-tcp", state: "broken" as const, detail: "operation not permitted" },
+			{ at: 2, capability: "gh-auth", state: "degraded" as const },
+		];
+		const todo = item(["loopback-tcp", "gh-auth"]);
+		assert.ok(todo);
+		assert.deepEqual(blockedCapabilities(todo, capabilities), ["loopback-tcp"]);
+	});
+
+	it("unblocks once the journal's last word says the capability works", () => {
+		const todo = item(["loopback-tcp"]);
+		assert.ok(todo);
+		assert.deepEqual(
+			blockedCapabilities(todo, [
+				{ at: 1, capability: "loopback-tcp", state: "broken" as const },
+				{ at: 2, capability: "loopback-tcp", state: "working" as const },
+			]),
+			[],
+		);
+	});
+
+	it("an item that declares nothing is never blocked", () => {
+		const todo = item(undefined);
+		assert.ok(todo);
+		assert.deepEqual(
+			blockedCapabilities(todo, [{ at: 1, capability: "loopback-tcp", state: "broken" as const }]),
+			[],
+		);
 	});
 });
