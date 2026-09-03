@@ -47,9 +47,9 @@ import path from "node:path";
 import fs from "node:fs/promises";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import crypto from "node:crypto";
-import { validateClosure } from "./night-mode/evidence.ts";
-import { NIGHT_TAG } from "./night-mode/ledger.ts";
-import { isNightRunParticipant, readActiveNightRun } from "./night-mode/night-run.ts";
+import { validateClosure } from "../night-mode/evidence.ts";
+import { NIGHT_TAG } from "../night-mode/ledger.ts";
+import { isNightRunParticipant, readActiveNightRun } from "../night-mode/night-run.ts";
 import {
 	Container,
 	type Focusable,

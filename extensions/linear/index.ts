@@ -14,7 +14,7 @@
  *   LINEAR_API_KEY via env or ~/.pi/agent/secrets.json (personal API key, "lin_api_...").
  *
  * Install:
- *   Auto-discovered from ~/.pi/agent/extensions/linear.ts
+ *   Auto-discovered from ~/.pi/agent/extensions/linear/index.ts
  */
 
 import { existsSync, readFileSync } from "node:fs";

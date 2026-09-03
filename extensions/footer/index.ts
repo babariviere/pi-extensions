@@ -24,7 +24,7 @@ import {
 	findWindow,
 	isAnthropicModel,
 	isUsageSnapshotEvent,
-} from "./usage/protocol.ts";
+} from "../usage/protocol.ts";
 
 // ── Context thresholds ──────────────────────────────────────────────────
 const CONTEXT_WARNING_THRESHOLD = 70;

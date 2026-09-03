@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { findGitWrites, findJjRoot, gitSubcommand } from "./tool-substitute.ts";
+import { findGitWrites, findJjRoot, gitSubcommand } from "./index.ts";
 
 const BASE = "/repo";
 
