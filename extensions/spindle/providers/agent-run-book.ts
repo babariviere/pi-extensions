@@ -17,6 +17,8 @@
  * replaced.
  */
 
+import type { RunFailure } from "../agents/run.ts";
+
 /** Structured value returned to the sandbox for a single run. */
 export interface SpindleAgentResult {
 	agent: string;
@@ -34,6 +36,11 @@ export interface SpindleAgentResult {
 	exitCode?: number;
 	paneId?: string;
 	error?: string;
+	/**
+	 * Why it failed, as a class (see `RunFailure`). `launch` in particular means
+	 * the child never ran: the task is not what needs rethinking.
+	 */
+	failure?: RunFailure;
 }
 
 export type AgentBatchState = "running" | "settled" | "cancelled";

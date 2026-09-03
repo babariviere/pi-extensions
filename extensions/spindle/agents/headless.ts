@@ -14,7 +14,15 @@ import { nightChildEnv, readActiveNightRun } from "../../night-mode/night-run.ts
 import { readDefaultProvider } from "./settings.ts";
 import { resolveRunOutput } from "./output.ts";
 import { DEFAULT_KILL_GRACE_MS, terminateProcessTree, type TerminateHandle } from "./process-tree.ts";
-import { baseResult, prepareChildRun, runCwd, type RunContext, type RunRequest, type RunResult } from "./run.ts";
+import {
+	baseResult,
+	prepareChildRun,
+	runCwd,
+	type RunContext,
+	type RunFailure,
+	type RunRequest,
+	type RunResult,
+} from "./run.ts";
 
 /** Error recorded when the parent session cancels a run. */
 const CANCELLED_RUN_ERROR = "cancelled by the parent session";
@@ -71,8 +79,10 @@ function runHeadless(req: RunRequest, ctx: RunContext, defaultProvider: string |
 		let fallbackTimer: NodeJS.Timeout | undefined;
 		/** Why the run was torn down; becomes the result's error. */
 		let stopReason: string | undefined;
+		/** The failure class that teardown amounts to (see `RunFailure`). */
+		let stopFailure: RunFailure | undefined;
 
-		const finish = async (exitCode: number | null, error: string | undefined) => {
+		const finish = async (exitCode: number | null, error: string | undefined, failure?: RunFailure) => {
 			if (settled) return;
 			settled = true;
 			clearTimeout(timer);
@@ -85,7 +95,7 @@ function runHeadless(req: RunRequest, ctx: RunContext, defaultProvider: string |
 			});
 			ctx.onStatus?.(req.index, { state: resolved.ok ? "done" : "failed", outputPath });
 			resolve({
-				...baseResult(req, resolved, error),
+				...baseResult(req, resolved, error, failure ?? "run"),
 				backend: "headless",
 				exitCode: exitCode ?? undefined,
 			});
@@ -96,21 +106,22 @@ function runHeadless(req: RunRequest, ctx: RunContext, defaultProvider: string |
 		 * run still reports the output it produced (SIGTERM gives the child a
 		 * chance to flush its transcript before the SIGKILL).
 		 */
-		const stop = (reason: string): void => {
+		const stop = (reason: string, failure: RunFailure): void => {
 			stopReason ??= reason;
+			stopFailure ??= failure;
 			if (teardown) return;
 			teardown = terminateProcessTree(child);
-			fallbackTimer = setTimeout(() => void finish(null, stopReason), CLOSE_FALLBACK_MS);
+			fallbackTimer = setTimeout(() => void finish(null, stopReason, stopFailure), CLOSE_FALLBACK_MS);
 			fallbackTimer.unref?.();
 		};
 
-		const timer = setTimeout(() => stop(`timed out after ${ctx.timeoutMs}ms`), ctx.timeoutMs);
+		const timer = setTimeout(() => stop(`timed out after ${ctx.timeoutMs}ms`, "timeout"), ctx.timeoutMs);
 
-		const onAbort = () => stop(CANCELLED_RUN_ERROR);
+		const onAbort = () => stop(CANCELLED_RUN_ERROR, "cancelled");
 		ctx.signal?.addEventListener("abort", onAbort, { once: true });
 		// An already-aborted signal never fires the listener, and the batch can be
 		// cancelled between launch and spawn (the backend probe awaits).
-		if (ctx.signal?.aborted) stop(CANCELLED_RUN_ERROR);
+		if (ctx.signal?.aborted) stop(CANCELLED_RUN_ERROR, "cancelled");
 
 		child.stdout?.on("data", (d) => {
 			stdout += d.toString("utf-8");
@@ -119,11 +130,13 @@ function runHeadless(req: RunRequest, ctx: RunContext, defaultProvider: string |
 			stderr += d.toString("utf-8");
 		});
 		child.on("error", (err) => {
-			void finish(null, err.message);
+			// Spawn itself failed (no `pi` on PATH, bad cwd): nothing ran, so the
+			// task is not what needs changing.
+			void finish(null, err.message, "launch");
 		});
 		child.on("close", (code) => {
 			const err = stopReason ?? (code === 0 ? undefined : stderr.trim() || `pi exited with code ${code}`);
-			void finish(code, err);
+			void finish(code, err, stopFailure);
 		});
 	});
 }

@@ -109,6 +109,24 @@ export interface RunContext {
  */
 export type RunBackend = (reqs: RunRequest[], ctx: RunContext) => Promise<RunResult[]>;
 
+/**
+ * Why a run failed, as a class rather than prose.
+ *
+ * The distinction the night of 2026-09-02 lacked: a `launch` failure is the
+ * parent's or the terminal multiplexer's fault and says nothing about the task,
+ * while `run` means a child really did work and came back with nothing usable.
+ * Reported identically, the two are indistinguishable, and a coordinator faced
+ * with 90 launch failures re-planned the task 14 times — shorter task, other
+ * persona, other model — for a fault no task could have avoided.
+ *
+ *  - `launch`    the child was never started (or never confirmed): retrying the
+ *                same task is pointless until the runner is fixed
+ *  - `run`       the child ran and produced no usable final message
+ *  - `timeout`   the child was still working at its deadline
+ *  - `cancelled` the parent, or the user, tore it down
+ */
+export type RunFailure = "launch" | "run" | "timeout" | "cancelled";
+
 export interface RunResultBase {
 	agent: string;
 	scope: string;
@@ -117,6 +135,8 @@ export interface RunResultBase {
 	/** Where the result was persisted. Absent when nothing was written. */
 	outputPath?: string;
 	error?: string;
+	/** Present only on a failure. See {@link RunFailure}. */
+	failure?: RunFailure;
 }
 
 /**
@@ -139,7 +159,12 @@ export type RunResult =
  * a failed write is folded into `error`. Reporting the intended path
  * unconditionally made the tool claim a file existed when it did not.
  */
-export function baseResult(req: RunRequest, resolved: ResolvedOutput, error?: string): RunResultBase {
+export function baseResult(
+	req: RunRequest,
+	resolved: ResolvedOutput,
+	error?: string,
+	failure?: RunFailure,
+): RunResultBase {
 	const reason = [error, resolved.writeError].filter((v): v is string => !!v).join("; ");
 	return {
 		agent: req.agent.config.name,
@@ -148,6 +173,8 @@ export function baseResult(req: RunRequest, resolved: ResolvedOutput, error?: st
 		output: resolved.output,
 		...(resolved.outputPath ? { outputPath: resolved.outputPath } : {}),
 		...(reason ? { error: reason } : {}),
+		// A successful run has no failure class, whatever happened on the way.
+		...(!resolved.ok && failure ? { failure } : {}),
 	};
 }
 

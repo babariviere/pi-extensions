@@ -250,6 +250,7 @@ const agentResult = (result: RunResult, runId: string): SpindleAgentResult => ({
 	...(result.backend === "headless" && result.exitCode !== undefined ? { exitCode: result.exitCode } : {}),
 	...(result.backend === "herdr" && result.paneId ? { paneId: result.paneId } : {}),
 	...(result.error ? { error: result.error } : {}),
+	...(result.failure ? { failure: result.failure } : {}),
 });
 
 /** The placeholder result a still-running run reports. */

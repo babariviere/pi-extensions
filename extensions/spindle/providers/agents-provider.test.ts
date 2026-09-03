@@ -218,3 +218,25 @@ test("every descriptor schema accepts the payloads the guest can emit", async ()
 	await rejects("run", { task: "t", unknown: 1 });
 	await rejects("wait", {});
 });
+
+test("a launch failure reaches the sandbox as its own class, not as prose", async () => {
+	const { provider, settle } = harness();
+	const handle = (await provider.invoke("start", { task: "do a thing" }, invocationContext())) as { runId: string };
+	settle([
+		{
+			agent: "task",
+			scope: "user",
+			ok: false,
+			output: "(failed to run in herdr: timed out waiting for agent startup)",
+			backend: "herdr",
+			error: "timed out waiting for agent startup",
+			failure: "launch",
+		},
+	]);
+	const waited = (await provider.invoke("wait", { runId: handle.runId, waitMs: 1_000 }, invocationContext())) as {
+		results: { state: string; failure?: string }[];
+	};
+	assert.equal(waited.results[0].state, "failed");
+	// The coordinator has to be able to tell a broken runner from a bad task.
+	assert.equal(waited.results[0].failure, "launch");
+});

@@ -185,6 +185,12 @@ interface SpindleAgentResult {
   exitCode?: number;
   paneId?: string;
   error?: string;
+  /**
+   * Why it failed. "launch" means the child never started, so the runner is at
+   * fault and re-planning the task changes nothing; "run" means it ran and
+   * produced nothing usable; also "timeout" and "cancelled".
+   */
+  failure?: "launch" | "run" | "timeout" | "cancelled";
 }
 interface SpindleAgentHandle {
   runId: string;

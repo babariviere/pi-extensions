@@ -65,7 +65,15 @@ import { waitForAgentFinish, waitForChildEvidence } from "./pane-lifecycle.ts";
 import { readDefaultProvider } from "./settings.ts";
 import { describeTranscript, hasTerminalAssistantMessage, resolveRunOutput } from "./output.ts";
 import { outcomeError, type RunOutcome, waitForRunCompletion } from "./herdr-completion.ts";
-import { baseResult, prepareChildRun, runCwd, type RunContext, type RunRequest, type RunResult } from "./run.ts";
+import {
+	baseResult,
+	prepareChildRun,
+	runCwd,
+	type RunContext,
+	type RunFailure,
+	type RunRequest,
+	type RunResult,
+} from "./run.ts";
 
 export const SUBAGENTS_TAB_LABEL = "subagents";
 
@@ -387,7 +395,7 @@ async function settleRun(s: SpawnedRun, ctx: RunContext): Promise<RunResult> {
 	// badly; a run that produced its output does not need the launch trivia.
 	const failure = resolved.ok ? undefined : [s.note, outcomeError(outcome), whereToLook(s)].filter(Boolean).join("; ");
 	return {
-		...baseResult(s.req, resolved, failure),
+		...baseResult(s.req, resolved, failure, outcomeFailure(outcome)),
 		backend: "herdr",
 		paneId: s.paneId,
 	};
@@ -411,7 +419,7 @@ async function failedLaunchResult(s: SpawnedRun, ctx: RunContext): Promise<RunRe
 	});
 	ctx.onStatus?.(s.req.index, { state: "failed", paneId: s.paneId, outputPath: s.outputPath });
 	return {
-		...baseResult(s.req, resolved, [s.error, whereToLook(s)].filter(Boolean).join("; ")),
+		...baseResult(s.req, resolved, [s.error, whereToLook(s)].filter(Boolean).join("; "), "launch"),
 		backend: "herdr",
 		...(s.paneId ? { paneId: s.paneId } : {}),
 	};
@@ -434,5 +442,21 @@ function failResult(req: RunRequest, error: string, paneId?: string): RunResult 
 		backend: "herdr",
 		paneId,
 		error,
+		// No tab, no pane, or no child: nothing about the task was ever tried.
+		failure: "launch",
 	};
+}
+
+/** The failure class a completion outcome amounts to. */
+function outcomeFailure(outcome: RunOutcome): RunFailure {
+	switch (outcome) {
+		case "timeout":
+			return "timeout";
+		case "gone":
+			// The pane was terminated: by the user, or by the batch being cancelled.
+			return "cancelled";
+		default:
+			// The child finished (or its transcript settled) with nothing usable.
+			return "run";
+	}
 }
