@@ -60,6 +60,67 @@ const imageBlocks = (content: unknown): SpindleMediaBlock[] => {
 	return blocks;
 };
 
+/**
+ * What pi core's read tool reports on `details.truncation` when it cut the
+ * content short. Only the fields this module reads are named.
+ */
+interface ReadTruncation {
+	truncated?: boolean;
+	truncatedBy?: "lines" | "bytes" | null;
+	firstLineExceedsLimit?: boolean;
+	totalLines?: number;
+	totalBytes?: number;
+	outputLines?: number;
+	outputBytes?: number;
+}
+
+const readTruncation = (details: unknown): ReadTruncation | undefined => {
+	if (!details || typeof details !== "object" || Array.isArray(details)) return undefined;
+	const truncation = (details as { truncation?: unknown }).truncation;
+	if (!truncation || typeof truncation !== "object" || Array.isArray(truncation)) return undefined;
+	return truncation as ReadTruncation;
+};
+
+const formatBytes = (bytes: number | undefined): string =>
+	bytes === undefined ? "unknown size" : bytes >= 1024 ? `${Math.round(bytes / 1024)} KB` : `${bytes} B`;
+
+/**
+ * A read that came back short must not look like a read that came back whole.
+ *
+ * pi's read tool caps its output at the model's context budget (2000 lines /
+ * 50 KB) and reports the cut as a sentence appended to the text: fine for a
+ * model that reads the sentence, silently lossy for a program that slices the
+ * string. It cost this repository real data on 2026-09-03, when a restructure
+ * of a 51 KB notes file was derived from a truncated read and dropped nine
+ * lines, pasting the notice into the file as content.
+ *
+ * The machine-readable signal was there all along (`details.truncation`) and was
+ * being discarded one function up. Now an involuntary cut throws, naming the
+ * shortfall and the two ways forward. Paging with an explicit `limit` is not
+ * affected: core reports that case without a `truncation` record.
+ */
+function assertReadNotTruncated(details: unknown, args: Record<string, unknown>): void {
+	const truncation = readTruncation(details);
+	if (!truncation) return;
+	if (!truncation.truncated && !truncation.firstLineExceedsLimit) return;
+	const path = typeof args.path === "string" ? args.path : "the file";
+	const alternatives =
+		"Filter it in pi.bash (rg/sed/jq) instead of pulling the whole file into the sandbox, or page it with offset.";
+	if (truncation.firstLineExceedsLimit) {
+		throw new Error(
+			`pi.read(${path}) returned nothing: its first line alone is ${formatBytes(truncation.totalBytes)}, past pi's ` +
+				`read limit. ${alternatives}`,
+		);
+	}
+	const offset = typeof args.offset === "number" ? args.offset : 1;
+	const next = offset + (truncation.outputLines ?? 0);
+	throw new Error(
+		`pi.read(${path}) was truncated by pi's read limit: ${truncation.outputLines ?? "?"} of ` +
+			`${truncation.totalLines ?? "?"} lines, ${formatBytes(truncation.outputBytes)} of ` +
+			`${formatBytes(truncation.totalBytes)}. The sandbox refuses to hand back a short read as if it were whole: ` +
+			`continue from offset ${next}, or read it in one piece another way. ${alternatives}`,
+	);
+}
 const normalizeResult = (
 	name: PiCoreToolName,
 	result: { content: ToolContent; details?: unknown; isError?: boolean },
@@ -391,6 +452,7 @@ export class PiToolsProvider implements SpindleProvider {
 	): unknown {
 		const normalized = normalizeResult(name, result);
 		if (name !== "read" || typeof normalized !== "string") return normalized;
+		assertReadNotTruncated(result.details, args);
 		return expandSkillDirMarkersForRead(normalized, args, this.#cwd);
 	}
 

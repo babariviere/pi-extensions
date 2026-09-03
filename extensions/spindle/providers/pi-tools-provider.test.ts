@@ -74,3 +74,51 @@ test("a read the guard allows still executes", async () => {
 	const result = await provider.invoke("read", { path: file }, context);
 	assert.equal(result, "content\n");
 });
+
+/**
+ * The 2026-09-03 data loss: a 51 KB notes file was restructured from a
+ * truncated read, so nine lines were dropped and pi's truncation notice was
+ * written into the file as content. Inside the sandbox a short read must fail,
+ * not read like a whole one.
+ */
+test("a read past pi's limit fails instead of returning a silent head", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "spindle-read-limit-"));
+	const file = join(dir, "big.md");
+	// 60 KB of short lines: past the 50 KB byte ceiling, under the 2000-line one.
+	writeFileSync(file, `${"x".repeat(200)}\n`.repeat(300));
+	await assert.rejects(
+		() => provider().invoke("read", { path: file }, context),
+		(error: Error) => {
+			assert.match(error.message, /was truncated by pi's read limit/);
+			assert.match(error.message, /254 of 300 lines/);
+			assert.match(error.message, /continue from offset \d+/);
+			assert.match(error.message, /pi\.bash \(rg\/sed\/jq\)/);
+			return true;
+		},
+	);
+});
+
+test("a line too long to return at all says so", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "spindle-read-line-"));
+	const file = join(dir, "one-line.json");
+	writeFileSync(file, "y".repeat(60 * 1024));
+	await assert.rejects(() => provider().invoke("read", { path: file }, context), /first line alone is \d+ KB/);
+});
+
+test("a file inside the limit is returned whole, with no truncation notice", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "spindle-read-small-"));
+	const file = join(dir, "small.md");
+	const content = `${"z".repeat(100)}\n`.repeat(50);
+	writeFileSync(file, content);
+	const result = await provider().invoke("read", { path: file }, context);
+	assert.equal(result, content);
+	assert.doesNotMatch(String(result), /Showing lines/);
+});
+
+test("paging with an explicit limit is not mistaken for truncation", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "spindle-read-page-"));
+	const file = join(dir, "paged.md");
+	writeFileSync(file, `${"w".repeat(80)}\n`.repeat(400));
+	const result = await provider().invoke("read", { path: file, offset: 1, limit: 10 }, context);
+	assert.match(String(result), /more lines in file/);
+});
