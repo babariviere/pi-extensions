@@ -4,27 +4,26 @@
  * A minimal footer that merges the old status-line + usage-status extensions:
  *
  *	 Line 1:	<context gauge>																					 <model> • <thinking>
- *	 Line 2:	Claude <5h bar %> <Week bar %> <extra> ⟳ <reset>		(Claude models only)
+ *	 Line 2:	<provider> <5h bar %> <Week bar %> <extra> ⟳ <resets>	(subscription models only)
  *
- * Left side	→ context window usage + Claude subscription usage.
+ * Left side	→ context window usage + subscription usage.
  * Right side → model id + thinking level.
  *
- * Claude usage data is not fetched here: the `usage` extension owns the poll
- * and publishes it on pi's event bus (`usage:snapshot`). This extension only
- * subscribes and renders.
+ * Subscription usage data is not fetched here: the `usage` extension owns the
+ * poll and publishes it on pi's event bus (`usage:snapshot`). This extension
+ * only subscribes and renders.
  */
 
 import type { ExtensionAPI, Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import {
 	FIVE_HOUR_LABEL,
-	USAGE_REQUEST_EVENT,
-	USAGE_SNAPSHOT_EVENT,
-	type UsageSnapshot,
-	findWindow,
 	isAnthropicModel,
 	isOpenAIModel,
 	isUsageSnapshotEvent,
+	USAGE_REQUEST_EVENT,
+	USAGE_SNAPSHOT_EVENT,
+	type UsageSnapshot,
 } from "../usage/protocol.ts";
 
 // ── Context thresholds ──────────────────────────────────────────────────
@@ -40,10 +39,12 @@ const USAGE_ERROR_THRESHOLD = 92;
 const BAR_FILLED = "━";
 const BAR_EMPTY = "─";
 
-// Anthropic brand orange (#D97757) as a 24-bit ANSI foreground escape.
-const ORANGE = "\x1b[38;2;217;119;87m";
+// Provider colors as 24-bit ANSI foreground escapes.
+const ANTHROPIC_ORANGE = "\x1b[38;2;217;119;87m";
+const CODEX_BLUE = "\x1b[38;2;59;130;246m";
 const RESET = "\x1b[0m";
-const colorizeOrange = (text: string): string => `${ORANGE}${text}${RESET}`;
+const colorizeAnthropic = (text: string): string => `${ANTHROPIC_ORANGE}${text}${RESET}`;
+const colorizeCodex = (text: string): string => `${CODEX_BLUE}${text}${RESET}`;
 
 // ── Formatting helpers ──────────────────────────────────────────────────
 
@@ -67,14 +68,16 @@ function formatTokens(count: number): string {
 	return `${Math.round(count / 1000000)}M`;
 }
 
-/** Compact "2h34m" until the timestamp, or undefined if past/invalid. */
+/** Compact "2h34m" or "3d4h" until the timestamp, or undefined if past/invalid. */
 function formatTimeLeft(resetsAt: string | undefined): string | undefined {
 	if (!resetsAt) return undefined;
 	const ms = new Date(resetsAt).getTime() - Date.now();
 	if (!Number.isFinite(ms) || ms <= 0) return undefined;
 	const totalMin = Math.round(ms / 60_000);
-	const h = Math.floor(totalMin / 60);
+	const d = Math.floor(totalMin / (24 * 60));
+	const h = Math.floor((totalMin % (24 * 60)) / 60);
 	const m = totalMin % 60;
+	if (d > 0) return `${d}d${h}h`;
 	return h > 0 ? `${h}h${String(m).padStart(2, "0")}m` : `${m}m`;
 }
 
@@ -119,15 +122,17 @@ function renderContextGauge(
 	return theme.fg("dim", "ctx ") + bar + " " + theme.fg("dim", pct + counts);
 }
 
-/** Build the Claude usage line: `Claude 5h ━━──── 30% Week ━──── 12% ⟳ 2h34m`. */
-function renderUsageLine(snapshot: UsageSnapshot, theme: Theme): string {
+/** Build a subscription usage line, including every reported window reset. */
+export function renderUsageLine(snapshot: UsageSnapshot, theme: Theme): string {
 	const dim = (s: string) => theme.fg("dim", s);
+	const isCodex = snapshot.provider === "openai";
+	const provider = isCodex ? "Codex" : "Claude";
+	const coloredProvider = isCodex ? colorizeCodex(provider) : colorizeAnthropic(provider);
 
-	if (snapshot.error) return colorizeOrange("Claude ") + dim(snapshot.error);
+	if (snapshot.error) return coloredProvider + " " + dim(snapshot.error);
 	if (snapshot.windows.length === 0) return "";
 
-	const provider = snapshot.provider === "openai" ? "OpenAI" : "Claude";
-	const segments: string[] = [snapshot.provider === "openai" ? provider : colorizeOrange(provider)];
+	const segments: string[] = [coloredProvider];
 
 	for (const w of snapshot.windows) {
 		if (w.label.startsWith("Extra")) {
@@ -140,8 +145,17 @@ function renderUsageLine(snapshot: UsageSnapshot, theme: Theme): string {
 		segments.push(`${dim(w.label)} ${bar} ${dim(`${Math.round(w.usedPercent)}%`)}`);
 	}
 
-	const timeLeft = formatTimeLeft(findWindow(snapshot, FIVE_HOUR_LABEL)?.resetsAt);
-	if (timeLeft) segments.push(dim(`⟳ ${timeLeft}`));
+	const resets = snapshot.windows.flatMap((window) => {
+		const timeLeft = formatTimeLeft(window.resetsAt);
+		return timeLeft ? [{ label: window.label, timeLeft }] : [];
+	});
+	if (resets.length === 1) {
+		const reset = resets[0];
+		const label = reset.label === FIVE_HOUR_LABEL ? "" : `${reset.label} `;
+		segments.push(dim(`⟳ ${label}${reset.timeLeft}`));
+	} else if (resets.length > 1) {
+		segments.push(dim(`⟳ ${resets.map((reset) => `${reset.label} ${reset.timeLeft}`).join(" ")}`));
+	}
 
 	return segments.join(" ");
 }
