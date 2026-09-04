@@ -19,6 +19,8 @@ export interface SandboxRequest {
 	mode: SandboxMode;
 	/** Extra writable roots. `~` is expanded; relative paths resolve against cwd. */
 	allowWrite?: string[];
+	/** Roots unavailable to agent tools and shell commands. */
+	denyRead?: string[];
 }
 
 /**
@@ -62,15 +64,19 @@ export function parseSandboxRequestEvent(value: unknown): SandboxRequestEvent | 
 		return { policy: null, ...(reason ? { reason } : {}) };
 	}
 	if (!isRecord(value.policy)) return undefined;
-	const { mode, allowWrite } = value.policy;
+	const { mode, allowWrite, denyRead } = value.policy;
 	if (!isSandboxMode(mode)) return undefined;
 	const roots = Array.isArray(allowWrite)
 		? allowWrite.filter((entry): entry is string => typeof entry === "string" && !!entry.trim())
+		: undefined;
+	const deniedRoots = Array.isArray(denyRead)
+		? denyRead.filter((entry): entry is string => typeof entry === "string" && !!entry.trim())
 		: undefined;
 	return {
 		policy: {
 			mode,
 			...(roots?.length ? { allowWrite: roots } : {}),
+			...(deniedRoots?.length ? { denyRead: deniedRoots } : {}),
 		},
 		...(reason ? { reason } : {}),
 	};

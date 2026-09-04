@@ -575,9 +575,9 @@ export default function (pi: ExtensionAPI): void {
 	 * Ask Spindle to sandbox the filesystem for the duration of the run.
 	 *
 	 * The writable set is derived from the run itself rather than configured: the
-	 * working copy the agent was told to use, the report it has to append to, and
-	 * the todo store backing the ledger. Anything else on the disk is read-only for
-	 * the night, which is the whole point.
+	 * working copy the agent was told to use and the report it has to append to.
+	 * The ledger is accessed only through the todo tool. Anything else on the disk
+	 * is read-only for the night, which is the whole point.
 	 *
 	 * Returns undefined when the config disables it, so `nightMode.sandboxMode:
 	 * "off"` restores the previous behaviour exactly.
@@ -600,11 +600,14 @@ export default function (pi: ExtensionAPI): void {
 				// once, at start, and child processes read it from that file.
 				...(input.workspacePath ? [agentWorkspacesRoot(input.workspacePath)] : []),
 				dirname(input.reportPath),
-				input.ledgerDir,
 				// Roots the run cannot derive: a second repository the night is
 				// expected to touch, a notes vault, and so on.
 				...input.config.sandboxAllowWrite.map((path) => resolvePath(path, input.cwd)),
 			],
+			// The todo extension runs in the trusted Pi host and writes this store
+			// itself. Denying it to agent tools and shell commands prevents a child
+			// from bypassing the tool with direct filesystem access.
+			denyRead: [input.ledgerDir],
 		};
 	}
 

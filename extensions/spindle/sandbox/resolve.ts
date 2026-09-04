@@ -81,8 +81,8 @@ export function effectiveSandbox(input: EffectiveSandboxInput): EffectiveSandbox
 
 	return {
 		mode,
-		// The night's roots are always present: a tightening request must not cut
-		// the run's own report or ledger out of the writable set.
+		// The night's writable roots are always present: a tightening request
+		// must not cut the run's own report out of the writable set.
 		allowWrite: dedupe([
 			...settings.allowWrite,
 			...(night?.allowWrite ?? []),
@@ -90,7 +90,9 @@ export function effectiveSandbox(input: EffectiveSandboxInput): EffectiveSandbox
 			...(requested?.allowWrite ?? []),
 		]),
 		denyWrite: [...settings.denyWrite],
-		denyRead: [...settings.denyRead],
+		// A night-protected root stays inaccessible even if an agent asks for a
+		// looser sandbox. Its extension-owned tool retains host-side access.
+		denyRead: dedupe([...settings.denyRead, ...(night?.denyRead ?? [])]),
 		source,
 		...(mode !== asked ? { refused: { asked, enforced: mode } } : {}),
 	};

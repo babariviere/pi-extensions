@@ -71,6 +71,14 @@ test("the night's writable roots survive a tightening request", () => {
 	assert.deepEqual(effective.allowWrite, ["~/base", "/sandboxes/run", "/reports", "/extra"]);
 });
 
+test("night-protected roots deny direct reads and writes", () => {
+	const effective = effectiveSandbox({
+		settings: settings("off"),
+		night: { mode: "workspace-write", denyRead: ["/night/todos"] },
+	});
+	assert.deepEqual(effective.denyRead, ["/night/todos"]);
+});
+
 test("a night run with no request still applies its own floor", () => {
 	const effective = effectiveSandbox({
 		settings: settings("off"),
