@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { markPacingWarningSent, observeWeeklyUsage, remainingCalendarDays } from "./pacing.ts";
+import { markPacingWarningSent, observeWeeklyUsage, pacingPeriodStart, remainingPacingDays } from "./pacing.ts";
 
-test("counts local calendar dates through the weekly reset", () => {
-	assert.equal(remainingCalendarDays(new Date(2025, 0, 1, 12), new Date(2025, 0, 4, 8)), 4);
-	assert.equal(remainingCalendarDays(new Date(2025, 0, 1, 12), new Date(2025, 0, 2, 0)), 1);
+test("anchors pacing periods to the weekly reset's local time", () => {
+	const reset = new Date(2025, 0, 4, 8, 42, 10);
+	assert.deepEqual(pacingPeriodStart(new Date(2025, 0, 1, 7, 0), reset), new Date(2024, 11, 31, 8, 42, 10));
+	assert.deepEqual(pacingPeriodStart(new Date(2025, 0, 1, 9, 0), reset), new Date(2025, 0, 1, 8, 42, 10));
+	assert.equal(remainingPacingDays(new Date(2025, 0, 1, 7, 0), reset), 4);
+	assert.equal(remainingPacingDays(new Date(2025, 0, 1, 9, 0), reset), 3);
 });
 
 test("attributes usage before the first poll to today and records observed deltas", () => {
@@ -12,7 +15,7 @@ test("attributes usage before the first poll to today and records observed delta
 	const resetAt = new Date(2025, 0, 4, 8).toISOString();
 	const first = observeWeeklyUsage(undefined, { weeklyUsedPercent: 40, resetAt, now });
 	assert.ok(first);
-	assert.equal(first.status.allowancePercent, (60 * 1.2) / 4.1);
+	assert.ok(Math.abs(first.status.allowancePercent - (60 * 1.2) / 3.6) < 1e-9);
 	assert.equal(first.status.usedTodayPercent, 40);
 	assert.equal(first.status.remainingTodayPercent, 0);
 	assert.equal(first.status.blocked, true);
@@ -57,20 +60,6 @@ test("does not attribute prior-week usage to a later day", () => {
 	assert.equal(next.status.usedTodayPercent, 0);
 });
 
-test("migrates an existing day's baseline into today's usage", () => {
-	const now = new Date(2025, 0, 1, 12);
-	const resetAt = new Date(2025, 0, 4, 8).toISOString();
-	const observed = observeWeeklyUsage(
-		{
-			weekResetAt: resetAt,
-			days: { "2025-01-01": { allowancePercent: 15, usedPercent: 0, lastWeeklyPercent: 40 } },
-		},
-		{ weeklyUsedPercent: 40, resetAt, now },
-	);
-	assert.ok(observed);
-	assert.equal(observed.status.usedTodayPercent, 40);
-});
-
 test("starts a fresh ledger when the weekly reset changes", () => {
 	const now = new Date(2025, 0, 1, 12);
 	const first = observeWeeklyUsage(undefined, {
@@ -94,7 +83,7 @@ test("requests one warning at 90 percent of today's allowance", () => {
 	const resetAt = new Date(2025, 0, 2, 8).toISOString();
 	const first = observeWeeklyUsage(undefined, { weeklyUsedPercent: 0, resetAt, now });
 	assert.ok(first);
-	const nearLimit = observeWeeklyUsage(first.ledger, { weeklyUsedPercent: 46, resetAt, now });
+	const nearLimit = observeWeeklyUsage(first.ledger, { weeklyUsedPercent: 91, resetAt, now });
 	assert.ok(nearLimit);
 	assert.equal(nearLimit.status.warningPending, true);
 	markPacingWarningSent(nearLimit.ledger, nearLimit.status.day);

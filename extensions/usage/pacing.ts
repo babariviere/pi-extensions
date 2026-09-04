@@ -18,14 +18,17 @@ interface DayRecord {
 }
 
 export interface PacingLedger {
+	/** Incremented when persisted pacing-period semantics change. */
+	version: 2;
 	weekResetAt: string;
 	days: Record<string, DayRecord>;
 }
 
 export interface PacingStatus {
 	weekResetAt: string;
-	weeklyUsedPercent: number;
+	/** ISO start of the reset-anchored pacing period. */
 	day: string;
+	weeklyUsedPercent: number;
 	daysRemaining: number;
 	allowancePercent: number;
 	usedTodayPercent: number;
@@ -35,19 +38,40 @@ export interface PacingStatus {
 	warningPending: boolean;
 }
 
-function dayKey(date: Date): string {
-	const pad = (value: number) => String(value).padStart(2, "0");
-	return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+/**
+ * Start of the current local pacing period. Its daily boundary is the local
+ * time of the provider's weekly reset, rather than midnight.
+ */
+export function pacingPeriodStart(now: Date, resetAt: Date): Date {
+	const start = new Date(
+		now.getFullYear(),
+		now.getMonth(),
+		now.getDate(),
+		resetAt.getHours(),
+		resetAt.getMinutes(),
+		resetAt.getSeconds(),
+		resetAt.getMilliseconds(),
+	);
+	if (start.getTime() > now.getTime()) start.setDate(start.getDate() - 1);
+	return start;
 }
 
-/** Number of local calendar dates with any time before the weekly reset. */
-export function remainingCalendarDays(now: Date, resetAt: Date): number {
+/** Number of reset-anchored local pacing periods through the weekly reset. */
+export function remainingPacingDays(now: Date, resetAt: Date): number {
 	if (!Number.isFinite(resetAt.getTime()) || resetAt.getTime() <= now.getTime()) return 1;
-	let cursor = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+	let cursor = pacingPeriodStart(now, resetAt);
 	let days = 0;
 	while (cursor.getTime() < resetAt.getTime()) {
 		days++;
-		cursor = new Date(cursor.getFullYear(), cursor.getMonth(), cursor.getDate() + 1);
+		cursor = new Date(
+			cursor.getFullYear(),
+			cursor.getMonth(),
+			cursor.getDate() + 1,
+			resetAt.getHours(),
+			resetAt.getMinutes(),
+			resetAt.getSeconds(),
+			resetAt.getMilliseconds(),
+		);
 	}
 	return Math.max(1, days);
 }
@@ -58,13 +82,21 @@ function dailyAllowanceWeight(date: Date): number {
 }
 
 function remainingAllowanceWeight(now: Date, resetAt: Date): number {
-	let cursor = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+	let cursor = pacingPeriodStart(now, resetAt);
 	let weight = 0;
 	while (cursor.getTime() < resetAt.getTime()) {
 		weight += dailyAllowanceWeight(cursor);
-		cursor = new Date(cursor.getFullYear(), cursor.getMonth(), cursor.getDate() + 1);
+		cursor = new Date(
+			cursor.getFullYear(),
+			cursor.getMonth(),
+			cursor.getDate() + 1,
+			resetAt.getHours(),
+			resetAt.getMinutes(),
+			resetAt.getSeconds(),
+			resetAt.getMilliseconds(),
+		);
 	}
-	return weight || dailyAllowanceWeight(now);
+	return weight || dailyAllowanceWeight(pacingPeriodStart(now, resetAt));
 }
 
 export function observeWeeklyUsage(
@@ -75,14 +107,15 @@ export function observeWeeklyUsage(
 	if (!Number.isFinite(reset.getTime()) || !Number.isFinite(input.weeklyUsedPercent)) return undefined;
 	const weeklyUsedPercent = Math.max(0, Math.min(100, input.weeklyUsedPercent));
 	const isNewWindow = ledger?.weekResetAt !== input.resetAt;
-	const active = isNewWindow ? { weekResetAt: input.resetAt, days: {} } : ledger;
-	const day = dayKey(input.now);
-	const daysRemaining = remainingCalendarDays(input.now, reset);
+	const active = isNewWindow ? { version: 2 as const, weekResetAt: input.resetAt, days: {} } : ledger;
+	const periodStart = pacingPeriodStart(input.now, reset);
+	const day = periodStart.toISOString();
+	const daysRemaining = remainingPacingDays(input.now, reset);
 	let record = active.days[day];
 	if (!record) {
 		record = {
 			allowancePercent:
-				(Math.max(0, 100 - weeklyUsedPercent) * dailyAllowanceWeight(input.now)) /
+				(Math.max(0, 100 - weeklyUsedPercent) * dailyAllowanceWeight(periodStart)) /
 				remainingAllowanceWeight(input.now, reset),
 			// The API exposes only a cumulative weekly percentage. Attribute the
 			// unobserved amount to today so pacing does not ignore usage that
@@ -112,8 +145,8 @@ export function observeWeeklyUsage(
 		ledger: active,
 		status: {
 			weekResetAt: input.resetAt,
-			weeklyUsedPercent,
 			day,
+			weeklyUsedPercent,
 			daysRemaining,
 			allowancePercent: record.allowancePercent,
 			usedTodayPercent: record.usedPercent,
@@ -143,7 +176,10 @@ function ledgerPath(): string {
 export function loadPacingLedger(): PacingLedger | undefined {
 	try {
 		const parsed = JSON.parse(readFileSync(ledgerPath(), "utf8")) as PacingLedger;
-		return typeof parsed.weekResetAt === "string" && parsed.days && typeof parsed.days === "object"
+		return parsed.version === 2 &&
+			typeof parsed.weekResetAt === "string" &&
+			parsed.days &&
+			typeof parsed.days === "object"
 			? parsed
 			: undefined;
 	} catch {

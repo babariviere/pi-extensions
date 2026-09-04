@@ -224,7 +224,7 @@ export default function (pi: ExtensionAPI): void {
 					`pacing: ${pacingEnabled ? (pacingOverride ? "overridden for this session" : "enabled") : "disabled for this session"}`,
 					...(pacing
 						? [
-								`today (${pacing.day}): ${percent(pacing.usedTodayPercent)} used of ${percent(pacing.allowancePercent)}, ${percent(pacing.remainingTodayPercent)} remaining`,
+								`pacing period (${pacing.day}): ${percent(pacing.usedTodayPercent)} used of ${percent(pacing.allowancePercent)}, ${percent(pacing.remainingTodayPercent)} remaining`,
 								`days through reset: ${pacing.daysRemaining}`,
 								`blocked: ${pacing.blocked ? "yes" : "no"}`,
 							]
