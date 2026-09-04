@@ -26,12 +26,15 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import {
 	FIVE_HOUR_LABEL,
 	findWindow,
+	isUsagePacingEvent,
 	isUsageSnapshotEvent,
+	USAGE_PACING_EVENT,
 	USAGE_REQUEST_EVENT,
 	USAGE_SNAPSHOT_EVENT,
 	type UsageSnapshot,
 	WEEK_LABEL,
 } from "../usage/protocol.ts";
+import type { PacingStatus } from "../usage/pacing.ts";
 import {
 	formatDateTimeStamp,
 	NEEDS_HUMAN_HEADING,
@@ -119,6 +122,8 @@ export interface NightModeState {
 	threshold: number;
 	weekPercent?: number;
 	weeklyThreshold: number;
+	/** Whether the global Codex pacing guard has stopped work. */
+	pacingBlocked?: boolean;
 	/** True while an agent run is in flight (between `agent_start` and `agent_settled`). */
 	agentBusy: boolean;
 	/** True while this session holds a wake lock. */
@@ -131,6 +136,7 @@ export default function (pi: ExtensionAPI): void {
 	let ctxRef: ExtensionContext | undefined;
 	let wakeLock: WakeLock | undefined;
 	let usage: UsageSnapshot | undefined;
+	let pacing: PacingStatus | undefined;
 	let enabled = true;
 	let inWindow = false;
 	let paused = false;
@@ -144,6 +150,7 @@ export default function (pi: ExtensionAPI): void {
 	let resumeTimer: ReturnType<typeof setTimeout> | undefined;
 	let tickTimer: ReturnType<typeof setInterval> | undefined;
 	let unsubscribeUsage: (() => void) | undefined;
+	let unsubscribePacing: (() => void) | undefined;
 	/** Session-only window override, set by `/night start`. */
 	let windowOverride: NightWindow | undefined;
 
@@ -155,21 +162,23 @@ export default function (pi: ExtensionAPI): void {
 	const weekPercent = () => week()?.usedPercent;
 
 	/** The window that should stop the run right now, weekly first. */
-	const currentPauseReason = (): PauseReason | undefined =>
-		pauseReasonFor({
+	const currentPauseReason = (): PauseReason | undefined => {
+		if (pacing?.blocked) return "pacing";
+		return pauseReasonFor({
 			fiveHourPercent: usedPercent(),
 			weekPercent: weekPercent(),
 		});
+	};
 
 	/** Usage reading behind a pause reason, for messages and the footer. */
 	const percentFor = (reason: PauseReason | undefined): number | undefined =>
-		reason === "week" ? weekPercent() : usedPercent();
+		reason === "pacing" ? pacing?.weeklyUsedPercent : reason === "week" ? weekPercent() : usedPercent();
 
 	const thresholdFor = (reason: PauseReason | undefined): number =>
-		reason === "week" ? DEFAULT_WEEKLY_THRESHOLD_PERCENT : DEFAULT_THRESHOLD_PERCENT;
+		reason === "pacing" ? 100 : reason === "week" ? DEFAULT_WEEKLY_THRESHOLD_PERCENT : DEFAULT_THRESHOLD_PERCENT;
 
 	const limitLabel = (reason: PauseReason | undefined): string =>
-		reason === "week" ? "weekly usage limit" : "5h usage window";
+		reason === "pacing" ? "Codex pacing allowance" : reason === "week" ? "weekly usage limit" : "5h usage window";
 
 	// ── night run (prompt / instructions / report) ────────────────────────
 
@@ -719,6 +728,7 @@ export default function (pi: ExtensionAPI): void {
 			threshold: DEFAULT_THRESHOLD_PERCENT,
 			weekPercent: weekPercent(),
 			weeklyThreshold: DEFAULT_WEEKLY_THRESHOLD_PERCENT,
+			...(pacing ? { pacingBlocked: pacing.blocked } : {}),
 			agentBusy,
 			caffeinated: held.held,
 			wakeLock: held.backend === "none" ? "off" : held.backend,
@@ -737,7 +747,7 @@ export default function (pi: ExtensionAPI): void {
 		if (!enabled || !inWindow) return undefined;
 		if (paused) {
 			const left = resumeAt ? formatDuration(resumeAt - Date.now()) : "?";
-			const label = pausedReason === "week" ? "week" : "5h";
+			const label = pausedReason === "pacing" ? "Codex pacing" : pausedReason === "week" ? "week" : "5h";
 			return `\u{1F319} paused (${label} ${Math.round(percentFor(pausedReason) ?? 100)}%) \u27F3 ${left}`;
 		}
 		const pct = usedPercent();
@@ -771,6 +781,7 @@ export default function (pi: ExtensionAPI): void {
 	 * until the week rolls over.
 	 */
 	function scheduleResume(): void {
+		if (pausedReason === "pacing") return;
 		if (pausedReason === "week") {
 			armResume(WEEKLY_RETRY_MS);
 			return;
@@ -795,20 +806,24 @@ export default function (pi: ExtensionAPI): void {
 		});
 		report();
 		noteTimeline(
-			`⏸ paused: Claude ${limitLabel(reason)} at ${pct}%` +
-				(reason === "week"
-					? ", waiting for the week to roll over"
-					: resumeAt
-						? `, resuming around ${formatClock(new Date(resumeAt))}`
-						: ""),
+			`⏸ paused: ${reason === "pacing" ? "Codex" : "Claude"} ${limitLabel(reason)} at ${pct}%` +
+				(reason === "pacing"
+					? ", awaiting a manual resume after the allowance is available"
+					: reason === "week"
+						? ", waiting for the week to roll over"
+						: resumeAt
+							? `, resuming around ${formatClock(new Date(resumeAt))}`
+							: ""),
 		);
 		ctxRef?.ui.notify(
-			`night-mode: Claude ${limitLabel(reason)} at ${pct}%, pausing` +
-				(reason === "week"
-					? " until the weekly window has room again"
-					: resumeAt
-						? ` until ${formatClock(new Date(resumeAt))}`
-						: ""),
+			`night-mode: ${reason === "pacing" ? "Codex" : "Claude"} ${limitLabel(reason)} at ${pct}%, pausing` +
+				(reason === "pacing"
+					? " until manually resumed after the allowance is available"
+					: reason === "week"
+						? " until the weekly window has room again"
+						: resumeAt
+							? ` until ${formatClock(new Date(resumeAt))}`
+							: ""),
 			"warning",
 		);
 	}
@@ -834,7 +849,7 @@ export default function (pi: ExtensionAPI): void {
 			// A 5h pause can turn into a weekly one while it waits, and the retry
 			// cadence differs, so re-read the reason instead of keeping the old one.
 			pausedReason = still;
-			armResume(still === "week" ? WEEKLY_RETRY_MS : RESUME_RETRY_MS);
+			if (still !== "pacing") armResume(still === "week" ? WEEKLY_RETRY_MS : RESUME_RETRY_MS);
 			report();
 			return;
 		}
@@ -853,7 +868,13 @@ export default function (pi: ExtensionAPI): void {
 			usedPercent: percentFor(reason),
 		});
 		report();
-		noteTimeline(reason === "week" ? "▶ resumed: weekly usage limit has room again" : "▶ resumed: 5h window reset");
+		noteTimeline(
+			reason === "pacing"
+				? "▶ resumed: Codex pacing allowance manually resumed"
+				: reason === "week"
+					? "▶ resumed: weekly usage limit has room again"
+					: "▶ resumed: 5h window reset",
+		);
 		ctxRef?.ui.notify(`night-mode: ${limitLabel(reason)} has room again, sending automated continue`, "info");
 		deliver(
 			composeResumePrompt({
@@ -905,10 +926,10 @@ export default function (pi: ExtensionAPI): void {
 				const data = entry.data as { status?: string; resumeAt?: number; reason?: string; at?: string } | undefined;
 				if (data?.status === "paused") {
 					paused = true;
-					pausedReason = data.reason === "week" ? "week" : "5h";
+					pausedReason = data.reason === "pacing" ? "pacing" : data.reason === "week" ? "week" : "5h";
 					const at = data.at ? new Date(data.at) : undefined;
 					pausedAt = at && !Number.isNaN(at.getTime()) ? at : undefined;
-					armResume(Math.max(0, (data.resumeAt ?? Date.now()) - Date.now()));
+					if (pausedReason !== "pacing") armResume(Math.max(0, (data.resumeAt ?? Date.now()) - Date.now()));
 				}
 				return;
 			}
@@ -922,6 +943,12 @@ export default function (pi: ExtensionAPI): void {
 	unsubscribeUsage = pi.events.on(USAGE_SNAPSHOT_EVENT, (data) => {
 		if (!isUsageSnapshotEvent(data) || data.snapshot.provider === "openai") return;
 		usage = data.snapshot;
+		evaluate();
+	});
+
+	unsubscribePacing = pi.events.on(USAGE_PACING_EVENT, (data) => {
+		if (!isUsagePacingEvent(data)) return;
+		pacing = data.pacing;
 		evaluate();
 	});
 
@@ -953,6 +980,16 @@ export default function (pi: ExtensionAPI): void {
 	pi.on("tool_call", (_event, ctx) => {
 		ctxRef = ctx;
 		if (!enabled || !inWindow || !paused) return;
+		if (pausedReason === "pacing") {
+			return {
+				block: true,
+				terminate: true,
+				reason:
+					"night-mode: today's Codex pacing allowance is exhausted " +
+					`(${pacing?.usedTodayPercent.toFixed(1) ?? "?"}% used, ${pacing?.remainingTodayPercent.toFixed(1) ?? "?"}% remaining). ` +
+					"Stopping here. Resume manually after a new allowance is available, or use /usage override. Do not retry.",
+			};
+		}
 		const until =
 			pausedReason === "week"
 				? "the weekly window has room again"
@@ -979,11 +1016,13 @@ export default function (pi: ExtensionAPI): void {
 		}
 		unsubscribeUsage?.();
 		unsubscribeUsage = undefined;
+		unsubscribePacing?.();
+		unsubscribePacing = undefined;
 	});
 
 	pi.registerCommand("night", {
 		description:
-			"Night mode: wake lock + Claude 5h budget guard (status | start | report | todos | on | off | resume)",
+			"Night mode: wake lock + Claude budget and Codex pacing guards (status | start | report | todos | on | off | resume)",
 		getArgumentCompletions: (prefix) =>
 			["status", "start", "report", "todos", "on", "off", "resume"]
 				.filter((v) => v.startsWith(prefix))
@@ -1107,6 +1146,7 @@ export default function (pi: ExtensionAPI): void {
 				`5h usage: ${pct === undefined ? "unknown" : `${Math.round(pct)}% / ${DEFAULT_THRESHOLD_PERCENT}%`}`,
 				`5h reset: ${resets ? formatDuration(new Date(resets).getTime() - Date.now()) : "unknown"}`,
 				`week usage: ${weekly === undefined ? "unknown" : `${Math.round(weekly)}% / ${DEFAULT_WEEKLY_THRESHOLD_PERCENT}%`}`,
+				`Codex pacing: ${pacing ? `${pacing.blocked ? "blocked" : "available"}, ${pacing.usedTodayPercent.toFixed(1)}% used, ${pacing.remainingTodayPercent.toFixed(1)}% remaining today` : "unavailable"}`,
 				`paused: ${paused ? `yes (${limitLabel(pausedReason)}), resume in ${resumeAt ? formatDuration(resumeAt - Date.now()) : "?"}` : "no"}`,
 				`run: ${run ? `since ${formatDateTimeStamp(run.startedAt)}, report ${run.reportPath}` : "none"}`,
 				`working copy: ${run?.workspacePath ?? (run ? "session checkout (no clone)" : "n/a")}`,

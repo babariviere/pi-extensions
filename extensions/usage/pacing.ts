@@ -5,6 +5,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 export const CODEX_WEEKLY_STOP_PERCENT = 100;
+export const CODEX_PACING_WARNING_PERCENT = 90;
 
 interface DayRecord {
 	allowancePercent: number;
@@ -12,6 +13,8 @@ interface DayRecord {
 	lastWeeklyPercent: number;
 	/** Whether weekly usage present at the day's first observation was attributed to this day. */
 	initialUsageAttributed?: boolean;
+	/** The one-time near-limit warning has been delivered to an agent. */
+	warningSent?: boolean;
 }
 
 export interface PacingLedger {
@@ -28,6 +31,8 @@ export interface PacingStatus {
 	usedTodayPercent: number;
 	remainingTodayPercent: number;
 	blocked: boolean;
+	/** True until an agent has received the near-limit warning for this pacing day. */
+	warningPending: boolean;
 }
 
 function dayKey(date: Date): string {
@@ -97,6 +102,12 @@ export function observeWeeklyUsage(
 		record.lastWeeklyPercent = weeklyUsedPercent;
 	}
 	const remainingTodayPercent = Math.max(0, record.allowancePercent - record.usedPercent);
+	const blocked = weeklyUsedPercent >= CODEX_WEEKLY_STOP_PERCENT || remainingTodayPercent <= 0;
+	const warningPending =
+		!blocked &&
+		!record.warningSent &&
+		record.allowancePercent > 0 &&
+		(record.usedPercent / record.allowancePercent) * 100 >= CODEX_PACING_WARNING_PERCENT;
 	return {
 		ledger: active,
 		status: {
@@ -107,9 +118,16 @@ export function observeWeeklyUsage(
 			allowancePercent: record.allowancePercent,
 			usedTodayPercent: record.usedPercent,
 			remainingTodayPercent,
-			blocked: weeklyUsedPercent >= CODEX_WEEKLY_STOP_PERCENT || remainingTodayPercent <= 0,
+			blocked,
+			warningPending,
 		},
 	};
+}
+
+/** Mark a day's near-limit warning as delivered, so it survives reloads and sessions. */
+export function markPacingWarningSent(ledger: PacingLedger | undefined, day: string): void {
+	const record = ledger?.days[day];
+	if (record) record.warningSent = true;
 }
 
 function ledgerPath(): string {

@@ -6,6 +6,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
 	FIVE_HOUR_LABEL,
+	USAGE_PACING_EVENT,
 	USAGE_REQUEST_EVENT,
 	USAGE_SNAPSHOT_EVENT,
 	WEEK_LABEL,
@@ -16,7 +17,14 @@ import {
 	type UsageSnapshotEvent,
 	usageProviderForModel,
 } from "./protocol.ts";
-import { loadPacingLedger, observeWeeklyUsage, savePacingLedger, type PacingStatus } from "./pacing.ts";
+import {
+	CODEX_PACING_WARNING_PERCENT,
+	loadPacingLedger,
+	markPacingWarningSent,
+	observeWeeklyUsage,
+	savePacingLedger,
+	type PacingStatus,
+} from "./pacing.ts";
 import {
 	fetchWithCache,
 	isOAuthToken,
@@ -72,6 +80,7 @@ export default function (pi: ExtensionAPI): void {
 		updatePacing(snapshot);
 		last = { fetchedAt, snapshot };
 		pi.events.emit(USAGE_SNAPSHOT_EVENT, last);
+		pi.events.emit(USAGE_PACING_EVENT, { ...(pacing ? { pacing } : {}) });
 	}
 
 	function syncWatch(): void {
@@ -155,7 +164,19 @@ export default function (pi: ExtensionAPI): void {
 	});
 
 	pi.on("tool_call", (_event, ctx) => {
-		if (!pacingEnabled || pacingOverride || !isOpenAIModel(ctx.model) || !pacing?.blocked) return;
+		if (!pacingEnabled || pacingOverride || !isOpenAIModel(ctx.model) || !pacing) return;
+		if (pacing.warningPending) {
+			markPacingWarningSent(pacingLedger, pacing.day);
+			pacing.warningPending = false;
+			if (pacingLedger) savePacingLedger(pacingLedger);
+			pi.sendUserMessage(
+				`[usage] Warning: you have used ${percent(pacing.usedTodayPercent)} of today's Codex pacing allowance ` +
+					`(${percent(pacing.remainingTodayPercent)} remains). You are at the ${CODEX_PACING_WARNING_PERCENT}% warning threshold. ` +
+					"Finish or checkpoint current work and avoid starting expensive new work before the allowance is exhausted.",
+				{ deliverAs: "followUp" },
+			);
+		}
+		if (!pacing.blocked) return;
 		const reason =
 			pacing.weeklyUsedPercent >= 100
 				? "the Codex weekly limit is exhausted"

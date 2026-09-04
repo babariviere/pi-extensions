@@ -2,11 +2,29 @@
 
 export const USAGE_SNAPSHOT_EVENT = "usage:snapshot";
 export const USAGE_REQUEST_EVENT = "usage:request";
+export const USAGE_PACING_EVENT = "usage:pacing";
 
 export const FIVE_HOUR_LABEL = "5h";
 export const WEEK_LABEL = "Week";
 
 export type UsageProvider = "anthropic" | "openai";
+
+export interface UsagePacingEvent {
+	/** Undefined when the current snapshot cannot support Codex pacing. */
+	pacing?: import("./pacing.ts").PacingStatus;
+}
+
+/** Narrow an untyped bus payload to a Codex pacing event. */
+export function isUsagePacingEvent(data: unknown): data is UsagePacingEvent {
+	if (!data || typeof data !== "object") return false;
+	const pacing = (data as UsagePacingEvent).pacing;
+	return (
+		pacing === undefined ||
+		(typeof pacing === "object" &&
+			typeof pacing.blocked === "boolean" &&
+			typeof pacing.remainingTodayPercent === "number")
+	);
+}
 
 export interface RateWindow {
 	label: string;

@@ -113,7 +113,7 @@ export function shouldPause(usedPercent: number | undefined, threshold: number =
 }
 
 /** Which subscription window stopped the run. */
-export type PauseReason = "5h" | "week";
+export type PauseReason = "5h" | "week" | "pacing";
 
 export interface PauseThresholds {
 	fiveHour?: number;

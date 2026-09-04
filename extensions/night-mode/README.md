@@ -41,7 +41,7 @@ one session length.
 
 For an unconditional lid-close block, independent of this extension:
 `sudo pmset -a disablesleep 1` (and `0` to restore).
-2. **Budget guard**: watches both the Claude 5h subscription window and the weekly one, and pauses the agent at **95%** of either, so a night run never spills past a limit.
+2. **Budget guard**: watches Claude's 5h and weekly subscription windows, and also respects the global Codex pacing guard published by `usage`. A spent Codex allowance pauses the run and requires a manual `/night resume` after the allowance is available.
 3. **Automated resume**: once the window has room again, sends a `continue` prompt on its own.
 
 ## How pausing works
@@ -90,9 +90,9 @@ its own.
 
 ## Data source
 
-No HTTP calls of its own. The `usage` extension owns the poll of the Claude
-OAuth usage endpoint and publishes `usage:snapshot` on pi's event bus; this
-extension only subscribes. State is republished as `night-mode:state`.
+No HTTP calls of its own. The `usage` extension owns subscription polling and
+publishes `usage:snapshot` plus Codex `usage:pacing` state on pi's event bus;
+this extension only subscribes. State is republished as `night-mode:state`.
 
 ## Night runs
 
