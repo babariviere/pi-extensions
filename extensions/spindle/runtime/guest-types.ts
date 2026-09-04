@@ -36,7 +36,10 @@ interface SpindleCapturedToolResult {
 interface SpindleCapturedTool {
   (args?: Record<string, unknown>): Promise<SpindleCapturedToolResult>;
 }
-type SpindleExtensionsApi = Record<string, SpindleCapturedTool>;
+type SpindleExtensionsApi = Record<string, SpindleCapturedTool> & {
+  /** Compatibility alias for the top-level discovery API. */
+  tools: SpindleToolsApi;
+};
 interface SpindleAction {
   ref: string;
   provider: string;
