@@ -137,6 +137,8 @@ export default function (pi: ExtensionAPI): void {
 	let wakeLock: WakeLock | undefined;
 	let usage: UsageSnapshot | undefined;
 	let pacing: PacingStatus | undefined;
+	/** Mirrors usage's session-level pacing toggle. */
+	let pacingEnforced = true;
 	let enabled = true;
 	let inWindow = false;
 	let paused = false;
@@ -163,7 +165,7 @@ export default function (pi: ExtensionAPI): void {
 
 	/** The window that should stop the run right now, weekly first. */
 	const currentPauseReason = (): PauseReason | undefined => {
-		if (pacing?.blocked) return "pacing";
+		if (pacingEnforced && pacing?.blocked) return "pacing";
 		return pauseReasonFor({
 			fiveHourPercent: usedPercent(),
 			weekPercent: weekPercent(),
@@ -949,6 +951,9 @@ export default function (pi: ExtensionAPI): void {
 	unsubscribePacing = pi.events.on(USAGE_PACING_EVENT, (data) => {
 		if (!isUsagePacingEvent(data)) return;
 		pacing = data.pacing;
+		// Older publishers omit this field and therefore retain the safe default.
+		pacingEnforced = data.enforced ?? true;
+		if (pausedReason === "pacing" && !currentPauseReason()) clearPause();
 		evaluate();
 	});
 
@@ -980,14 +985,14 @@ export default function (pi: ExtensionAPI): void {
 	pi.on("tool_call", (_event, ctx) => {
 		ctxRef = ctx;
 		if (!enabled || !inWindow || !paused) return;
-		if (pausedReason === "pacing") {
+		if (pausedReason === "pacing" && pacingEnforced) {
 			return {
 				block: true,
 				terminate: true,
 				reason:
 					"night-mode: today's Codex pacing allowance is exhausted " +
 					`(${pacing?.usedTodayPercent.toFixed(1) ?? "?"}% used, ${pacing?.remainingTodayPercent.toFixed(1) ?? "?"}% remaining). ` +
-					"Stopping here. Resume manually after a new allowance is available, or use /usage override. Do not retry.",
+					"Stopping here. Resume manually after a new allowance is available, or use /usage pacing off. Do not retry.",
 			};
 		}
 		const until =

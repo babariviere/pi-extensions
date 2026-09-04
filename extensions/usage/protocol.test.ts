@@ -18,6 +18,7 @@ test("recognizes published pacing state and a cleared pacing state", () => {
 		}),
 		true,
 	);
+	assert.equal(isUsagePacingEvent({ enforced: false }), true);
 	assert.equal(isUsagePacingEvent({}), true);
 });
 
@@ -25,4 +26,5 @@ test("rejects malformed pacing events", () => {
 	assert.equal(isUsagePacingEvent(undefined), false);
 	assert.equal(isUsagePacingEvent({ pacing: { blocked: "no", remainingTodayPercent: 0 } }), false);
 	assert.equal(isUsagePacingEvent({ pacing: { blocked: true, remainingTodayPercent: "none" } }), false);
+	assert.equal(isUsagePacingEvent({ enforced: "no" }), false);
 });

@@ -12,17 +12,20 @@ export type UsageProvider = "anthropic" | "openai";
 export interface UsagePacingEvent {
 	/** Undefined when the current snapshot cannot support Codex pacing. */
 	pacing?: import("./pacing.ts").PacingStatus;
+	/** Whether pacing is currently allowed to stop tool calls. */
+	enforced?: boolean;
 }
 
 /** Narrow an untyped bus payload to a Codex pacing event. */
 export function isUsagePacingEvent(data: unknown): data is UsagePacingEvent {
 	if (!data || typeof data !== "object") return false;
-	const pacing = (data as UsagePacingEvent).pacing;
+	const { pacing, enforced } = data as UsagePacingEvent;
 	return (
-		pacing === undefined ||
-		(typeof pacing === "object" &&
-			typeof pacing.blocked === "boolean" &&
-			typeof pacing.remainingTodayPercent === "number")
+		(enforced === undefined || typeof enforced === "boolean") &&
+		(pacing === undefined ||
+			(typeof pacing === "object" &&
+				typeof pacing.blocked === "boolean" &&
+				typeof pacing.remainingTodayPercent === "number"))
 	);
 }
 

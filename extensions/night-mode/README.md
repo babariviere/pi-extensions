@@ -41,7 +41,7 @@ one session length.
 
 For an unconditional lid-close block, independent of this extension:
 `sudo pmset -a disablesleep 1` (and `0` to restore).
-2. **Budget guard**: watches Claude's 5h and weekly subscription windows, and also respects the global Codex pacing guard published by `usage`. A spent Codex allowance pauses the run and requires a manual `/night resume` after the allowance is available.
+2. **Budget guard**: watches Claude's 5h and weekly subscription windows, and also respects the global Codex pacing guard published by `usage`. A spent Codex allowance pauses the run and requires a manual `/night resume` after the allowance is available. `/usage pacing off` clears the Codex pacing pause for this session.
 3. **Automated resume**: once the window has room again, sends a `continue` prompt on its own.
 
 ## How pausing works

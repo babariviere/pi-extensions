@@ -49,7 +49,6 @@ export default function (pi: ExtensionAPI): void {
 	let pacingLedger = loadPacingLedger();
 	let pacing: PacingStatus | undefined;
 	let pacingEnabled = process.env.PI_USAGE_PACING !== "off";
-	let pacingOverride = false;
 
 	function provider(): UsageProvider | undefined {
 		return usageProviderForModel(model);
@@ -76,11 +75,18 @@ export default function (pi: ExtensionAPI): void {
 		savePacingLedger(pacingLedger);
 	}
 
+	function publishPacing(): void {
+		pi.events.emit(USAGE_PACING_EVENT, {
+			...(pacing ? { pacing } : {}),
+			enforced: pacingEnabled,
+		});
+	}
+
 	function publish(snapshot: UsageSnapshot, fetchedAt = Date.now()): void {
 		updatePacing(snapshot);
 		last = { fetchedAt, snapshot };
 		pi.events.emit(USAGE_SNAPSHOT_EVENT, last);
-		pi.events.emit(USAGE_PACING_EVENT, { ...(pacing ? { pacing } : {}) });
+		publishPacing();
 	}
 
 	function syncWatch(): void {
@@ -164,7 +170,7 @@ export default function (pi: ExtensionAPI): void {
 	});
 
 	pi.on("tool_call", (_event, ctx) => {
-		if (!pacingEnabled || pacingOverride || !isOpenAIModel(ctx.model) || !pacing) return;
+		if (!pacingEnabled || !isOpenAIModel(ctx.model) || !pacing) return;
 		if (pacing.warningPending) {
 			markPacingWarningSent(pacingLedger, pacing.day);
 			pacing.warningPending = false;
@@ -186,32 +192,28 @@ export default function (pi: ExtensionAPI): void {
 			terminate: true,
 			reason:
 				`usage: ${reason} (${percent(pacing.usedTodayPercent)} used today, ` +
-				`${percent(pacing.remainingTodayPercent)} remaining). Use /usage override to continue for this session.`,
+				`${percent(pacing.remainingTodayPercent)} remaining). Use /usage pacing off to continue for this session.`,
 		};
 	});
 
 	pi.registerCommand("usage", {
-		description: "Show Codex subscription usage and weekly pacing (status | pacing on|off | override)",
+		description: "Show Codex subscription usage and weekly pacing (status | pacing on|off)",
 		getArgumentCompletions: (prefix) =>
-			["status", "pacing on", "pacing off", "override"]
+			["status", "pacing on", "pacing off"]
 				.filter((value) => value.startsWith(prefix))
 				.map((value) => ({ value, label: value })),
 		handler: async (args, ctx) => {
 			const action = args.trim().toLowerCase();
 			if (action === "pacing on") {
 				pacingEnabled = true;
-				pacingOverride = false;
+				publishPacing();
 				ctx.ui.notify("usage: Codex pacing enabled", "info");
 				return;
 			}
 			if (action === "pacing off") {
 				pacingEnabled = false;
+				publishPacing();
 				ctx.ui.notify("usage: Codex pacing disabled for this session", "warning");
-				return;
-			}
-			if (action === "override") {
-				pacingOverride = true;
-				ctx.ui.notify("usage: Codex pacing override enabled for this session", "warning");
 				return;
 			}
 			const week = findWindow(last?.snapshot, WEEK_LABEL);
@@ -221,7 +223,7 @@ export default function (pi: ExtensionAPI): void {
 					`usage provider: ${last?.snapshot.provider ?? "unknown"}`,
 					`Codex week: ${percent(week?.usedPercent)}${week?.resetsAt ? `, resets ${week.resetsAt}` : ""}`,
 					`Codex 5h: ${fiveHour ? percent(fiveHour.usedPercent) : "none"} (informational)`,
-					`pacing: ${pacingEnabled ? (pacingOverride ? "overridden for this session" : "enabled") : "disabled for this session"}`,
+					`pacing: ${pacingEnabled ? "enabled" : "disabled for this session"}`,
 					...(pacing
 						? [
 								`pacing period (${pacing.day}): ${percent(pacing.usedTodayPercent)} used of ${percent(pacing.allowancePercent)}, ${percent(pacing.remainingTodayPercent)} remaining`,
