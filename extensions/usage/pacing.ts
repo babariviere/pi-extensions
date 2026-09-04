@@ -10,6 +10,8 @@ interface DayRecord {
 	allowancePercent: number;
 	usedPercent: number;
 	lastWeeklyPercent: number;
+	/** Whether weekly usage present at the day's first observation was attributed to this day. */
+	initialUsageAttributed?: boolean;
 }
 
 export interface PacingLedger {
@@ -52,18 +54,28 @@ export function observeWeeklyUsage(
 	const reset = new Date(input.resetAt);
 	if (!Number.isFinite(reset.getTime()) || !Number.isFinite(input.weeklyUsedPercent)) return undefined;
 	const weeklyUsedPercent = Math.max(0, Math.min(100, input.weeklyUsedPercent));
-	const active = ledger?.weekResetAt === input.resetAt ? ledger : { weekResetAt: input.resetAt, days: {} };
+	const isNewWindow = ledger?.weekResetAt !== input.resetAt;
+	const active = isNewWindow ? { weekResetAt: input.resetAt, days: {} } : ledger;
 	const day = dayKey(input.now);
 	const daysRemaining = remainingCalendarDays(input.now, reset);
 	let record = active.days[day];
 	if (!record) {
 		record = {
 			allowancePercent: Math.max(0, 100 - weeklyUsedPercent) / daysRemaining,
-			usedPercent: 0,
+			// The API exposes only a cumulative weekly percentage. Attribute the
+			// unobserved amount to today so pacing does not ignore usage that
+			// occurred before pi's first poll.
+			usedPercent: isNewWindow ? weeklyUsedPercent : 0,
 			lastWeeklyPercent: weeklyUsedPercent,
+			initialUsageAttributed: true,
 		};
 		active.days[day] = record;
 	} else {
+		// Migrate ledgers written before initial usage was attributed.
+		if (!record.initialUsageAttributed) {
+			record.usedPercent += record.lastWeeklyPercent;
+			record.initialUsageAttributed = true;
+		}
 		record.usedPercent += Math.max(0, weeklyUsedPercent - record.lastWeeklyPercent);
 		record.lastWeeklyPercent = weeklyUsedPercent;
 	}

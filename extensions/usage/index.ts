@@ -199,7 +199,7 @@ export default function (pi: ExtensionAPI): void {
 				[
 					`usage provider: ${last?.snapshot.provider ?? "unknown"}`,
 					`Codex week: ${percent(week?.usedPercent)}${week?.resetsAt ? `, resets ${week.resetsAt}` : ""}`,
-					`Codex 5h: ${percent(fiveHour?.usedPercent)} (informational)`,
+					`Codex 5h: ${fiveHour ? percent(fiveHour.usedPercent) : "none"} (informational)`,
 					`pacing: ${pacingEnabled ? (pacingOverride ? "overridden for this session" : "enabled") : "disabled for this session"}`,
 					...(pacing
 						? [
