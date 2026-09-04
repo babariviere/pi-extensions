@@ -367,7 +367,7 @@ export default function (pi: ExtensionAPI): void {
 	 * Two brakes keep this from spinning: a hard cap on continuations, and a
 	 * fingerprint check, since a nudge that changes nothing is a stall.
 	 */
-	function maybeContinue(): void {
+	function maybeContinue(ctx?: ExtensionContext): void {
 		if (!run || !enabled || !inWindow || paused) return;
 
 		const items = currentLedger();
@@ -417,7 +417,7 @@ export default function (pi: ExtensionAPI): void {
 		noteTimeline(
 			`night-mode: settled with ${open.length || "no"} ledger item(s) open, sending continuation ${run.nudges}/${MAX_CONTINUATIONS}`,
 		);
-		deliver(message);
+		deliver(message, ctx);
 	}
 
 	/**
@@ -976,11 +976,11 @@ export default function (pi: ExtensionAPI): void {
 
 	// `agent_settled` (not `agent_end`) is the real "nothing left to do" signal: no
 	// retry, compaction or queued continuation will follow.
-	pi.on("agent_settled", () => {
+	pi.on("agent_settled", (_event, ctx) => {
 		agentBusy = false;
 		evaluate();
 		// The agent thinks it is done. The ledger decides whether it really is.
-		maybeContinue();
+		maybeContinue(ctx);
 	});
 
 	pi.on("tool_call", (_event, ctx) => {
