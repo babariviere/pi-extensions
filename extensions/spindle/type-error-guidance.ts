@@ -17,6 +17,10 @@ const TUPLE_ARITY_PATTERN = /Tuple type .* of length '[0-9]+' has no element at 
 const MISSING_NAME_PATTERN = /^Cannot find name '([^']+)'/;
 const UNKNOWN_PROPERTY_PATTERN = /'([^']+)' does not exist in type '([^']+)'/;
 const PI_CALL_PATTERN = /\bpi\.(\w+)\s*\(/g;
+// A double-escaped quote immediately before a concatenation operator terminates
+// the surrounding TypeScript string instead of escaping the embedded quote.
+// This commonly happens when a shell command embeds another command language.
+const DOUBLE_ESCAPED_QUOTE_CONCAT_PATTERN = /\\\\"\s*\+\+/;
 
 // spindle_exec envelope arguments that are commonly misplaced inside `code`.
 const SPINDLE_EXEC_ARGUMENT_NOTES: Readonly<Record<string, string>> = {
@@ -104,6 +108,12 @@ export const typeErrorRecoveryHint = (code: string, errors: SpindleTypeError[]):
 	}
 	if (PROMISE_ALL_PATTERN.test(code) && errors.some((error) => TUPLE_ARITY_PATTERN.test(error.message))) {
 		return "Recovery hint: match `Promise.all` destructuring one binding per promise; remove the extra binding or add the missing call.";
+	}
+	if (
+		DOUBLE_ESCAPED_QUOTE_CONCAT_PATTERN.test(code) &&
+		errors.some((error) => SYNTAX_ERROR_PATTERN.test(error.message))
+	) {
+		return 'Recovery hint: a double-escaped quote before string concatenation broke a nested command string. Prefer `pi.exec({ argv: [...] })` for literal command arguments, or use `"` (not `\\"`) when an embedded quote must remain in a TypeScript string.';
 	}
 	if (hasLiteralPayloadInterpolation(code, errors)) {
 		return "Recovery hint: a `${...}` expression in an edit/write payload is being evaluated by the Spindle TypeScript program. Declare it if intentional; for literal file content, move the payload to top-level `strings` and reference `\u03c0.key`.";

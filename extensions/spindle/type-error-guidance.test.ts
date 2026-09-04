@@ -33,6 +33,12 @@ test("unquoted paths are diagnosed", () => {
 	assert.match(String(hint), /quote filesystem paths/);
 });
 
+test("a double-escaped nested command quote is diagnosed", () => {
+	const code = String.raw`pi.bash({ command: "jj log -T \\" ++ description.first_line()" });`;
+	const hint = typeErrorRecoveryHint(code, [error("',' expected")]);
+	assert.match(String(hint), /nested command string/);
+});
+
 test("a literal interpolation in a write payload is diagnosed", () => {
 	const hint = typeErrorRecoveryHint("await pi.write({ path: '/x', content: `${body}` });", [
 		error("Cannot find name 'body'"),
