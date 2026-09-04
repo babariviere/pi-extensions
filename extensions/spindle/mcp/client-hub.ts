@@ -319,9 +319,9 @@ export class McpClientHub implements McpToolHub {
 		options: { allowConnect?: boolean } = {},
 	): Promise<CachedMcpTool[]> {
 		const connection = this.#connections.get(definition.name);
-		if (connection) return connection.tools;
+		if (connection) return connection.tools.filter((tool) => isToolAllowed(definition, tool.name));
 		const cached = this.#toolCache().get(definition.name, serverTarget(definition), this.#fingerprint());
-		if (cached) return cached.tools;
+		if (cached) return cached.tools.filter((tool) => isToolAllowed(definition, tool.name));
 		if (options.allowConnect === false) return [];
 		return (await this.#connection(definition.name)).tools;
 	}
