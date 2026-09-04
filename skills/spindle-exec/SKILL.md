@@ -7,7 +7,7 @@ description: >-
 
 # spindle_exec
 
-Run one TypeScript program for related work. Only its `return` enters model context. Keep large reads, command output, and intermediate data inside the sandbox. Return paths, counts, decisions, and short excerpts instead of raw data.
+Run one TypeScript program for related work. Only its `return` enters model context. Keep large reads, command output, and intermediate data inside the sandbox. Return paths, counts, decisions, and short excerpts instead of raw data. Return structured values directly, for example `return { paths, count }`, rather than `return JSON.stringify({ paths, count })`. Use `JSON.stringify` only when the required result is explicitly a raw JSON string.
 
 ## Retrieval first
 
