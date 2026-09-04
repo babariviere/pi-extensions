@@ -18,7 +18,7 @@ Search before reading repository files:
 - `pi.ls` inspects directory structure.
 - `pi.read({ path, offset, limit })` reads an identified, bounded range.
 
-Do not whole-file-read logs, generated files, lockfiles, vendored code, or large files unless necessary. `tools.search()` discovers extension and MCP actions. It does not search repository contents.
+Do not whole-file-read logs, generated files, lockfiles, vendored code, or large files unless necessary. `tools.search()` discovers registered actions. It does not search repository contents or lazy MCP servers.
 
 ## Core tools
 
@@ -51,9 +51,10 @@ await τ.set("index", request);
 
 ## Discovery and agents
 
-- `tools.search({ query })` finds registered actions. Call static tools on their namespaces. Use `tools.describe({ ref })` before dynamically calling `tools.call`.
-- `mcp.search({ query })` and `mcp.describe({ tool })` discover lazy MCP actions. Call with `mcp.call(server, tool, args)`.
+- Before declaring an external capability unavailable, discover it. `tools.search({ query })` finds registered actions.
+- For lazy MCP services such as Slack, use `mcp.list()` or `mcp.search({ query: "slack" })`, then `mcp.connect("slack")` if needed. Use `mcp.search({ query: "messages" })` and `mcp.describe({ tool })` before `mcp.call(server, tool, args)`.
 - `agents.run`, `agents.runAll`, `agents.start`, and `agents.wait` run subagents. A `running` result is not a failure.
+
 
 ## Execution
 
