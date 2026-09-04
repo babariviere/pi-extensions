@@ -36,8 +36,11 @@ afterEach(() => {
 test("/tmp in allowWrite resolves to the real path, not the top-level alias", () => {
 	const result = buildSeatbeltProfile(basePolicy({ allowWrite: ["/tmp"] }));
 	const values = result.params.map(([, value]) => value);
-	assert.ok(values.includes("/private/tmp"), `expected /private/tmp among ${values.join(", ")}`);
-	assert.ok(!values.includes("/tmp"), "the unresolved alias must never be handed to sandbox-exec as a param value");
+	const resolvedTmp = realpathSync("/tmp");
+	assert.ok(values.includes(resolvedTmp), `expected ${resolvedTmp} among ${values.join(", ")}`);
+	if (resolvedTmp !== "/tmp") {
+		assert.ok(!values.includes("/tmp"), "the unresolved alias must never be handed to sandbox-exec as a param value");
+	}
 });
 
 test("a symlinked writable root resolves to its target and warns", () => {
