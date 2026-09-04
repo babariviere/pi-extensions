@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { AGENT_STARTUP_TIMEOUT_MS, HerdrClient } from "./herdr-client.ts";
+import { HerdrClient } from "./herdr-client.ts";
 import type { HerdrCliResult } from "./herdr-parse.ts";
 import type { HerdrTransport } from "./herdr-transport.ts";
 
@@ -27,39 +27,29 @@ function scriptedTransport(responses: HerdrCliResult[] | ((args: string[], call:
 	return { transport, calls };
 }
 
-test("startAgent retries while the pane is busy, then succeeds", async () => {
-	const { transport, calls } = scriptedTransport((_, call) =>
-		call < 2 ? { ok: false, error: "agent target pane wA:p1 is not an available shell" } : { ok: true, result: {} },
+test("runPi atomically submits a quoted Pi command with explicit environment", async () => {
+	const { transport, calls } = scriptedTransport([{ ok: true, result: {} }]);
+	const result = await new HerdrClient(transport).runPi("wA:p1", ["--model", "openai/gpt", "--value=it's"], {
+		PI_USAGE_PACING: "off",
+		PI_NIGHT_RUN: "1",
+	});
+	assert.deepEqual(result, { ok: true });
+	assert.deepEqual(calls, [
+		[
+			"pane",
+			"run",
+			"wA:p1",
+			`PI_USAGE_PACING='off' PI_NIGHT_RUN='1' exec pi '--model' 'openai/gpt' '--value=it'"'"'s'`,
+		],
+	]);
+});
+
+test("runPi surfaces a pane-run failure", async () => {
+	const result = await new HerdrClient(scriptedTransport([{ ok: false, error: "pane unavailable" }]).transport).runPi(
+		"wA:p1",
+		["--flag"],
 	);
-	const res = await new HerdrClient(transport).startAgent("sub-0-abc", "pi", "wA:p1", ["--flag"], 60000, {
-		pollMs: 1,
-		readyTimeoutMs: 5000,
-	});
-	assert.equal(res.ok, true);
-	assert.equal(calls.length, 3);
-});
-
-test("startAgent times out with a clear error when the pane stays busy", async () => {
-	const { transport } = scriptedTransport([{ ok: false, error: "agent target pane wA:p1 is not an available shell" }]);
-	const res = await new HerdrClient(transport).startAgent("sub-0-abc", "pi", "wA:p1", ["--flag"], 60000, {
-		pollMs: 1,
-		readyTimeoutMs: 30,
-	});
-	assert.equal(res.ok, false);
-	assert.match(res.error ?? "", /wA:p1 did not become ready/);
-	assert.match(res.error ?? "", /within 30ms/);
-	assert.match(res.error ?? "", /not an available shell/);
-});
-
-test("startAgent fails fast on a non-busy error without retrying", async () => {
-	const { transport, calls } = scriptedTransport([{ ok: false, error: "unsupported interactive agent kind foo" }]);
-	const res = await new HerdrClient(transport).startAgent("sub-0-abc", "foo", "wA:p1", ["--flag"], 60000, {
-		pollMs: 1,
-		readyTimeoutMs: 5000,
-	});
-	assert.equal(res.ok, false);
-	assert.match(res.error ?? "", /unsupported interactive agent kind/);
-	assert.equal(calls.length, 1);
+	assert.deepEqual(result, { ok: false, error: "pane unavailable" });
 });
 
 test("splitPane sends the right args and returns the new pane id", async () => {
@@ -103,38 +93,4 @@ test("statusProbe wires peek to `pane get` for the same pane", async () => {
 	const state = await probe.peek();
 	assert.deepEqual(state, { exists: true, status: "working" });
 	assert.deepEqual(calls[0], ["pane", "get", "wA:p9"]);
-});
-
-test("startAgent reports a startup timeout as its own failure kind and does not retry", async () => {
-	const { transport, calls } = scriptedTransport([
-		{ ok: false, error: 'timed out waiting for agent startup (id "cli:agent:start")' },
-	]);
-	const res = await new HerdrClient(transport).startAgent("sub-0-abc", "pi", "wA:p1", ["--flag"], undefined, {
-		pollMs: 1,
-		readyTimeoutMs: 5000,
-	});
-	assert.equal(res.ok, false);
-	assert.equal(res.failure, "startup-timeout");
-	// Retrying would start a second child in the same pane.
-	assert.equal(calls.length, 1);
-});
-
-test("startAgent classifies a pane that never frees up apart from a fatal error", async () => {
-	const busy = await new HerdrClient(
-		scriptedTransport([{ ok: false, error: "agent_pane_busy" }]).transport,
-	).startAgent("sub-0-abc", "pi", "wA:p1", ["--flag"], undefined, { pollMs: 1, readyTimeoutMs: 20 });
-	assert.equal(busy.failure, "pane-busy");
-
-	const fatal = await new HerdrClient(
-		scriptedTransport([{ ok: false, error: "unsupported interactive agent kind foo" }]).transport,
-	).startAgent("sub-0-abc", "foo", "wA:p1", ["--flag"], undefined, { pollMs: 1, readyTimeoutMs: 20 });
-	assert.equal(fatal.failure, "fatal");
-});
-
-test("startAgent keeps herdr's readiness wait short by default", async () => {
-	const { transport, calls } = scriptedTransport([{ ok: true, result: {} }]);
-	await new HerdrClient(transport).startAgent("sub-0-abc", "pi", "wA:p1", ["--flag"]);
-	const timeout = calls[0][calls[0].indexOf("--timeout") + 1];
-	assert.equal(timeout, String(AGENT_STARTUP_TIMEOUT_MS));
-	assert.ok(AGENT_STARTUP_TIMEOUT_MS <= 15_000, "a long readiness wait is pure latency for a working child");
 });

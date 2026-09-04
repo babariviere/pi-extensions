@@ -71,6 +71,8 @@ export interface ActiveNightRun {
 	 * restarted mid-run) read it back from this file.
 	 */
 	configHome?: string;
+	/** Whether children disable the local Codex pacing guard for this run. */
+	pacingDisabled?: boolean;
 	/**
 	 * Where the run's capability probe writes what the sandbox actually allows
 	 * (see `preflight.ts`). Published so a child can read the envelope instead
@@ -167,6 +169,7 @@ export function nightChildEnv(
 		[NIGHT_RUN_ENV]: "1",
 		...(run.ledgerDir ? { PI_TODO_PATH: run.ledgerDir } : {}),
 		...(run.configHome ? { XDG_CONFIG_HOME: run.configHome } : {}),
+		...(run.pacingDisabled ? { PI_USAGE_PACING: "off" } : {}),
 	};
 }
 
@@ -191,6 +194,10 @@ export function applyNightRunEnv(
 	if (run.ledgerDir && env.PI_TODO_PATH !== run.ledgerDir) {
 		env.PI_TODO_PATH = run.ledgerDir;
 		applied.push("PI_TODO_PATH");
+	}
+	if (run.pacingDisabled && env.PI_USAGE_PACING !== "off") {
+		env.PI_USAGE_PACING = "off";
+		applied.push("PI_USAGE_PACING");
 	}
 	return applied;
 }

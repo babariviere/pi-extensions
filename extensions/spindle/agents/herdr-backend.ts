@@ -1,62 +1,18 @@
 /**
- * herdr backend: spawn each subagent as a `pi` instance in its own pane inside a
- * fresh "subagents" tab, then wait for each run's transcript to settle.
+ * Herdr backend: run each subagent as a Pi process in a pane of a fresh
+ * "subagents" tab, then wait for its transcript to settle.
  *
- * Lifecycle: create a fresh tab per run, build an evenly-sized grid of panes
- * (reusing the tab's root pane as the first cell), launch one titled `pi` per
- * agent via `herdr agent start`, and once every run has settled and its output
- * has been read, close the whole tab (removing all panes). Panes are live while
- * running so the user can watch and interact; they are torn down only after the
- * batch completes.
+ * A pane is created at an idle shell prompt, but Pi is launched with `pane run`
+ * instead of `agent start`. `pane run` submits the quoted command and Enter in
+ * one operation, avoiding the shell-input race that could leave a Pi command in
+ * the composer. Pi is then discovered through its pane id for lifecycle waits.
  *
- * Balance: `herdr agent start` cannot set a split ratio, so spawning N agents by
- * repeatedly splitting the focused pane squashed later panes (50/25/12.5...).
- * Stacking them all vertically also squashes each into a thin strip. Instead we
- * tile them into a grid (see computeGrid): split the root into even columns with
- * `right` splits, then split each column into even rows with `down` splits, so
- * every pane gets a usable rectangle.
- *
- * Launch: each split pane lands at a fresh idle shell prompt, which is exactly
- * what `herdr agent start` requires (it types the launch command into that
- * shell and blocks until it detects pi is interactive-ready). We must start the
- * agent before anything else runs in the pane, or herdr reports
- * `agent_pane_busy`. The child needs no output-path plumbing: its result is its
- * final assistant message, read from the transcript the parent already named
- * via `--session` (see run.ts `resolveRunOutput`).
- *
- * Task delivery: `agent start` types its args into a shell and rejects
- * multi-line ones, so we start pi with flags only (all single-line), one of
- * which is `--spindle-task-file <path>` pointing at the framed task the run
- * preparation wrote. The child's own Spindle reads that file and injects it as
- * its first user message (`task-delivery.ts`), so the task arrives with the
- * process and nothing is ever typed into the TUI.
- *
- * That replaced `herdr agent prompt`, which wrote the task to pi's tty: input
- * arriving before pi bound its input handler was discarded rather than
- * buffered, so a slow child (fresh night workspace, extension load, MCP
- * connect) came up idle with an empty composer and the run died at its timeout
- * with no output. Replaying the submit key could not repair that - the text was
- * already gone.
- *
- * Completion: each run waits on a blocking `herdr agent wait`
- * (idle-after-working, or pane gone) rather than polling, then confirms the turn
- * really ended by checking that the child transcript ends on a terminal
- * assistant message. herdr cannot see turn boundaries, so an idle report alone
- * would cut off a child that was merely between a tool result and its next model
- * stream, and closing the tab would kill it mid-generation.
- *
- * Startup is not a completion signal either. `herdr agent start` blocks until it
- * judges the agent interactive-ready and reports `timed out waiting for agent
- * startup` otherwise, but a subagent receives its task with the process and is
- * therefore *working*, not idling at a prompt: only children that finished
- * inside herdr's window ever "started". That error is now tolerated whenever a
- * child can be shown to exist (`childIsAlive`), and the transcript decides the
- * run's fate. A launch that really did fail still reads its transcript before
- * giving up (`failedLaunchResult`), so a child that worked is never discarded
- * unreported, and the error names the pane and the transcript.
+ * The task is still a file path, not terminal input. This avoids shell quoting
+ * multi-line work and lets the child inject its first message after startup.
  */
 
 import { existsSync } from "node:fs";
+import { nightChildEnv, readActiveNightRun } from "../../night-mode/night-run.ts";
 import { computeGrid } from "./grid.ts";
 import { herdr } from "./herdr-client.ts";
 import { paneLabel } from "./herdr-parse.ts";
@@ -77,11 +33,7 @@ import {
 
 export const SUBAGENTS_TAB_LABEL = "subagents";
 
-/**
- * How long to look for evidence of a child after herdr's `agent start` reports a
- * startup timeout. A pi child writes its transcript within seconds of spawning,
- * so this only has to outlast process start, not the task.
- */
+/** How long to wait for a `pane run` child to appear in its transcript or pane state. */
 const CHILD_EVIDENCE_TIMEOUT_MS = 20_000;
 
 export async function runInHerdr(reqs: RunRequest[], ctx: RunContext): Promise<RunResult[]> {
@@ -238,11 +190,6 @@ interface SpawnedRun {
 	paneId?: string;
 	error?: string;
 	/**
-	 * Launch anomaly that did not stop the run (a tolerated herdr startup
-	 * timeout). Reported only if the run then ends badly.
-	 */
-	note?: string;
-	/**
 	 * Pane scrollback captured before an aborted batch's tab was closed. It is
 	 * the fallback output source for a run whose transcript never landed, and it
 	 * has to be read while the pane still exists.
@@ -258,18 +205,7 @@ function prepareRun(req: RunRequest, ctx: RunContext, defaultProvider: string | 
 	return { req, outputPath: p.outputPath, sessionPath: p.sessionPath, childArgs: p.childArgs };
 }
 
-/**
- * Unique live agent name for `herdr agent start`. herdr requires a strict name:
- * a leading lowercase letter, then only lowercase letters, digits, `-` or `_`,
- * 1-32 chars. A short random suffix keeps names distinct across concurrent
- * batches; names are freed when the occupant exits, so per-batch reuse is fine.
- */
-function agentName(index: number): string {
-	const rand = Math.random().toString(36).slice(2, 8);
-	return `sub-${index}-${rand}`;
-}
-
-/** Rename the pane and start pi in it via `herdr agent start`. */
+/** Rename the pane, run Pi atomically, then require child evidence. */
 async function launchRun(p: PreparedRun, ctx: RunContext): Promise<SpawnedRun> {
 	if (p.error || !p.paneId) {
 		ctx.onStatus?.(p.req.index, { state: "failed", paneId: p.paneId, outputPath: p.outputPath });
@@ -282,53 +218,23 @@ async function launchRun(p: PreparedRun, ctx: RunContext): Promise<SpawnedRun> {
 		};
 	}
 
-	// Start pi before anything else touches the pane so it is still an idle shell.
-	// A freshly split pane's shell can still be initializing (or briefly busy),
-	// so startAgent waits for the pane to become ready (up to 30s) and retries.
-	const started = await herdr.startAgent(agentName(p.req.index), "pi", p.paneId, p.childArgs, undefined, {
-		signal: ctx.signal,
-	});
-
-	// A startup timeout is not a launch failure. herdr blocks until it judges the
-	// started agent interactive-ready, and a subagent never looks like that: its
-	// task arrives with the process, so it is working from its first second
-	// instead of waiting at a prompt. Trivial children happened to finish and go
-	// idle inside the window and "started"; every child doing real work timed out
-	// and had its pane torn down mid-task with a full transcript on disk.
-	//
-	// So when herdr's probe expires we ask whether a child exists at all, and only
-	// an empty pane fails the run. Everything else (bad name, unsupported kind,
-	// pane gone, a pane that never freed up) still fails immediately.
-	let note: string | undefined;
-	if (!started.ok) {
-		const tolerable = started.failure === "startup-timeout" && (await childIsAlive(p, ctx));
-		if (!tolerable) {
-			ctx.onStatus?.(p.req.index, { state: "failed", paneId: p.paneId, outputPath: p.outputPath });
-			return {
-				req: p.req,
-				outputPath: p.outputPath,
-				sessionPath: p.sessionPath,
-				paneId: p.paneId,
-				error: started.error,
-			};
-		}
-		note = `herdr reported "${started.error}" while the child was already running; waited on its transcript instead`;
+	await herdr.renamePane(p.paneId, paneLabel(p.req.agent.config.name, p.req.task));
+	const env = p.req.night ? nightChildEnv(readActiveNightRun(), {}) : {};
+	const launched = await herdr.runPi(p.paneId, p.childArgs, env, ctx.signal);
+	if (!launched.ok || !(await childIsAlive(p, ctx))) {
+		const error = launched.error ?? "Pi did not start in the Herdr pane";
+		ctx.onStatus?.(p.req.index, { state: "failed", paneId: p.paneId, outputPath: p.outputPath });
+		return {
+			req: p.req,
+			outputPath: p.outputPath,
+			sessionPath: p.sessionPath,
+			paneId: p.paneId,
+			error,
+		};
 	}
 
-	// Label the pane with the task so a watcher can tell panes apart. The task
-	// itself needs no delivery step: it came in on `--spindle-task-file` and the
-	// child injects it once its runtime is up.
-	await herdr.renamePane(p.paneId, paneLabel(p.req.agent.config.name, p.req.task));
-
 	ctx.onStatus?.(p.req.index, { state: "running", paneId: p.paneId, outputPath: p.outputPath });
-
-	return {
-		req: p.req,
-		outputPath: p.outputPath,
-		sessionPath: p.sessionPath,
-		paneId: p.paneId,
-		...(note ? { note } : {}),
-	};
+	return { req: p.req, outputPath: p.outputPath, sessionPath: p.sessionPath, paneId: p.paneId };
 }
 
 /**
@@ -391,9 +297,7 @@ async function settleRun(s: SpawnedRun, ctx: RunContext): Promise<RunResult> {
 		placeholder: "(no output produced before the pane finished or was terminated)",
 	});
 	report(resolved.ok);
-	// A tolerated startup timeout is only worth mentioning when the run ended
-	// badly; a run that produced its output does not need the launch trivia.
-	const failure = resolved.ok ? undefined : [s.note, outcomeError(outcome), whereToLook(s)].filter(Boolean).join("; ");
+	const failure = resolved.ok ? undefined : [outcomeError(outcome), whereToLook(s)].filter(Boolean).join("; ");
 	return {
 		...baseResult(s.req, resolved, failure, outcomeFailure(outcome)),
 		backend: "herdr",

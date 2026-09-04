@@ -27,10 +27,10 @@ function scriptedTransport(result: (args: string[]) => HerdrCliResult): {
 	};
 }
 
-const START_HELP: HerdrCliResult = {
+const PANE_HELP: HerdrCliResult = {
 	ok: true,
 	result: {},
-	stdout: "Usage: herdr agent start <name> [--kind <kind>] [--pane <id>]",
+	stdout: "Commands: list, run, read",
 };
 const AGENT_HELP: HerdrCliResult = {
 	ok: true,
@@ -39,26 +39,24 @@ const AGENT_HELP: HerdrCliResult = {
 };
 
 test("probe accepts the dialect the adapter speaks", async () => {
-	const { transport, calls } = scriptedTransport((args) => (args.includes("start") ? START_HELP : AGENT_HELP));
+	const { transport, calls } = scriptedTransport((args) => (args.includes("pane") ? PANE_HELP : AGENT_HELP));
 	const verdict = await probeHerdrDialect(transport);
 	assert.equal(verdict.compatible, true);
 	assert.equal(calls.length, 2);
 });
 
-test("probe rejects a CLI whose agent start lacks --kind (the observed drift)", async () => {
+test("probe rejects a CLI without pane run", async () => {
 	const { transport } = scriptedTransport((args) =>
-		args.includes("start")
-			? { ok: true, result: {}, stdout: "Usage: herdr agent start <name> [--pane <id>]" }
-			: AGENT_HELP,
+		args.includes("pane") ? { ok: true, result: {}, stdout: "Commands: list, read" } : AGENT_HELP,
 	);
 	const verdict = await probeHerdrDialect(transport);
 	assert.equal(verdict.compatible, false);
-	assert.match(verdict.reason ?? "", /--kind/);
+	assert.match(verdict.reason ?? "", /pane run/);
 });
 
 test("probe rejects a CLI without agent wait", async () => {
 	const { transport } = scriptedTransport((args) =>
-		args.includes("start") ? START_HELP : { ok: true, result: {}, stdout: "Commands: start, prompt" },
+		args.includes("pane") ? PANE_HELP : { ok: true, result: {}, stdout: "Commands: start, prompt" },
 	);
 	const verdict = await probeHerdrDialect(transport);
 	assert.equal(verdict.compatible, false);

@@ -4,8 +4,8 @@
  * Two adapters implement `RunBackend` (see run.ts): `headless` (child `pi`
  * processes) and `herdr` (live panes). This module is the one place that
  * knows both exist: it picks the adapter for a batch and contains CLI drift.
- * The herdr adapter speaks a specific herdr dialect (`agent start --kind`,
- * `agent wait`); when the installed binary no longer does, the launcher
+ * The herdr adapter speaks a specific herdr dialect (`pane run`, `agent wait`);
+ * when the installed binary no longer does, the launcher
  * probes once, caches the verdict, and falls back to the headless adapter
  * instead of failing every run with a raw CLI error.
  */
@@ -32,27 +32,17 @@ export interface HerdrDialect {
 
 /**
  * Probe the installed herdr for the dialect `herdr-backend.ts` speaks:
- * `agent start` must accept `--kind`, and `agent` must have the `wait`
- * subcommand herdr 0.7.5 introduced. Read-only (`--help` runs), cheap, and
- * never throws: any transport failure is an incompatible verdict with a
- * reason, so a missing or broken binary degrades to headless rather than
- * breaking `agents.run`.
+ * `pane run` starts Pi atomically and `agent wait` observes the detected Pi
+ * process. Read-only (`--help` runs), cheap, and never throws: any transport
+ * failure is an incompatible verdict with a reason, so a missing or broken
+ * binary degrades to headless rather than breaking `agents.run`.
  */
 export async function probeHerdrDialect(transport: HerdrTransport = execFileTransport): Promise<HerdrDialect> {
-	const start = await transport.run(["agent", "start", "--help"]);
-	if (!start.ok) {
-		return {
-			compatible: false,
-			reason: `herdr agent start unavailable (${start.error ?? "no help output"})`,
-		};
-	}
-	if (!/--kind/.test(start.stdout ?? "")) {
-		return { compatible: false, reason: "herdr agent start does not accept --kind" };
-	}
+	const pane = await transport.run(["pane", "--help"]);
+	if (!pane.ok) return { compatible: false, reason: `herdr pane unavailable (${pane.error ?? "no help output"})` };
+	if (!/\brun\b/.test(pane.stdout ?? "")) return { compatible: false, reason: "herdr pane run is missing" };
 	const agent = await transport.run(["agent", "--help"]);
-	if (!/\bwait\b/.test(agent.stdout ?? "")) {
-		return { compatible: false, reason: "herdr agent wait is missing" };
-	}
+	if (!/\bwait\b/.test(agent.stdout ?? "")) return { compatible: false, reason: "herdr agent wait is missing" };
 	return { compatible: true };
 }
 

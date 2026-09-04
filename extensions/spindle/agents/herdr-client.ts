@@ -3,8 +3,8 @@
  *
  * `HerdrClient` holds a `HerdrTransport` (how commands run) and turns each herdr
  * operation into typed args + a parsed result, keeping the rest of the code
- * API-name-agnostic. Arg construction, the `agent start` busy-retry loop, and
- * the herdr-version-specific `agent wait` all live here; parsing delegates to
+ * API-name-agnostic. Pane-run launch construction and the herdr-version-specific
+ * `agent wait` live here; parsing delegates to
  * `herdr-parse.ts`. The default `herdr` export is bound to the production
  * transport; tests construct `new HerdrClient(fakeTransport)`.
  */
@@ -12,12 +12,10 @@
 import { type StatusProbe } from "./pane-lifecycle.ts";
 import {
 	type AgentStatus,
-	isAgentStartupTimeoutError,
 	type AgentWaitResult,
 	type HerdrTab,
 	type PaneAgentState,
 	findAgentStatus,
-	isPaneBusyError,
 	isTimeoutError,
 	lastJsonLine,
 	parsePaneId,
@@ -26,39 +24,11 @@ import {
 } from "./herdr-parse.ts";
 import { execFileTransport, type HerdrTransport } from "./herdr-transport.ts";
 
-/** Resolve after `ms`, or immediately if `signal` is/gets aborted. */
-function delay(ms: number, signal?: AbortSignal): Promise<void> {
-	return new Promise((resolve) => {
-		if (signal?.aborted) return resolve();
-		const timer = setTimeout(resolve, ms);
-		signal?.addEventListener(
-			"abort",
-			() => {
-				clearTimeout(timer);
-				resolve();
-			},
-			{ once: true },
-		);
-	});
-}
-
 export type SplitDirection = "right" | "down";
 
-/**
- * How long herdr may block waiting for a started agent to look
- * interactive-ready. Short on purpose: the wait is pure latency for a subagent
- * that starts working the moment it launches, and the caller verifies the child
- * itself afterwards.
- */
-export const AGENT_STARTUP_TIMEOUT_MS = 15_000;
-
-/** Why a `herdr agent start` failed, so callers can tell recoverable apart. */
-export type StartAgentFailure = "startup-timeout" | "pane-busy" | "fatal";
-
-export interface StartAgentResult {
-	ok: boolean;
-	failure?: StartAgentFailure;
-	error?: string;
+/** Quote one value for the interactive POSIX shell behind `pane run`. */
+function shellQuote(value: string): string {
+	return `'${value.replaceAll("'", "'\"'\"'")}'`;
 }
 
 export class HerdrClient {
@@ -78,8 +48,8 @@ export class HerdrClient {
 	async createTab(label: string, workspaceId?: string, cwd?: string): Promise<HerdrTab | undefined> {
 		const args = ["tab", "create", "--label", label, "--no-focus"];
 		if (workspaceId) args.push("--workspace", workspaceId);
-		// The tab's root pane is reused as the first run's pane, and `agent start`
-		// cannot set a directory, so the first run's cwd has to be decided here.
+		// The tab's root pane is reused as the first run's pane, so its cwd has to
+		// be decided here before Pi is launched.
 		if (cwd) args.push("--cwd", cwd);
 		const res = await this.#transport.run(args);
 		return res.ok ? parseTab(res.result) : undefined;
@@ -115,71 +85,22 @@ export class HerdrClient {
 	}
 
 	/**
-	 * Start a supported interactive agent in an existing (idle shell) pane via
-	 * `herdr agent start`. The pane must be at its interactive shell prompt with
-	 * nothing running, or herdr reports `agent_pane_busy`. A freshly split pane's
-	 * shell can still be initializing (or briefly busy), so this polls `agent
-	 * start` every `pollMs` until it takes, up to `readyTimeoutMs` (default 30s).
-	 *
-	 * `timeoutMs` is herdr's own startup deadline, not the child's lifetime, and
-	 * it is deliberately short ({@link AGENT_STARTUP_TIMEOUT_MS}): herdr blocks
-	 * for all of it waiting for the started agent to look interactive-ready,
-	 * which a subagent that picks up its task immediately never does. Waiting
-	 * longer only delays the caller, so we take the timeout early and let it
-	 * verify the child directly.
-	 *
-	 * A failure is classified rather than flattened: `startup-timeout` is herdr's
-	 * readiness probe giving up (the child may well be running), `pane-busy` is a
-	 * pane that never freed up, `fatal` is everything else (bad name, unsupported
-	 * kind, pane gone).
+	 * Start Pi through `pane run`, which sends the whole command and Enter as one
+	 * operation. `agent start` types through the shell but can leave the command
+	 * unsubmitted; Pi is discovered afterwards by the pane-id lifecycle probes.
 	 */
-	async startAgent(
-		name: string,
-		kind: string,
+	async runPi(
 		paneId: string,
 		childArgs: string[],
-		timeoutMs = AGENT_STARTUP_TIMEOUT_MS,
-		opts?: { readyTimeoutMs?: number; pollMs?: number; signal?: AbortSignal },
-	): Promise<StartAgentResult> {
-		const args = [
-			"agent",
-			"start",
-			name,
-			"--kind",
-			kind,
-			"--pane",
-			paneId,
-			"--timeout",
-			String(timeoutMs),
-			"--",
-			...childArgs,
-		];
-		const readyTimeoutMs = opts?.readyTimeoutMs ?? 30000;
-		const pollMs = opts?.pollMs ?? 250;
-		const deadline = Date.now() + readyTimeoutMs;
-		let lastBusy: string | undefined;
-		for (;;) {
-			const res = await this.#transport.run(args, timeoutMs + 5000, opts?.signal);
-			if (res.ok) return { ok: true };
-			// Startup timeout: the launch command was accepted and pi was spawned;
-			// only herdr's readiness probe expired. Retrying would start a second
-			// child in the same pane, so report it and let the caller check liveness.
-			if (isAgentStartupTimeoutError(res.error)) {
-				return { ok: false, failure: "startup-timeout", error: res.error ?? "timed out waiting for agent startup" };
-			}
-			// Any non-busy error is fatal (bad name, unsupported kind, pane gone, ...).
-			if (!isPaneBusyError(res.error)) return { ok: false, failure: "fatal", error: res.error };
-			lastBusy = res.error;
-			const remaining = deadline - Date.now();
-			if (remaining <= 0 || opts?.signal?.aborted) {
-				return {
-					ok: false,
-					failure: "pane-busy",
-					error: `pane ${paneId} did not become ready to start an agent within ${readyTimeoutMs}ms (last herdr error: ${lastBusy ?? "agent_pane_busy"})`,
-				};
-			}
-			await delay(Math.min(pollMs, remaining), opts?.signal);
-		}
+		env: NodeJS.ProcessEnv = {},
+		signal?: AbortSignal,
+	): Promise<{ ok: boolean; error?: string }> {
+		const assignments = Object.entries(env)
+			.filter(([name, value]) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(name) && value !== undefined)
+			.map(([name, value]) => `${name}=${shellQuote(value ?? "")}`);
+		const command = [...assignments, "exec", "pi", ...childArgs.map(shellQuote)].join(" ");
+		const res = await this.#transport.run(["pane", "run", paneId, command], undefined, signal);
+		return res.ok ? { ok: true } : { ok: false, error: res.error ?? "herdr pane run failed" };
 	}
 
 	/**

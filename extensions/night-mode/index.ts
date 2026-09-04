@@ -525,6 +525,7 @@ export default function (pi: ExtensionAPI): void {
 			// Published rather than left in this process's environment: a child the
 			// spawn path cannot hand an env to reads these back from the file.
 			...(prepared.configHome ? { configHome: prepared.configHome } : {}),
+			...(process.env.PI_USAGE_PACING === "off" ? { pacingDisabled: true } : {}),
 			preflightPath,
 			capabilityPath,
 			...(sessionId ? { sessionId } : {}),
