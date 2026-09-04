@@ -63,6 +63,10 @@ export class SpindleState {
 	#mcpStatusListener: (() => void) | undefined;
 	/** Unsubscribe for the mid-session sandbox request listener. */
 	#unsubscribeSandbox: (() => void) | undefined;
+	/** Invalidates deferred request work when this session starts tearing down. */
+	#sandboxGeneration = 0;
+	/** Request handlers are async even though the extension event bus is synchronous. */
+	readonly #pendingSandboxRequests = new Set<Promise<void>>();
 	/** Unsubscribe for the parent session's usage-pacing state. */
 	#unsubscribePacing: (() => void) | undefined;
 	/** Pacing is session state, seeded from the compatibility environment switch. */
@@ -269,6 +273,9 @@ export class SpindleState {
 	}
 
 	async shutdown(): Promise<void> {
+		// Invalidate session-bound callbacks before the slower child drain. A sandbox
+		// apply may have been awaiting OS setup when session replacement began.
+		await this.#closeInternal(false);
 		// Cancelling the parent cancels its children, and waits for them: the kill
 		// escalates SIGTERM -> SIGKILL on a timer, so exiting immediately would leave
 		// a child that ignores SIGTERM behind as an orphan.
@@ -365,7 +372,7 @@ export class SpindleState {
 		this.#unsubscribeSandbox = this.pi.events.on(SANDBOX_REQUEST_EVENT, (payload) => {
 			const request = parseSandboxRequestEvent(payload);
 			if (!request) return;
-			void this.applySandboxRequest(request.policy, request.reason, context);
+			this.#queueSandboxRequest(request.policy, request.reason, context);
 		});
 		return controller;
 	}
@@ -385,10 +392,12 @@ export class SpindleState {
 	): Promise<SandboxStateEvent | undefined> {
 		const controller = this.#sandbox;
 		if (!controller) return undefined;
+		const generation = this.#sandboxGeneration;
 		this.#sandboxRequest = request ?? undefined;
 		const cwd = this.#cwd ?? context.cwd;
 		const { policy, effective } = this.#resolveSandbox(cwd);
 		const state = await controller.apply(policy, effective.source === "config" ? "config" : "request");
+		if (!this.#isCurrentSandbox(controller, generation)) return undefined;
 		this.pi.events.emit(SANDBOX_STATE_EVENT, state);
 		// The policy is now in force, so this is the first moment the run can measure
 		// what it actually allows. Fire-and-forget: a probe is diagnostics, and the
@@ -399,7 +408,9 @@ export class SpindleState {
 			cwd,
 		})
 			.then((path) => {
-				if (path) context.ui.notify(`spindle: sandbox capabilities probed, see ${path}`, "info");
+				if (path && this.#isCurrentSandbox(controller, generation)) {
+					context.ui.notify(`spindle: sandbox capabilities probed, see ${path}`, "info");
+				}
 			})
 			.catch(() => {
 				// Diagnostics only: a failed probe must never fail the run.
@@ -507,17 +518,43 @@ export class SpindleState {
 		}
 	}
 
-	async #closeInternal(): Promise<void> {
+	#isCurrentSandbox(controller: SandboxController, generation: number): boolean {
+		return this.#sandbox === controller && this.#sandboxGeneration === generation;
+	}
+
+	#queueSandboxRequest(request: SandboxRequest | null, reason: string | undefined, context: ExtensionContext): void {
+		const generation = this.#sandboxGeneration;
+		let pending: Promise<void>;
+		pending = this.applySandboxRequest(request, reason, context)
+			.then(() => {})
+			.catch((error: unknown) => {
+				const message = error instanceof Error ? error.message : String(error);
+				if (generation !== this.#sandboxGeneration) {
+					console.warn(`[spindle] Sandbox request failed during session teardown: ${message}`);
+					return;
+				}
+				console.error(`[spindle] Failed to apply sandbox request: ${message}`);
+				context.ui.notify(`spindle: failed to apply sandbox request: ${message}`, "error");
+			})
+			.finally(() => this.#pendingSandboxRequests.delete(pending));
+		this.#pendingSandboxRequests.add(pending);
+	}
+
+	async #closeInternal(preserveExternalProviders = true): Promise<void> {
+		this.#sandboxGeneration++;
 		this.#unsubscribePacing?.();
 		this.#unsubscribePacing = undefined;
 		this.#unsubscribeSandbox?.();
 		this.#unsubscribeSandbox = undefined;
 		const sandbox = this.#sandbox;
 		this.#sandbox = undefined;
+		if (this.#pendingSandboxRequests.size) {
+			await Promise.all(this.#pendingSandboxRequests);
+		}
 		if (sandbox) await sandbox.dispose();
 		if (!this.#registry) return;
-		const externalNames = new Set(this.#externalProviders.keys());
-		await this.#registry.close(externalNames);
+		const preserve = preserveExternalProviders ? new Set(this.#externalProviders.keys()) : undefined;
+		await this.#registry.close(preserve);
 		this.#registry = undefined;
 		this.#execution = undefined;
 	}

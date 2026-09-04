@@ -442,6 +442,8 @@ export default async function spindle(pi: ExtensionAPI): Promise<void> {
 
 	pi.on("session_shutdown", async () => {
 		unsubscribeProviderRegistration();
+		sandboxContext = undefined;
+		state.onMcpStatusChange(undefined);
 		try {
 			spindleUi.stop();
 			suspendToolCapture();
