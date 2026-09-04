@@ -47,6 +47,21 @@ export function remainingCalendarDays(now: Date, resetAt: Date): number {
 	return Math.max(1, days);
 }
 
+/** Weekends receive half a baseline daily allowance. Weekdays receive 120%, preserving the weekly total. */
+function dailyAllowanceWeight(date: Date): number {
+	return date.getDay() === 0 || date.getDay() === 6 ? 0.5 : 1.2;
+}
+
+function remainingAllowanceWeight(now: Date, resetAt: Date): number {
+	let cursor = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+	let weight = 0;
+	while (cursor.getTime() < resetAt.getTime()) {
+		weight += dailyAllowanceWeight(cursor);
+		cursor = new Date(cursor.getFullYear(), cursor.getMonth(), cursor.getDate() + 1);
+	}
+	return weight || dailyAllowanceWeight(now);
+}
+
 export function observeWeeklyUsage(
 	ledger: PacingLedger | undefined,
 	input: { weeklyUsedPercent: number; resetAt: string; now: Date },
@@ -61,7 +76,9 @@ export function observeWeeklyUsage(
 	let record = active.days[day];
 	if (!record) {
 		record = {
-			allowancePercent: Math.max(0, 100 - weeklyUsedPercent) / daysRemaining,
+			allowancePercent:
+				(Math.max(0, 100 - weeklyUsedPercent) * dailyAllowanceWeight(input.now)) /
+				remainingAllowanceWeight(input.now, reset),
 			// The API exposes only a cumulative weekly percentage. Attribute the
 			// unobserved amount to today so pacing does not ignore usage that
 			// occurred before pi's first poll.

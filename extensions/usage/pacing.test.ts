@@ -12,7 +12,7 @@ test("attributes usage before the first poll to today and records observed delta
 	const resetAt = new Date(2025, 0, 4, 8).toISOString();
 	const first = observeWeeklyUsage(undefined, { weeklyUsedPercent: 40, resetAt, now });
 	assert.ok(first);
-	assert.equal(first.status.allowancePercent, 15);
+	assert.equal(first.status.allowancePercent, (60 * 1.2) / 4.1);
 	assert.equal(first.status.usedTodayPercent, 40);
 	assert.equal(first.status.remainingTodayPercent, 0);
 	assert.equal(first.status.blocked, true);
@@ -20,6 +20,24 @@ test("attributes usage before the first poll to today and records observed delta
 	assert.ok(next);
 	assert.equal(next.status.usedTodayPercent, 47);
 	assert.equal(next.status.remainingTodayPercent, 0);
+});
+
+test("weights weekends at half baseline and boosts weekdays", () => {
+	const resetAt = new Date(2025, 0, 12).toISOString();
+	const weekend = observeWeeklyUsage(undefined, {
+		weeklyUsedPercent: 0,
+		resetAt,
+		now: new Date(2025, 0, 5, 12),
+	});
+	const weekday = observeWeeklyUsage(undefined, {
+		weeklyUsedPercent: 0,
+		resetAt,
+		now: new Date(2025, 0, 6, 12),
+	});
+	assert.ok(weekend);
+	assert.ok(weekday);
+	assert.equal(weekend.status.allowancePercent, 100 * 0.5 / 7);
+	assert.equal(weekday.status.allowancePercent, 100 * 1.2 / 6.5);
 });
 
 test("does not attribute prior-week usage to a later day", () => {
