@@ -1,10 +1,9 @@
 /**
  * tool-substitute
  *
- * Suggests modern alternatives and keeps history mutations on jj.
- * - git -> jj ( Jujutsu VCS )  [enforced only for writes inside a jj repo]
- * - find -> fd ( faster alternative )  [suggestion only]
- * - grep -> rg ( ripgrep )  [suggestion only]
+ * Keeps history mutations on jj and guides repository searches to Pi tools.
+ * - git -> jj (Jujutsu VCS) [enforced only for writes inside a jj repo]
+ * - pi.find and pi.grep are preferred for repository searches [suggestion only]
  *
  * git policy:
  * - Outside a jj repo, git is fully allowed (nothing to substitute with).
@@ -20,8 +19,7 @@
  * (ssh, docker, kubectl, ...) or in a directory that cannot be resolved
  * statically are left alone.
  *
- * find/grep are only suggested in the system prompt, never blocked, since the
- * agent does not always translate them to fd/rg correctly.
+ * Pi search tools are only suggested in the system prompt, never enforced.
  *
  * Also injects these rules into the system prompt via before_agent_start.
  *
@@ -35,8 +33,6 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 const replacements: Record<string, string> = {
 	git: "jj",
-	find: "fd",
-	grep: "rg",
 };
 
 /**
@@ -251,48 +247,6 @@ export function findJjRoot(start: string): string | undefined {
 }
 
 /**
- * Auto-fixes grep-style recursive flags wrongly passed to `rg`.
- *
- * In ripgrep recursion is the default and `-r`/`--replace` consumes the next
- * characters as a replacement string, so `rg -rn`, `rg -rli`, `rg -R`, etc.
- * (grep muscle memory) silently mangle output. We rewrite:
- *   - `-R` and `--recursive` -> dropped (no recursive flag needed in rg)
- *   - short-flag clusters bundling r/R -> the r/R is stripped
- *     (`-rn` -> `-n`, `-rli` -> `-li`, `-rln` -> `-ln`)
- * A standalone `-r` is left alone since it is a legitimate `--replace`.
- *
- * Only the leading flag run (before the search pattern) is inspected, so
- * patterns that happen to look like flags are not touched.
- */
-function fixRgRecursiveFlags(command: string): string {
-	// Split while preserving the shell-operator separators so we can rejoin.
-	const parts = command.split(new RegExp(`(\\s*(?:${SHELL_OPERATORS})\\s*)`));
-	for (let i = 0; i < parts.length; i += 2) {
-		const seg = parts[i];
-		const m = seg.match(/^(\s*rg\s+)([\s\S]*)$/);
-		if (!m) continue;
-		const head = m[1];
-		const rest = m[2];
-		// Leading run of flag tokens (each starts with "-").
-		const lead = rest.match(/^((?:-\S+(?:\s+|$))*)/)?.[1] ?? "";
-		const tail = rest.slice(lead.length);
-		const newToks: string[] = [];
-		for (const tok of lead.trim().split(/\s+/).filter(Boolean)) {
-			if (tok === "-R" || tok === "--recursive") continue; // drop
-			if (/^-[a-zA-Z]+$/.test(tok) && tok.length >= 3 && /[rR]/.test(tok)) {
-				const fixed = tok.replace(/[rR]/g, "");
-				if (fixed !== "-") newToks.push(fixed);
-				continue;
-			}
-			newToks.push(tok);
-		}
-		const newLead = newToks.length ? newToks.join(" ") + (tail ? " " : "") : "";
-		parts[i] = head + newLead + tail;
-	}
-	return parts.join("");
-}
-
-/**
  * git subcommands that map cleanly to `jj git <subcommand>`.
  * These are simple, safe conversions with identical argument semantics.
  */
@@ -308,10 +262,10 @@ const gitConvertRegex = new RegExp(
 );
 
 const systemPromptAddition = `
-## Tool Substitution Rules
-Prefer modern alternatives:
-- \`find\` -> \`fd\`
-- \`grep\` -> \`rg\`
+## Search Tool Rules
+- Prefer \`pi.find\` for file discovery and \`pi.grep\` for content search.
+- Use \`pi.bash\` with \`fd\` or \`rg\` only when Pi search APIs lack required
+  options or output formatting.
 
 Version control: inside a jj (Jujutsu) repository, use \`jj\` for anything that
 modifies the repository (commit, rebase, branch, reset, ...); read-only \`git\`
@@ -339,14 +293,6 @@ export default function (pi: ExtensionAPI) {
 				command = converted;
 				event.input.command = converted;
 			}
-		}
-
-		// Auto-fix grep-style recursive flags on rg (e.g. `rg -rn`, `rg -R`),
-		// which silently mangle output via --replace. A bare `-r` is left alone.
-		const rgFixed = fixRgRecursiveFlags(command);
-		if (rgFixed !== command) {
-			command = rgFixed;
-			event.input.command = rgFixed;
 		}
 
 		// Block only writes whose target directory is a known jj repo.
