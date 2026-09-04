@@ -153,6 +153,8 @@ interface SpindleAgentRequest {
   reads?: string[];
   /** Inherit the night-mode contract when an overnight run is in flight. */
   night?: boolean;
+  /** Approved ledger id. Required for every launch during an active night run. */
+  nightTodoId?: string;
 }
 /**
  * Timing is per batch, not per task: waitMs bounds how long the caller blocks,

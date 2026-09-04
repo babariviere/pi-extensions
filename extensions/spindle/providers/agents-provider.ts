@@ -50,6 +50,7 @@ import type {
 import { actionArgNormalizer } from "./arg-normalization.ts";
 import { AgentRunBook, type AgentWaitOutcome, type SpindleAgentResult } from "./agent-run-book.ts";
 import { RunProgressMonitor, SpindleAgentRunRegistry } from "./agent-run-monitor.ts";
+import { isNightRunParticipant, type ActiveNightRun, readActiveNightRun } from "../../night-mode/night-run.ts";
 
 /** Parent session the child runs are attributed to. */
 export interface SessionRef {
@@ -90,6 +91,7 @@ const taskItemSchema = {
 		output: { type: "string" },
 		reads: { type: "array", items: { type: "string" } },
 		night: { type: "boolean" },
+		nightTodoId: { type: "string", description: "Approved night ledger id, required while a night run is active" },
 	},
 	required: ["task"],
 	additionalProperties: false,
@@ -253,6 +255,7 @@ const normalizedItem = (value: unknown): NormalizedItem => {
 	const output = stringOrUndefined(record.output);
 	const reads = stringArrayOrUndefined(record.reads);
 	const night = record.night === true;
+	const nightTodoId = stringOrUndefined(record.nightTodoId);
 	return {
 		...(record.agent === undefined ? {} : { agent: String(record.agent) }),
 		task: String(record.task ?? ""),
@@ -261,6 +264,7 @@ const normalizedItem = (value: unknown): NormalizedItem => {
 		...(output ? { output } : {}),
 		...(reads ? { reads } : {}),
 		...(night ? { night } : {}),
+		...(nightTodoId ? { nightTodoId } : {}),
 	};
 };
 
@@ -325,6 +329,33 @@ const tasksOf = (args: Record<string, unknown>, action: string): NormalizedItem[
 	if (items.length === 0) throw new Error(`${action} requires at least one non-empty task`);
 	return items;
 };
+
+export function bindApprovedNightTasks(
+	items: NormalizedItem[],
+	run: ActiveNightRun | undefined = readActiveNightRun(),
+	ref: { sessionId?: string; cwd?: string } = {},
+): NormalizedItem[] {
+	if (!run?.approvedTaskIds?.length || !isNightRunParticipant(run, ref)) return items;
+	const approved = new Set(run.approvedTaskIds.map((id) => id.toLowerCase()));
+	return items.map((item) => {
+		const rawId = item.nightTodoId
+			?.replace(/^TODO-/i, "")
+			.trim()
+			.toLowerCase();
+		if (!rawId) {
+			throw new Error(
+				"An active night run may launch only approved work. Pass nightTodoId for the approved ledger item.",
+			);
+		}
+		if (!approved.has(rawId)) throw new Error(`Night ledger item TODO-${rawId} was not approved for this run.`);
+		return {
+			...item,
+			night: true,
+			nightTodoId: rawId,
+			task: `Approved ledger item: TODO-${rawId}\n\n${item.task}`,
+		};
+	});
+}
 
 export class SpindleAgentsProvider implements SpindleProvider {
 	readonly name = "agents";
@@ -497,6 +528,7 @@ export class SpindleAgentsProvider implements SpindleProvider {
 	): Promise<LaunchedBatch> {
 		const ref = this.session();
 		const runtimeConfig = this.runtimeConfig();
+		items = bindApprovedNightTasks(items, undefined, { sessionId: ref.sessionId, cwd: ref.cwd });
 		const requests = this.#resolveRequests(items, ref, runtimeConfig);
 
 		const runId = newRunId();

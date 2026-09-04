@@ -18,7 +18,7 @@ import type { RunBackend, RunContext, RunResult } from "../agents/run.ts";
 import type { SpindleInvocationContext } from "../protocol.ts";
 import { AgentRunBook } from "./agent-run-book.ts";
 import { SpindleAgentRunRegistry } from "./agent-run-monitor.ts";
-import { SpindleAgentsProvider } from "./agents-provider.ts";
+import { bindApprovedNightTasks, SpindleAgentsProvider } from "./agents-provider.ts";
 
 const invocationContext = (signal?: AbortSignal): SpindleInvocationContext => ({
 	cwd: tmpdir(),
@@ -333,4 +333,48 @@ test("a run that reaches its child clears the breaker", async () => {
 	await run();
 	assert.equal(launches, 3);
 	assert.equal(breaker.verdict(), undefined);
+});
+
+test("an active approved night rejects subagents without a checked todo id", () => {
+	const run = {
+		startedAt: Date.now(),
+		reportPath: "/tmp/report.md",
+		maxPullRequests: 2,
+		approvedTaskIds: ["abcd1234"],
+		sessionId: "coordinator",
+	};
+	const ref = { sessionId: "coordinator" };
+	assert.throws(() => bindApprovedNightTasks([{ task: "unapproved work", night: true }], run, ref), /nightTodoId/);
+	assert.throws(
+		() => bindApprovedNightTasks([{ task: "wrong work", night: true, nightTodoId: "ffffffff" }], run, ref),
+		/not approved/,
+	);
+});
+
+test("an approved todo id is injected into the child task and forces the night contract", () => {
+	const run = {
+		startedAt: Date.now(),
+		reportPath: "/tmp/report.md",
+		maxPullRequests: 2,
+		approvedTaskIds: ["abcd1234"],
+		sessionId: "coordinator",
+	};
+	const [item] = bindApprovedNightTasks([{ task: "correct docs", nightTodoId: "TODO-abcd1234" }], run, {
+		sessionId: "coordinator",
+	});
+	assert.equal(item.night, true);
+	assert.equal(item.nightTodoId, "abcd1234");
+	assert.match(item.task, /^Approved ledger item: TODO-abcd1234/);
+});
+
+test("an unrelated session is not constrained by another session's approved night", () => {
+	const run = {
+		startedAt: Date.now(),
+		reportPath: "/tmp/report.md",
+		maxPullRequests: 2,
+		approvedTaskIds: ["abcd1234"],
+		sessionId: "night-coordinator",
+	};
+	const items = [{ task: "normal interactive work" }];
+	assert.deepEqual(bindApprovedNightTasks(items, run, { sessionId: "other", cwd: "/other/repo" }), items);
 });

@@ -21,6 +21,7 @@ export interface NormalizedItem {
 	output?: string;
 	reads?: string[];
 	night?: boolean;
+	nightTodoId?: string;
 }
 
 export interface RawToolParams {
@@ -31,6 +32,7 @@ export interface RawToolParams {
 	output?: string;
 	reads?: string[];
 	night?: boolean;
+	nightTodoId?: string;
 	tasks?: NormalizedItem[];
 }
 
@@ -110,6 +112,7 @@ export function normalizeRequests(params: RawToolParams): { items: NormalizedIte
 					output: params.output,
 					reads: params.reads,
 					night: params.night,
+					nightTodoId: params.nightTodoId,
 				},
 			],
 		};

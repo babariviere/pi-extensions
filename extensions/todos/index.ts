@@ -46,7 +46,14 @@ import { Type } from "typebox";
 import path from "node:path";
 import fs from "node:fs/promises";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
-import crypto from "node:crypto";
+import {
+	createTodo,
+	ensureTodosDir,
+	serializeTodo,
+	todoPath,
+	type TodoFrontMatter,
+	type TodoRecord,
+} from "./storage.ts";
 import { validateClosure } from "../night-mode/evidence.ts";
 import { NIGHT_TAG } from "../night-mode/ledger.ts";
 import { isNightRunParticipant, readActiveNightRun } from "../night-mode/night-run.ts";
@@ -77,19 +84,6 @@ const DEFAULT_TODO_SETTINGS = {
 	gcDays: 7,
 };
 const LOCK_TTL_MS = 30 * 60 * 1000;
-
-interface TodoFrontMatter {
-	id: string;
-	title: string;
-	tags: string[];
-	status: string;
-	created_at: string;
-	assigned_to_session?: string;
-}
-
-interface TodoRecord extends TodoFrontMatter {
-	body: string;
-}
 
 interface LockInfo {
 	id: string;
@@ -801,7 +795,7 @@ async function garbageCollectTodos(todosDir: string, settings: TodoSettings): Pr
 }
 
 function getTodoPath(todosDir: string, id: string): string {
-	return path.join(todosDir, `${id}.md`);
+	return todoPath(todosDir, id);
 }
 
 function getLockPath(todosDir: string, id: string): string {
@@ -816,6 +810,7 @@ function parseFrontMatter(text: string, idFallback: string): TodoFrontMatter {
 		status: "open",
 		created_at: "",
 		assigned_to_session: undefined,
+		needs: undefined,
 	};
 
 	const trimmed = text.trim();
@@ -833,6 +828,9 @@ function parseFrontMatter(text: string, idFallback: string): TodoFrontMatter {
 		}
 		if (Array.isArray(parsed.tags)) {
 			data.tags = parsed.tags.filter((tag): tag is string => typeof tag === "string");
+		}
+		if (Array.isArray(parsed.needs)) {
+			data.needs = parsed.needs.filter((need): need is string => typeof need === "string");
 		}
 	} catch {
 		return data;
@@ -908,32 +906,9 @@ function parseTodoContent(content: string, idFallback: string): TodoRecord {
 		status: parsed.status,
 		created_at: parsed.created_at,
 		assigned_to_session: parsed.assigned_to_session,
+		needs: parsed.needs,
 		body: body ?? "",
 	};
-}
-
-function serializeTodo(todo: TodoRecord): string {
-	const frontMatter = JSON.stringify(
-		{
-			id: todo.id,
-			title: todo.title,
-			tags: todo.tags ?? [],
-			status: todo.status,
-			created_at: todo.created_at,
-			assigned_to_session: todo.assigned_to_session || undefined,
-		},
-		null,
-		2,
-	);
-
-	const body = todo.body ?? "";
-	const trimmedBody = body.replace(/^\n+/, "").replace(/\s+$/, "");
-	if (!trimmedBody) return `${frontMatter}\n`;
-	return `${frontMatter}\n\n${trimmedBody}\n`;
-}
-
-async function ensureTodosDir(todosDir: string) {
-	await fs.mkdir(todosDir, { recursive: true });
 }
 
 async function readTodoFile(filePath: string, idFallback: string): Promise<TodoRecord> {
@@ -943,15 +918,6 @@ async function readTodoFile(filePath: string, idFallback: string): Promise<TodoR
 
 async function writeTodoFile(filePath: string, todo: TodoRecord) {
 	await fs.writeFile(filePath, serializeTodo(todo), "utf8");
-}
-
-async function generateTodoId(todosDir: string): Promise<string> {
-	for (let attempt = 0; attempt < 10; attempt += 1) {
-		const id = crypto.randomBytes(4).toString("hex");
-		const todoPath = getTodoPath(todosDir, id);
-		if (!existsSync(todoPath)) return id;
-	}
-	throw new Error("Failed to generate unique todo id");
 }
 
 async function readLockInfo(lockPath: string): Promise<LockInfo | null> {
@@ -1565,42 +1531,32 @@ export default function todosExtension(pi: ExtensionAPI) {
 							details: { action: "create", error: "title required" },
 						};
 					}
-					await ensureTodosDir(todosDir);
-					const id = await generateTodoId(todosDir);
-					const filePath = getTodoPath(todosDir, id);
-					const todo: TodoRecord = {
-						id,
+					const candidate = {
 						title: params.title,
 						tags: params.tags ?? [],
 						status: params.status ?? "open",
-						created_at: new Date().toISOString(),
 						body: params.body ?? "",
 					};
-
-					const closureError = nightClosureError(todo);
+					const closureError = nightClosureError(candidate);
 					if (closureError) {
 						return {
 							content: [{ type: "text", text: closureError }],
 							details: { action: "create", error: closureError },
 						};
 					}
-
-					const result = await withTodoLock(todosDir, id, ctx, async () => {
-						await writeTodoFile(filePath, todo);
-						return todo;
-					});
-
-					if (typeof result === "object" && "error" in result) {
+					try {
+						const todo = await createTodo(todosDir, candidate);
 						return {
-							content: [{ type: "text", text: result.error }],
-							details: { action: "create", error: result.error },
+							content: [{ type: "text", text: serializeTodoForAgent(todo) }],
+							details: { action: "create", todo },
+						};
+					} catch (error) {
+						const message = `Failed to create todo: ${String(error)}`;
+						return {
+							content: [{ type: "text", text: message }],
+							details: { action: "create", error: message },
 						};
 					}
-
-					return {
-						content: [{ type: "text", text: serializeTodoForAgent(todo) }],
-						details: { action: "create", todo },
-					};
 				}
 
 				case "update": {

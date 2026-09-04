@@ -13,7 +13,7 @@ Personal extensions for [pi](https://github.com/earendil-works/pi).
 | `context` | Context-window usage + session token/cost footer data |
 | `footer` | Custom footer rendering (consumes `usage:snapshot`) |
 | `usage` | Single poller for Claude and Codex / ChatGPT subscription usage, republished on the event bus |
-| `night-mode` | Overnight wake lock (Amphetamine/`caffeinate`) + Claude 5h budget guard with automated resume ([docs](extensions/night-mode/README.md)) |
+| `night-mode` | Astra planning, interactive task approval, fresh Sol orchestration, wake lock, and usage guards ([docs](extensions/night-mode/README.md)) |
 | `tool-substitute` | Enforce jj writes and guide agents to Pi search tools |
 | `guardrail` | Block catastrophic bash commands (`rm -rf ~`, raw device writes, `curl \| sh`) ([docs](extensions/guardrail/README.md)) |
 | `todos` | File-based todos in `.pi/todos` with a `/todos` TUI manager ([origin](https://github.com/mitsuhiko/agent-stuff/blob/main/extensions/todos.ts)) |

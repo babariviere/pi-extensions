@@ -96,19 +96,20 @@ this extension only subscribes. State is republished as `night-mode:state`.
 
 ## Night runs
 
-`/night start` does more than move the window: it kicks off an actual unattended
-run.
+`/night start` has separate planning, approval, and execution phases.
 
-1. Reads the **base prompt** file: your standing routine, whatever it is (tickets, CI triage, inbox sweep, chores).
-2. Reads the **instructions** file (tonight's one-off asks) and inlines it under an `## Extra instructions for tonight` heading, or states there are none.
-3. Creates the **report** file from a skeleton and tells the agent to append to it as it goes.
-4. Prepends the **orchestrator contract**: the session that receives the prompt coordinates and delegates, it does not implement.
-5. Clones the repo into a **private working copy** for the night and points the run at it (see below).
-6. Publishes a handshake at `~/.pi/agent/night/active.json` so subagents can pick up the same rules, report path and working copy.
-6. Sends the composed prompt as a follow-up user message.
+1. The current session switches to **gpt-6-astra** and receives a planning-only prompt.
+2. Astra reads the standing routine and one-off instructions. It may spawn read-only subagents to explore repositories and services, but neither Astra nor its children implement anything.
+3. Astra submits structured candidates through `night_plan`.
+4. Night mode presents an interactive checklist. Tasks begin unchecked. They can be selected, edited as JSON, added, or deleted.
+5. Approval creates a fresh session with the planning session recorded as its parent. Only checked and refined tasks are placed in the new session state.
+6. The fresh session starts on **gpt-5.6-sol**, creates the report and private working copy, and materializes approved tasks through the todo extension's shared storage layer.
+7. Sol orchestrates those tasks through subagents. Every launch must carry the approved `nightTodoId`; the agents provider refuses unknown or unchecked ids.
+8. The run handshake at `~/.pi/agent/night/active.json` carries the approved ids, sandbox policy, report path, ledger store, and working copy to every participant.
 
-The instructions file is archived and truncated when the run *ends*, not at
-inject time: a crash mid-run leaves the asks intact for the next night.
+The execution session does not inherit the planning transcript. It receives the approved task descriptions and the planner findings attached to them. New work discovered during execution is reported for a later planning session rather than executed.
+
+The instructions file is archived and truncated when the approved run *ends*, not during planning. Cancelling the checklist leaves it untouched.
 
 Pauses and resumes are appended to the report's `## Timeline`, so a report read
 in the morning shows where the 5h window bit.
@@ -397,7 +398,13 @@ Like the filesystem sandbox, the night request is a floor: `readOnly: false` in
 `spindle.json` cannot turn it back off while the run is in flight.
 
 
-## The ledger, and finishing
+## The approved ledger, and finishing
+
+Only checklist selections are materialized as ledger entries. Each item carries `night`, `night-approved`, and the current `run:<id>` tag. The active run reads only that run id, so unresolved items from an older night cannot enter the execution queue.
+
+The agents provider also checks the active handshake before launching a child. During an approved run, every launch needs a `nightTodoId` present in `approvedTaskIds`. This is the enforcement boundary behind “only checked tasks,” rather than relying on prompt wording alone.
+
+## Ledger completion and evidence
 
 An agent that decides it is done after two tickets is the main failure mode of an
 unattended run, and prompt wording does not fix it. So the run's task list is
@@ -559,6 +566,8 @@ and every path is configurable. Defaults keep the night files under
 
 | Key | Default | Meaning |
 |-----|---------|---------|
+| `plannerModel` | `openai-codex/gpt-6-astra` | Model used in the current session to propose the plan |
+| `orchestratorModel` | `openai-codex/gpt-5.6-sol` | Model used by the fresh approved execution session |
 | `promptPath` | `~/.pi/agent/night/prompt.md` | Your standing routine |
 | `instructionsPath` | `~/.pi/agent/night/instructions.md` | One-off asks, cleared after the run |
 | `reportPathTemplate` | `~/.pi/agent/night/reports/{datetime} - report.md` | `{datetime}`, `{date}`, `{time}` placeholders |
@@ -596,7 +605,7 @@ follows.
 | Command | Effect |
 |---------|--------|
 | `/night` or `/night status` | Window state, wake lock state, 5h and weekly usage, reset countdown, pause state, active run |
-| `/night start` | Start a night run now: moves the window start to the current hour, composes the prompt, creates the report |
+| `/night start` | Switch the current session to Astra, build a read-only plan, and show its approval checklist. Checked tasks continue in a fresh Sol session |
 | `/night report` | Path, wiki-link and size of tonight's report |
 | `/night todos` | The ledger: every item, its state and its evidence. Works outside a run |
 | `/night on` / `/night off` | Enable or disable the whole thing for this session |

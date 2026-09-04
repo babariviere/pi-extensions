@@ -13,6 +13,7 @@ import { buildNightContract } from "./night-run.ts";
 import {
 	composeNightPrompt,
 	composeNudge,
+	composePlanningPrompt,
 	composeReportHeader,
 	hasInstructions,
 	ORCHESTRATOR_CONTRACT,
@@ -55,9 +56,13 @@ describe("mergeNightConfig", () => {
 		const merged = mergeNightConfig({
 			instructionsPath: "/tmp/i.md",
 			maxPullRequests: 2,
+			plannerModel: "provider/planner",
+			orchestratorModel: "provider/orchestrator",
 		});
 		assert.equal(merged.instructionsPath, "/tmp/i.md");
 		assert.equal(merged.maxPullRequests, 2);
+		assert.equal(merged.plannerModel, "provider/planner");
+		assert.equal(merged.orchestratorModel, "provider/orchestrator");
 	});
 
 	it("lets an empty archiveDir disable archiving", () => {
@@ -120,6 +125,20 @@ describe("hasInstructions", () => {
 	});
 });
 
+describe("composePlanningPrompt", () => {
+	it("keeps Astra in planning and allows exploratory subagents", () => {
+		const text = composePlanningPrompt({
+			prompt: "Inspect routine sources",
+			instructions: "Check documentation",
+			windowLabel: "21:00-09:00",
+		});
+		assert.match(text, /Build a proposed plan only/);
+		assert.match(text, /spawn subagents to explore/);
+		assert.match(text, /night_plan/);
+		assert.match(text, /Check documentation/);
+	});
+});
+
 describe("composeNightPrompt", () => {
 	const base = {
 		prompt: "# Night Run\nDo the work.",
@@ -164,11 +183,30 @@ describe("composeNightPrompt", () => {
 		const text = composeNightPrompt({ ...base, instructions: "" });
 		assert.doesNotMatch(text, /Working copy:/);
 	});
+
+	it("contains only the tasks approved in the previous session", () => {
+		const text = composeNightPrompt({
+			...base,
+			instructions: "",
+			approvedTasks: [
+				{
+					id: "abcd1234",
+					title: "Approved docs",
+					goal: "Correct docs",
+					repository: "/repo",
+					definitionOfDone: "Draft PR opened",
+				},
+			],
+		});
+		assert.match(text, /Only these tasks are authorized/);
+		assert.match(text, /TODO-abcd1234 Approved docs/);
+	});
 });
 
 describe("orchestrator contract", () => {
 	it("names the delegation mechanics the coordinator has to use", () => {
 		assert.match(ORCHESTRATOR_CONTRACT, /night: true/);
+		assert.match(ORCHESTRATOR_CONTRACT, /nightTodoId/);
 		assert.match(ORCHESTRATOR_CONTRACT, /reads/);
 		assert.match(ORCHESTRATOR_CONTRACT, /output/);
 		assert.match(ORCHESTRATOR_CONTRACT, /Evidence:/);

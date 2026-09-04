@@ -13,6 +13,10 @@ import { isAbsolute, join } from "node:path";
 import { isWakeLockPreference, type WakeLockPreference } from "./wake-lock.ts";
 
 export interface NightConfig {
+	/** Model used by the current session while it builds the proposed plan. */
+	plannerModel: string;
+	/** Model recorded in the fresh session that executes an approved plan. */
+	orchestratorModel: string;
 	/** Base prompt injected on `/night start`. */
 	promptPath: string;
 	/** Extra, one-shot instructions. Archived and truncated when the run settles. */
@@ -100,6 +104,8 @@ export const DEFAULT_REPORT_SECTIONS = ["Summary", "Needs you", "Work", "Finding
 export const NEEDS_HUMAN_HEADING = DEFAULT_REPORT_SECTIONS[1];
 
 export const DEFAULT_NIGHT_CONFIG: NightConfig = {
+	plannerModel: "openai-codex/gpt-6-astra",
+	orchestratorModel: "openai-codex/gpt-5.6-sol",
 	promptPath: join(defaultNightDir(), "prompt.md"),
 	instructionsPath: join(defaultNightDir(), "instructions.md"),
 	reportPathTemplate: join(defaultNightDir(), "reports", "{datetime} - report.md"),
@@ -212,6 +218,8 @@ export function mergeNightConfig(raw: unknown, base: NightConfig = DEFAULT_NIGHT
 				.map((v) => v.trim())
 		: undefined;
 	return {
+		plannerModel: str("plannerModel", base.plannerModel),
+		orchestratorModel: str("orchestratorModel", base.orchestratorModel),
 		promptPath: str("promptPath", base.promptPath),
 		instructionsPath: str("instructionsPath", base.instructionsPath),
 		reportPathTemplate: str("reportPathTemplate", base.reportPathTemplate),

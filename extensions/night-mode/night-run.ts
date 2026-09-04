@@ -48,6 +48,8 @@ export interface ActiveNightRun {
 	reportPath: string;
 	/** Hard cap on pull requests for the whole night. */
 	maxPullRequests: number;
+	/** Ledger ids explicitly checked by the user during planning. */
+	approvedTaskIds?: string[];
 	/** Session id of the coordinator, for debugging. */
 	sessionId?: string;
 	/**
