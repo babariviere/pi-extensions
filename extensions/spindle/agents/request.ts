@@ -6,6 +6,7 @@
  */
 
 import { BUILTIN_AGENT_NAME, type DiscoveredAgent } from "./discovery.ts";
+import { subagentModelPriceError } from "./model-policy.ts";
 import { planBatchOutputs } from "./output.ts";
 import { qualifyModel, stripThinkingSuffix, THINKING_LEVELS } from "./pi-args.ts";
 import { type RunRequest } from "./run.ts";
@@ -42,6 +43,7 @@ export function buildRunRequests(
 	params: RawToolParams,
 	agents: DiscoveredAgent[],
 	cwd: string,
+	models?: readonly import("@earendil-works/pi-ai").Model<any>[],
 ): { requests: RunRequest[] } | { error: string } {
 	const normalized = normalizeRequests(params);
 	if ("error" in normalized) return normalized;
@@ -56,6 +58,9 @@ export function buildRunRequests(
 		const name = item.agent ?? BUILTIN_AGENT_NAME;
 		const agent = agents.find((a) => a.config.name === name);
 		if (!agent) return { error: unknownAgentError(name, agents) };
+		const model = item.model ?? agent.config.model;
+		const priceError = models ? subagentModelPriceError(model, models, readDefaultProvider(cwd)) : undefined;
+		if (priceError) return { error: priceError };
 		const overrides = item.model || item.thinking ? { model: item.model, thinking: item.thinking } : undefined;
 		rawOutputs.push(item.output ?? agent.config.output);
 		requests.push({

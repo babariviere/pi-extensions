@@ -73,6 +73,8 @@ export interface SpindleAgentRuntimeConfig {
 	waitMs: number;
 	defaultModel?: string;
 	defaultThinking?: string;
+	/** Available parent models and their configured prices. */
+	models?: readonly import("@earendil-works/pi-ai").Model<any>[];
 }
 
 /** One task in a batch. Timing lives on the batch, not here. */
@@ -470,7 +472,7 @@ export class SpindleAgentsProvider implements SpindleProvider {
 				? { thinking: item.thinking ?? runtimeConfig.defaultThinking }
 				: {}),
 		}));
-		const built = buildRunRequests({ tasks: withDefaults }, discovered, ref.cwd);
+		const built = buildRunRequests({ tasks: withDefaults }, discovered, ref.cwd, runtimeConfig.models);
 		if ("error" in built) throw new Error(built.error);
 		return built.requests;
 	}

@@ -11,6 +11,7 @@
  */
 
 import { getAgentDir, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { Model } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { SpindleActivityStore } from "./activity/store.ts";
 import { CapturedToolCatalog } from "./capture/catalog.ts";
@@ -201,6 +202,10 @@ export class SpindleState {
 				() => this.#mcpReadOnlyGate(),
 			),
 		);
+		const availableModels: readonly Model<any>[] =
+			context.scopedModels.length > 0
+				? context.scopedModels.map((entry) => entry.model)
+				: await context.modelRegistry.getAvailable();
 		this.#registry.register(
 			new SpindleAgentsProvider(
 				() => this.#sessionRef,
@@ -208,8 +213,11 @@ export class SpindleState {
 				() => ({
 					timeoutMs: this.config.agents.timeoutMs,
 					waitMs: this.config.agents.waitMs,
-					...(this.config.agents.defaultModel ? { defaultModel: this.config.agents.defaultModel } : {}),
+					defaultModel:
+						this.config.agents.defaultModel ??
+						(context.model ? `${context.model.provider}/${context.model.id}` : undefined),
 					...(this.config.agents.defaultThinking ? { defaultThinking: this.config.agents.defaultThinking } : {}),
+					models: availableModels,
 				}),
 				this.agentRunBook,
 			),
