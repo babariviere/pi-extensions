@@ -13,6 +13,7 @@ import {
 import { readFileSync, statSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 import { createSpindleBashToolDefinition } from "./spindle-bash-tool.ts";
+import { createSpindleExecToolDefinition } from "./spindle-exec-tool.ts";
 import { runAbortable, throwIfAborted } from "../async-settlement.ts";
 import { classifyPiBashError, piBashResultError } from "../core/pi-bash-error.ts";
 import { CapturedToolCatalog } from "../capture/catalog.ts";
@@ -172,6 +173,8 @@ export interface PiToolsSandbox {
 	bash?: BashOperations;
 	/** Wrap a command for the OS sandbox when one is active (pi.bash stdin path). */
 	wrapCommand?: (command: string) => Promise<string>;
+	/** Apply the OS sandbox to direct argv execution. */
+	wrapArgv?: (argv: readonly string[]) => Promise<readonly string[]>;
 	edit?: EditOperations;
 	writeGuard?: (absolutePath: string) => void;
 	/**
@@ -214,6 +217,7 @@ export class PiToolsProvider implements SpindleProvider {
 				operations: sandbox?.bash,
 				wrapCommand: sandbox?.wrapCommand,
 			}),
+			exec: createSpindleExecToolDefinition(cwd, { wrapArgv: sandbox?.wrapArgv }),
 			edit: createEditToolDefinition(cwd, sandbox?.edit ? { operations: sandbox.edit } : undefined),
 			write: createPreviewWriteToolDefinition(cwd, sandbox?.writeGuard),
 			grep: createGrepToolDefinition(cwd),
@@ -386,7 +390,7 @@ export class PiToolsProvider implements SpindleProvider {
 		} catch (error) {
 			// Classify an ordinary bash exit here, before any tool_result middleware
 			// can rewrite the message the settle envelope is derived from.
-			thrown = name === "bash" ? classifyPiBashError(error) : error;
+			thrown = name === "bash" || name === "exec" ? classifyPiBashError(error) : error;
 			isError = true;
 			result = {
 				content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }],
@@ -441,7 +445,7 @@ export class PiToolsProvider implements SpindleProvider {
 			const text = textContent(result.content).trim();
 			// bash keeps its classified exit status across middleware so settle:true
 			// still yields an { ok: false, exitCode } envelope in the sandbox.
-			if (name === "bash") throw piBashResultError(thrown, text);
+			if (name === "bash" || name === "exec") throw piBashResultError(thrown, text);
 			throw new Error(text || (thrown instanceof Error ? thrown.message : `Pi tool ${name} failed`));
 		}
 		this.#attachPreview(name, result, args, context);

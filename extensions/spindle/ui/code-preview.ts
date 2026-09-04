@@ -7,7 +7,7 @@ type DiffBackgroundIntensity = "off" | "subtle" | "medium";
 type DiffWordEmphasis = "all" | "smart" | "off";
 type ToolCallBackgroundMode = "on" | "border" | "off";
 type PathIconMode = "unicode" | "nerd" | "off";
-type CodePreviewToolName = "bash" | "read" | "write" | "edit" | "grep" | "find" | "ls";
+type CodePreviewToolName = "bash" | "exec" | "read" | "write" | "edit" | "grep" | "find" | "ls";
 
 export interface CodePreviewSettings {
 	shikiTheme: string;
@@ -35,7 +35,7 @@ export interface CodePreviewSettings {
 	tools: CodePreviewToolName[];
 }
 
-const TOOLS: CodePreviewToolName[] = ["bash", "read", "write", "edit", "grep", "find", "ls"];
+const TOOLS: CodePreviewToolName[] = ["bash", "exec", "read", "write", "edit", "grep", "find", "ls"];
 const booleanEnv = (name: string, fallback: boolean): boolean => {
 	const value = process.env[name]?.toLowerCase();
 	if (value === "1" || value === "true" || value === "yes" || value === "on") return true;

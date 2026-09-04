@@ -11,7 +11,7 @@ const AGENT_BUDGET_REFS = new Set(["agents.run", "agents.runAll", "agents.start"
 // Host calls that block the sandbox for as long as the underlying process runs.
 // An explicit timeout on these has to extend the execution deadline, otherwise
 // the executor kills the program before the call it was told to wait for.
-const BLOCKING_HOST_TIMEOUT_REFS = new Set(["pi.bash"]);
+const BLOCKING_HOST_TIMEOUT_REFS = new Set(["pi.bash", "pi.exec"]);
 
 export const isBlockingOrchestrationRef = (ref: string): boolean => BLOCKING_ORCHESTRATION_REFS.has(ref);
 
@@ -37,7 +37,7 @@ export const requestedBlockingTimeoutMs = (ref: string, args: Record<string, unk
 		const timeoutMs = finiteNumber(args.timeoutMs) ?? 0;
 		return Math.max(waitMs, timeoutMs);
 	}
-	if (ref === "pi.bash") {
+	if (ref === "pi.bash" || ref === "pi.exec") {
 		const milliseconds = finiteNumber(args.timeoutMs);
 		if (milliseconds !== undefined) return milliseconds;
 		const seconds = finiteNumber(args.timeout);

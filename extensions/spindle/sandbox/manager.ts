@@ -23,6 +23,7 @@ import { supervisedSpawn } from "./supervised-spawn.ts";
 export interface SandboxRuntime {
 	initialize(policy: SandboxPolicy): Promise<void>;
 	wrapWithSandbox(command: string): Promise<string>;
+	wrapArgv(argv: readonly string[]): Promise<string[]>;
 	reset(): Promise<void>;
 	/**
 	 * Roots that were canonicalized (a symlinked root resolved to its target)

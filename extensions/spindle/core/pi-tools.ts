@@ -1,4 +1,4 @@
-export const PI_CORE_TOOL_NAMES = ["read", "bash", "edit", "write", "grep", "find", "ls"] as const;
+export const PI_CORE_TOOL_NAMES = ["read", "bash", "exec", "edit", "write", "grep", "find", "ls"] as const;
 
 export type PiCoreToolName = (typeof PI_CORE_TOOL_NAMES)[number];
 

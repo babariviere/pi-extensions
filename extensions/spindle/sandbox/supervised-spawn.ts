@@ -20,7 +20,9 @@ import { spawn } from "node:child_process";
 
 export interface SupervisedSpawnOptions {
 	/** Shell command line run under `bash -c`. Wrap it for the OS sandbox first. */
-	command: string;
+	command?: string;
+	/** Program and arguments run directly, without shell parsing. */
+	argv?: readonly string[];
 	cwd: string;
 	/** Stream both stdout and stderr here as they arrive. */
 	onData: (data: Buffer) => void;
@@ -41,9 +43,18 @@ export interface SupervisedSpawnOptions {
  * tool error contract so tool-level error formatting still applies.
  */
 export function supervisedSpawn(options: SupervisedSpawnOptions): Promise<{ exitCode: number | null }> {
-	const { command, cwd, onData, stdin, timeout, signal, env } = options;
+	const { command, argv, cwd, onData, stdin, timeout, signal, env } = options;
+	if ((command === undefined) === (argv === undefined)) {
+		throw new Error("supervisedSpawn requires exactly one of command or argv");
+	}
+	if (argv !== undefined && argv.length === 0) throw new Error("supervisedSpawn argv must not be empty");
 	return new Promise((resolve, reject) => {
-		const child = spawn("bash", ["-c", command], {
+		const child = argv === undefined ? spawn("bash", ["-c", command as string], {
+			cwd,
+			detached: true,
+			stdio: stdin === undefined ? ["ignore", "pipe", "pipe"] : ["pipe", "pipe", "pipe"],
+			...(env ? { env } : {}),
+		}) : spawn(argv[0]!, argv.slice(1), {
 			cwd,
 			detached: true,
 			// A stdin pipe only when there is text to feed; callers without stdin

@@ -106,7 +106,7 @@ interface SpindleToolsApi {
 // workingDir / workingDirectory are normalized aliases), env (extra variables
 // merged over the shell environment), and stdin (text piped to the command,
 // e.g. pi.bash({ command: 'ssh host bash -s', stdin: π.script })).
-type SpindleBashOptions = {
+type SpindleCommandOptions = {
   /** Cancels this command. See AbortController. */
   signal?: AbortSignal;
   timeout?: number;
@@ -121,7 +121,8 @@ type SpindleBashOptions = {
 };
 interface PiToolsApi {
   read(args: string | { path: string; offset?: number; limit?: number; start?: number; max?: number } | { file: string; offset?: number; limit?: number; start?: number; max?: number }): Promise<string>;
-  bash(args: string | (({ command: string } | { cmd: string } | { shell: string }) & SpindleBashOptions)): Promise<{ ok: true; output: string; details: unknown } | { ok: false; output: string; details: null; exitCode: number; error: string }>;
+  bash(args: string | (({ command: string } | { cmd: string } | { shell: string }) & SpindleCommandOptions)): Promise<{ ok: true; output: string; details: unknown } | { ok: false; output: string; details: null; exitCode: number; error: string }>;
+  exec(args: { argv: string[] } & SpindleCommandOptions): Promise<{ ok: true; output: string; details: unknown } | { ok: false; output: string; details: null; exitCode: number; error: string }>;
   edit(args: { path: string; edits: Array<{ oldText: string; newText: string }> } | { file: string; edits: Array<{ oldText: string; newText: string }> } | { path: string; oldText: string; newText: string } | { file: string; oldText: string; newText: string } | { path: string; old: string; new: string } | { path: string; old: string; replacement: string }): Promise<{ ok: true; output: string; details: unknown }>;
   edit(path: string, oldText: string, newText: string): Promise<{ ok: true; output: string; details: unknown }>;
   write(args: { path: string; content: string } | { file: string; content: string } | { path: string; contents: string } | { path: string; body: string } | { path: string; text: string }): Promise<{ ok: true; output: string; details: unknown }>;

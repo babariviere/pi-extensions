@@ -21,6 +21,7 @@ function fakeRuntime() {
 			calls.wrapped.push(command);
 			return `sandboxed ${command}`;
 		},
+		wrapArgv: async (argv) => argv.slice(),
 		reset: async () => {
 			calls.resets += 1;
 		},
@@ -122,6 +123,7 @@ test("a runtime's warnings (e.g. a resolved symlinked root) surface on the sandb
 	const runtime: SandboxRuntime = {
 		initialize: async () => {},
 		wrapWithSandbox: async (command) => command,
+		wrapArgv: async (argv) => argv.slice(),
 		reset: async () => {},
 		warnings: ["sandbox: root '/work/link' resolved through symlink '/work/link' to '/work/real'"],
 	};

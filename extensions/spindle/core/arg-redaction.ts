@@ -7,7 +7,7 @@
  */
 
 export const redactRecordedArgs = (ref: string, args: Record<string, unknown>): Record<string, unknown> => {
-	if (ref !== "pi.bash") return args;
+	if (ref !== "pi.bash" && ref !== "pi.exec") return args;
 	let out: Record<string, unknown> | undefined;
 	const env = args.env;
 	if (typeof env === "object" && env !== null && !Array.isArray(env)) {

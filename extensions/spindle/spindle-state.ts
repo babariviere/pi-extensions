@@ -182,6 +182,7 @@ export class SpindleState {
 					{
 						bash: sandbox.bashOperations(),
 						wrapCommand: (command: string) => sandbox.wrapCommand(command),
+						wrapArgv: (argv: readonly string[]) => sandbox.wrapArgv(argv),
 						edit: sandbox.editOperations(),
 						writeGuard: sandbox.writeGuard(),
 						readGuard: sandbox.readGuard(),

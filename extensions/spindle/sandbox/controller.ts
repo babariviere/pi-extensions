@@ -155,6 +155,14 @@ export class SandboxController {
 		return Promise.resolve(command);
 	}
 
+	/** Apply the active OS sandbox to a direct argv invocation. */
+	wrapArgv(argv: readonly string[]): Promise<readonly string[]> {
+		const runtime = this.#runtime;
+		if (runtime) return runtime.wrapArgv(argv);
+		if (this.enforcing) return Promise.reject(new Error(this.#degradedReason ?? "sandbox: exec is not available"));
+		return Promise.resolve(argv);
+	}
+
 	/** Path check for Spindle's preview write tool, which does its own writing. */
 	writeGuard(): (absolutePath: string) => void {
 		return (absolutePath: string) => {

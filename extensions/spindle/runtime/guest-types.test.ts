@@ -25,7 +25,7 @@ test("orchestration-only mode strips the tools global alongside pi and extension
 test("declarations include the process shim and pi.bash extras", () => {
 	const declarations = guestTypeDeclarations(true);
 	assert.match(declarations, /declare const process: \{/);
-	assert.match(declarations, /type SpindleBashOptions = \{/);
+	assert.match(declarations, /type SpindleCommandOptions = \{/);
 	assert.match(declarations, /stdin\?: string;/);
 });
 

@@ -124,8 +124,14 @@ export class SeatbeltSandbox {
 	}
 
 	async wrapWithSandbox(command: string): Promise<string> {
+		return (await this.wrapArgv([this.#shellPath, "-c", command])).map(shellQuote).join(" ");
+	}
+
+	/** Prefix an argv invocation with the active Seatbelt profile. */
+	async wrapArgv(argv: readonly string[]): Promise<string[]> {
 		if (!this.#profilePath) throw new Error("sandbox: seatbelt profile not initialized");
-		return [SEATBELT_EXECUTABLE, ...this.#sandboxExecArgs(command)].map(shellQuote).join(" ");
+		const params = this.#params.map(([key, value]) => `-D${key}=${value}`);
+		return [SEATBELT_EXECUTABLE, "-f", this.#profilePath, ...params, "--", ...argv];
 	}
 
 	async reset(): Promise<void> {

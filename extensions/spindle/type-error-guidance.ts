@@ -39,7 +39,7 @@ const PROPERTY_NOTES: Readonly<Record<string, string>> = {
 const isCoreToolName = (name: string): boolean => CORE_TOOL_NAMES.includes(name);
 
 // Spindle declares core tool arguments inline, so the checked type text rarely
-// names the tool; the option bags it does name (SpindleBashOptions) still do.
+// names the tool; the option bags it does name (SpindleCommandOptions) still do.
 const toolFromTypeText = (typeText: string): string | undefined => {
 	for (const match of typeText.matchAll(/\bSpindle([A-Z]\w*?)Options\b/g)) {
 		const candidate = match[1]?.toLowerCase();

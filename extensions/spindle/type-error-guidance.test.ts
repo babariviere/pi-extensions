@@ -9,7 +9,7 @@ const error = (message: string, line = 1, column = 40) => ({ message, line, colu
 test("core tool names and properties derive from the guest declarations", () => {
 	assert.ok(CORE_TOOL_NAMES.includes("bash"));
 	assert.ok(CORE_TOOL_NAMES.includes("read"));
-	assert.deepEqual(CORE_TOOL_PROPERTIES.get("settle"), ["bash"]);
+	assert.deepEqual(CORE_TOOL_PROPERTIES.get("settle"), ["bash", "exec"]);
 	assert.ok(CORE_TOOL_PROPERTIES.get("path")?.includes("read"));
 });
 

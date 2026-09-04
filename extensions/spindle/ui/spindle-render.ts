@@ -799,7 +799,7 @@ export interface SpindleCoreToolPreview extends SpindleRenderAudit {
 	ref: string;
 }
 
-const CORE_TOOL_NAMES = new Set(["bash", "read", "write", "edit", "grep", "find", "ls"]);
+const CORE_TOOL_NAMES = new Set(["bash", "exec", "read", "write", "edit", "grep", "find", "ls"]);
 
 export const captureSpindleCoreToolPreviews = (
 	audits: SpindleRenderAudit[],

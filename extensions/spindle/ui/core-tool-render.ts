@@ -38,7 +38,7 @@ type DiffSummary = {
 	hunks: number;
 };
 
-const CORE_TOOLS = new Set(["bash", "read", "write", "edit", "grep", "find", "ls"]);
+const CORE_TOOLS = new Set(["bash", "exec", "read", "write", "edit", "grep", "find", "ls"]);
 
 export const isCoreToolAudit = (audit: SpindleRenderAudit): boolean =>
 	audit.tool !== undefined &&
@@ -652,8 +652,12 @@ const getWriteBefore = (audit: SpindleRenderAudit): unknown => {
 	return details?.codePreviewBeforeWrite ?? recordOf(audit.preview)?.codePreviewBeforeWrite;
 };
 
-const bashCommand = (audit: SpindleRenderAudit): string =>
-	stringOf(recordOf(audit.preview)?.bashCommand) ?? argString(audit, "command") ?? "";
+const bashCommand = (audit: SpindleRenderAudit): string => {
+	const command = stringOf(recordOf(audit.preview)?.bashCommand) ?? argString(audit, "command");
+	if (command !== undefined) return command;
+	const argv = audit.args?.argv;
+	return Array.isArray(argv) && argv.every((value) => typeof value === "string") ? argv.map((value) => JSON.stringify(value)).join(" ") : "";
+};
 
 const writeContent = (audit: SpindleRenderAudit): string | undefined =>
 	stringOf(recordOf(audit.preview)?.writeContent) ?? argString(audit, "content");
@@ -1110,7 +1114,8 @@ export const coreToolPreviewEnabled = (audit: SpindleRenderAudit, settings: Code
 			return settings.findResultPreview;
 		case "ls":
 			return settings.lsResultPreview;
-		case "bash": {
+		case "bash":
+		case "exec": {
 			if (!settings.bashResultPreview) return false;
 			const command = firstShellCommandName(bashCommand(audit));
 			if (command === "grep" || command === "egrep" || command === "fgrep") {
@@ -1144,6 +1149,7 @@ export const renderCoreToolBody = (
 		case "ls":
 			return renderPathList(audit, theme, options);
 		case "bash":
+		case "exec":
 			return renderBash(audit, theme, options);
 		default:
 			return null;
@@ -1168,7 +1174,7 @@ export const coreToolTitle = (
 				: `${(durationMs / 1_000).toFixed(1)}s`
 			: undefined;
 	const filePath = argString(audit, "path") ?? "";
-	if (audit.tool === "bash") {
+	if (audit.tool === "bash" || audit.tool === "exec") {
 		const command = bashCommand(audit);
 		const firstLine = command.split("\n")[0] ?? "";
 		const highlighted = firstLine ? highlightCode(firstLine, "bash", options.invalidate)?.[0] : undefined;

@@ -115,7 +115,7 @@ globalThis.process = Object.freeze({
   arch: __spindleProcessInfo.arch,
   cwd: () => __spindleProcessInfo.cwd,
 });
-const __piToolNames = ["read","bash","edit","write","grep","find","ls"];
+const __piToolNames = ["read","bash","exec","edit","write","grep","find","ls"];
 const __piStringFields = { bash: "command", read: "path", ls: "path", grep: "pattern", find: "pattern" };
 // Per-tool key aliases. The runtime normalizes them to the canonical form
 // before the host validates args; unit-converting aliases are handled separately
@@ -164,7 +164,7 @@ const __normalizePiArgs = (name, args) => {
   if (args === null || typeof args !== "object" || Array.isArray(args)) return args;
   const aliases = __piArgAliases[name];
   let out = args;
-  if (name === "bash" && "timeoutMs" in out) {
+  if ((name === "bash" || name === "exec") && "timeoutMs" in out) {
     out = Object.assign({}, args);
     if (!("timeout" in out)) {
       const timeoutMs = out.timeoutMs;
@@ -174,7 +174,7 @@ const __normalizePiArgs = (name, args) => {
   }
   // settle is a guest-only directive (settles nonzero exits instead of
   // rejecting); strip it so it never reaches the host/bash schema.
-  if (name === "bash" && "settle" in out) {
+  if ((name === "bash" || name === "exec") && "settle" in out) {
     if (out === args) out = Object.assign({}, args);
     delete out.settle;
   }
