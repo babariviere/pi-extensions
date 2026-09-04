@@ -1,3 +1,4 @@
+import type { SpindleContextMetrics } from "../context-metrics.ts";
 import {
 	isSpindleExecutionTraceV1,
 	type SpindleExecutionTraceOperationV1,
@@ -24,6 +25,7 @@ export interface SpindlePersistedExecutionDetailsV1 {
 	outputFormatLines?: number;
 	/** Present when the program failed type checking and was never executed. */
 	typeErrors?: SpindleRenderTypeError[];
+	contextMetrics?: SpindleContextMetrics;
 }
 
 export interface SpindleLegacyRenderAudit {
@@ -50,6 +52,7 @@ export interface SpindleExecutionRenderDetails {
 	phases: string[];
 	audits: SpindleLegacyRenderAudit[];
 	typeErrors?: SpindleRenderTypeError[];
+	contextMetrics?: SpindleContextMetrics;
 }
 
 const serializedBytes = (value: unknown): number => Buffer.byteLength(JSON.stringify(value), "utf8");
@@ -68,6 +71,7 @@ export const createSpindlePersistedExecutionDetails = (input: {
 	outputFormatStartLine?: number;
 	outputFormatLines?: number;
 	typeErrors?: SpindleRenderTypeError[];
+	contextMetrics?: SpindleContextMetrics;
 }): SpindlePersistedExecutionDetailsV1 => {
 	const details: SpindlePersistedExecutionDetailsV1 = {
 		success: input.success,
@@ -79,6 +83,7 @@ export const createSpindlePersistedExecutionDetails = (input: {
 		...(input.outputFormatLines !== undefined
 			? { outputFormatLines: Math.max(0, Math.floor(input.outputFormatLines)) }
 			: {}),
+		...(input.contextMetrics ? { contextMetrics: input.contextMetrics } : {}),
 		...(input.typeErrors !== undefined && input.typeErrors.length > 0
 			? {
 					typeErrors: input.typeErrors.slice(0, MAX_PERSISTED_TYPE_ERRORS).map((error) => ({
@@ -176,6 +181,13 @@ export const readSpindleExecutionRenderDetails = (value: unknown): SpindleExecut
 			: {}),
 		phases: oldPhases ?? trace?.phases ?? [],
 		audits: oldAudits ?? trace?.operations.map(auditFromOperation) ?? [],
+		...(isRecord(value.contextMetrics) &&
+		typeof value.contextMetrics.readCalls === "number" &&
+		typeof value.contextMetrics.unboundedReadCalls === "number" &&
+		typeof value.contextMetrics.readResultChars === "number" &&
+		typeof value.contextMetrics.largeUnboundedReadCalls === "number"
+			? { contextMetrics: value.contextMetrics as unknown as SpindleContextMetrics }
+			: {}),
 		...(Array.isArray(value.typeErrors)
 			? {
 					typeErrors: value.typeErrors

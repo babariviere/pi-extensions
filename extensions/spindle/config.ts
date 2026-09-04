@@ -146,7 +146,7 @@ export const DEFAULT_SPINDLE_CONFIG: SpindleConfig = {
 		maxTimeoutMs: 900_000,
 		memoryLimitBytes: 64 * 1024 * 1024,
 		readMaxBytes: 8 * 1024 * 1024,
-		maxOutputChars: 100_000,
+		maxOutputChars: 30_000,
 		maxNestedResultChars: 2_000_000,
 		resultFormat: "auto",
 	},

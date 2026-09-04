@@ -52,6 +52,7 @@ import { prepareSpindleExecArguments, resolveSpindleExecPayloads } from "./spind
 import { normalizeRunDisplay } from "./run-display.ts";
 import { typeErrorRecoveryHint } from "./type-error-guidance.ts";
 import { formatFailureProgress } from "./failure-progress.ts";
+import { contextReadWarning, summarizeContextMetrics } from "./context-metrics.ts";
 import { boundModelOutput, modelOutputBudget } from "./output-budget.ts";
 import { formatSessionStoreBytes } from "./session-store.ts";
 import {
@@ -532,6 +533,9 @@ export const createSpindleExecTool = (
 					countLabel(audits.length, "nested call"),
 					failedCalls > 0 ? `${failedCalls} failed` : undefined,
 					phases.length > 0 ? countLabel(phases.length, "phase") : undefined,
+					details.contextMetrics?.largeUnboundedReadCalls
+						? `${details.contextMetrics.largeUnboundedReadCalls} large unbounded read${details.contextMetrics.largeUnboundedReadCalls === 1 ? "" : "s"}`
+						: undefined,
 				].filter((value): value is string => Boolean(value));
 				let text = theme.fg(statusColor, `${failed ? "✗" : "✓"} Spindle ${status}`);
 				if (metadata.length > 0) text += theme.fg("dim", ` · ${metadata.join(" · ")}`);
@@ -667,6 +671,8 @@ export const createSpindleExecTool = (
 				const selectedResultFormat = params.resultFormat ?? state.config.executor.resultFormat;
 				const formattedValue = formatSpindleValue(result.value, selectedResultFormat);
 				const failureProgress = formatFailureProgress(result.trace);
+				const contextMetrics = summarizeContextMetrics(result.audits);
+				const contextWarning = contextReadWarning(contextMetrics);
 				const sections = [...result.logs];
 				const logPrefix = result.logs.join("\n\n");
 				if (formattedValue.text) sections.push(formattedValue.text);
@@ -674,6 +680,7 @@ export const createSpindleExecTool = (
 				// A failed program still mutated whatever its successful calls touched;
 				// name them so the model inspects before repeating the work.
 				if (failureProgress) sections.push(failureProgress);
+				if (contextWarning) sections.push(contextWarning);
 				// The other half of the τ contract: state the model cannot see is state
 				// it will guess at, so every result names what the scratchpad holds.
 				if (result.stateKeys && result.stateKeys.length > 0) {
@@ -692,6 +699,7 @@ export const createSpindleExecTool = (
 				const outputFormatStartLine = result.logs.length > 0 ? countNewlines(logPrefix) + 2 : 0;
 				const persistedDetails = createSpindlePersistedExecutionDetails({
 					...result,
+					contextMetrics,
 					...(outputFormat ? { outputFormat, outputFormatStartLine } : {}),
 					...(outputFormat
 						? {
