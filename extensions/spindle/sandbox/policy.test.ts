@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
 import {
 	assertReadAllowed,
@@ -10,14 +13,12 @@ import {
 	isInside,
 	isReadDenied,
 	isSandboxMode,
-	hasUnrestrictedEgress,
 	isWriteAllowed,
 	matchesPattern,
 	type PolicyEnvironment,
+	type SandboxPolicy,
 	resolveSandboxPolicy,
 	toolCacheRoots,
-	toSandboxRuntimeConfig,
-	UNRESTRICTED_PROXY_DOMAIN,
 } from "./policy.ts";
 
 const environment = (overrides: Partial<PolicyEnvironment> = {}): PolicyEnvironment => ({
@@ -149,104 +150,44 @@ test("assertWriteAllowed reports the mode and the writable roots", () => {
 	);
 });
 
-test("hasUnrestrictedEgress only for the '*' pattern", () => {
-	assert.equal(hasUnrestrictedEgress(resolveSandboxPolicy({}, environment())), true);
-	assert.equal(
-		hasUnrestrictedEgress(resolveSandboxPolicy({ network: { allowedDomains: ["github.com"] } }, environment())),
-		false,
-	);
+test("direct path guards resolve symlinks before checking their policy roots", () => {
+	const root = mkdtempSync(join(tmpdir(), "spindle-policy-"));
+	try {
+		const workspace = join(root, "workspace");
+		const secret = join(root, "secret");
+		mkdirSync(workspace);
+		mkdirSync(secret);
+		writeFileSync(join(secret, "credential"), "secret");
+		symlinkSync(secret, join(workspace, "link"));
+		const policy: SandboxPolicy = {
+			mode: "workspace-write",
+			allowWrite: [workspace],
+			denyWrite: [],
+			denyRead: [secret],
+		};
+		assert.equal(isWriteAllowed(policy, join(workspace, "link", "created")), false);
+		assert.equal(isReadDenied(policy, join(workspace, "link", "credential")), true);
+		assert.throws(() => assertReadAllowed(policy, join(workspace, "link", "credential")), /denied by mode/);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
 });
 
-test("toSandboxRuntimeConfig never hands '*' to the runtime", () => {
-	// srt matches an exact host or `*.example.com` only, so a bare `*` would match
-	// nothing and deny every request. Unrestricted egress travels as the
-	// permission hook instead (see manager.ts).
-	const policy = resolveSandboxPolicy({ network: { allowedDomains: ["*", "github.com"] } }, environment());
-	assert.deepEqual(toSandboxRuntimeConfig(policy).network.allowedDomains, ["github.com"]);
-});
-
-test("unrestricted egress still hands the runtime a non-empty allowlist", () => {
-	// An empty allowlist makes srt restrict the network without starting its
-	// proxy, which denies DNS outright and leaves the permission hook unreachable.
-	assert.deepEqual(toSandboxRuntimeConfig(resolveSandboxPolicy({}, environment())).network.allowedDomains, [
-		UNRESTRICTED_PROXY_DOMAIN,
-	]);
-});
-
-test("an explicitly empty allowlist stays empty: no egress is a real policy", () => {
-	const policy = resolveSandboxPolicy({ network: { allowedDomains: [] } }, environment());
-	assert.deepEqual(toSandboxRuntimeConfig(policy).network.allowedDomains, []);
-});
-
-test("toSandboxRuntimeConfig mirrors the policy", () => {
-	const policy = resolveSandboxPolicy({ network: { allowedDomains: ["github.com"] } }, environment());
-	const config = toSandboxRuntimeConfig(policy);
-	assert.deepEqual(config.network, { allowedDomains: ["github.com"], deniedDomains: [] });
-	assert.deepEqual(config.filesystem.denyRead, ["/home/dev/.ssh", "/home/dev/.gnupg"]);
-	assert.ok(config.filesystem.allowWrite.includes("/work/repo"));
+test("direct path guards refuse dangling symlinks rather than following them after the check", () => {
+	const root = mkdtempSync(join(tmpdir(), "spindle-policy-"));
+	try {
+		const workspace = join(root, "workspace");
+		mkdirSync(workspace);
+		const dangling = join(workspace, "dangling");
+		symlinkSync(join(root, "missing-target"), dangling);
+		const policy: SandboxPolicy = { mode: "workspace-write", allowWrite: [workspace], denyWrite: [], denyRead: [] };
+		assert.throws(() => isWriteAllowed(policy, dangling), /dangling symlink/);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
 });
 
 test("describeSandbox summarises enforcement", () => {
 	assert.match(describeSandbox(resolveSandboxPolicy({}, environment())), /^sandbox workspace-write: /);
 	assert.match(describeSandbox(resolveSandboxPolicy({ mode: "off" }, environment())), /no enforcement/);
-});
-
-test("platform TLS verification is on by default so Go CLIs can verify chains", () => {
-	// Go on darwin ignores SSL_CERT_FILE and asks trustd, so without this rule
-	// every gh/terraform/kubectl HTTPS call dies with x509: OSStatus -26276.
-	const policy = resolveSandboxPolicy({}, environment());
-	assert.equal(policy.platformTlsVerification, true);
-	assert.equal(toSandboxRuntimeConfig(policy).enableWeakerNetworkIsolation, true);
-});
-
-test("platform TLS verification can be turned off for the tighter profile", () => {
-	const policy = resolveSandboxPolicy({ platformTlsVerification: false }, environment());
-	assert.equal(policy.platformTlsVerification, false);
-	assert.equal(toSandboxRuntimeConfig(policy).enableWeakerNetworkIsolation, false);
-});
-
-test("loopback becomes srt's localhost allowance plus local binding", () => {
-	const config = toSandboxRuntimeConfig({
-		mode: "workspace-write",
-		allowWrite: ["/repo"],
-		denyWrite: [],
-		denyRead: [],
-		network: { allowedDomains: ["github.com"], deniedDomains: [], allowLoopback: true },
-		platformTlsVerification: false,
-	});
-	assert.deepEqual(config.network.allowedDomains, ["github.com", "localhost"]);
-	// A DB-backed suite starts its own Postgres, so the listener side matters too.
-	// `allowLocalBinding` lives inside `network`: that is where srt's own schema
-	// declares it, and a sibling-of-network field silently vanishes (#see policy.ts).
-	assert.equal(config.network.allowLocalBinding, true);
-});
-
-test("without loopback the allowlist and the binding permission are untouched", () => {
-	const config = toSandboxRuntimeConfig({
-		mode: "workspace-write",
-		allowWrite: ["/repo"],
-		denyWrite: [],
-		denyRead: [],
-		network: { allowedDomains: ["github.com"], deniedDomains: [] },
-		platformTlsVerification: false,
-	});
-	assert.deepEqual(config.network.allowedDomains, ["github.com"]);
-	assert.equal(config.network.allowLocalBinding, undefined);
-});
-
-test("resolveSandboxPolicy carries allowLoopback through to the runtime config", () => {
-	const policy = resolveSandboxPolicy(
-		{ mode: "workspace-write", network: { allowedDomains: ["*"], deniedDomains: [], allowLoopback: true } },
-		environment(),
-	);
-	assert.equal(policy.network.allowLoopback, true);
-	const runtime = toSandboxRuntimeConfig(policy);
-	assert.equal(runtime.network.allowLocalBinding, true);
-	assert.ok(runtime.network.allowedDomains.includes("localhost"));
-});
-
-test("resolveSandboxPolicy leaves loopback off by default", () => {
-	const policy = resolveSandboxPolicy({ mode: "workspace-write" }, environment());
-	assert.equal(policy.network.allowLoopback, undefined);
-	assert.equal(toSandboxRuntimeConfig(policy).network.allowLocalBinding, undefined);
 });

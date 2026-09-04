@@ -5,14 +5,16 @@
  * be able to `rm -rf ~` at 3am. So this is a guardrail with two enforcement
  * points, both driven by the same policy:
  *
- *  - `bash` is wrapped by an OS-level sandbox (Seatbelt on macOS, bubblewrap on
- *    Linux) via `@anthropic-ai/sandbox-runtime`. See `manager.ts`.
+ *  - `bash` is wrapped by an in-repo Seatbelt profile run through
+ *    `/usr/bin/sandbox-exec` (macOS only, see `seatbelt.ts`). Egress is
+ *    unrestricted by design: the threat model here is accidents, not
+ *    adversaries, and the filesystem rules are what this guardrail is about.
  *  - `write` and `edit` are checked against the write allowlist directly, since
  *    they take absolute paths and never go through a shell.
  *
- * Read tools (`read`, `grep`, `find`, `ls`) are deliberately NOT gated here.
- * Reading is not the destructive path, and `denyRead` still applies to anything
- * running under `bash`, which is where an exfiltration attempt would live.
+ * Read tools (`read`, `grep`, `find`, `ls`) are checked against `denyRead`
+ * directly. Both direct guards resolve the existing part of each path before
+ * comparing it, so a symlink inside a writable root cannot escape the policy.
  *
  * The mode names mirror Codex CLI's (`read-only`, `workspace-write`,
  * `danger-full-access`) because that vocabulary is already familiar and maps
@@ -23,27 +25,11 @@
  * rules are testable without touching a real home directory.
  */
 
-import { isAbsolute, join, relative } from "node:path";
+import { lstatSync, realpathSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, relative } from "node:path";
 
 export const SANDBOX_MODES = ["off", "read-only", "workspace-write", "full"] as const;
 export type SandboxMode = (typeof SANDBOX_MODES)[number];
-
-export interface SandboxNetworkPolicy {
-	/** Domain patterns allowed through the sandbox proxy. `*` means unrestricted. */
-	allowedDomains: string[];
-	deniedDomains: string[];
-	/**
-	 * Whether local sockets are permitted: connecting to `localhost` and binding a
-	 * local port.
-	 *
-	 * Off, a Go test that dials `[::1]:5450` fails with "operation not permitted"
-	 * and every DB-backed suite is skipped, which is what shipped two untested
-	 * night PRs on 2026-09-01. Loopback reaches nothing outside the machine, so it
-	 * is not the egress this guardrail is about, and the filesystem rules still
-	 * apply to whatever a local service writes.
-	 */
-	allowLoopback?: boolean;
-}
 
 export interface SandboxPolicy {
 	mode: SandboxMode;
@@ -53,17 +39,6 @@ export interface SandboxPolicy {
 	denyWrite: string[];
 	/** Absolute directories reads are denied under (enforced by the OS sandbox on `bash`). */
 	denyRead: string[];
-	network: SandboxNetworkPolicy;
-	/**
-	 * Let sandboxed processes reach macOS `trustd` so Go binaries can verify TLS
-	 * chains. Defaults to true: without it `gh`, `terraform`, `kubectl` and every
-	 * other Go CLI fails every HTTPS call with
-	 * `tls: failed to verify certificate: x509: OSStatus -26276`, because Go on
-	 * darwin ignores `SSL_CERT_FILE` and delegates chain validation to the
-	 * platform verifier. Set to false to keep the tighter profile at the cost of
-	 * those tools.
-	 */
-	platformTlsVerification: boolean;
 }
 
 export interface SandboxPolicyInput {
@@ -72,9 +47,6 @@ export interface SandboxPolicyInput {
 	allowWrite?: string[];
 	denyWrite?: string[];
 	denyRead?: string[];
-	network?: Partial<SandboxNetworkPolicy>;
-	/** Allow macOS `trustd` access so Go CLIs can verify TLS chains (default true). */
-	platformTlsVerification?: boolean;
 }
 
 export interface PolicyEnvironment {
@@ -98,30 +70,6 @@ export const DEFAULT_DENY_READ = ["~/.ssh", "~/.gnupg"];
 export const DEFAULT_DENY_WRITE = [".env", ".env.*", "*.pem", "*.key", "*.p12", "id_rsa", "id_ed25519"];
 
 export const DEFAULT_SANDBOX_MODE: SandboxMode = "workspace-write";
-
-/**
- * The pattern this module spells "any host". It is spindle's own vocabulary:
- * `srt` has no way to express it, so it never reaches the runtime (see
- * `toSandboxRuntimeConfig`).
- */
-export const UNRESTRICTED_DOMAIN = "*";
-
-/**
- * The host handed to `srt` in place of `*`, so the allowlist it receives is
- * never empty. `.invalid` is reserved (RFC 2606) and can never match a real
- * request, so the placeholder only ever changes whether `srt` starts its proxy.
- * See `toSandboxRuntimeConfig` for why an empty allowlist is not the same as
- * "allow everything".
- */
-export const UNRESTRICTED_PROXY_DOMAIN = "unrestricted.sandbox.invalid";
-
-/** Unrestricted egress: the filesystem is what this guardrail is about. */
-const DEFAULT_NETWORK: SandboxNetworkPolicy = { allowedDomains: [UNRESTRICTED_DOMAIN], deniedDomains: [] };
-
-/** True when the policy asks for egress to any host. */
-export function hasUnrestrictedEgress(policy: SandboxPolicy): boolean {
-	return policy.network.allowedDomains.includes(UNRESTRICTED_DOMAIN);
-}
 
 export function isSandboxMode(value: unknown): value is SandboxMode {
 	return typeof value === "string" && (SANDBOX_MODES as readonly string[]).includes(value);
@@ -237,14 +185,6 @@ export function resolveSandboxPolicy(input: SandboxPolicyInput, environment: Pol
 		allowWrite,
 		denyWrite: dedupe(input.denyWrite ?? DEFAULT_DENY_WRITE),
 		denyRead: dedupe((input.denyRead ?? DEFAULT_DENY_READ).map(expand).filter(Boolean)),
-		network: {
-			allowedDomains: input.network?.allowedDomains ?? DEFAULT_NETWORK.allowedDomains,
-			deniedDomains: input.network?.deniedDomains ?? DEFAULT_NETWORK.deniedDomains,
-			// Carried through explicitly: dropping it here silently disabled loopback
-			// even for a night run that asked for it.
-			...(input.network?.allowLoopback === true ? { allowLoopback: true } : {}),
-		},
-		platformTlsVerification: input.platformTlsVerification ?? true,
 	};
 }
 
@@ -259,11 +199,48 @@ export function policyEnvironment(cwd: string, overrides: Partial<PolicyEnvironm
 	};
 }
 
+/**
+ * Resolve the existing part of a path before applying a direct-tool guard.
+ *
+ * A write target may not exist yet, so resolve its nearest existing ancestor
+ * and restore the missing suffix. Existing symlinks are thereby compared using
+ * their target path. A dangling symlink cannot be safely classified and is
+ * refused instead of being followed by Node's later open/write operation.
+ */
+function canonicalPathForGuard(path: string): string {
+	const suffix: string[] = [];
+	let current = path;
+	for (;;) {
+		try {
+			return join(realpathSync.native(current), ...suffix.reverse());
+		} catch (error) {
+			const code = error instanceof Error && "code" in error ? (error as NodeJS.ErrnoException).code : undefined;
+			if (code !== "ENOENT" && code !== "ENOTDIR") {
+				throw new Error(`sandbox: could not resolve path '${path}' for policy check`, { cause: error });
+			}
+			try {
+				if (lstatSync(current).isSymbolicLink()) {
+					throw new Error(`sandbox: dangling symlink '${current}' refused by policy check`);
+				}
+			} catch (lstatError) {
+				if (lstatError instanceof Error && lstatError.message.startsWith("sandbox:")) throw lstatError;
+			}
+			const parent = dirname(current);
+			if (parent === current)
+				throw new Error(`sandbox: could not resolve path '${path}' for policy check`, { cause: error });
+			suffix.push(basename(current));
+			current = parent;
+		}
+	}
+}
+
 /** Decide whether a write to `absolutePath` is permitted. */
 export function isWriteAllowed(policy: SandboxPolicy, absolutePath: string): boolean {
 	if (!isEnforcing(policy)) return true;
-	if (policy.denyWrite.some((pattern) => matchesPattern(pattern, absolutePath))) return false;
-	return policy.allowWrite.some((root) => isInside(root, absolutePath));
+	const canonical = canonicalPathForGuard(absolutePath);
+	if (policy.denyWrite.some((pattern) => matchesPattern(pattern, absolutePath) || matchesPattern(pattern, canonical)))
+		return false;
+	return policy.allowWrite.some((root) => isInside(canonicalPathForGuard(root), canonical));
 }
 
 /** Throw a caller-facing error when a write is outside the policy. */
@@ -282,7 +259,8 @@ export function assertWriteAllowed(policy: SandboxPolicy, absolutePath: string):
  */
 export function isReadDenied(policy: SandboxPolicy, absolutePath: string): boolean {
 	if (!isEnforcing(policy)) return false;
-	return policy.denyRead.some((root) => isInside(root, absolutePath));
+	const canonical = canonicalPathForGuard(absolutePath);
+	return policy.denyRead.some((root) => isInside(canonicalPathForGuard(root), canonical));
 }
 
 /** Throw a caller-facing error when a read is under a denied root. */
@@ -291,65 +269,6 @@ export function assertReadAllowed(policy: SandboxPolicy, absolutePath: string): 
 	throw new Error(
 		`sandbox: read of ${absolutePath} denied by mode '${policy.mode}'. Denied read roots: ${policy.denyRead.join(", ")}`,
 	);
-}
-
-/**
- * The config object `@anthropic-ai/sandbox-runtime` expects.
- *
- * `*` is dropped from `allowedDomains`: `srt`'s matcher only understands an
- * exact host or `*.example.com`, so a bare `*` matches nothing and handing it
- * over turns "unrestricted" into "every CONNECT refused with a 403". The
- * allow-any intent is carried by the permission hook instead, see
- * `sandboxAskCallback` in `manager.ts`.
- *
- * Dropping it must not leave the list empty, though. `srt`'s `wrapWithSandbox`
- * decides two things from the same field, separately: it restricts the network
- * whenever `allowedDomains` is *defined*, but it only starts its proxy, and
- * only exports `HTTP_PROXY`/`ALL_PROXY` into the child, when the list is
- * *non-empty*. An empty allowlist therefore yields a seatbelt profile that
- * denies every socket including UDP 53, with no proxy to fall back to: DNS
- * fails with "Operation not permitted" before any HTTP policy applies, and the
- * permission hook is never consulted because nothing can reach the proxy that
- * calls it. So unrestricted egress keeps the list non-empty with a single
- * unroutable placeholder host, which keeps the proxy up and the hook reachable.
- */
-export function toSandboxRuntimeConfig(policy: SandboxPolicy): {
-	network: SandboxNetworkPolicy & { allowLocalBinding?: boolean };
-	filesystem: { allowWrite: string[]; denyWrite: string[]; denyRead: string[] };
-	enableWeakerNetworkIsolation?: boolean;
-} {
-	const named = policy.network.allowedDomains.filter((domain) => domain !== UNRESTRICTED_DOMAIN);
-	// `srt` spells loopback as the literal host `localhost` in the allowlist, plus
-	// `allowLocalBinding` for the listener side (a test container, a temporary
-	// Postgres). Both are needed: dialling without binding covers a service that
-	// is already up, and the suites this exists for start their own.
-	//
-	// `allowLocalBinding` belongs *inside* `network`: srt's own
-	// `NetworkConfigSchema` declares it there (`getAllowLocalBinding()` reads
-	// `config.network.allowLocalBinding`), and its top-level
-	// `SandboxRuntimeConfigSchema` has no such field. Zod strips unknown keys by
-	// default rather than rejecting them, so a sibling-of-`network`
-	// `allowLocalBinding` used to parse cleanly and vanish silently: `srt` never
-	// saw it, the seatbelt profile never grew the network-bind/inbound rules, and
-	// every loopback listen kept failing with EPERM even though this function's
-	// own unit tests (asserting the wrong, top-level shape) stayed green.
-	const loopback = policy.network.allowLoopback === true;
-	const allowed = hasUnrestrictedEgress(policy) && named.length === 0 ? [UNRESTRICTED_PROXY_DOMAIN] : named;
-	return {
-		network: {
-			...policy.network,
-			allowedDomains: loopback && !allowed.includes("localhost") ? [...allowed, "localhost"] : allowed,
-			...(loopback ? { allowLocalBinding: true } : {}),
-		},
-		filesystem: {
-			allowWrite: policy.allowWrite,
-			denyWrite: policy.denyWrite,
-			denyRead: policy.denyRead,
-		},
-		// Emits `(allow mach-lookup (global-name "com.apple.trustd.agent"))` in the
-		// seatbelt profile, which is what Go's darwin verifier needs.
-		enableWeakerNetworkIsolation: policy.platformTlsVerification,
-	};
 }
 
 /** One-line summary for status output. */

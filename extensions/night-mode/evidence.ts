@@ -185,8 +185,7 @@ export function validateClosure(input: { status: string; body: string }): Closur
 	if (evidence.kind === UNSTRUCTURED) {
 		return {
 			ok: false,
-			error:
-				`Evidence "${evidence.value}" has no recognisable kind, so nothing can check it. ${EVIDENCE_FORMAT_HELP}`,
+			error: `Evidence "${evidence.value}" has no recognisable kind, so nothing can check it. ${EVIDENCE_FORMAT_HELP}`,
 		};
 	}
 	if (evidence.kind === "none-with-reason" && evidence.value.length < 8) {

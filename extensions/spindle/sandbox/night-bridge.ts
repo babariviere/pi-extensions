@@ -34,19 +34,5 @@ export function activeNightSandboxRequest(ref: NightSessionRef = {}): SandboxReq
 	const roots = Array.isArray(requested.allowWrite)
 		? requested.allowWrite.filter((entry): entry is string => typeof entry === "string" && !!entry.trim())
 		: [];
-	const domains = Array.isArray(requested.network?.allowedDomains)
-		? requested.network.allowedDomains.filter((entry): entry is string => typeof entry === "string" && !!entry.trim())
-		: [];
-	return {
-		mode: requested.mode,
-		...(roots.length ? { allowWrite: roots } : {}),
-		...(domains.length || requested.network?.allowLoopback === true
-			? {
-					network: {
-						...(domains.length ? { allowedDomains: domains } : {}),
-						...(requested.network?.allowLoopback === true ? { allowLoopback: true } : {}),
-					},
-				}
-			: {}),
-	};
+	return { mode: requested.mode, ...(roots.length ? { allowWrite: roots } : {}) };
 }

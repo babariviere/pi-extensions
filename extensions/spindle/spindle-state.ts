@@ -299,8 +299,6 @@ export class SpindleState {
 				allowWrite: effective.allowWrite,
 				...(effective.denyWrite.length ? { denyWrite: effective.denyWrite } : {}),
 				...(effective.denyRead.length ? { denyRead: effective.denyRead } : {}),
-				network: effective.network,
-				platformTlsVerification: effective.platformTlsVerification,
 			},
 			policyEnvironment(cwd),
 		);
@@ -321,9 +319,10 @@ export class SpindleState {
 
 	/**
 	 * Build the session's sandbox and subscribe to mid-session change requests.
-	 * Never throws: an unsupported platform or a missing
-	 * `@anthropic-ai/sandbox-runtime` install degrades to write/edit path guards,
-	 * and the reason is surfaced to the user once.
+	 * Never throws itself: an enforcing mode whose OS sandbox could not be
+	 * brought up (unsupported platform, missing `sandbox-exec`, a rejected
+	 * profile) leaves `bash` refusing to run rather than running unsandboxed,
+	 * and the reason is surfaced to the user once, as an error.
 	 */
 	async #createSandbox(context: ExtensionContext): Promise<SandboxController> {
 		const { policy, effective } = this.#resolveSandbox(context.cwd);
@@ -331,7 +330,13 @@ export class SpindleState {
 		const controller = new SandboxController(policy, source);
 		const state = await controller.apply(policy, source);
 		if (state.enforcing && state.degradedReason) {
-			context.ui.notify(`spindle: ${controller.describe()}`, "warning");
+			context.ui.notify(`spindle: ${controller.describe()}`, "error");
+		}
+		// A canonicalized root (e.g. a symlinked writable root or denyRead root)
+		// is not fatal, but an operator should still see it once, the same way a
+		// degraded sandbox is surfaced above.
+		if (state.warnings?.length) {
+			context.ui.notify(`spindle: ${state.warnings.join("; ")}`, "warning");
 		}
 		this.pi.events.emit(SANDBOX_STATE_EVENT, state);
 

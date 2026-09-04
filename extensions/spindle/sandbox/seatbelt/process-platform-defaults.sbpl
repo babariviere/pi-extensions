@@ -1,0 +1,6 @@
+; Derived from openai/codex MACOS_PROCESS_PLATFORM_DEFAULTS, write grants removed:
+; temp-dir writes come from the policy's own writable roots so the OS profile
+; cannot be broader than the write/edit path guards.
+(allow file-read* file-test-existence (subpath "/Applications"))
+(allow file-read* file-test-existence (subpath "/private/tmp"))
+(allow file-read* file-test-existence (subpath "/private/var/tmp"))

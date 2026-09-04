@@ -19,12 +19,6 @@ export interface SandboxRequest {
 	mode: SandboxMode;
 	/** Extra writable roots. `~` is expanded; relative paths resolve against cwd. */
 	allowWrite?: string[];
-	/**
-	 * Domains to add to the session's allowlist. Only honoured from a night run
-	 * (see `resolve.ts`), which is the one case where widening beats failing
-	 * unattended.
-	 */
-	network?: { allowedDomains?: string[]; allowLoopback?: boolean };
 }
 
 /**
@@ -49,6 +43,12 @@ export interface SandboxStateEvent {
 	/** Where the active policy came from. */
 	source: "config" | "request";
 	degradedReason?: string;
+	/**
+	 * Non-fatal notes from the last successful OS sandbox build, e.g. a
+	 * configured root that was a symlink and got resolved to its target.
+	 * Absent (or empty) when there is nothing to show.
+	 */
+	warnings?: string[];
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -62,28 +62,15 @@ export function parseSandboxRequestEvent(value: unknown): SandboxRequestEvent | 
 		return { policy: null, ...(reason ? { reason } : {}) };
 	}
 	if (!isRecord(value.policy)) return undefined;
-	const { mode, allowWrite, network } = value.policy;
+	const { mode, allowWrite } = value.policy;
 	if (!isSandboxMode(mode)) return undefined;
 	const roots = Array.isArray(allowWrite)
 		? allowWrite.filter((entry): entry is string => typeof entry === "string" && !!entry.trim())
 		: undefined;
-	const domains =
-		isRecord(network) && Array.isArray(network.allowedDomains)
-			? network.allowedDomains.filter((entry): entry is string => typeof entry === "string" && !!entry.trim())
-			: undefined;
-	const loopback = isRecord(network) && network.allowLoopback === true;
 	return {
 		policy: {
 			mode,
 			...(roots?.length ? { allowWrite: roots } : {}),
-			...(domains?.length || loopback
-				? {
-						network: {
-							...(domains?.length ? { allowedDomains: domains } : {}),
-							...(loopback ? { allowLoopback: true } : {}),
-						},
-					}
-				: {}),
 		},
 		...(reason ? { reason } : {}),
 	};

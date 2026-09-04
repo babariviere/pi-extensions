@@ -86,23 +86,24 @@ describe("mergeNightConfig", () => {
 		assert.deepEqual(mergeNightConfig({ sandboxAllowWrite: [] }, base).sandboxAllowWrite, []);
 	});
 
-	it("defaults the requested domains to unrestricted egress", () => {
-		// A narrow allowlist failed closed overnight; the filesystem sandbox is the
-		// guardrail a night run actually needs. See DEFAULT_NIGHT_DOMAINS.
-		assert.deepEqual(mergeNightConfig({}).sandboxAllowedDomains, ["*"]);
-	});
-
-	it("takes custom requested domains, and lets an empty list clear them", () => {
-		assert.deepEqual(mergeNightConfig({ sandboxAllowedDomains: [" gitlab.com ", "", 7] }).sandboxAllowedDomains, [
-			"gitlab.com",
-		]);
-		assert.deepEqual(mergeNightConfig({ sandboxAllowedDomains: [] }).sandboxAllowedDomains, []);
-	});
-
 	it("takes custom report sections, ignoring junk entries", () => {
 		const merged = mergeNightConfig({ reportSections: ["Tickets", "  ", 3] });
 		assert.deepEqual(merged.reportSections, ["Tickets"]);
 		assert.deepEqual(mergeNightConfig({ reportSections: [] }).reportSections, DEFAULT_REPORT_SECTIONS);
+	});
+	it("leaves stale sandbox network keys inert instead of erroring", () => {
+		// A handshake / settings file written before the Seatbelt migration may
+		// still carry these keys. There is no schema validation on this path
+		// (readNightConfig / mergeNightConfig), so an unknown key must simply be
+		// ignored rather than throwing or resurrecting network config.
+		const merged = mergeNightConfig({
+			sandboxAllowedDomains: ["github.com"],
+			sandboxAllowLoopback: true,
+			sandboxMode: "read-only",
+		});
+		assert.equal(merged.sandboxMode, "read-only");
+		assert.equal((merged as unknown as Record<string, unknown>).sandboxAllowedDomains, undefined);
+		assert.equal((merged as unknown as Record<string, unknown>).sandboxAllowLoopback, undefined);
 	});
 });
 

@@ -301,8 +301,8 @@ The working copy stops the agent from touching your checkout. It does not stop
 the duration of the run**, and releases it when the run ends. Nothing to
 configure: an interactive session stays unsandboxed, the night does not.
 
-Enforcement is OS-level on `bash` (Seatbelt on macOS, bubblewrap on Linux, via
-`@anthropic-ai/sandbox-runtime`) plus a path check on `write` and `edit`.
+Enforcement is an in-repo Seatbelt profile on `bash`, run through
+`/usr/bin/sandbox-exec` (macOS only), plus a path check on `write` and `edit`.
 
 The writable set is derived from the run rather than configured, so it cannot
 drift out of sync with it:
@@ -342,37 +342,15 @@ policy.
 Set `sandboxMode: "off"` to disable the request, or pick `read-only` for a
 triage-only night.
 
-### Network
-
-The run also asks for the domains it needs, unioned into whatever the session's
-own allowlist has. Defaults to `["*"]`, unrestricted egress, because a night that
-cannot reach the network cannot open the pull request it was asked for, and
-nobody is awake to widen the list. A narrow allowlist here also fails closed in
-the worst way: when the proxy layer breaks, even the allowed hosts stop
-resolving and the whole night is lost.
-
-Narrow it per project if a run should only reach a forge:
-
-```json
-{
-  "nightMode": {
-    "sandboxAllowedDomains": ["github.com", "*.github.com", "*.githubusercontent.com"]
-  }
-}
-```
-
-Set it to `[]` to request nothing and inherit the session's allowlist as is. This
-is the one thing a night run widens rather than tightens; the filesystem sandbox
-is unaffected, and `spindle.sandbox.deniedDomains` still wins, so denying a host
-there blocks it for the night too.
-
 While the run is active the sandbox is a **floor**: `/sandbox off` is refused and
 reported, so nothing can un-sandbox the night mid-flight. Tightening it (say
 `/sandbox read-only`) is allowed, and the run's own writable roots survive it.
 When the run ends, night-mode releases the floor and the session goes back to
 `spindle.json`. Two known holes: granting Docker socket access defeats the
-filesystem boundary entirely (a container can bind-mount `/`), and on macOS the
-backend is `sandbox-exec`, which Apple has deprecated. See
+filesystem boundary entirely (a container can bind-mount `/`), and the backend
+is `sandbox-exec`, which Apple has deprecated (still true, and not a
+regression: every prior backend used it too). Enforcement is macOS-only, so a
+night run on Linux gets `bash` refusing to run rather than an OS sandbox; see
 `extensions/spindle/CONTEXT.md`.
 
 ## Read-only MCP

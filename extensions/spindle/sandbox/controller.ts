@@ -13,12 +13,8 @@
 
 import { access, mkdir, readFile, writeFile } from "node:fs/promises";
 import type { BashOperations, EditOperations, WriteOperations } from "@earendil-works/pi-coding-agent";
-import {
-	initializeSandboxRuntime,
-	lateBoundBashOperations,
-	type RuntimeAttempt,
-	type SandboxRuntime,
-} from "./manager.ts";
+import { initializeSandboxRuntime, lateBoundBashOperations, type SandboxRuntime } from "./manager.ts";
+import { resolveShellPath } from "./shell.ts";
 import {
 	assertReadAllowed,
 	assertWriteAllowed,
@@ -40,17 +36,21 @@ export class SandboxController {
 	/** Stable operations, installed once and never replaced. */
 	readonly #bash: BashOperations;
 	/** Injected in tests so the suite never brings up a real OS sandbox. */
-	readonly #startRuntime: (policy: SandboxPolicy) => Promise<RuntimeAttempt>;
+	readonly #startRuntime: (policy: SandboxPolicy) => Promise<SandboxRuntime>;
 
 	constructor(
 		policy: SandboxPolicy,
 		source: SandboxSource = "config",
-		startRuntime: (policy: SandboxPolicy) => Promise<RuntimeAttempt> = initializeSandboxRuntime,
+		startRuntime: (policy: SandboxPolicy) => Promise<SandboxRuntime> = initializeSandboxRuntime,
 	) {
 		this.#policy = policy;
 		this.#source = source;
 		this.#startRuntime = startRuntime;
-		this.#bash = lateBoundBashOperations(() => this.#runtime);
+		this.#bash = lateBoundBashOperations(
+			() => this.#runtime,
+			() => (this.enforcing && !this.#runtime ? this.#degradedReason : undefined),
+			resolveShellPath(),
+		);
 	}
 
 	get policy(): SandboxPolicy {
@@ -66,6 +66,12 @@ export class SandboxController {
 		return this.#runtime !== undefined;
 	}
 
+	/**
+	 * Why the OS sandbox is not up, and therefore why `bash` refuses to run.
+	 * Undefined when the sandbox is up, or when nothing is enforced. On the wire
+	 * as `SandboxStateEvent.degradedReason` (`protocol.ts`), read by
+	 * `spindle-state.ts`.
+	 */
 	get degradedReason(): string | undefined {
 		return this.#degradedReason;
 	}
@@ -86,11 +92,19 @@ export class SandboxController {
 		}
 
 		// Re-initializing replaces the previous profile, so an already-running
-		// runtime is reset first rather than layered on.
+		// runtime is reset first rather than layered on. The one narrow race this
+		// leaves: a command wrapped just before this reset can be spawned just
+		// after it, and sandbox-exec will then fail with "profile not found"
+		// rather than running unsandboxed. That is the safe direction, and it is
+		// the same shape of race the previous (srt-based) backend had.
 		await this.#resetRuntime();
-		const attempt = await this.#startRuntime(policy);
-		this.#runtime = attempt.runtime;
-		this.#degradedReason = attempt.degradedReason;
+		try {
+			this.#runtime = await this.#startRuntime(policy);
+			this.#degradedReason = undefined;
+		} catch (error) {
+			this.#runtime = undefined;
+			this.#degradedReason = error instanceof Error ? error.message : String(error);
+		}
 		return this.state();
 	}
 
@@ -106,6 +120,7 @@ export class SandboxController {
 	}
 
 	state(): SandboxStateEvent {
+		const warnings = this.#runtime?.warnings;
 		return {
 			mode: this.#policy.mode,
 			enforcing: this.enforcing,
@@ -113,13 +128,14 @@ export class SandboxController {
 			writableRoots: this.#policy.allowWrite.length,
 			source: this.#source,
 			...(this.#degradedReason ? { degradedReason: this.#degradedReason } : {}),
+			...(warnings && warnings.length ? { warnings } : {}),
 		};
 	}
 
 	describe(): string {
 		const base = describeSandbox(this.#policy);
 		if (!this.enforcing) return base;
-		return this.osEnforced ? `${base}, bash OS-enforced` : `${base}, ${this.#degradedReason}`;
+		return this.osEnforced ? `${base}, bash OS-enforced` : `${base}, bash REFUSED: ${this.#degradedReason}`;
 	}
 
 	/** Stable `bash` operations. Always installed; a no-op when nothing is enforced. */
@@ -134,7 +150,9 @@ export class SandboxController {
 	 */
 	wrapCommand(command: string): Promise<string> {
 		const runtime = this.#runtime;
-		return runtime ? runtime.wrapWithSandbox(command) : Promise.resolve(command);
+		if (runtime) return runtime.wrapWithSandbox(command);
+		if (this.enforcing) return Promise.reject(new Error(this.#degradedReason ?? "sandbox: bash is not available"));
+		return Promise.resolve(command);
 	}
 
 	/** Path check for Spindle's preview write tool, which does its own writing. */

@@ -35,8 +35,7 @@ test("defuddleFetch maps HTTP errors to DefuddleError carrying the status", asyn
 
 test("defuddleFetch reports the status of successful responses", async () => {
 	const orig = globalThis.fetch;
-	globalThis.fetch = async () =>
-		new Response(FIXTURE_HTML, { status: 200, headers: { "content-type": "text/html" } });
+	globalThis.fetch = async () => new Response(FIXTURE_HTML, { status: 200, headers: { "content-type": "text/html" } });
 	try {
 		const r = await defuddleFetch("https://example.com/post", { timeout: 5000 });
 		assert.equal(r.status, 200);

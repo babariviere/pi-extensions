@@ -458,8 +458,13 @@ risk/approval hunks by hand.
 | `runtime/guest-polyfills.test.ts` | Behavioural tests for the polyfill layer, plus the conditional-injection contract (a program that mentions nothing gets nothing). |
 | `runtime/guest-abort.test.ts` | Cancellation end to end: the `AbortController` shape, that a signal never reaches a tool's argument schema, that aborting one call really aborts the host work and leaves its siblings running, and that `mapLimit` stops launching items. |
 | `runtime/guest-intl.test.ts` | That the absent locale APIs fail loudly: `Intl`/`Atomics` name the missing property, a locale argument to `toLocaleString` throws instead of being ignored, and the same methods still work without one. |
-| `sandbox/policy.ts` | Pure filesystem policy: modes, writable roots, deny patterns, and the config object `@anthropic-ai/sandbox-runtime` expects. |
-| `sandbox/manager.ts` | Runtime plumbing: loading `srt`, initializing it for a policy, and the late-bound `bash` operations (supervised by `sandbox/supervised-spawn.ts`). |
+| `sandbox/policy.ts` | Pure filesystem policy: modes, writable roots, deny patterns. |
+| `sandbox/manager.ts` | Runtime plumbing: constructing and initializing the Seatbelt backend for a policy, and the late-bound `bash` operations (supervised by `sandbox/supervised-spawn.ts`). No optional dependency: an enforcing mode either brings up a real sandbox or throws. |
+| `sandbox/seatbelt.ts` | The Seatbelt backend itself: darwin + `/usr/bin/sandbox-exec` presence guards, a private `mkdtemp` profile directory, a real `sandbox-exec` self-test round trip before the profile is ever trusted, `wrapWithSandbox`, and `reset()`. |
+| `sandbox/seatbelt-profile.ts` | Assembles the SBPL profile text from a `SandboxPolicy`: read/write allow rules with carve-outs, root-anchor and rename-escape unlink denies, `-D` param table, top-level firmlink normalization and nested-symlink canonicalization. |
+| `sandbox/seatbelt-glob.ts` | Glob → Seatbelt regex translation, ported from Codex's `seatbelt_regex_for_glob`, adapted to this repo's basename-vs-path `matchesPattern` semantics. |
+| `sandbox/seatbelt/` | Vendored Apache-2.0 SBPL fragments from `openai/codex` plus a derived, write-stripped process-defaults fragment; see `NOTICE` for provenance. |
+| `sandbox/shell.ts` | `resolveShellPath()` / `shellQuote()`: the shell the Seatbelt backend execs into, read from pi's settings, and its shell-quoting for embedding a wrapped command. |
 | `sandbox/supervised-spawn.ts` | The one supervised process-tree spawn: detached process group, kill-tree on timeout/abort, stdin piping, and the `timeout:<seconds>` / `aborted` error contract, behind one small interface. Two adapters ride on it: the OS-sandbox wrap (`sandbox/manager.ts`) and the `pi.bash` stdin extras (`providers/spindle-bash-tool.ts`), which previously carried two private copies of these mechanics. |
 | `sandbox/controller.ts` | The session's live sandbox state. Hands out stable operations whose closures read the *current* policy, so the mode can change mid-session. `readGuard()` hands out the same shape of stable closure for the denyRead roots. |
 | `sandbox/protocol.ts` | Bus contract for changing the mode at runtime (`spindle:sandbox-request` / `spindle:sandbox-state`). |
@@ -488,13 +493,16 @@ agent cannot `rm -rf ~`. Two enforcement points, one policy:
 
 | Tool | Mechanism | Why |
 |---|---|---|
-| `bash` | `@anthropic-ai/sandbox-runtime` (Seatbelt on macOS, bubblewrap on Linux) | A shell command can do anything; only the kernel can bound it |
+| `bash` | an in-repo Seatbelt profile via `/usr/bin/sandbox-exec` (macOS only, see `sandbox/seatbelt.ts`) | A shell command can do anything; only the kernel can bound it |
 | `write`, `edit` | direct path check against the write allowlist | They take absolute paths and never reach a shell, so the check is exact and needs no OS support |
 | `read`, `grep`, `find`, `ls` | direct path check against the `denyRead` roots (`SandboxController.readGuard()` → `PiToolsSandbox.readGuard`) | The tools keep pi's own definitions (image handling / truncation / offsets stay byte-identical), but while a policy enforces, the `denyRead` roots that bind `bash` bind the read tools too. Without this, a sandboxed program could pull a credential through `pi.read` and send it out through any channel `bash` may reach. Reads outside the denied roots are untouched |
 
-`@anthropic-ai/sandbox-runtime` is an `optionalDependency`, imported through a
-variable specifier. A missing install or an unsupported platform degrades to
-"path guards only" with a warning, instead of breaking session startup.
+There is no optional dependency and no graceful degradation. An enforcing mode
+(`read-only` / `workspace-write`) on a non-macOS host, with a missing
+`sandbox-exec`, or whose generated profile is rejected by `sandbox-exec` at
+startup, makes `bash` refuse to run with an actionable error instead of
+silently running unsandboxed or falling back to path guards only. `off` and
+`full` are unaffected and still work everywhere, including Linux.
 
 Config lives under `sandbox` in `spindle.json`. It defaults to `mode: "off"`,
 because an interactive session legitimately writes outside its cwd (notes,
@@ -511,18 +519,13 @@ the duration of a night run.
 }
 ```
 
-`platformTlsVerification` (default `true`) is the one network knob that is not
-about domains. Go on darwin ignores `SSL_CERT_FILE`/`SSL_CERT_DIR` and delegates
-chain validation to the platform verifier, which needs
-`mach-lookup com.apple.trustd.agent`. `srt` only emits that rule when its config
-carries `enableWeakerNetworkIsolation`, so without it every Go CLI (`gh`,
-`terraform`, `kubectl`, `gcloud`) fails every HTTPS call with
-`tls: failed to verify certificate: x509: OSStatus -26276` while `curl` in the
-same shell succeeds. The trade-off srt documents is a potential exfiltration
-channel through `trustd`; set `"platformTlsVerification": false` to take the
-tighter profile and lose those tools. It is config-only on purpose: a `/sandbox`
-request or a night floor that tightens the mode must not break every Go CLI in
-the session as a side effect.
+The profile always emits `(allow network*)`, plus the `trustd`/`SecurityServer`/
+`ocspd`/SystemConfiguration mach-lookups the vendored Codex network fragment
+carries. So Go CLIs (`gh`, `terraform`, `kubectl`, `gcloud`) can verify TLS
+chains through the platform verifier, DNS and HTTPS egress simply work, and
+loopback bind/connect needs no extra flag. There is no network knob: the
+threat model here is accidents, not adversaries, and the filesystem rules are
+what this guardrail is about.
 
 The mode names mirror Codex CLI's, since that vocabulary is already familiar:
 
@@ -584,14 +587,14 @@ The only slash command Spindle registers.
 
 | Invocation | Effect |
 |---|---|
-| `/sandbox` or `/sandbox status` | Mode, source, whether a night run holds it, and whether `bash` is OS-enforced or path-guarded only |
+| `/sandbox` or `/sandbox status` | Mode, source, whether a night run holds it, and whether `bash` is OS-enforced or refused |
 | `/sandbox read-only` | Restrict now |
 | `/sandbox workspace-write [path…]` | Restrict now, granting extra writable roots |
 | `/sandbox off` | Revert to what `spindle.json` says |
 
 `off` is a *revert*, not a forced "no enforcement", so it can never loosen the
 configured baseline. While enforcing, the footer shows `🔒 workspace-write`, or
-`🔒 workspace-write (paths only)` when the OS backend is unavailable.
+`🔒 workspace-write (bash refused)` when the OS backend is unavailable.
 
 #### Precedence, and why a night run cannot be unsandboxed
 
@@ -610,26 +613,11 @@ run is a **floor**, never a ceiling:
 
 The night's own writable roots (its working copy, the report, the ledger) are
 always unioned in, so a tightening request cannot cut the run off from the files
-it has to write.
-
-Egress is the one place a night run **widens** instead of tightening: its
-`network.allowedDomains` are unioned into the configured allowlist (a config of
-`["*"]` is already unrestricted and is left alone). The reason is the failure
-mode, not convenience: a narrowed allowlist breaks an unattended run at 3am with
-nobody awake to widen it, and reaching a forge is not the destructive path this
-guardrail exists for. `deniedDomains` stays config-only and the runtime checks
-denials first, so `deniedDomains: ["github.com"]` is still an absolute kill
-switch. A `/sandbox` request carries no network at all.
-
-`sandbox.allowLoopback` (config, off by default) lets a sandboxed process dial
-and bind `localhost`, which is what a DB-backed suite that starts its own
-Postgres needs. A night run can turn it on for a session whose config leaves it
-off; it is granted, never revoked, because loopback reaches nothing outside the
-machine. Without it those suites fail with "operation not permitted", which is
-how an interactive subagent under a `sandbox:` floor ends up unable to run the
-verification gate it was asked to run. A refused request is surfaced as a warning rather than silently
-appearing to work, and it is not remembered: when the run ends, night-mode emits
-a revert that clears it.
+it has to write. There is no egress axis to widen any more: the profile already
+emits `(allow network*)` unconditionally, so a night run's floor is purely the
+mode plus the writable-root union above. A refused request is surfaced as a
+warning rather than silently appearing to work, and it is not remembered: when
+the run ends, night-mode emits a revert that clears it.
 
 ### Directory name collision warning
 
@@ -740,9 +728,8 @@ sandbox instead:
   loosen it, and the tightest of the two floors wins (`sandbox/resolve.ts`).
 
 Enforcement is the existing one, so there is no second mechanism to keep in
-sync: `bash` runs under the OS sandbox (Seatbelt/bubblewrap via
-`@anthropic-ai/sandbox-runtime`), `write`/`edit` are path-checked, and the read
-tools honour `denyRead`.
+sync: `bash` runs under the in-repo Seatbelt profile (macOS only), `write`/`edit`
+are path-checked, and the read tools honour `denyRead`.
 
 What this does not do: `read-only` still grants the temp dirs (a compiler that
 cannot write a temp file is a brick, not a sandbox) and leaves egress
@@ -922,9 +909,13 @@ two needs no config edit and no re-authentication. Entries the client cannot run
 `@types/node` as a devDependency. `typebox` was already a peerDependency.
 **Upstream's embeddable MCP client package and `cross-spawn` are deliberately absent.**
 
-`@anthropic-ai/sandbox-runtime` is an **optionalDependency** used by `sandbox/`.
-It is not upstream's: upstream ships no filesystem sandbox. Linux also needs
-`bubblewrap`, `socat` and `ripgrep` on the host for it to enforce anything.
+The filesystem sandbox (`sandbox/`) has no dependency of its own: it is an
+in-repo, macOS-only Seatbelt profile generator run through
+`/usr/bin/sandbox-exec`. It vendors four Apache-2.0 SBPL fragments from
+`openai/codex` (`sandbox/seatbelt/*.sbpl`); see `sandbox/seatbelt/NOTICE` for
+the upstream commit, license and per-file verbatim/derived status. `off` and
+`full` work on every platform; `read-only`/`workspace-write` enforce on macOS
+only, and refuse to start `bash` elsewhere rather than degrading.
 
 The QuickJS WASM variant (`@jitl/quickjs-singlefile-mjs-release-sync` loaded via
 `newQuickJSWASMModuleFromVariant`) was validated to instantiate and evaluate in

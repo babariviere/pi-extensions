@@ -12,12 +12,10 @@
  * report, the ledger) always stay in the set, so a tightening request cannot
  * accidentally break the run it is protecting.
  *
- * Egress is the one exception, and only for a night run: its `allowedDomains` are
- * unioned into the configured allowlist rather than intersected with it. A
- * narrowed allowlist would otherwise break an overnight run at 3am, with nobody
- * awake to widen it, and reaching a forge is not the destructive path this
- * guardrail exists for. `deniedDomains` stays config-only, so a domain the user
- * denied is still denied (the runtime checks denials first).
+ * There is no egress exception any more: the Seatbelt profile always emits
+ * `(allow network*)` (see `seatbelt-profile.ts`), so there is no allowlist for
+ * a night run to widen and no per-domain floor to compute. The night floor is
+ * therefore purely a tightening floor on the mode, plus a writable-root union.
  *
  * Pure, so the precedence rules are testable without a session.
  */
@@ -31,12 +29,6 @@ export interface SandboxSettings {
 	allowWrite: string[];
 	denyWrite: string[];
 	denyRead: string[];
-	allowedDomains: string[];
-	deniedDomains: string[];
-	/** Allow sandboxed processes to dial and bind loopback. */
-	allowLoopback?: boolean;
-	/** Allow macOS `trustd` access so Go CLIs can verify TLS chains. */
-	platformTlsVerification?: boolean;
 }
 
 export interface EffectiveSandboxInput {
@@ -58,9 +50,6 @@ export interface EffectiveSandbox {
 	allowWrite: string[];
 	denyWrite: string[];
 	denyRead: string[];
-	network: { allowedDomains: string[]; deniedDomains: string[]; allowLoopback: boolean };
-	/** Allow macOS `trustd` access so Go CLIs can verify TLS chains. */
-	platformTlsVerification: boolean;
 	/** Where the mode came from. */
 	source: "config" | "request" | "night" | "agent";
 	/**
@@ -102,23 +91,6 @@ export function effectiveSandbox(input: EffectiveSandboxInput): EffectiveSandbox
 		]),
 		denyWrite: [...settings.denyWrite],
 		denyRead: [...settings.denyRead],
-		network: {
-			// Merged even when the settings already say `*`. `*` is spindle's own
-			// spelling for "any host" and never reaches the runtime, so keeping it
-			// *instead* of the night's concrete domains handed `srt` an empty
-			// allowlist and denied all egress (see `toSandboxRuntimeConfig`).
-			allowedDomains: dedupe([...settings.allowedDomains, ...(night?.network?.allowedDomains ?? [])]),
-			deniedDomains: [...settings.deniedDomains],
-			// Loopback is granted, never revoked: config enables it for every run, and
-			// a night run can still turn it on for a session whose config leaves it off.
-			// It reaches nothing outside the machine, so widening it is not the egress
-			// this guardrail is about, and dropping it here is what made every
-			// DB-backed suite fail under a subagent sandbox.
-			allowLoopback: settings.allowLoopback === true || night?.network?.allowLoopback === true,
-		},
-		// Config-only: a request that tightens the mode must not be able to break
-		// every Go CLI in the session as a side effect.
-		platformTlsVerification: settings.platformTlsVerification ?? true,
 		source,
 		...(mode !== asked ? { refused: { asked, enforced: mode } } : {}),
 	};

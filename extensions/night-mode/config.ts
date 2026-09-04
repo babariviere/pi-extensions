@@ -60,22 +60,10 @@ export interface NightConfig {
 	 */
 	sandboxAllowWrite: string[];
 	/**
-	 * Domains the run must be able to reach, unioned into the session's own
-	 * allowlist for the duration of the night. Defaults to the GitHub hosts, since
-	 * a run that cannot reach the forge cannot open the pull request it was asked
-	 * for, and nobody is awake to widen the list. An empty array requests nothing.
-	 */
-	sandboxAllowedDomains: string[];
-	/**
 	 * Run `mise trust` / `direnv allow` on a fresh working copy. Both tools trust
 	 * by path, so without this every `mise` command in the copy hard-fails with an
 	 * untrusted-config error.
 	 */
-	/**
-	 * Allow loopback sockets in the run's sandbox: connecting to `localhost` and
-	 * binding a local port, which is what a DB-backed test suite needs.
-	 */
-	sandboxAllowLoopback: boolean;
 	sandboxTrust: boolean;
 	/**
 	 * Refuse write-shaped MCP tool calls for the whole run: no Slack message, no
@@ -105,21 +93,6 @@ function defaultNightDir(): string {
 	return join(process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent"), "night");
 }
 
-/**
- * Unrestricted egress for the night, on purpose.
- *
- * A host allowlist here was worth four nights of zero pull requests: the proxy
- * layer failed closed (DNS itself stopped resolving), so even the forge hosts
- * that were explicitly allowed were unreachable, with nobody awake to notice.
- * The guardrail a night run needs is the filesystem one, and that is untouched;
- * `*` routes through Spindle's allow-any permission hook instead of the domain
- * matcher (see `hasUnrestrictedEgress` in `spindle/sandbox/manager.ts`).
- *
- * Narrow it per project if a run should only reach a forge, and note that
- * `spindle.sandbox.deniedDomains` still wins either way.
- */
-export const DEFAULT_NIGHT_DOMAINS = ["*"];
-
 /** Sections seeded into a fresh report. Override per workflow. */
 export const DEFAULT_REPORT_SECTIONS = ["Summary", "Needs you", "Work", "Findings", "Skipped / failed", "Timeline"];
 
@@ -136,8 +109,6 @@ export const DEFAULT_NIGHT_CONFIG: NightConfig = {
 	sandboxCopyFiles: ["mise.local.toml"],
 	sandboxMode: "workspace-write",
 	sandboxAllowWrite: [],
-	sandboxAllowedDomains: DEFAULT_NIGHT_DOMAINS,
-	sandboxAllowLoopback: true,
 	sandboxTrust: true,
 	mcpReadOnly: true,
 	wakeLock: "auto",
@@ -235,11 +206,6 @@ export function mergeNightConfig(raw: unknown, base: NightConfig = DEFAULT_NIGHT
 				.filter((v): v is string => typeof v === "string" && v.trim().length > 0)
 				.map((v) => v.trim())
 		: undefined;
-	const allowedDomains = Array.isArray(record.sandboxAllowedDomains)
-		? record.sandboxAllowedDomains
-				.filter((v): v is string => typeof v === "string" && v.trim().length > 0)
-				.map((v) => v.trim())
-		: undefined;
 	const sections = Array.isArray(record.reportSections)
 		? record.reportSections
 				.filter((v): v is string => typeof v === "string" && v.trim().length > 0)
@@ -257,9 +223,6 @@ export function mergeNightConfig(raw: unknown, base: NightConfig = DEFAULT_NIGHT
 		sandboxCopyFiles: copyFiles ?? base.sandboxCopyFiles,
 		sandboxMode: isNightSandboxMode(record.sandboxMode) ? record.sandboxMode : base.sandboxMode,
 		sandboxAllowWrite: allowWrite ?? base.sandboxAllowWrite,
-		sandboxAllowedDomains: allowedDomains ?? base.sandboxAllowedDomains,
-		sandboxAllowLoopback:
-			typeof record.sandboxAllowLoopback === "boolean" ? record.sandboxAllowLoopback : base.sandboxAllowLoopback,
 		sandboxTrust: typeof record.sandboxTrust === "boolean" ? record.sandboxTrust : base.sandboxTrust,
 		mcpReadOnly: typeof record.mcpReadOnly === "boolean" ? record.mcpReadOnly : base.mcpReadOnly,
 		wakeLock: isWakeLockPreference(record.wakeLock) ? record.wakeLock : base.wakeLock,

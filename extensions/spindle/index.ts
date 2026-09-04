@@ -178,9 +178,10 @@ export default async function spindle(pi: ExtensionAPI): Promise<void> {
 			context.ui.setStatus(SANDBOX_STATUS_KEY, undefined);
 			return;
 		}
-		// "paths only" matters: it is the difference between the kernel refusing a
-		// write and Spindle refusing one it can see.
-		const degraded = state.osEnforced ? "" : " (paths only)";
+		// "bash refused" matters: with no OS sandbox up, bash no longer runs at
+		// all in an enforcing mode (see sandbox/controller.ts), it does not fall
+		// back to running unsandboxed.
+		const degraded = state.osEnforced ? "" : " (bash refused)";
 		context.ui.setStatus(SANDBOX_STATUS_KEY, context.ui.theme.fg("accent", `\u{1F512} ${state.mode}${degraded}`));
 	};
 

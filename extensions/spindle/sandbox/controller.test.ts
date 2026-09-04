@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { SandboxController } from "./controller.ts";
-import type { RuntimeAttempt, SandboxRuntime } from "./manager.ts";
+import type { SandboxRuntime } from "./manager.ts";
 import { policyEnvironment, resolveSandboxPolicy, type SandboxMode } from "./policy.ts";
 
 const policyFor = (mode: SandboxMode) =>
@@ -25,9 +25,9 @@ function fakeRuntime() {
 			calls.resets += 1;
 		},
 	};
-	const start = async (): Promise<RuntimeAttempt> => {
-		await runtime.initialize({});
-		return { runtime };
+	const start = async (policy: Parameters<SandboxRuntime["initialize"]>[0]): Promise<SandboxRuntime> => {
+		await runtime.initialize(policy);
+		return runtime;
 	};
 	return { calls, start };
 }
@@ -118,14 +118,49 @@ test("applying a new enforcing policy resets the previous profile first", async 
 	assert.equal(calls.resets, 2);
 });
 
-test("state reports the mode, the source and the degradation reason", async () => {
-	const degraded = async (): Promise<RuntimeAttempt> => ({ degradedReason: "no bubblewrap" });
-	const controller = new SandboxController(policyFor("off"), "config", degraded);
+test("a runtime's warnings (e.g. a resolved symlinked root) surface on the sandbox state event", async () => {
+	const runtime: SandboxRuntime = {
+		initialize: async () => {},
+		wrapWithSandbox: async (command) => command,
+		reset: async () => {},
+		warnings: ["sandbox: root '/work/link' resolved through symlink '/work/link' to '/work/real'"],
+	};
+	const controller = new SandboxController(policyFor("off"), "config", async () => runtime);
+	const state = await controller.apply(policyFor("workspace-write"), "request");
+	assert.deepEqual(state.warnings, [
+		"sandbox: root '/work/link' resolved through symlink '/work/link' to '/work/real'",
+	]);
+});
+
+test("no warnings key is present on the sandbox state event when the runtime reports none", async () => {
+	const { start } = fakeRuntime();
+	const controller = new SandboxController(policyFor("off"), "config", start);
+	const state = await controller.apply(policyFor("workspace-write"), "request");
+	assert.equal("warnings" in state, false);
+});
+
+test("a runtime that fails to start leaves bash refusing to run, not running unsandboxed", async () => {
+	const failing = async (): Promise<SandboxRuntime> => {
+		throw new Error("sandbox: no macOS sandbox-exec on this host");
+	};
+	const controller = new SandboxController(policyFor("off"), "config", failing);
 	const state = await controller.apply(policyFor("workspace-write"), "request");
 	assert.equal(state.mode, "workspace-write");
 	assert.equal(state.enforcing, true);
 	assert.equal(state.osEnforced, false);
 	assert.equal(state.source, "request");
-	assert.equal(state.degradedReason, "no bubblewrap");
-	assert.match(controller.describe(), /no bubblewrap/);
+	assert.equal(state.degradedReason, "sandbox: no macOS sandbox-exec on this host");
+	assert.match(controller.describe(), /REFUSED/);
+	assert.match(controller.describe(), /no macOS sandbox-exec on this host/);
+
+	await assert.rejects(
+		() => controller.bashOperations().exec("echo hi", process.cwd(), { onData: () => {} }),
+		/no macOS sandbox-exec on this host/,
+	);
+	await assert.rejects(() => controller.wrapCommand("echo hi"), /no macOS sandbox-exec on this host/);
+
+	// The write/edit/read path guards are unaffected: they never depended on the
+	// OS runtime at all.
+	assert.throws(() => controller.writeGuard()("/home/dev/.zshrc"), /denied by mode/);
+	assert.throws(() => controller.readGuard()("/home/dev/.ssh/id_ed25519"), /denied by mode/);
 });

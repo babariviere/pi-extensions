@@ -1,0 +1,27 @@
+Vendored Seatbelt (SBPL) policy fragments
+==========================================
+
+Upstream: openai/codex (https://github.com/openai/codex)
+Path: codex-rs/sandboxing/src/
+Commit fetched: 696b4502dfaacd91133c3691a23dc91ae3b14bc9 (2026-08-21)
+Fetch date: 2026-09-04
+License: Apache-2.0
+Copyright 2025 OpenAI
+
+This directory includes code derived from the openai/codex project, licensed
+under the Apache License, Version 2.0 (see LICENSE-Apache-2.0.txt in this
+directory for the full text). The following files have been modified from
+the upstream source, or are original derivations written for this repository.
+
+Per-file table
+---------------
+
+| File                                | Status                                            |
+|-------------------------------------|----------------------------------------------------|
+| base.sbpl                           | Verbatim copy of seatbelt_base_policy.sbpl          |
+| read-only-platform-defaults.sbpl    | Verbatim copy of seatbelt_read_only_platform_defaults.sbpl |
+| network.sbpl                        | Verbatim copy of seatbelt_network_policy.sbpl       |
+| preferences.sbpl                    | Verbatim copy of seatbelt_preferences_policy.sbpl   |
+| process-platform-defaults.sbpl      | DERIVED from Codex's inline MACOS_PROCESS_PLATFORM_DEFAULTS (codex-rs/sandboxing/src/seatbelt.rs). The write grants on /var/tmp and /private/var/tmp have been removed: this repo's own writable-root parameterization (seatbelt-profile.ts) is the only source of write grants, so the OS-level profile can never be broader than the policy's own `allowWrite`/`isWriteAllowed` guard. |
+
+No other files in this repository are derived from openai/codex.

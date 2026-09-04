@@ -28,9 +28,6 @@
       "themes/*.json"
     ]
   },
-  "optionalDependencies": {
-    "@anthropic-ai/sandbox-runtime": "^0.0.75"
-  },
   "dependencies": {
     "@jitl/quickjs-singlefile-mjs-release-sync": "^0.32.0",
     "@modelcontextprotocol/client": "^2.0.0",

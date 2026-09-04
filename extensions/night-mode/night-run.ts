@@ -19,25 +19,16 @@ export interface NightSandboxRequest {
 	mode: "off" | "read-only" | "workspace-write" | "full";
 	/** Extra writable roots on top of the run's working directory. */
 	allowWrite?: string[];
-	/**
-	 * Domains the run needs to reach, unioned into whatever the session's own
-	 * config allows. The only place a night run *widens* a policy instead of
-	 * tightening it: an overnight run that cannot reach the forge fails at 3am
-	 * with nobody awake to add a domain, and egress is not the destructive path
-	 * this sandbox is about. A domain in the config's `deniedDomains` still wins,
-	 * so the kill switch survives.
-	 */
-	network?: {
-		allowedDomains?: string[];
-		/**
-		 * Permit local sockets, so a DB-backed test suite can start its own Postgres
-		 * and dial it. Loopback leaves the machine nowhere, and it is the difference
-		 * between a tested and an untested night PR (2026-09-01: both Go PRs shipped
-		 * with their DB tests deferred).
-		 */
-		allowLoopback?: boolean;
-	};
 }
+
+/**
+ * Older handshake files (written by a build before the Seatbelt migration) may
+ * still carry a `sandbox.network` block, since the handshake file is JSON on
+ * disk and not versioned against the reader. `activeNightSandboxRequest`
+ * simply ignores any such field: the Seatbelt profile always emits
+ * `(allow network*)`, so there is nothing left for that key to configure. No
+ * migration is needed; the key is just inert.
+ */
 
 /**
  * MCP guardrail a night run asks for. Plain shape rather than an import from
