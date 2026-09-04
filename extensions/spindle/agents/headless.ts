@@ -18,6 +18,7 @@ import {
 	baseResult,
 	prepareChildRun,
 	runCwd,
+	withPacingDisabled,
 	type RunContext,
 	type RunFailure,
 	type RunRequest,
@@ -42,8 +43,8 @@ const CLOSE_FALLBACK_MS = DEFAULT_KILL_GRACE_MS + 1_000;
  * starts, but a spawn from anywhere else would hand the child a shell where
  * `jj` cannot write its per-repo record and every commit fails.
  */
-function nightEnv(): NodeJS.ProcessEnv {
-	return nightChildEnv(readActiveNightRun());
+function childEnv(pacingDisabled: boolean | undefined): NodeJS.ProcessEnv {
+	return withPacingDisabled(pacingDisabled, nightChildEnv(readActiveNightRun()));
 }
 
 export function runHeadlessBatch(reqs: RunRequest[], ctx: RunContext): Promise<RunResult[]> {
@@ -71,7 +72,7 @@ function runHeadless(req: RunRequest, ctx: RunContext, defaultProvider: string |
 			cwd: runCwd(req, ctx),
 			// Own process group, so teardown reaches the child's own subprocesses.
 			detached: true,
-			...(req.night ? { env: nightEnv() } : {}),
+			...(req.night || ctx.pacingDisabled ? { env: childEnv(ctx.pacingDisabled) } : {}),
 		});
 		ctx.onStatus?.(req.index, { state: "running", outputPath });
 
