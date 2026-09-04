@@ -34,6 +34,7 @@ import { agentSandboxFloor } from "./sandbox/agent-floor.ts";
 import { activeNightSandboxRequest } from "./sandbox/night-bridge.ts";
 import { runNightPreflight } from "./sandbox/preflight-bridge.ts";
 import { applyNightRunEnv } from "../night-mode/night-run.ts";
+import { isUsagePacingEvent, USAGE_PACING_EVENT } from "../usage/protocol.ts";
 import { policyEnvironment, resolveSandboxPolicy } from "./sandbox/policy.ts";
 import { effectiveSandbox } from "./sandbox/resolve.ts";
 import {
@@ -62,6 +63,10 @@ export class SpindleState {
 	#mcpStatusListener: (() => void) | undefined;
 	/** Unsubscribe for the mid-session sandbox request listener. */
 	#unsubscribeSandbox: (() => void) | undefined;
+	/** Unsubscribe for the parent session's usage-pacing state. */
+	#unsubscribePacing: (() => void) | undefined;
+	/** Pacing is session state, seeded from the compatibility environment switch. */
+	#pacingDisabled = process.env.PI_USAGE_PACING === "off";
 	/**
 	 * Last sandbox request from `/sandbox` or the bus. Cleared by a revert, so a
 	 * request refused by an active night run does not resurface when the run ends.
@@ -141,6 +146,10 @@ export class SpindleState {
 
 	async initialize(context: ExtensionContext): Promise<void> {
 		await this.#closeInternal();
+		this.#pacingDisabled = process.env.PI_USAGE_PACING === "off";
+		this.#unsubscribePacing = this.pi.events.on(USAGE_PACING_EVENT, (payload) => {
+			if (isUsagePacingEvent(payload)) this.#pacingDisabled = payload.enforced === false;
+		});
 		this.activity.reset();
 		this.agentRuns.reset();
 		this.#cwd = context.cwd;
@@ -218,6 +227,7 @@ export class SpindleState {
 						(context.model ? `${context.model.provider}/${context.model.id}` : undefined),
 					...(this.config.agents.defaultThinking ? { defaultThinking: this.config.agents.defaultThinking } : {}),
 					models: availableModels,
+					pacingDisabled: this.#pacingDisabled,
 				}),
 				this.agentRunBook,
 			),
@@ -498,6 +508,8 @@ export class SpindleState {
 	}
 
 	async #closeInternal(): Promise<void> {
+		this.#unsubscribePacing?.();
+		this.#unsubscribePacing = undefined;
 		this.#unsubscribeSandbox?.();
 		this.#unsubscribeSandbox = undefined;
 		const sandbox = this.#sandbox;

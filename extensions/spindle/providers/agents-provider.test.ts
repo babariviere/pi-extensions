@@ -40,7 +40,7 @@ interface Harness {
 	count: () => number;
 }
 
-const harness = (waitMs = 0): Harness => {
+const harness = (waitMs = 0, pacingDisabled = false): Harness => {
 	let runContext: RunContext | undefined;
 	let settle: (results: RunResult[]) => void = () => {};
 	let count = 0;
@@ -71,7 +71,7 @@ const harness = (waitMs = 0): Harness => {
 	const provider = new SpindleAgentsProvider(
 		() => ({ sessionId: undefined, sessionFile: undefined, cwd: tmpdir() }),
 		new SpindleAgentRunRegistry(),
-		() => ({ timeoutMs: 60_000, waitMs }),
+		() => ({ timeoutMs: 60_000, waitMs, pacingDisabled }),
 		book,
 		new RunLauncher({ inHerdr: () => false, headless }),
 	);
@@ -85,6 +85,12 @@ const doneResult = (agent: string): RunResult => ({
 	output: `${agent} finished`,
 	backend: "headless",
 	exitCode: 0,
+});
+
+test("a pacing-disabled parent marks its child run context as pacing-disabled", async () => {
+	const { provider, contextOf } = harness(0, true);
+	await provider.invoke("start", { task: "do a thing" }, invocationContext());
+	assert.equal(contextOf()?.pacingDisabled, true);
 });
 
 test("an expired wait window returns a running handle without killing the run", async () => {

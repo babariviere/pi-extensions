@@ -25,6 +25,7 @@ import {
 	baseResult,
 	prepareChildRun,
 	runCwd,
+	withPacingDisabled,
 	type RunContext,
 	type RunFailure,
 	type RunRequest,
@@ -219,7 +220,7 @@ async function launchRun(p: PreparedRun, ctx: RunContext): Promise<SpawnedRun> {
 	}
 
 	await herdr.renamePane(p.paneId, paneLabel(p.req.agent.config.name, p.req.task));
-	const env = p.req.night ? nightChildEnv(readActiveNightRun(), {}) : {};
+	const env = withPacingDisabled(ctx.pacingDisabled, p.req.night ? nightChildEnv(readActiveNightRun(), {}) : {});
 	const launched = await herdr.runPi(p.paneId, p.childArgs, env, ctx.signal);
 	if (!launched.ok || !(await childIsAlive(p, ctx))) {
 		const error = launched.error ?? "Pi did not start in the Herdr pane";

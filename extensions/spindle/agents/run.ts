@@ -96,8 +96,22 @@ export interface RunContext {
 	 * working copy is untrusted and would stop on the prompt.
 	 */
 	projectTrusted?: boolean;
+	/** Whether the parent session disabled the usage pacing guard. */
+	pacingDisabled?: boolean;
 	signal?: AbortSignal;
 	onStatus?: OnStatus;
+}
+
+/**
+ * Add the explicit pacing override to a child environment. Both launch
+ * backends call this because pane launches do not inherit the parent process
+ * environment, while headless launches normally do.
+ */
+export function withPacingDisabled(
+	pacingDisabled: boolean | undefined,
+	base: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+	return pacingDisabled ? { ...base, PI_USAGE_PACING: "off" } : base;
 }
 
 /**
