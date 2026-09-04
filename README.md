@@ -12,7 +12,7 @@ Personal extensions for [pi](https://github.com/earendil-works/pi).
 | `pr` | GitHub pull request helpers |
 | `context` | Context-window usage + session token/cost footer data |
 | `footer` | Custom footer rendering (consumes `usage:snapshot`) |
-| `usage` | Single poller for the Claude subscription usage endpoint, republished on the event bus |
+| `usage` | Single poller for Claude and Codex / ChatGPT subscription usage, republished on the event bus |
 | `night-mode` | Overnight wake lock (Amphetamine/`caffeinate`) + Claude 5h budget guard with automated resume ([docs](extensions/night-mode/README.md)) |
 | `tool-substitute` | Rewrite tool calls (e.g. git -> jj, grep -> rg) |
 | `guardrail` | Block catastrophic bash commands (`rm -rf ~`, raw device writes, `curl \| sh`) ([docs](extensions/guardrail/README.md)) |

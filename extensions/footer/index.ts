@@ -23,6 +23,7 @@ import {
 	type UsageSnapshot,
 	findWindow,
 	isAnthropicModel,
+	isOpenAIModel,
 	isUsageSnapshotEvent,
 } from "../usage/protocol.ts";
 
@@ -125,7 +126,8 @@ function renderUsageLine(snapshot: UsageSnapshot, theme: Theme): string {
 	if (snapshot.error) return colorizeOrange("Claude ") + dim(snapshot.error);
 	if (snapshot.windows.length === 0) return "";
 
-	const segments: string[] = [colorizeOrange("Claude")];
+	const provider = snapshot.provider === "openai" ? "OpenAI" : "Claude";
+	const segments: string[] = [snapshot.provider === "openai" ? provider : colorizeOrange(provider)];
 
 	for (const w of snapshot.windows) {
 		if (w.label.startsWith("Extra")) {
@@ -286,7 +288,12 @@ export default function (pi: ExtensionAPI): void {
 
 					const lines: string[] = [layoutLine(leftSegment, modelSegment, width)];
 
-					if (usageSnapshot && isAnthropicModel(ctx.model ?? lastModel)) {
+					if (
+						usageSnapshot &&
+						(usageSnapshot.provider === "openai"
+							? isOpenAIModel(ctx.model ?? lastModel)
+							: isAnthropicModel(ctx.model ?? lastModel))
+					) {
 						const usageLine = renderUsageLine(usageSnapshot, theme);
 						if (usageLine) lines.push(truncateToWidth(usageLine, width, theme.fg("dim", "...")));
 					}

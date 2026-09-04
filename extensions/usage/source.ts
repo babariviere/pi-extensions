@@ -1,17 +1,14 @@
 /**
- * Usage fetching + cross-process cache.
+ * Subscription-usage fetching with provider-specific cross-process caches.
  *
- * Vendored out of the old `footer` extension so a single poller can serve every
- * consumer. Data comes from the undocumented OAuth usage endpoint that Claude
- * Code uses (GET https://api.anthropic.com/api/oauth/usage), authed with the
- * OAuth access token pi stores in auth.json. Results are shared between pi
- * instances on this machine through a file cache guarded by a lock file.
+ * Claude uses its OAuth usage API. Codex / ChatGPT uses the undocumented
+ * WHAM API used by Codex clients. Neither endpoint accepts API keys.
  */
 
 import { execFileSync } from "node:child_process";
 import {
-	type FSWatcher,
 	existsSync,
+	type FSWatcher,
 	mkdirSync,
 	readFileSync,
 	renameSync,
@@ -22,19 +19,26 @@ import {
 } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { RateWindow, UsageSnapshot } from "./protocol.ts";
+import type { RateWindow, UsageProvider, UsageSnapshot } from "./protocol.ts";
 
 export const REFRESH_INTERVAL_MS = 60_000;
-const USAGE_ENDPOINT = "https://api.anthropic.com/api/oauth/usage";
 const API_TIMEOUT_MS = 5_000;
 const DEFAULT_BACKOFF_MS = 60_000;
-
-// Cross-process cache, shared by every pi instance on this machine.
-const CACHE_DIR = join(homedir(), ".pi", "agent", "cache", "usage-status");
-const CACHE_PATH = join(CACHE_DIR, "cache.json");
-const LOCK_PATH = join(CACHE_DIR, "cache.lock");
-const BACKOFF_PATH = join(CACHE_DIR, "backoff");
 const LOCK_STALE_MS = 5_000;
+const CLAUDE_USAGE_ENDPOINT = "https://api.anthropic.com/api/oauth/usage";
+const OPENAI_USAGE_ENDPOINT = "https://chatgpt.com/backend-api/wham/usage";
+
+interface CachePaths {
+	dir: string;
+	cache: string;
+	lock: string;
+	backoff: string;
+}
+
+function pathsFor(provider: UsageProvider): CachePaths {
+	const dir = join(homedir(), ".pi", "agent", "cache", "usage-status", provider);
+	return { dir, cache: join(dir, "cache.json"), lock: join(dir, "cache.lock"), backoff: join(dir, "backoff") };
+}
 
 // ── Token loading ───────────────────────────────────────────────────────────
 
@@ -44,32 +48,48 @@ export function loadClaudeToken(): string | undefined {
 	try {
 		if (existsSync(piAuthPath)) {
 			const data = JSON.parse(readFileSync(piAuthPath, "utf8"));
-			if (data.anthropic?.access) return data.anthropic.access as string;
+			if (typeof data.anthropic?.access === "string") return data.anthropic.access;
 		}
 	} catch {
-		// ignore parse errors
+		// Ignore malformed credentials.
 	}
-
 	try {
 		const keychainData = execFileSync("security", ["find-generic-password", "-s", "Claude Code-credentials", "-w"], {
 			encoding: "utf-8",
 			stdio: ["ignore", "pipe", "ignore"],
 		}).trim();
-		if (keychainData) {
-			const parsed = JSON.parse(keychainData);
-			const scopes = parsed.claudeAiOauth?.scopes || [];
-			if (scopes.includes("user:profile") && parsed.claudeAiOauth?.accessToken) {
-				return parsed.claudeAiOauth.accessToken as string;
-			}
+		const parsed = JSON.parse(keychainData);
+		if (
+			parsed.claudeAiOauth?.scopes?.includes("user:profile") &&
+			typeof parsed.claudeAiOauth.accessToken === "string"
+		) {
+			return parsed.claudeAiOauth.accessToken;
 		}
 	} catch {
-		// keychain access failed / not macOS
+		// Keychain is unavailable outside macOS, or has no Claude credential.
 	}
-
 	return undefined;
 }
 
-/** Only OAuth (subscription) tokens can call the usage endpoint. */
+/** Load a ChatGPT OAuth access token from pi, then the Codex CLI credential store. */
+export function loadOpenAIToken(): string | undefined {
+	try {
+		const auth = JSON.parse(readFileSync(join(homedir(), ".pi", "agent", "auth.json"), "utf8"));
+		if (typeof auth["openai-codex"]?.access === "string") return auth["openai-codex"].access;
+	} catch {
+		// Fall through to Codex CLI credentials.
+	}
+	try {
+		const codexHome = process.env.CODEX_HOME || join(homedir(), ".codex");
+		const auth = JSON.parse(readFileSync(join(codexHome, "auth.json"), "utf8"));
+		if (typeof auth.tokens?.access_token === "string") return auth.tokens.access_token;
+	} catch {
+		// No Codex credentials are installed.
+	}
+	return undefined;
+}
+
+/** Only OAuth (subscription) tokens can call Anthropic's usage endpoint. */
 export function isOAuthToken(token: string): boolean {
 	return token.startsWith("sk-ant-oat");
 }
@@ -80,18 +100,13 @@ function formatExtraUsageCredits(credits: number): string {
 	return (credits / 100).toFixed(2);
 }
 
-/** Parse a Retry-After header into milliseconds, or undefined. */
 function parseRetryAfter(res: Response): number | undefined {
 	const header = res.headers.get("retry-after");
 	if (!header) return undefined;
 	const seconds = Number(header);
 	if (Number.isFinite(seconds) && seconds > 0) return seconds * 1000;
-	const date = new Date(header);
-	if (!Number.isNaN(date.getTime())) {
-		const ms = date.getTime() - Date.now();
-		return ms > 0 ? ms : undefined;
-	}
-	return undefined;
+	const ms = new Date(header).getTime() - Date.now();
+	return Number.isFinite(ms) && ms > 0 ? ms : undefined;
 }
 
 interface FetchResult {
@@ -99,65 +114,75 @@ interface FetchResult {
 	retryAfterMs?: number;
 }
 
-async function fetchUsage(token: string): Promise<FetchResult> {
+interface OpenAIRateWindow {
+	used_percent?: number;
+	limit_window_seconds?: number;
+	reset_at?: number;
+}
+
+/** Parse Codex's two quota windows by duration, not primary/secondary position. */
+export function parseOpenAIUsage(data: unknown): UsageSnapshot {
+	const rateLimit = (
+		data as { rate_limit?: { primary_window?: OpenAIRateWindow; secondary_window?: OpenAIRateWindow } }
+	)?.rate_limit;
+	const windows: RateWindow[] = [];
+	for (const window of [rateLimit?.primary_window, rateLimit?.secondary_window]) {
+		if (!window || !Number.isFinite(window.used_percent)) continue;
+		const isFiveHour = (window.limit_window_seconds ?? 0) <= 6 * 60 * 60;
+		windows.push({
+			label: isFiveHour ? "5h" : "Week",
+			usedPercent: window.used_percent as number,
+			...(typeof window.reset_at === "number" ? { resetsAt: new Date(window.reset_at * 1000).toISOString() } : {}),
+		});
+	}
+	return { provider: "openai", windows };
+}
+
+async function fetchUsage(provider: UsageProvider, token: string): Promise<FetchResult> {
 	const controller = new AbortController();
 	const timeout = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
-
 	try {
-		const res = await fetch(USAGE_ENDPOINT, {
-			headers: {
-				Authorization: `Bearer ${token}`,
-				"anthropic-beta": "oauth-2025-04-20",
-			},
+		const res = await fetch(provider === "anthropic" ? CLAUDE_USAGE_ENDPOINT : OPENAI_USAGE_ENDPOINT, {
+			headers:
+				provider === "anthropic"
+					? { Authorization: `Bearer ${token}`, "anthropic-beta": "oauth-2025-04-20" }
+					: { Authorization: `Bearer ${token}`, Accept: "application/json" },
 			signal: controller.signal,
 		});
-		clearTimeout(timeout);
+		if (!res.ok)
+			return {
+				snapshot: { provider, windows: [], error: `http ${res.status}` },
+				retryAfterMs: parseRetryAfter(res),
+			};
+		const data = await res.json();
+		if (provider === "openai") return { snapshot: parseOpenAIUsage(data) };
 
-		if (!res.ok) {
-			return { snapshot: { windows: [], error: `http ${res.status}` }, retryAfterMs: parseRetryAfter(res) };
-		}
-
-		const data = (await res.json()) as {
+		const usage = data as {
 			five_hour?: { utilization?: number; resets_at?: string };
 			seven_day?: { utilization?: number };
-			extra_usage?: {
-				is_enabled?: boolean;
-				used_credits?: number;
-				monthly_limit?: number;
-				utilization?: number;
-			};
+			extra_usage?: { is_enabled?: boolean; used_credits?: number; monthly_limit?: number; utilization?: number };
 		};
-
 		const windows: RateWindow[] = [];
-
-		if (data.five_hour?.utilization !== undefined) {
-			windows.push({
-				label: "5h",
-				usedPercent: data.five_hour.utilization,
-				resetsAt: data.five_hour.resets_at,
-			});
+		if (usage.five_hour?.utilization !== undefined) {
+			windows.push({ label: "5h", usedPercent: usage.five_hour.utilization, resetsAt: usage.five_hour.resets_at });
 		}
-		if (data.seven_day?.utilization !== undefined) {
-			windows.push({ label: "Week", usedPercent: data.seven_day.utilization });
-		}
-
-		if (data.extra_usage?.is_enabled === true) {
-			const extra = data.extra_usage;
-			const usedCredits = extra.used_credits || 0;
-			const monthlyLimit = extra.monthly_limit;
-			// "active" when the 5h window is exhausted, otherwise "on".
-			const extraStatus = (data.five_hour?.utilization ?? 0) >= 99 ? "active" : "on";
+		if (usage.seven_day?.utilization !== undefined)
+			windows.push({ label: "Week", usedPercent: usage.seven_day.utilization });
+		if (usage.extra_usage?.is_enabled) {
+			const extra = usage.extra_usage;
+			const used = extra.used_credits || 0;
+			const status = (usage.five_hour?.utilization ?? 0) >= 99 ? "active" : "on";
 			const label =
-				monthlyLimit && monthlyLimit > 0
-					? `Extra [${extraStatus}] ${formatExtraUsageCredits(usedCredits)}/${formatExtraUsageCredits(monthlyLimit)}`
-					: `Extra [${extraStatus}] ${formatExtraUsageCredits(usedCredits)}`;
+				extra.monthly_limit && extra.monthly_limit > 0
+					? `Extra [${status}] ${formatExtraUsageCredits(used)}/${formatExtraUsageCredits(extra.monthly_limit)}`
+					: `Extra [${status}] ${formatExtraUsageCredits(used)}`;
 			windows.push({ label, usedPercent: extra.utilization || 0 });
 		}
-
-		return { snapshot: { windows } };
+		return { snapshot: { provider, windows } };
 	} catch {
+		return { snapshot: { provider, windows: [], error: "fetch failed" } };
+	} finally {
 		clearTimeout(timeout);
-		return { snapshot: { windows: [], error: "fetch failed" } };
 	}
 }
 
@@ -168,157 +193,136 @@ export interface CacheEntry {
 	snapshot: UsageSnapshot;
 }
 
-function ensureDir(): void {
-	mkdirSync(CACHE_DIR, { recursive: true });
+function ensureDir(paths: CachePaths): void {
+	mkdirSync(paths.dir, { recursive: true });
 }
 
-export function readCache(): CacheEntry | undefined {
+export function readCache(provider: UsageProvider): CacheEntry | undefined {
 	try {
-		return JSON.parse(readFileSync(CACHE_PATH, "utf-8")) as CacheEntry;
+		return JSON.parse(readFileSync(pathsFor(provider).cache, "utf-8")) as CacheEntry;
 	} catch {
 		return undefined;
 	}
 }
 
-function writeCache(entry: CacheEntry): void {
-	ensureDir();
-	const tempPath = `${CACHE_PATH}.${process.pid}.tmp`;
-	writeFileSync(tempPath, JSON.stringify(entry), "utf-8");
-	renameSync(tempPath, CACHE_PATH);
+function writeCache(provider: UsageProvider, entry: CacheEntry): void {
+	const paths = pathsFor(provider);
+	ensureDir(paths);
+	const temp = `${paths.cache}.${process.pid}.tmp`;
+	writeFileSync(temp, JSON.stringify(entry), "utf-8");
+	renameSync(temp, paths.cache);
 }
 
-/** Fresh good snapshot, or undefined if stale/missing. */
-function getGoodUsage(ttlMs: number): UsageSnapshot | undefined {
-	const entry = readCache();
-	if (!entry) return undefined;
-	if (Date.now() - entry.fetchedAt >= ttlMs) return undefined;
+function getGoodUsage(provider: UsageProvider, ttlMs: number): UsageSnapshot | undefined {
+	const entry = readCache(provider);
+	if (!entry || Date.now() - entry.fetchedAt >= ttlMs || entry.snapshot.error) return undefined;
 	return entry.snapshot;
 }
 
-function tryAcquireLock(): boolean {
-	ensureDir();
+function tryAcquireLock(paths: CachePaths): boolean {
+	ensureDir(paths);
 	try {
-		writeFileSync(LOCK_PATH, String(Date.now()), { flag: "wx" });
+		writeFileSync(paths.lock, String(Date.now()), { flag: "wx" });
 		return true;
 	} catch {
 		try {
-			const lockTime = parseInt(readFileSync(LOCK_PATH, "utf-8"), 10);
-			if (Date.now() - lockTime > LOCK_STALE_MS) {
-				writeFileSync(LOCK_PATH, String(Date.now()));
+			if (Date.now() - Number(readFileSync(paths.lock, "utf-8")) > LOCK_STALE_MS) {
+				unlinkSync(paths.lock);
+				writeFileSync(paths.lock, String(Date.now()), { flag: "wx" });
 				return true;
 			}
-		} catch {
-			// ignore
-		}
+		} catch {}
 		return false;
 	}
 }
 
-function releaseLock(): void {
+function releaseLock(paths: CachePaths): void {
 	try {
-		unlinkSync(LOCK_PATH);
-	} catch {
-		// ignore
-	}
+		unlinkSync(paths.lock);
+	} catch {}
 }
 
-async function waitForLock(maxWaitMs: number): Promise<boolean> {
+async function waitForLock(paths: CachePaths, maxWaitMs: number): Promise<boolean> {
 	const start = Date.now();
 	while (Date.now() - start < maxWaitMs) {
 		await new Promise((resolve) => setTimeout(resolve, 100));
-		if (!existsSync(LOCK_PATH)) return true;
+		if (!existsSync(paths.lock)) return true;
 	}
 	return false;
 }
 
-function isBackingOff(): boolean {
+function isBackingOff(paths: CachePaths): boolean {
 	try {
-		return Date.now() < parseInt(readFileSync(BACKOFF_PATH, "utf-8"), 10);
+		return Date.now() < Number(readFileSync(paths.backoff, "utf-8"));
 	} catch {
 		return false;
 	}
 }
 
-function writeBackoff(retryAfterMs?: number): void {
-	ensureDir();
-	const backoffMs = retryAfterMs && retryAfterMs > 0 ? retryAfterMs : DEFAULT_BACKOFF_MS;
-	writeFileSync(BACKOFF_PATH, String(Date.now() + backoffMs));
+function writeBackoff(paths: CachePaths, retryAfterMs?: number): void {
+	ensureDir(paths);
+	writeFileSync(
+		paths.backoff,
+		String(Date.now() + (retryAfterMs && retryAfterMs > 0 ? retryAfterMs : DEFAULT_BACKOFF_MS)),
+	);
 }
 
-function clearBackoff(): void {
+function clearBackoff(paths: CachePaths): void {
 	try {
-		unlinkSync(BACKOFF_PATH);
-	} catch {
-		// ignore
-	}
+		unlinkSync(paths.backoff);
+	} catch {}
 }
 
-/**
- * Fetch with lock + backoff coordination across instances. Returns a fresh
- * good snapshot, or undefined if it deferred to another instance / is backing
- * off (caller keeps publishing the last good state).
- */
-export async function fetchWithCache(token: string): Promise<UsageSnapshot | undefined> {
-	const good = getGoodUsage(REFRESH_INTERVAL_MS);
+/** Fetch a fresh snapshot, coalescing requests across pi instances. */
+export async function fetchWithCache(provider: UsageProvider, token: string): Promise<UsageSnapshot | undefined> {
+	const good = getGoodUsage(provider, REFRESH_INTERVAL_MS);
 	if (good) return good;
-
-	if (isBackingOff()) return undefined;
-
-	if (!tryAcquireLock()) {
-		if (await waitForLock(3000)) {
-			const fresh = getGoodUsage(REFRESH_INTERVAL_MS);
-			if (fresh) return fresh;
-		}
+	const paths = pathsFor(provider);
+	if (isBackingOff(paths)) return undefined;
+	if (!tryAcquireLock(paths)) {
+		if (await waitForLock(paths, 3_000)) return getGoodUsage(provider, REFRESH_INTERVAL_MS);
 		return undefined;
 	}
-
 	try {
-		const { snapshot, retryAfterMs } = await fetchUsage(token);
+		const { snapshot, retryAfterMs } = await fetchUsage(provider, token);
 		if (snapshot.error) {
-			writeBackoff(retryAfterMs);
+			writeBackoff(paths, retryAfterMs);
 			return undefined;
 		}
-		writeCache({ fetchedAt: Date.now(), snapshot });
-		clearBackoff();
+		writeCache(provider, { fetchedAt: Date.now(), snapshot });
+		clearBackoff(paths);
 		return snapshot;
 	} finally {
-		releaseLock();
+		releaseLock(paths);
 	}
 }
 
-/** Watch the cache file for good updates from other instances. */
-export function watchCache(onChange: (entry: CacheEntry) => void): () => void {
+/** Watch another pi instance's cache updates for one subscription provider. */
+export function watchCache(provider: UsageProvider, onChange: (entry: CacheEntry) => void): () => void {
+	const paths = pathsFor(provider);
 	let lastMtimeMs = 0;
 	let stopped = false;
-
 	const check = () => {
 		if (stopped) return;
 		try {
-			const stat = statSync(CACHE_PATH, { throwIfNoEntry: false });
-			if (!stat || stat.mtimeMs === lastMtimeMs) return;
-			if (existsSync(LOCK_PATH)) return; // mid-write
+			const stat = statSync(paths.cache, { throwIfNoEntry: false });
+			if (!stat || stat.mtimeMs === lastMtimeMs || existsSync(paths.lock)) return;
 			lastMtimeMs = stat.mtimeMs;
-			const entry = readCache();
-			if (entry?.snapshot && !entry.snapshot.error) onChange(entry);
-		} catch {
-			// ignore
-		}
+			const entry = readCache(provider);
+			if (entry && !entry.snapshot.error) onChange(entry);
+		} catch {}
 	};
-
 	let watcher: FSWatcher | undefined;
 	try {
-		ensureDir();
-		if (existsSync(CACHE_PATH)) watcher = watch(CACHE_PATH, () => check());
+		ensureDir(paths);
+		if (existsSync(paths.cache)) watcher = watch(paths.cache, check);
 		watcher?.unref?.();
-	} catch {
-		// fall back to polling only
-	}
-	const pollTimer = setInterval(check, 5_000);
-	pollTimer.unref?.();
-
+	} catch {}
+	const poll = setInterval(check, 5_000);
+	poll.unref?.();
 	return () => {
 		stopped = true;
 		watcher?.close();
-		clearInterval(pollTimer);
+		clearInterval(poll);
 	};
 }

@@ -1,20 +1,4 @@
-/**
- * Shared protocol for the `usage` extension.
- *
- * The `usage` extension owns the poll of the undocumented Claude OAuth usage
- * endpoint and republishes every refresh on pi's in-process event bus. Any
- * other extension (footer, night-mode, ...) consumes it from there instead of
- * fetching on its own.
- *
- * Channels:
- * - `usage:snapshot` (usage -> consumers): a `UsageSnapshotEvent` after each
- *   refresh, and in reply to a request.
- * - `usage:request` (consumers -> usage): ask for the current snapshot. The bus
- *   has no replay, so late subscribers use this to get an immediate value.
- *
- * This module is dependency free on purpose: importing it must never pull in
- * node builtins or start a poller.
- */
+/** Shared protocol for subscription-usage snapshots. */
 
 export const USAGE_SNAPSHOT_EVENT = "usage:snapshot";
 export const USAGE_REQUEST_EVENT = "usage:request";
@@ -22,14 +6,17 @@ export const USAGE_REQUEST_EVENT = "usage:request";
 export const FIVE_HOUR_LABEL = "5h";
 export const WEEK_LABEL = "Week";
 
+export type UsageProvider = "anthropic" | "openai";
+
 export interface RateWindow {
 	label: string;
 	usedPercent: number;
-	/** ISO timestamp at which the window resets (5h window only). */
+	/** ISO timestamp at which the window resets. */
 	resetsAt?: string;
 }
 
 export interface UsageSnapshot {
+	provider?: UsageProvider;
 	windows: RateWindow[];
 	error?: string;
 }
@@ -50,16 +37,30 @@ export function isUsageSnapshotEvent(data: unknown): data is UsageSnapshotEvent 
 	return Array.isArray((snapshot as UsageSnapshot).windows);
 }
 
-/** Find a rate window by label, e.g. `findWindow(snapshot, FIVE_HOUR_LABEL)`. */
+/** Find a rate window by label, e.g. findWindow(snapshot, FIVE_HOUR_LABEL). */
 export function findWindow(snapshot: UsageSnapshot | undefined, label: string): RateWindow | undefined {
-	if (!snapshot) return undefined;
-	return snapshot.windows.find((w) => w.label === label);
+	return snapshot?.windows.find((window) => window.label === label);
 }
 
 /** True when the active model is served by the Anthropic subscription. */
 export function isAnthropicModel(model: { provider?: string; id?: string } | undefined): boolean {
 	const provider = model?.provider?.toLowerCase() ?? "";
 	const id = model?.id?.toLowerCase() ?? "";
-	if (provider) return provider.includes("anthropic");
-	return id.includes("claude");
+	return provider ? provider.includes("anthropic") : id.includes("claude");
+}
+
+/** True when the active model is served by the Codex / ChatGPT subscription. */
+export function isOpenAIModel(model: { provider?: string; id?: string } | undefined): boolean {
+	const provider = model?.provider?.toLowerCase() ?? "";
+	const id = model?.id?.toLowerCase() ?? "";
+	return provider.includes("codex") || (!provider && id.includes("codex"));
+}
+
+/** Return the subscription provider that can supply usage for a model. */
+export function usageProviderForModel(
+	model: { provider?: string; id?: string } | undefined,
+): UsageProvider | undefined {
+	if (isAnthropicModel(model)) return "anthropic";
+	if (isOpenAIModel(model)) return "openai";
+	return undefined;
 }

@@ -920,7 +920,7 @@ export default function (pi: ExtensionAPI): void {
 	// ── wiring ───────────────────────────────────────────────────────────
 
 	unsubscribeUsage = pi.events.on(USAGE_SNAPSHOT_EVENT, (data) => {
-		if (!isUsageSnapshotEvent(data)) return;
+		if (!isUsageSnapshotEvent(data) || data.snapshot.provider === "openai") return;
 		usage = data.snapshot;
 		evaluate();
 	});
