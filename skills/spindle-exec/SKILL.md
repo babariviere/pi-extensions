@@ -51,10 +51,9 @@ await τ.set("index", request);
 
 ## Discovery and agents
 
-- Before declaring an external capability unavailable, discover it. `tools.search({ query })` finds registered actions.
-- For lazy MCP services such as Slack, use `mcp.list()` or `mcp.search({ query: "slack" })`, then `mcp.connect("slack")` if needed. Use `mcp.search({ query: "messages" })` and `mcp.describe({ tool })` before `mcp.call(server, tool, args)`.
+- If a task names an external service or needs web research, discover tools before declaring the capability unavailable. `tools.search({ query: "web search" })` finds registered tools, including web search.
+- Use `mcp.list()` or `mcp.search({ query })` for lazy MCP services. Connect the selected server if needed, then search and describe its action before `mcp.call(server, tool, args)`.
 - `agents.run`, `agents.runAll`, `agents.start`, and `agents.wait` run subagents. A `running` result is not a failure.
-
 
 ## Execution
 
