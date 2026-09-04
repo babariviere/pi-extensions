@@ -154,7 +154,7 @@ return index.filter((entry) => entry.path.endsWith(".ts")).length;
 
 ## `tools` — cross-provider discovery + generic dispatch (full code mode only)
 
-`tools` owns no tools; it enumerates and invokes actions across every provider (pi, extensions, mcp, agents). Use it to discover names/schemas at runtime, then call them on their own namespace.
+`tools` owns no tools; it is a top-level global that enumerates and invokes actions across every provider (pi, extensions, mcp, agents). Use it to discover names/schemas at runtime, then call them on their own namespace. Search accepts natural-language terms for snake_case names, so `tools.search({ query: "web search" })` finds `web_search`. For recovery only, `extensions.tools` aliases this discovery API. Prefer `tools.*` in new code.
 
 - `tools.providers()` → `[{name, description}]` for every registered provider.
 - `tools.list({provider?, namespace?, query?, limit?})` → `SpindleAction[]` (`ref, provider, name, description, inputSchema, namespace?`). No args lists everything, including captured `extensions.*` tools that are hidden from the direct tool list.

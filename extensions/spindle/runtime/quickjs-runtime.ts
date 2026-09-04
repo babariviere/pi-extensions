@@ -308,7 +308,15 @@ const __providerProxy = (provider) => new Proxy({}, {
     return (args = {}) => __call(provider + "." + String(property), args);
   },
 });
-globalThis.extensions = __providerProxy("extensions");
+globalThis.extensions = new Proxy(__providerProxy("extensions"), {
+  get(target, property) {
+    // A common namespace slip is extensions.tools.search(...). Keep this
+    // discovery-only compatibility route: it exposes exactly the top-level
+    // tools API and cannot invoke an unregistered action on its own.
+    if (property === "tools") return globalThis.tools;
+    return target[property];
+  },
+});
 // tools is discovery + generic calls only. The proxy keeps the six discovery
 // methods and turns a core-tool name (read/bash/edit/...) into an actionable
 // error pointing at pi.<name>, so a model that writes tools.read(...) learns

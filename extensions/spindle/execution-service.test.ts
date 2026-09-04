@@ -118,6 +118,16 @@ test("discovery actions dispatch through the static host calls", async () => {
 	assert.deepEqual(value.called, { echoed: { via: "call" } });
 });
 
+test("discovery finds snake_case names through the extensions compatibility alias", async () => {
+	const service = serviceWith([makeProvider("extensions", { web_search: () => ({}) })]);
+	const result = await execute(
+		service,
+		"return (await extensions.tools.search({ query: 'web search' })).map((action) => action.ref);",
+	);
+	assert.equal(result.success, true, result.error ?? "");
+	assert.deepEqual(result.value, ["extensions.web_search"]);
+});
+
 test("mapLimit bounds how many thunks run at once", async () => {
 	const service = serviceWith([]);
 	const result = await execute(

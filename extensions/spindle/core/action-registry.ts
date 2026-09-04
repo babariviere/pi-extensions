@@ -214,8 +214,10 @@ const descriptorHash = (value: unknown): string =>
 		.update(JSON.stringify(stableJsonValue(value)))
 		.digest("hex");
 
+// Tool names commonly use snake_case while users search with natural-language
+// words. Treat underscores as separators so "web search" finds "web_search".
 const discoveryTerms = (value: string): string[] =>
-	[...value.normalize("NFKC").matchAll(/[\p{L}\p{N}_]+/gu)].map((match) => match[0].toLowerCase());
+	[...value.normalize("NFKC").matchAll(/[\p{L}\p{N}]+/gu)].map((match) => match[0].toLowerCase());
 
 const validationMessage = (schema: Record<string, unknown>, value: Record<string, unknown>): string | undefined => {
 	try {

@@ -188,7 +188,7 @@ const renderExtensionsDeclaration = (sources: SpindleNamedActionTypeSource[]): s
 		"// gate before the sandbox runs. Anything absent compiles as the loose\n" +
 		"// declaration would and is validated by the registry at dispatch.\n" +
 		note +
-		`interface SpindleExtensionsApiDynamic {\n${memberBlock.lines.join("\n")}\n}\n` +
+		`interface SpindleExtensionsApiDynamic {\n  /** Compatibility alias for the top-level discovery API. */\n  tools: SpindleToolsApi;\n${memberBlock.lines.join("\n")}\n}\n` +
 		"declare const extensions: SpindleExtensionsApiDynamic;\n"
 	);
 };
