@@ -81,6 +81,15 @@ test("denyRead roots deny reads only while enforcing", () => {
 	assert.doesNotThrow(() => assertReadAllowed(off, "/home/dev/.ssh/id_ed25519"));
 });
 
+test("denyRead roots also reject direct writes", () => {
+	const policy = resolveSandboxPolicy(
+		{ mode: "workspace-write", allowWrite: ["/night/todos"], denyRead: ["/night/todos"] },
+		environment(),
+	);
+	assert.equal(isWriteAllowed(policy, "/night/todos/TODO-123.md"), false);
+	assert.throws(() => assertWriteAllowed(policy, "/night/todos/TODO-123.md"), /denied by mode/);
+});
+
 test("workspace-write grants the run dir plus tool caches", () => {
 	const policy = resolveSandboxPolicy({}, environment({ env: { GOCACHE: "/cache/go-build" } }));
 	assert.equal(policy.mode, "workspace-write");

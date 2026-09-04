@@ -45,12 +45,13 @@ test("a subagent process picks the policy up from the handshake file", () => {
 		startedAt: 1,
 		reportPath: "/tmp/r.md",
 		maxPullRequests: 3,
-		sandbox: { mode: "workspace-write", allowWrite: ["/sandboxes/repo", ""] },
+		sandbox: { mode: "workspace-write", allowWrite: ["/sandboxes/repo", ""], denyRead: ["/night/todos", ""] },
 	});
 	process.env[NIGHT_RUN_ENV] = "1";
 	assert.deepEqual(activeNightSandboxRequest(), {
 		mode: "workspace-write",
 		allowWrite: ["/sandboxes/repo"],
+		denyRead: ["/night/todos"],
 	});
 });
 

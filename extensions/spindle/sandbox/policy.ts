@@ -240,6 +240,9 @@ export function isWriteAllowed(policy: SandboxPolicy, absolutePath: string): boo
 	const canonical = canonicalPathForGuard(absolutePath);
 	if (policy.denyWrite.some((pattern) => matchesPattern(pattern, absolutePath) || matchesPattern(pattern, canonical)))
 		return false;
+	// denyRead roots are also write-protected in the OS profile. Keep direct
+	// write/edit tools aligned with shell enforcement.
+	if (policy.denyRead.some((root) => isInside(canonicalPathForGuard(root), canonical))) return false;
 	return policy.allowWrite.some((root) => isInside(canonicalPathForGuard(root), canonical));
 }
 

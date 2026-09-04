@@ -19,6 +19,8 @@ export interface NightSandboxRequest {
 	mode: "off" | "read-only" | "workspace-write" | "full";
 	/** Extra writable roots on top of the run's working directory. */
 	allowWrite?: string[];
+	/** Roots agents may access only through an extension-owned tool. */
+	denyRead?: string[];
 }
 
 /**

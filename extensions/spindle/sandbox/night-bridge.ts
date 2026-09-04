@@ -34,5 +34,12 @@ export function activeNightSandboxRequest(ref: NightSessionRef = {}): SandboxReq
 	const roots = Array.isArray(requested.allowWrite)
 		? requested.allowWrite.filter((entry): entry is string => typeof entry === "string" && !!entry.trim())
 		: [];
-	return { mode: requested.mode, ...(roots.length ? { allowWrite: roots } : {}) };
+	const deniedRoots = Array.isArray(requested.denyRead)
+		? requested.denyRead.filter((entry): entry is string => typeof entry === "string" && !!entry.trim())
+		: [];
+	return {
+		mode: requested.mode,
+		...(roots.length ? { allowWrite: roots } : {}),
+		...(deniedRoots.length ? { denyRead: deniedRoots } : {}),
+	};
 }
