@@ -3,7 +3,8 @@ import { mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { findGitWrites, findJjRoot, gitSubcommand } from "./index.ts";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import toolSubstitute, { findGitWrites, findJjRoot, gitSubcommand } from "./index.ts";
 
 const BASE = "/repo";
 
@@ -70,4 +71,25 @@ test("findJjRoot walks up to the .jj directory", () => {
 
 	const plain = mkdtempSync(join(tmpdir(), "plain-"));
 	assert.equal(findJjRoot(plain), undefined);
+});
+
+test("emits explicit search syntax guidance", async () => {
+	type Hook = (event: { systemPrompt: string }, context: unknown) => Promise<{ systemPrompt: string }>;
+	let hook: Hook | undefined;
+	const pi = {
+		on(name: string, handler: unknown) {
+			if (name === "before_agent_start") hook = handler as Hook;
+		},
+	} as unknown as ExtensionAPI;
+
+	toolSubstitute(pi);
+	assert.ok(hook);
+	const result = await hook({ systemPrompt: "base prompt" }, undefined);
+
+	assert.match(result.systemPrompt, /pi\.find\(\{ pattern: "\*\.test\.ts", path: "extensions" \}\)/);
+	assert.match(result.systemPrompt, /pi\.grep\(\{ pattern: "setModel\(", path: "src", literal: true \}\)/);
+	assert.match(result.systemPrompt, /optional `glob` filters file paths and does not change the content pattern/);
+	assert.match(result.systemPrompt, /rg --fixed-strings --glob '\*\.ts' 'setModel\('/);
+	assert.match(result.systemPrompt, /fd --glob '\*\.test\.ts'/);
+	assert.match(result.systemPrompt, /Only when Pi search APIs lack required options or output formatting/);
 });

@@ -263,9 +263,15 @@ const gitConvertRegex = new RegExp(
 
 const systemPromptAddition = `
 ## Search Tool Rules
-- Prefer \`pi.find\` for file discovery and \`pi.grep\` for content search.
-- Use \`pi.bash\` with \`fd\` or \`rg\` only when Pi search APIs lack required
-  options or output formatting.
+- Prefer \`pi.find\` for file discovery. Its \`pattern\` is a file glob, for example
+  \`pi.find({ pattern: "*.test.ts", path: "extensions" })\`.
+- Prefer \`pi.grep\` for content search. Its \`pattern\` is a regex by default;
+  use \`literal: true\` for exact text containing characters such as parentheses,
+  for example \`pi.grep({ pattern: "setModel(", path: "src", literal: true })\`.
+  The optional \`glob\` filters file paths and does not change the content pattern.
+- Only when Pi search APIs lack required options or output formatting, use
+  \`pi.bash\` with quoted patterns: \`rg --fixed-strings --glob '*.ts' 'setModel('\`
+  for literal content, or \`fd --glob '*.test.ts'\` for file discovery.
 
 Version control: inside a jj (Jujutsu) repository, use \`jj\` for anything that
 modifies the repository (commit, rebase, branch, reset, ...); read-only \`git\`
