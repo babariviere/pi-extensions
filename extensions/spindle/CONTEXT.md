@@ -38,10 +38,9 @@ plus its wiring, and none pulls in a dropped subsystem.
 | `core/core-override-guidance.ts` | `src/core/core-override-guidance.ts` | an exact-name core override keeps its authored prompt text in full code mode |
 | `ui/highlight.ts` (dynamic `import("shiki")`) | upstream's startup-perf change | the full shiki entry stays out of extension startup |
 
-The `spindle_exec` named-payload argument is `payloads`. `strings` is still
-accepted and silently remapped in `prepareArguments`, but it is no longer
-declared in the tool schema or named in any prompt surface, so nothing teaches a
-model to reach for it.
+The `spindle_exec` named-payload argument is `payloads`. Compatibility
+normalization happens in `prepareArguments` before schema validation, but the
+canonical name is used in the tool schema and every prompt surface.
 
 Full-code prompt guidance identifies `spindle_exec` as the session's TypeScript
 code mode and exclusive tool interface, explicitly ruling out Python as an
@@ -224,7 +223,7 @@ Globals inside `spindle_exec`:
   and the one taught spelling per tool lives in `FULL_CODE_GUIDANCE` in
   `index.ts`. Keep the declarations wide and the guidance narrow.
 - `process` — minimal shim built from `env-snapshot.ts`: allowlisted `process.env` (HOME, USER, LOGNAME, SHELL, PWD, PATH, LANG, LC_*, TERM, TMPDIR, XDG_*), `process.platform` / `process.arch`, `process.cwd()`. No secret ever enters the guest.
-- `print`, `console`, `π` (named payloads; the `payloads` argument, legacy alias `strings`), `setTimeout` / `setInterval` / `clearTimeout` / `clearInterval`
+- `print`, `console`, `π` (named payloads from the `payloads` argument), `setTimeout` / `setInterval` / `clearTimeout` / `clearInterval`
 - `τ` — the session-scoped scratchpad (`session-store.ts`), reached through five
   host calls (`spindle.$stateGet` / `$stateSet` / `$stateKeys` / `$stateDelete` /
   `$stateClear`). `τ = 2π` is the mnemonic and the semantics are deliberately
@@ -497,7 +496,7 @@ risk/approval hunks by hand.
 | `host-calls.ts` | The host half of the guest/host call contract: one `HOST_CALLS` table entry per `spindle.$*` ref (discovery, workflow, spans, `τ` state), each owning its handler over a per-execution `HostCallContext`. The execution service dispatches through `hostCallTable` and holds no host-call cases of its own; `runtime/guest-host-refs.test.ts` drives the table from the guest side. |
 | `runtime/guest-host-refs.test.ts` | The guest/host ref contract: runs a probe program through a real sandbox with a recording bridge, asserts every emitted ref is handled and every static `spindle.$*` table entry is reachable, and that no `fabric.$` names survive a port. |
 | `execution-service.test.ts` | Headless execution-service tests over a stub-provider registry: type errors, extension calls, discovery dispatch, phases, agent budget, and source-mapped runtime errors. |
-| `runtime/quickjs-runtime.test.ts` | Runtime integration tests: host-call marshalling and rejection, concurrency, logs and truncation, deadline, abort (pre-start and mid-host-call), memory limit, timers, `π` strings, `process` shim, and error-position mapping. |
+| `runtime/quickjs-runtime.test.ts` | Runtime integration tests: host-call marshalling and rejection, concurrency, logs and truncation, deadline, abort (pre-start and mid-host-call), memory limit, timers, `π` payloads, `process` shim, and error-position mapping. |
 | `runtime/guest-polyfills.ts` | The host APIs the engine does not ship, as guest source: `TextEncoder`/`TextDecoder`, `URL`/`URLSearchParams`, `atob`/`btoa`, `structuredClone`, `crypto`, `queueMicrotask`, `performance`, `AbortController`, and the loud-failure guard for the absent `Intl`/`Atomics`. Each polyfill declares the identifiers that imply it and is injected only when the program text mentions one, because `newContext()` runs per `execute()` call and every byte would otherwise be re-parsed on every invocation. Deliberately no `fetch`, `crypto.subtle` or `WebAssembly`: those are capabilities, and the audited host-call table has to stay the only route out. Must be kept in step with the declarations in `runtime/guest-types.ts`, since these globals are not in `lib.es2025` and TS2304 is not filtered. |
 | `runtime/guest-baseline.test.ts` | Locks the engine baseline. The pinned variant is bellard/quickjs `2025-09-13+f1139494` (`@jitl/quickjs-singlefile-mjs-release-sync@0.32.0`: release, sync, singlefile), whose global surface is not covered by the package's semver, so a `quickjs-emscripten-core` bump can add or remove intrinsics silently. Pins `globalThis`, asserts the ES2024/ES2025 features the engine does implement, and asserts the absences the polyfill layer covers. |
 | `runtime/engine-lib.test.ts` | Guards the type-checker `lib` tier against that baseline from both sides: the ES2025 APIs the engine has must resolve to real signatures, and the ones it lacks (`Array.fromAsync`, `JSON.rawJSON`) must stay untyped so the tier cannot creep to `esnext`. Discriminates on arity (TS2554, unfiltered) rather than property existence, because TS2339 is filtered and so cannot tell "typed" from `any`. |

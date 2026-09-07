@@ -169,7 +169,7 @@ export const createSpindleExecTool = (
 					: renderSpindleWriteArgumentPreview(
 							{
 								bindings: rendererState.spindleWriteBindings ?? [],
-								strings: resolveSpindleExecPayloads(params),
+								payloads: resolveSpindleExecPayloads(params),
 								expanded: context.expanded,
 								cwd: context.cwd,
 								settings: codePreviewSettings,
@@ -634,15 +634,15 @@ export const createSpindleExecTool = (
 				// non-string code param. Strict providers reject an array upstream
 				// against the Type.String schema, so this branch is a no-op there.
 				// prepareArguments joins code arrays, quotes unquoted pi path arguments and
-				// parses a JSON-encoded `strings` map before Pi validates this call; keep
+				// parses a JSON-encoded `payloads` map before Pi validates this call; keep
 				// the same coercions here for direct internal invocations.
 				const joined = Array.isArray(params.code) ? params.code.join("\n") : params.code;
 				const code = repairSpindleGuestCode(joined);
-				const strings = resolveSpindleExecPayloads(params);
+				const payloads = resolveSpindleExecPayloads(params);
 				const runDisplay = normalizeRunDisplay(params.display);
 				const result = await state.execution.execute({
 					code,
-					...(strings ? { strings } : {}),
+					...(payloads ? { payloads } : {}),
 					signal,
 					parentToolCallId: toolCallId,
 					context,

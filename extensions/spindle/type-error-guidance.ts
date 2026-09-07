@@ -26,8 +26,6 @@ const DOUBLE_ESCAPED_QUOTE_CONCAT_PATTERN = /\\\\"\s*\+\+/;
 const SPINDLE_EXEC_ARGUMENT_NOTES: Readonly<Record<string, string>> = {
 	payloads:
 		"named `payloads` belong in the outer `spindle_exec` arguments, then become available inside `code` as `\u03c0.key`.",
-	strings:
-		"`strings` is the legacy alias for outer `payloads`; named values belong in the outer `spindle_exec` arguments, then become available inside `code` as `\u03c0.key`.",
 	agentBudget: "`agentBudget` belongs to the outer `spindle_exec` call, not inside `code`.",
 	timeoutMs: "`timeoutMs` belongs to the outer `spindle_exec` call, not inside `code`.",
 	display: "the `display` objective belongs to the outer `spindle_exec` call, not inside `code`.",
@@ -116,7 +114,7 @@ export const typeErrorRecoveryHint = (code: string, errors: SpindleTypeError[]):
 		return 'Recovery hint: a double-escaped quote before string concatenation broke a nested command string. Prefer `pi.exec({ argv: [...] })` for literal command arguments, or use `"` (not `\\"`) when an embedded quote must remain in a TypeScript string.';
 	}
 	if (hasLiteralPayloadInterpolation(code, errors)) {
-		return "Recovery hint: a `${...}` expression in an edit/write payload is being evaluated by the Spindle TypeScript program. Declare it if intentional; for literal file content, move the payload to top-level `strings` and reference `\u03c0.key`.";
+		return "Recovery hint: a `${...}` expression in an edit/write payload is being evaluated by the Spindle TypeScript program. Declare it if intentional; for literal file content, move the payload to top-level `payloads` and reference `\u03c0.key`.";
 	}
 	if (
 		UNQUOTED_PATH_HEAD.test(code) &&
@@ -131,5 +129,5 @@ export const typeErrorRecoveryHint = (code: string, errors: SpindleTypeError[]):
 	}
 	if (!PAYLOAD_CALL_PATTERN.test(code)) return undefined;
 	if (!errors.some((error) => SYNTAX_ERROR_PATTERN.test(error.message))) return undefined;
-	return "Recovery hint: if embedded edit/write payload text caused the syntax error, pass it through top-level `strings` and reference `\u03c0.key` instead of escaping it inside `code`.";
+	return "Recovery hint: if embedded edit/write payload text caused the syntax error, pass it through top-level `payloads` and reference `\u03c0.key` instead of escaping it inside `code`.";
 };

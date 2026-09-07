@@ -50,9 +50,9 @@ const asStringRecord = (record: Record<string, unknown>): Record<string, string>
 // Silent repair for the named-payload map. The declared shape is
 // Record<string, string>, but models stringify nested maps (the highest-entropy
 // escaped field in an otherwise flat tool), which strict schema validation
-// rejects at the cost of a zero-work round trip. `strings` is the legacy alias:
-// the name collides with the JSON string type and taught models to pass one.
-const normalizeNamedStrings = (input: unknown): Record<string, string> | undefined => {
+// rejects at the cost of a zero-work round trip. A compatibility alias is
+// normalized here before the model-facing schema sees it.
+const normalizeNamedPayloads = (input: unknown): Record<string, string> | undefined => {
 	if (isRecord(input)) return asStringRecord(input);
 	if (typeof input !== "string") return undefined;
 	const parsed = parseJsonObject(input);
@@ -63,12 +63,12 @@ export const resolveSpindleExecPayloads = (params: {
 	payloads?: unknown;
 	strings?: unknown;
 }): Record<string, string> | undefined =>
-	normalizeNamedStrings(params.payloads) ?? normalizeNamedStrings(params.strings);
+	normalizeNamedPayloads(params.payloads) ?? normalizeNamedPayloads(params.strings);
 
 /**
  * Coerce the model-facing `spindle_exec` arguments into the declared shape
  * before Pi validates them: join a `code` array, quote unquoted path heads,
- * parse a JSON-encoded `strings` map, drop nullish optionals, and normalize a
+ * parse a JSON-encoded `payloads` map, drop nullish optionals, and normalize a
  * bare `display` string.
  */
 export const prepareSpindleExecArguments = (input: unknown): unknown => {
@@ -102,16 +102,16 @@ export const prepareSpindleExecArguments = (input: unknown): unknown => {
 	}
 
 	const hasPayloads = Object.hasOwn(prepared, "payloads");
-	const hasStrings = Object.hasOwn(prepared, "strings");
-	if (hasPayloads || hasStrings) {
+	const hasLegacyPayloadAlias = Object.hasOwn(prepared, "strings");
+	if (hasPayloads || hasLegacyPayloadAlias) {
 		const raw = hasPayloads ? prepared.payloads : prepared.strings;
-		const normalized = normalizeNamedStrings(raw);
+		const normalized = normalizeNamedPayloads(raw);
 		if (normalized) {
 			if (prepared.payloads !== normalized) writable().payloads = normalized;
 		} else if (!hasPayloads) {
 			writable().payloads = raw;
 		}
-		if (hasStrings) delete writable().strings;
+		if (hasLegacyPayloadAlias) delete writable().strings;
 	}
 
 	return prepared;

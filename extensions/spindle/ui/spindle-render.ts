@@ -245,9 +245,9 @@ const legacyCommandsFrom = (spindleArgs: unknown): ReadonlyMap<string, string> =
 	const remember = (candidate: unknown): void => {
 		if (typeof candidate === "string") commands.set(digestCommand(candidate), candidate);
 	};
-	const namedStrings = recordOf(args.strings);
-	if (namedStrings) {
-		for (const value of Object.values(namedStrings)) remember(value);
+	const namedPayloads = recordOf(args.payloads);
+	if (namedPayloads) {
+		for (const value of Object.values(namedPayloads)) remember(value);
 	}
 	const rawCode = args.code;
 	const code =
@@ -286,7 +286,7 @@ export const restoreLegacyBashCommands = (audits: SpindleRenderAudit[], spindleA
 
 export interface SpindleWriteArgumentPreviewInput {
 	bindings: SpindleWriteBinding[];
-	strings?: Record<string, string> | undefined;
+	payloads?: Record<string, string> | undefined;
 	expanded: boolean;
 	cwd?: string | undefined;
 	settings?: CodePreviewSettings | undefined;
@@ -332,7 +332,7 @@ export const renderSpindleWriteArgumentPreview = (
 	theme: Theme,
 	invalidate?: () => void,
 ): Component | null => {
-	const available = input.bindings.map((binding) => input.strings?.[binding.stringKey]);
+	const available = input.bindings.map((binding) => input.payloads?.[binding.stringKey]);
 	let activeIndex = -1;
 	for (let index = 0; index < available.length; index++) {
 		if (typeof available[index] === "string") activeIndex = index;

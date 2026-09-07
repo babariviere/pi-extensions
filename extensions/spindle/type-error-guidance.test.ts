@@ -22,10 +22,10 @@ test("a property owned by another tool names its owner", () => {
 });
 
 test("a misplaced envelope argument points back at spindle_exec", () => {
-	const hint = typeErrorRecoveryHint("return await pi.write({ path: '/x', strings: {} });", [
-		error("'strings' does not exist in type '{ path: string }'"),
+	const hint = typeErrorRecoveryHint("return await pi.write({ path: '/x', payloads: {} });", [
+		error("'payloads' does not exist in type '{ path: string }'"),
 	]);
-	assert.match(String(hint), /`strings` is a `spindle_exec` argument/);
+	assert.match(String(hint), /`payloads` is a `spindle_exec` argument/);
 });
 
 test("unquoted paths are diagnosed", () => {
@@ -43,7 +43,7 @@ test("a literal interpolation in a write payload is diagnosed", () => {
 	const hint = typeErrorRecoveryHint("await pi.write({ path: '/x', content: `${body}` });", [
 		error("Cannot find name 'body'"),
 	]);
-	assert.match(String(hint), /move the payload to top-level `strings`/);
+	assert.match(String(hint), /move the payload to top-level `payloads`/);
 });
 
 test("a Promise.all arity mismatch is diagnosed", () => {

@@ -101,7 +101,7 @@ interface SpindleExecutionPartial {
 
 export interface SpindleExecutionOptions {
 	code: string;
-	strings?: Record<string, string>;
+	payloads?: Record<string, string>;
 	signal: AbortSignal | undefined;
 	parentToolCallId: string;
 	context: ExtensionContext;
@@ -399,7 +399,7 @@ export class SpindleExecutionService {
 					// The map for checked.javascript, so guest stack positions map back
 					// to the program the model wrote (runtime/source-map.ts).
 					...(checked.javascript && checked.sourceMap ? { sourceMap: checked.sourceMap } : {}),
-					...(options.strings ? { strings: options.strings } : {}),
+					...(options.payloads ? { payloads: options.payloads } : {}),
 					// Allowlisted env snapshot injected as the guest's `process` global.
 					process: spindleProcessSnapshot(options.context.cwd),
 					...(options.signal ? { signal: options.signal } : {}),

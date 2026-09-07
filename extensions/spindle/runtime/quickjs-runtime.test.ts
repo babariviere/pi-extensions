@@ -174,16 +174,16 @@ test("setTimeout callbacks run", async () => {
 	assert.equal(result.value, 1);
 });
 
-test("π exposes only provided strings", async () => {
+test("π exposes only provided payloads", async () => {
 	const runtime = new QuickJsRuntime();
 	const provided = await runtime.execute("return π.greeting;", unexpectedHostCall, {
 		...baseOptions,
-		strings: { greeting: "hi" },
+		payloads: { greeting: "hi" },
 	});
 	assert.equal(provided.value, "hi");
 	const missing = await runtime.execute("return π.nope;", unexpectedHostCall, {
 		...baseOptions,
-		strings: { greeting: "hi" },
+		payloads: { greeting: "hi" },
 	});
 	assert.equal(missing.terminationReason, "runtime_error");
 	assert.match(missing.error ?? "", /π\.nope is not defined.*provided: greeting/s);
@@ -364,7 +364,7 @@ test("pi.applyPatch dispatches its payload unchanged", async () => {
 			receivedArgs = args;
 			return { ok: true };
 		},
-		{ ...baseOptions, strings: { patch: "*** Begin Patch\n*** End Patch" } },
+		{ ...baseOptions, payloads: { patch: "*** Begin Patch\n*** End Patch" } },
 	);
 	assert.equal(result.terminationReason, "completed");
 	assert.equal(receivedRef, "pi.applyPatch");

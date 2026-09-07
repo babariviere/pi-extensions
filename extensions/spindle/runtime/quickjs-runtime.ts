@@ -20,7 +20,7 @@ export interface SpindleSandboxOptions {
 	timeoutMs: number;
 	memoryLimitBytes: number;
 	maxLogChars?: number;
-	strings?: Record<string, string>;
+	payloads?: Record<string, string>;
 	/**
 	 * JSON text of the source map for `transpiledCode`, used to rewrite guest
 	 * stack positions back to the program the model wrote. Ignored when the
@@ -277,8 +277,8 @@ globalThis.pi = new Proxy({}, {
     };
   },
 });
-const __piStrings = (typeof globalThis["π"] === "object" && globalThis["π"] !== null) ? globalThis["π"] : {};
-globalThis["π"] = new Proxy(__piStrings, {
+const __piPayloads = (typeof globalThis["π"] === "object" && globalThis["π"] !== null) ? globalThis["π"] : {};
+globalThis["π"] = new Proxy(__piPayloads, {
   get(target, property) {
     if (typeof property === "symbol") return undefined;
     const name = String(property);
@@ -286,14 +286,14 @@ globalThis["π"] = new Proxy(__piStrings, {
     if (Object.prototype.hasOwnProperty.call(target, name)) return target[name];
     if (__piToolNames.indexOf(name) >= 0) {
       throw new Error(
-        "π." + name + " is the strings accessor, not a tool. For the Pi core tool, call pi." + name + "(args)."
+        "π." + name + " is the payloads accessor, not a tool. For the Pi core tool, call pi." + name + "(args)."
       );
     }
     const provided = Object.keys(target);
     throw new Error(
-      "π." + name + " is not defined. π only exposes keys from the spindle_exec strings parameter" +
+      "π." + name + " is not defined. π only exposes keys from the spindle_exec payloads argument" +
       (provided.length ? " (provided: " + provided.join(", ") + ")" : " (none provided)") +
-      ". Pass strings: { " + name + ": '...' } to use π." + name + "."
+      ". Pass payloads: { " + name + ": '...' } to use π." + name + "."
     );
   },
   ownKeys(target) { return Reflect.ownKeys(target); },
@@ -874,9 +874,9 @@ export class QuickJsRuntime {
 			context.setProp(context.global, "print", printFunction);
 			printFunction.dispose();
 
-			const strings = jsonHandle(context, jsonObject, jsonParse, options.strings ?? {});
-			context.setProp(context.global, "π", strings);
-			strings.dispose();
+			const payloads = jsonHandle(context, jsonObject, jsonParse, options.payloads ?? {});
+			context.setProp(context.global, "π", payloads);
+			payloads.dispose();
 
 			const processInfo = jsonHandle(
 				context,
