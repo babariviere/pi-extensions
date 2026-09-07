@@ -206,7 +206,7 @@ export default function (pi: ExtensionAPI): void {
 				windowLabel: string;
 				previousModel?: { provider: string; id: string };
 				approved?: NightPlanTask[];
-				cancelled?: boolean;
+				reviewDismissed?: boolean;
 				reminded?: boolean;
 				handoffStarted?: boolean;
 		  }
@@ -1124,10 +1124,15 @@ export default function (pi: ExtensionAPI): void {
 				};
 			}
 			const approved = await reviewNightPlan(ctx, params.tasks);
+			planning.reviewDismissed = !approved;
 			if (!approved) {
-				planning.cancelled = true;
 				return {
-					content: [{ type: "text", text: "The user cancelled night mode. Stop now without doing any work." }],
+					content: [
+						{
+							type: "text",
+							text: "The user dismissed the plan review without approving it. Night planning remains active. Wait for user feedback before revising and resubmitting with night_plan. Do not execute any work.",
+						},
+					],
 					details: { cancelled: true },
 				};
 			}
@@ -1176,18 +1181,9 @@ export default function (pi: ExtensionAPI): void {
 		agentBusy = false;
 		evaluate();
 		if (planning) {
-			if (planning.cancelled) {
-				const previous = planning.previousModel;
-				requestSandbox(null, "night planning cancelled");
-				clearActiveNightRun();
-				planning = undefined;
-				if (previous) {
-					const model = ctx.modelRegistry.find(previous.provider, previous.id);
-					if (model) await pi.setModel(model);
-				}
-				ctx.ui.notify("night-mode: plan cancelled, no work was started", "info");
-				return;
-			}
+			// Dismissing review withholds approval, it does not leave planning.
+			// Do not reopen the checklist automatically while awaiting user feedback.
+			if (planning.reviewDismissed) return;
 			if (planning.approved?.length) {
 				await handoffApprovedPlan(planning.commandContext);
 				return;

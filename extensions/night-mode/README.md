@@ -109,7 +109,7 @@ this extension only subscribes. State is republished as `night-mode:state`.
 
 The execution session does not inherit the planning transcript. It receives the approved task descriptions and the planner findings attached to them. New work discovered during execution is reported for a later planning session rather than executed.
 
-The instructions file is archived and truncated when the approved run *ends*, not during planning. Cancelling the checklist leaves it untouched.
+The instructions file is archived and truncated when the approved run *ends*, not during planning. Cancelling the checklist leaves it untouched and keeps the current session in read-only night planning with the same model and sandbox. The planner waits for feedback instead of reopening the checklist automatically. Ask for revisions and resubmit with `night_plan`; execution starts only after approval. Use `/night off` to exit night mode explicitly.
 
 Pauses and resumes are appended to the report's `## Timeline`, so a report read
 in the morning shows where the 5h window bit.
