@@ -5,7 +5,7 @@
 
 import type { ToolCallEvent } from "@earendil-works/pi-coding-agent";
 import { isToolCallEventType } from "@earendil-works/pi-coding-agent";
-import { checkCommand, defaultContext, type GuardrailContext } from "./rules";
+import { checkArgv, checkCommand, defaultContext, type GuardrailContext, type GuardrailHit } from "./rules";
 
 export type GuardrailDecision = { block: true; reason: string } | undefined;
 
@@ -15,24 +15,27 @@ export interface PolicyOptions {
 	context?: GuardrailContext;
 }
 
-/**
- * Decide whether a tool call should be blocked. Only `bash` is inspected;
- * everything else passes through untouched.
- */
+/** Decide whether a bash command or literal exec argv call should be blocked. */
 export function evaluateBashCall(event: ToolCallEvent, options: PolicyOptions): GuardrailDecision {
 	if (!options.enabled) return undefined;
-	if (!isToolCallEventType("bash", event)) return undefined;
-
-	const command = event.input.command;
-	if (typeof command !== "string") return undefined;
 
 	const base = options.context ?? defaultContext();
-	// The bash tool can run in a different directory than the agent process
-	// (spindle passes a per-call cwd), and relative targets are judged from it.
+	// Both tools can run in a different directory than the agent process, and
+	// relative targets are judged from that per-call directory.
 	const cwd = (event.input as { cwd?: unknown }).cwd;
 	const context = typeof cwd === "string" && cwd ? { ...base, cwd } : base;
-
-	const hit = checkCommand(command, context);
+	let hit: GuardrailHit | null;
+	if (isToolCallEventType("bash", event)) {
+		const command = event.input.command;
+		if (typeof command !== "string") return undefined;
+		hit = checkCommand(command, context);
+	} else if (event.toolName === "exec") {
+		const argv = (event.input as { argv?: unknown }).argv;
+		if (!Array.isArray(argv) || !argv.every((arg): arg is string => typeof arg === "string")) return undefined;
+		hit = checkArgv(argv, context);
+	} else {
+		return undefined;
+	}
 	if (!hit) return undefined;
 
 	return {

@@ -359,6 +359,69 @@ function classifyTarget(target: string, ctx: GuardrailContext): string | null {
 	return null;
 }
 
+/** Interpreters whose command-string modes are too opaque for safe inline file edits. */
+const PYTHON_INTERPRETER = /^(?:python(?:\d+(?:\.\d+)*)?|pypy(?:\d+)?)$/;
+const PERL_INTERPRETER = /^perl(?:\d+(?:\.\d+)*)?$/;
+const AWK_INTERPRETER = /^(?:awk|gawk|mawk|nawk)$/;
+
+function hasOption(args: string[], predicate: (arg: string) => boolean): boolean {
+	for (const arg of args) {
+		if (arg === "--") return false;
+		if (predicate(arg)) return true;
+		if (!arg.startsWith("-") || arg === "-") return false;
+	}
+	return false;
+}
+
+function readsProgramFromStdin(args: string[], allowModule: boolean): boolean {
+	if (args.length === 0) return true;
+	for (let i = 0; i < args.length; i++) {
+		const arg = args[i];
+		if (arg === "--") return args[i + 1] === undefined || args[i + 1] === "-";
+		if (arg === "-" || arg.startsWith("<<")) return true;
+		if (allowModule && (arg === "-m" || arg.startsWith("-m"))) return false;
+		if (arg === "-W" || arg === "-X") {
+			i++;
+			continue;
+		}
+		if (/^(?:-h|--help|-V|--version)$/.test(arg)) return false;
+		if (!arg.startsWith("-")) return false;
+	}
+	return true;
+}
+
+function awkInlineProgram(args: string[]): string | undefined {
+	for (let i = 0; i < args.length; i++) {
+		const arg = args[i];
+		if (arg === "--") return args[i + 1];
+		if (arg === "-f" || arg === "--file") return undefined;
+		if (arg === "-v" || arg === "-F") {
+			i++;
+			continue;
+		}
+		if (arg.startsWith("-")) continue;
+		if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(arg)) continue;
+		return arg;
+	}
+	return undefined;
+}
+
+/** Find shell output redirects whose destination is a file rather than an fd or /dev/null. */
+function checkFileRedirect(command: string, masked: string): GuardrailHit | null {
+	const redirect = /(^|[\s;|&(])(?:\d+|\{[A-Za-z_][A-Za-z0-9_]*\})?(?:&>>|&>|>>|>\||<>|>)(?![>&(])/g;
+	for (const match of masked.matchAll(redirect)) {
+		const operatorStart = match.index + match[1].length;
+		const operatorText = command.slice(operatorStart, match.index + match[0].length);
+		const target = tokenize(command.slice(match.index + match[0].length))[0];
+		if (!target || /^&(?:\d+|-)$/.test(target) || target === "/dev/null") continue;
+		return {
+			reason: "shell output redirection writing directly to a file; use the write or edit tool instead",
+			match: `${operatorText}${JSON.stringify(target)}`,
+		};
+	}
+	return null;
+}
+
 /**
  * Rules evaluated on the whole command: pipelines, redirects, fork bombs.
  * Matching runs on the masked string so quoted text and comments are inert,
@@ -377,7 +440,7 @@ function checkRaw(command: string, masked: string): GuardrailHit | null {
 		const match = regex.exec(masked);
 		if (match) return { reason, match: command.slice(match.index, match.index + match[0].length) };
 	}
-	return null;
+	return checkFileRedirect(command, masked);
 }
 
 /** Rules evaluated per command in the pipeline. */
@@ -386,6 +449,35 @@ function checkCommandSegment(segment: string, ctx: GuardrailContext, depth: numb
 	if (!cmd) return null;
 	const { flags, operands } = splitArgs(cmd.args);
 	const hit = (reason: string): GuardrailHit => ({ reason, match: segment.trim() });
+
+	if (
+		PYTHON_INTERPRETER.test(cmd.name) &&
+		(hasOption(cmd.args, (arg) => arg === "-c" || arg.startsWith("-c")) || readsProgramFromStdin(cmd.args, true))
+	) {
+		return hit(`inline '${cmd.name}' program; use the write or edit tool instead`);
+	}
+	if (
+		PERL_INTERPRETER.test(cmd.name) &&
+		(hasOption(cmd.args, (arg) => /^-[^-]*[eE]/.test(arg)) || readsProgramFromStdin(cmd.args, false))
+	) {
+		return hit(`inline '${cmd.name}' program; use the write or edit tool instead`);
+	}
+	if (cmd.name === "sed" && hasOption(cmd.args, (arg) => arg === "--in-place" || /^-i(?:.*)?$/.test(arg))) {
+		return hit("'sed' in-place edit; use the edit tool instead");
+	}
+	if (cmd.name === "tee") {
+		const fileOperands = operands.filter((operand) => operand !== "-" && operand !== "/dev/null");
+		if (fileOperands.length > 0) return hit("'tee' writing directly to a file; use the write or edit tool instead");
+	}
+	if (AWK_INTERPRETER.test(cmd.name)) {
+		if (hasOption(cmd.args, (arg) => arg === "--in-place" || arg === "-i" || arg.startsWith("-i"))) {
+			return hit(`'${cmd.name}' in-place edit; use the edit tool instead`);
+		}
+		const program = awkInlineProgram(cmd.args);
+		if (program && /\b(?:print|printf)\b[^;\n{}]*>{1,2}/.test(program)) {
+			return hit(`inline '${cmd.name}' program writing directly to a file`);
+		}
+	}
 
 	if (SHELLS.has(cmd.name) && depth < MAX_DEPTH) {
 		const index = cmd.args.findIndex((arg) => arg === "-c" || /^-[a-zA-Z]*c$/.test(arg));
@@ -454,6 +546,13 @@ function checkCommandSegment(segment: string, ctx: GuardrailContext, depth: numb
 			return null;
 		}
 	}
+}
+
+/** Check a literal argv call without treating its arguments as shell syntax. */
+export function checkArgv(argv: string[], ctx: GuardrailContext = defaultContext()): GuardrailHit | null {
+	if (argv.length === 0) return null;
+	const quoted = argv.map((arg) => `'${arg.replaceAll("'", `'\\''`)}'`).join(" ");
+	return checkCommand(quoted, ctx);
 }
 
 /**

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { checkCommand, type GuardrailContext, tokenize } from "./rules.ts";
+import { checkArgv, checkCommand, type GuardrailContext, tokenize } from "./rules.ts";
 
 const ctx: GuardrailContext = { home: "/Users/alice", cwd: "/Users/alice/src/project" };
 
@@ -43,6 +43,27 @@ const blocked: Array<[command: string, reason: RegExp]> = [
 	["for f in a b; do rm -rf ~; done", /home directory/],
 	["(cd /tmp && rm -rf ~)", /home directory/],
 	["echo $(rm -rf ~)", /home directory/],
+	// Direct manual file mutation syntax.
+	['python -c \'from pathlib import Path; Path("x").write_text("y")\'', /inline 'python' program/],
+	['python3.12 -c \'open("x", "w").write("y")\'', /inline 'python3.12' program/],
+	["pypy3 -c 'print(1)'", /inline 'pypy3' program/],
+	["python - <<'PY'\nprint(1)\nPY", /inline 'python' program/],
+	["perl <<'PL'\nprint 1\nPL", /inline 'perl' program/],
+	['perl -e \'open my $fh, ">", "x"\'', /inline 'perl' program/],
+	["perl -pi -e 's/a/b/' file.txt", /inline 'perl' program/],
+	["sed -i 's/a/b/' file.txt", /'sed' in-place edit/],
+	["sed -i.bak 's/a/b/' file.txt", /'sed' in-place edit/],
+	["sed --in-place 's/a/b/' file.txt", /'sed' in-place edit/],
+	["printf x | tee file.txt", /'tee' writing directly to a file/],
+	["tee -a one.txt two.txt", /'tee' writing directly to a file/],
+	["echo text > file.txt", /shell output redirection/],
+	["echo text >> 'file with spaces.txt'", /shell output redirection/],
+	["command 2>errors.log", /shell output redirection/],
+	["command &>all.log", /shell output redirection/],
+	["command <>state.txt", /shell output redirection/],
+	['awk \'BEGIN { print "new" > "file.txt" }\'', /inline 'awk' program/],
+	["gawk -i inplace '{ sub(/a/, \"b\") }' file.txt", /'gawk' in-place edit/],
+	["bash -c 'echo nested > file.txt'", /shell output redirection/],
 	// Permissions, devices and machine control.
 	["chmod -R 777 /", /recursive 'chmod' on the filesystem root/],
 	["chmod -r 777 /", /recursive 'chmod'/],
@@ -70,6 +91,32 @@ const blocked: Array<[command: string, reason: RegExp]> = [
 ];
 
 const allowed = [
+	// Interpreter files and modules are explicit automation, not inline edit workarounds.
+	"python scripts/rewrite.py",
+	"python -m pytest",
+	"python3 -m build",
+	"perl scripts/filter.pl input.txt",
+	// Read-only filters and output sinks remain usable.
+	"sed -n '1,20p' file.txt",
+	"awk '{ print $1 }' file.txt",
+	"awk 'BEGIN { system(\"date\") }'",
+	"awk -f scripts/report.awk file.txt",
+	"printf x | tee /dev/null",
+	"printf x | tee",
+	"cat file.txt >/dev/null",
+	"command 2>&1",
+	"command 3>&-",
+	"diff old new > /dev/null",
+	"cat <<'EOF'\nhello\nEOF",
+	// Normal automation may mutate files through its own established interface.
+	"npm install",
+	"pnpm test",
+	"cargo fmt",
+	"go generate ./...",
+	"rails db:migrate",
+	"npm run build",
+	"git checkout -- package.json",
+	"jj restore package.json",
 	"rm -rf node_modules",
 	"rm -rf ./dist",
 	"rm -rf /Users/alice/src/project/build",
@@ -109,6 +156,14 @@ for (const command of allowed) {
 		assert.equal(checkCommand(command, ctx), null);
 	});
 }
+
+test("literal argv checks mutations without treating arguments as shell syntax", () => {
+	assert.match(checkArgv(["python", "-c", 'open("x", "w")'], ctx)?.reason ?? "", /inline 'python'/);
+	assert.match(checkArgv(["python", "-"], ctx)?.reason ?? "", /inline 'python'/);
+	assert.match(checkArgv(["sed", "-i", "s/a/b/", "file.txt"], ctx)?.reason ?? "", /in-place edit/);
+	assert.equal(checkArgv(["printf", ">", "file.txt"], ctx), null);
+	assert.equal(checkArgv(["python", "scripts/generate.py"], ctx), null);
+});
 
 test("reports the offending fragment", () => {
 	const hit = checkCommand("echo start && sudo rm -rf ~", ctx);

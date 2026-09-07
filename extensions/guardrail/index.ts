@@ -1,7 +1,7 @@
 /**
  * guardrail
  *
- * A stupid, deliberately blunt safety net for catastrophic bash commands:
+ * A stupid, deliberately blunt safety net for catastrophic commands and direct file edits:
  * `rm -rf ~`, `rm -rf /`, `chmod -R 777 /`, `dd of=/dev/disk0`, `mkfs.*`,
  * fork bombs, `curl ... | sh`, `shutdown`, and friends.
  *
