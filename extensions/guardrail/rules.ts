@@ -408,7 +408,7 @@ function awkInlineProgram(args: string[]): string | undefined {
 
 /** Find shell output redirects whose destination is a file rather than an fd or /dev/null. */
 function checkFileRedirect(command: string, masked: string): GuardrailHit | null {
-	const redirect = /(^|[\s;|&(])(?:\d+|\{[A-Za-z_][A-Za-z0-9_]*\})?(?:&>>|&>|>>|>\||<>|>)(?![>&(])/g;
+	const redirect = /(^|[^<>=&])(?:\d+|\{[A-Za-z_][A-Za-z0-9_]*\})?(?:&>>|&>|>>|>\||<>|>)(?![>&(=])/g;
 	for (const match of masked.matchAll(redirect)) {
 		const operatorStart = match.index + match[1].length;
 		const operatorText = command.slice(operatorStart, match.index + match[0].length);
@@ -452,7 +452,7 @@ function checkCommandSegment(segment: string, ctx: GuardrailContext, depth: numb
 
 	if (
 		PYTHON_INTERPRETER.test(cmd.name) &&
-		(hasOption(cmd.args, (arg) => arg === "-c" || arg.startsWith("-c")) || readsProgramFromStdin(cmd.args, true))
+		(hasOption(cmd.args, (arg) => /^-[^-]*c/.test(arg)) || readsProgramFromStdin(cmd.args, true))
 	) {
 		return hit(`inline '${cmd.name}' program; use the write or edit tool instead`);
 	}
@@ -462,7 +462,7 @@ function checkCommandSegment(segment: string, ctx: GuardrailContext, depth: numb
 	) {
 		return hit(`inline '${cmd.name}' program; use the write or edit tool instead`);
 	}
-	if (cmd.name === "sed" && hasOption(cmd.args, (arg) => arg === "--in-place" || /^-i(?:.*)?$/.test(arg))) {
+	if (cmd.name === "sed" && hasOption(cmd.args, (arg) => arg === "--in-place" || /^-[^-]*i/.test(arg))) {
 		return hit("'sed' in-place edit; use the edit tool instead");
 	}
 	if (cmd.name === "tee") {
