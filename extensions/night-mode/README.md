@@ -100,7 +100,9 @@ this extension only subscribes. State is republished as `night-mode:state`.
 
 1. The current session switches to **gpt-6-astra** and receives a planning-only prompt.
 2. Astra reads the standing routine and one-off instructions. It may spawn read-only subagents to explore repositories and services, but neither Astra nor its children implement anything.
-3. Astra submits structured candidates through `night_plan`.
+3. Astra submits structured candidates through `night_plan`. Each task specifies `category`, `outputs`, and `permissions` (empty arrays for read-only work). Categories are `instructions`, `linear`, `ci`, `slack`, `daily-note`, `opportunistic`, `insights`, and `auto-improvement`. Every category needs a task or an `omissions` entry with `category` and a nonempty `reason`. For custom routines, mark unused categories not applicable. Validation errors allow revision and resubmission.
+   Planning treats the configured prompt as an execution reference, not an instruction to stop discovering work. Extra instructions supplement the routine. Slack, daily-note, and insights passes are proposed unless excluded or blocked.
+   The checklist shows omission reasons, task scope, outputs, and permissions. Users can still uncheck any task. Output and permission metadata survives into the ledger and execution prompt; it is a delegation contract, not a new OS permission grant. Declare `mcp-write` for MCP mutations: these tasks are rejected while `mcpReadOnly` is enabled, including after checklist edits. Filesystem capabilities still require the existing execution preflight; declared paths do not widen the sandbox. Legacy persisted handoffs remain readable.
 4. Night mode presents an interactive checklist. Tasks begin unchecked. They can be selected, edited as JSON, added, or deleted.
 5. Approval creates a fresh session with the planning session recorded as its parent. Only checked and refined tasks are placed in the new session state.
 6. The fresh session starts on **gpt-5.6-sol**, creates the report and private working copy, and materializes approved tasks through the todo extension's shared storage layer.

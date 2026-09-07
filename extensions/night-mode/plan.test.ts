@@ -21,6 +21,9 @@ describe("approved night plan", () => {
 			[
 				{
 					title: "Correct phishing documentation",
+					category: "instructions",
+					outputs: ["/repo/phishing"],
+					permissions: ["draft-pr"],
 					goal: "Compare repository documentation with current behavior and correct inaccuracies.",
 					repository: "/repo/phishing",
 					definitionOfDone: "Documentation checks pass and a draft PR exists.",
@@ -38,6 +41,9 @@ describe("approved night plan", () => {
 		assert.deepEqual(ledger?.needs, ["gh-auth"]);
 		assert.match(body, /Documentation checks pass/);
 		assert.match(body, /Planning findings/);
+		assert.match(body, /Permitted outputs: \/repo\/phishing/);
+		assert.match(body, /Approved operations: draft-pr/);
+		assert.deepEqual(task.permissions, ["draft-pr"]);
 	});
 
 	it("formats the exact ids handed to the orchestrator", () => {

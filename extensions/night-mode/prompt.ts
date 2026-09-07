@@ -6,7 +6,7 @@
 
 import { DEFAULT_REPORT_SECTIONS, formatDateTimeStamp } from "./config.ts";
 import { formatDayStamp, type PauseReason } from "./night-mode.ts";
-import { formatApprovedPlan, type ApprovedNightTask } from "./plan.ts";
+import { NIGHT_CATEGORIES, formatApprovedPlan, type ApprovedNightTask } from "./plan.ts";
 
 export interface NightPromptInput {
 	/** Body of the configured base prompt file. */
@@ -60,6 +60,7 @@ export const ORCHESTRATOR_CONTRACT = [
 	"- Omit `agent` (or pass `task`) unless a specific persona clearly fits. A generic subagent inherits your",
 	"  model, tools, skills and project context.",
 	"- Pass the how-to as `reads` instead of pasting it into the task: the child loads those files itself.",
+	"- Copy the approved output paths and operation permissions into every child task. Briefs cannot grant additional permissions.",
 	"- Pass an `output` path when the result is long, then append that file to the report without reading it.",
 	"- Every task message states: the goal, the repo and the base to branch from, the matching ledger item, the",
 	"  definition of done, and that the final message must end with an `Evidence:` line.",
@@ -83,7 +84,12 @@ export const ORCHESTRATOR_CONTRACT = [
 ].join("\n");
 
 /** The planning turn sent to Astra before any overnight run exists. */
-export function composePlanningPrompt(input: { prompt: string; instructions: string; windowLabel: string }): string {
+export function composePlanningPrompt(input: {
+	prompt: string;
+	instructions: string;
+	windowLabel: string;
+	mcpReadOnly?: boolean;
+}): string {
 	return [
 		"[night-mode] Planning phase. Build a proposed plan only. Do not implement, edit files, create tickets, push, or open pull requests.",
 		"You are the planner in the current session. You may use read-only tools and spawn subagents to explore in parallel,",
@@ -91,14 +97,25 @@ export function composePlanningPrompt(input: { prompt: string; instructions: str
 		"planning session's read-only filesystem and MCP policy.",
 		"",
 		`Execution window after approval: ${input.windowLabel}.`,
+		`Execution MCP policy: ${input.mcpReadOnly !== false ? "read-only; propose candidate-only outputs instead of ticket creation or comments" : "writes available only within explicit task approval; Slack remains read-only"}.`,
 		"Inspect the relevant repositories, tickets, CI, Slack, existing pull requests, and the standing routine below.",
+		"The reference below describes EXECUTION, not your current role. Its statements that planning already happened,",
+		"that only approved items may run, or that discovery is forbidden apply AFTER approval, not to read-only planning.",
+		"Read every referenced task brief. Extra instructions supplement the routine; they do not replace it.",
+		`Account for every category: ${NIGHT_CATEGORIES.join(", ")}. Each task needs its category.`,
+		"For categories without tasks, submit omissions with category and a concrete reason (no findings, blocked, not applicable, or explicitly excluded).",
+		"Always propose Slack scan, next-working-day daily note, and insights maintenance unless explicitly excluded or blocked.",
+		"For Linear, CI, and auto-improvement, identify specific tickets, runs, and existing insights before proposing implementation.",
+		"Every task must specify outputs (exact paths or assigned working-copy scope) and permissions (explicit operations; empty arrays for reads only).",
+		"Include mcp-write for Linear creation/comments or any other MCP mutation. Approval cannot override sandbox policy.",
+		"Preserve dependency order: source scans before daily-note synthesis, insights before an already identified improvement.",
 		"Turn the result into concrete tasks with exact scope, repository, definition of done, briefs, required capabilities,",
 		"and concise findings that the fresh execution session will need. Do not include speculative work.",
 		"",
-		"When the plan is complete, call `night_plan` exactly once. The user will check and refine tasks in an interactive",
-		"checklist. After the tool returns, stop immediately. A separate fresh session will execute the approved tasks.",
+		"When the plan is complete, call `night_plan`. If validation rejects it, correct the missing coverage or permissions and resubmit. The user will check and refine tasks in an interactive",
+		"checklist. After approval or dismissal, stop immediately. A separate fresh session will execute the approved tasks.",
 		"",
-		"## Standing night routine",
+		"## Execution reference: standing night routine and brief routing",
 		"",
 		input.prompt.trim(),
 		"",

@@ -107,6 +107,8 @@ import {
 	NIGHT_PLAN_HANDOFF_ENTRY,
 	NIGHT_PLAN_STARTED_ENTRY,
 	NightPlanTaskSchema,
+	NightCoverageSchema,
+	planProblems,
 	reviewNightPlan,
 	seedApprovedLedger,
 	type NightPlanHandoff,
@@ -508,7 +510,7 @@ export default function (pi: ExtensionAPI): void {
 			mcp: { readOnly: true },
 		});
 		requestSandbox(planningSandbox, "night planning started");
-		deliver(composePlanningPrompt({ prompt, instructions, windowLabel }), ctx);
+		deliver(composePlanningPrompt({ prompt, instructions, windowLabel, mcpReadOnly: config.mcpReadOnly }), ctx);
 		return undefined;
 	}
 
@@ -1115,7 +1117,10 @@ export default function (pi: ExtensionAPI): void {
 		label: "Night plan",
 		description:
 			"Submit the complete proposed night plan for interactive user review. Planning only: this tool never executes tasks.",
-		parameters: Type.Object({ tasks: Type.Array(NightPlanTaskSchema, { minItems: 1 }) }),
+		parameters: Type.Object({
+			tasks: Type.Array(NightPlanTaskSchema, { minItems: 1 }),
+			omissions: Type.Optional(Type.Array(NightCoverageSchema)),
+		}),
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
 			if (!planning) {
 				return {
@@ -1123,7 +1128,16 @@ export default function (pi: ExtensionAPI): void {
 					details: { error: "no planning phase" },
 				};
 			}
-			const approved = await reviewNightPlan(ctx, params.tasks);
+			const problems = planProblems(params.tasks, params.omissions ?? [], planning.config.mcpReadOnly);
+			if (problems.length)
+				return {
+					content: [
+						{ type: "text", text: `Plan incomplete. Revise and resubmit night_plan:\n${problems.join("\n")}` },
+					],
+					details: { problems },
+					isError: true,
+				};
+			const approved = await reviewNightPlan(ctx, params.tasks, params.omissions ?? [], planning.config.mcpReadOnly);
 			planning.reviewDismissed = !approved;
 			if (!approved) {
 				return {

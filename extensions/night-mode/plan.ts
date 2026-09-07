@@ -8,7 +8,74 @@ export const NIGHT_PLAN_HANDOFF_ENTRY = "night-mode:approved-plan";
 export const NIGHT_PLAN_STARTED_ENTRY = "night-mode:approved-plan-started";
 export const APPROVED_TAG = "night-approved";
 
+export const NIGHT_CATEGORIES = [
+	"instructions",
+	"linear",
+	"ci",
+	"slack",
+	"daily-note",
+	"opportunistic",
+	"insights",
+	"auto-improvement",
+] as const;
+
+export const NightCoverageSchema = Type.Object({
+	category: Type.String(),
+	reason: Type.String({
+		description:
+			"Why this category has no proposed task: no findings, blocked, not applicable, or explicitly excluded",
+	}),
+});
+export interface NightCoverage {
+	category: string;
+	reason: string;
+}
+
+export function planProblems(tasks: NightPlanTask[], omissions: NightCoverage[], mcpReadOnly: boolean): string[] {
+	const problems: string[] = [];
+	for (const omission of omissions) {
+		if (!NIGHT_CATEGORIES.some((category) => category === omission.category))
+			problems.push(`Unknown omitted category: ${omission.category}`);
+		if (tasks.some((task) => task.category === omission.category))
+			problems.push(`${omission.category}: cannot both propose tasks and omit the category.`);
+	}
+	for (const category of NIGHT_CATEGORIES) {
+		if (
+			!tasks.some((task) => task.category === category) &&
+			!omissions.some((item) => item.category === category && item.reason.trim())
+		)
+			problems.push(`Missing routine category: ${category}. Propose a task or explain its omission.`);
+	}
+	for (const task of tasks) {
+		if (!validTask(task)) {
+			problems.push("Task fields must be nonempty strings and metadata must be string arrays.");
+			continue;
+		}
+		if (!NIGHT_CATEGORIES.some((category) => category === task.category))
+			problems.push(`${task.title}: specify a valid category.`);
+		if (!task.outputs || !task.permissions)
+			problems.push(`${task.title}: specify outputs and permissions (empty arrays for read-only work).`);
+		if (mcpReadOnly && task.permissions?.some((permission) => permission.trim() === "mcp-write"))
+			problems.push(
+				`${task.title}: MCP writes are disabled. Propose a candidate-only result or change configuration before planning.`,
+			);
+	}
+	return problems;
+}
+
 export const NightPlanTaskSchema = Type.Object({
+	category: Type.Optional(Type.String({ description: `Routine category: ${NIGHT_CATEGORIES.join(", ")}` })),
+	outputs: Type.Optional(
+		Type.Array(Type.String({ description: "Exact permitted output paths or repository working-copy scope" })),
+	),
+	permissions: Type.Optional(
+		Type.Array(
+			Type.String({
+				description:
+					"Explicit approved operations, e.g. draft-pr, queue-update, note-write, mcp-write. Empty for reads only. Does not override sandbox policy.",
+			}),
+		),
+	),
 	title: Type.String({ description: "Short, specific task title" }),
 	goal: Type.String({ description: "Exact scope and intended outcome" }),
 	repository: Type.String({ description: "Absolute repository or workspace path" }),
@@ -19,6 +86,9 @@ export const NightPlanTaskSchema = Type.Object({
 });
 
 export interface NightPlanTask {
+	category?: string;
+	outputs?: string[];
+	permissions?: string[];
 	title: string;
 	goal: string;
 	repository: string;
@@ -53,6 +123,9 @@ type ReviewAction =
 function normalizedTask(task: NightPlanTask): NightPlanTask {
 	return {
 		title: task.title.trim(),
+		...(task.category ? { category: task.category.trim() } : {}),
+		...(task.outputs ? { outputs: task.outputs.map((value) => value.trim()).filter(Boolean) } : {}),
+		...(task.permissions ? { permissions: task.permissions.map((value) => value.trim()).filter(Boolean) } : {}),
 		goal: task.goal.trim(),
 		repository: task.repository.trim(),
 		definitionOfDone: task.definitionOfDone.trim(),
@@ -69,6 +142,15 @@ function normalizedTask(task: NightPlanTask): NightPlanTask {
 function validTask(value: unknown): value is NightPlanTask {
 	if (!value || typeof value !== "object" || Array.isArray(value)) return false;
 	const task = value as Record<string, unknown>;
+	if (task.category !== undefined && typeof task.category !== "string") return false;
+	for (const key of ["briefs", "needs", "outputs", "permissions"]) {
+		if (
+			task[key] !== undefined &&
+			(!Array.isArray(task[key]) || !(task[key] as unknown[]).every((value) => typeof value === "string"))
+		)
+			return false;
+	}
+	if (task.findings !== undefined && typeof task.findings !== "string") return false;
 	return ["title", "goal", "repository", "definitionOfDone"].every(
 		(key) => typeof task[key] === "string" && Boolean((task[key] as string).trim()),
 	);
@@ -97,6 +179,8 @@ async function editTask(ctx: ExtensionContext, task?: NightPlanTask): Promise<Ni
 export async function reviewNightPlan(
 	ctx: ExtensionContext,
 	proposed: NightPlanTask[],
+	omissions: NightCoverage[] = [],
+	mcpReadOnly = true,
 ): Promise<NightPlanTask[] | null> {
 	if (ctx.mode !== "tui") {
 		ctx.ui.notify("night-mode: approving a plan requires the interactive TUI", "error");
@@ -125,6 +209,8 @@ export async function reviewNightPlan(
 					};
 					add(" ", theme.bold("Approve tonight's work"));
 					lines.push("");
+					for (const item of omissions)
+						add(" ", theme.fg("warning", `Not proposed: ${item.category}: ${item.reason}`));
 					if (tasks.length === 0) add(" ", theme.fg("warning", "No tasks in the plan."));
 					tasks.forEach((task, taskIndex) => {
 						const current = taskIndex === index;
@@ -132,6 +218,11 @@ export async function reviewNightPlan(
 						const box = selected[taskIndex] ? theme.fg("success", "[x]") : theme.fg("dim", "[ ]");
 						add(`${arrow} ${box} `, theme.fg(current ? "accent" : "text", task.title));
 						add("      ", theme.fg("muted", `${task.repository} · ${task.definitionOfDone}`));
+						add("      ", `Scope: ${task.goal}`);
+						add(
+							"      ",
+							`Outputs: ${task.outputs?.join(", ") || "none"}; permissions: ${task.permissions?.join(", ") || "read-only"}`,
+						);
 					});
 					lines.push("");
 					add(
@@ -194,6 +285,17 @@ export async function reviewNightPlan(
 			ctx.ui.notify("night-mode: check at least one task, or press Esc to cancel", "warning");
 			continue;
 		}
+		const problems = planProblems(
+			approved,
+			NIGHT_CATEGORIES.filter((category) => !approved.some((task) => task.category === category)).map(
+				(category) => ({ category, reason: "Excluded in user review" }),
+			),
+			mcpReadOnly,
+		);
+		if (problems.length) {
+			ctx.ui.notify(problems.join("\n"), "error");
+			continue;
+		}
 		return approved;
 	}
 }
@@ -213,6 +315,10 @@ export async function seedApprovedLedger(
 			normalized.goal,
 			"",
 			`Repository: ${normalized.repository}`,
+			"",
+			`Category: ${normalized.category ?? "legacy"}`,
+			`Permitted outputs: ${normalized.outputs?.join(", ") || "none specified"}`,
+			`Approved operations: ${normalized.permissions ? normalized.permissions.join(", ") || "read-only" : "legacy: follow approved scope"}`,
 			"",
 			"## Definition of done",
 			normalized.definitionOfDone,
@@ -241,6 +347,10 @@ export function formatApprovedPlan(tasks: ApprovedNightTask[]): string {
 				`   Repository: ${task.repository}\n` +
 				`   Goal: ${task.goal}\n` +
 				`   Done when: ${task.definitionOfDone}` +
+				`\n   Read first: ${task.briefs?.join(", ") || "none"}` +
+				`\n   Needs: ${task.needs?.join(", ") || "none"}` +
+				`\n   Permitted outputs: ${task.outputs?.join(", ") || "none specified"}` +
+				`\n   Approved operations: ${task.permissions ? task.permissions.join(", ") || "read-only" : "legacy: follow approved scope"}` +
 				(task.findings ? `\n   Planning findings: ${task.findings}` : ""),
 		)
 		.join("\n\n");
