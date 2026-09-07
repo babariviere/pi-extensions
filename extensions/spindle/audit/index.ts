@@ -6,6 +6,14 @@ export {
 	type SpindleLegacyRenderAudit,
 	type SpindlePersistedExecutionDetailsV1,
 } from "./details.ts";
+export {
+	SPINDLE_EDIT_METRICS_VERSION,
+	createSpindleEditMetrics,
+	type SpindleEditMetricsV1,
+	type SpindleEditRouteMetricsV1,
+	type SpindleEditRouteV1,
+	type SpindleRepeatedEditAttemptV1,
+} from "./edit-metrics.ts";
 export { projectSpindleAuditArgs, projectSpindleAuditResult } from "./projection.ts";
 export {
 	SPINDLE_EXECUTION_TRACE_KIND,

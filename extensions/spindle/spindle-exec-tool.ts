@@ -62,6 +62,7 @@ import {
 	type SpindleStateNoteView,
 } from "./ui/inspect-preview.ts";
 import { repairSpindleGuestCode } from "./runtime/guest-code-repair.ts";
+import { resolveSpindleEditProfile } from "./edit-profile.ts";
 
 const RESULT_FORMATS = ["auto", "yaml", "json", "text"] as const;
 const MAX_SPINDLE_CODE_TRANSFER_LINES = 12;
@@ -700,6 +701,7 @@ export const createSpindleExecTool = (
 				const persistedDetails = createSpindlePersistedExecutionDetails({
 					...result,
 					contextMetrics,
+					editProfile: resolveSpindleEditProfile(context.model),
 					...(outputFormat ? { outputFormat, outputFormatStartLine } : {}),
 					...(outputFormat
 						? {

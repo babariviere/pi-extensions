@@ -1,4 +1,6 @@
 import type { SpindleContextMetrics } from "../context-metrics.ts";
+import type { SpindleEditProfile } from "../edit-profile.ts";
+import { createSpindleEditMetrics, type SpindleEditMetricsV1 } from "./edit-metrics.ts";
 import {
 	isSpindleExecutionTraceV1,
 	type SpindleExecutionTraceOperationV1,
@@ -26,6 +28,7 @@ export interface SpindlePersistedExecutionDetailsV1 {
 	/** Present when the program failed type checking and was never executed. */
 	typeErrors?: SpindleRenderTypeError[];
 	contextMetrics?: SpindleContextMetrics;
+	editMetrics?: SpindleEditMetricsV1;
 }
 
 export interface SpindleLegacyRenderAudit {
@@ -72,6 +75,8 @@ export const createSpindlePersistedExecutionDetails = (input: {
 	outputFormatLines?: number;
 	typeErrors?: SpindleRenderTypeError[];
 	contextMetrics?: SpindleContextMetrics;
+	elapsedMs?: number;
+	editProfile?: SpindleEditProfile;
 }): SpindlePersistedExecutionDetailsV1 => {
 	const details: SpindlePersistedExecutionDetailsV1 = {
 		success: input.success,
@@ -84,6 +89,15 @@ export const createSpindlePersistedExecutionDetails = (input: {
 			? { outputFormatLines: Math.max(0, Math.floor(input.outputFormatLines)) }
 			: {}),
 		...(input.contextMetrics ? { contextMetrics: input.contextMetrics } : {}),
+		...(input.elapsedMs !== undefined && input.editProfile !== undefined
+			? {
+					editMetrics: createSpindleEditMetrics({
+						trace: input.trace,
+						elapsedMs: input.elapsedMs,
+						profile: input.editProfile,
+					}),
+				}
+			: {}),
 		...(input.typeErrors !== undefined && input.typeErrors.length > 0
 			? {
 					typeErrors: input.typeErrors.slice(0, MAX_PERSISTED_TYPE_ERRORS).map((error) => ({

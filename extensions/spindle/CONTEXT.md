@@ -61,6 +61,20 @@ shape and reread-on-failure recovery, prohibits manual editing through shell
 utilities or redirection, and explicitly allows project automation such as
 formatters, generators, migrations, builds, and tests.
 
+Final `spindle_exec` details also carry optional versioned `editMetrics`. New
+executions derive it deterministically from the already-projected durable trace,
+the elapsed duration, and the active model's `anthropic` / `openai` /
+`neutral` edit profile. It counts attempts, successes, and failures for
+`pi.edit`, `pi.write`, `pi.applyPatch`, and the combined scripted
+`pi.bash` / `pi.exec` route; records guard-stage refusals and overall outcome;
+and retains bounded known-file and repeated-attempt aggregates. It does not copy
+guest code, commands, patch or source bodies, prompts, credentials, or errors.
+Known direct-tool paths come from projected arguments. Successful applyPatch
+results contribute only allowlisted `kind`, `path`, and `moveTo` metadata,
+with URL paths rejected, each path capped at 512 UTF-8 bytes, and each path list
+capped at 128 entries. The field is optional so older persisted details continue
+to render unchanged, and the existing aggregate details cap remains authoritative.
+
 ## Upstream drift audit
 
 Audited 2026-09-02 against upstream `main` at `1a71fff54d9bfc03de4a8df925df15e65bc82392`
@@ -340,7 +354,7 @@ first two passes, then run `npm run fmt`.
 
 Also currently carrying no hand edits (same two mechanical rewrites only; not
 part of the guaranteed parity contract, but useful to know):
-`activity/types.ts`, `audit/index.ts`,
+`activity/types.ts`,
 `core/{call-preview,pi-tools,skill-dir,tool-result-proxy}.ts`,
 `providers/write-preview.ts`, `async-settlement.ts`,
 `config-migrations.ts`, `host-compatibility.ts`, `util.ts`.
@@ -459,6 +473,8 @@ risk/approval hunks by hand.
 | `agents/` | The absorbed `extensions/subagents` code (see below). |
 | `providers/spindle-bash-tool.ts` | Spindle's `pi.bash` definition: wraps pi's bash tool with per-call `cwd` / `env` / `stdin` extras (validated, then applied via per-call `BashOperations`); extras-free calls delegate to the base tool unchanged. The `stdin` path delegates to the shared supervised spawn (`sandbox/supervised-spawn.ts`) and routes through the OS-sandbox wrap. |
 | `providers/apply-patch.ts` | Local `pi.applyPatch` implementation for Codex/OpenAI V4A envelopes. It parses Add/Update/Delete File sections, optional Move to, context hunks, anchors, and End of File; resolves relative paths inside the workspace (including symlink containment), runs every sandbox write guard and validates every file/hunk before the first mutation, and preserves CRLF on updated files. No external patch implementation or dependency is used. |
+| `edit-profile.ts`, `audit/edit-metrics.ts` | Pure active-model edit-profile classification and bounded aggregate edit metrics derived from the durable trace. The metrics never inspect guest code or raw edit payloads. |
+| `audit/details.test.ts` | Determinism, confidentiality, old-detail compatibility, and aggregate details-size coverage for persisted edit metrics. |
 | `env-snapshot.ts` | The allowlisted environment snapshot injected as the guest's `process` global; secrets never enter the sandbox. |
 | `session-store.ts` | The session-scoped JSON scratchpad behind the guest's `τ` namespace: key validation, per-value/total byte budgets, the held-key listing the result envelope echoes, and the `describe()` summary a limit error names. Owned by `SpindleState`, so it outlives one program; throws rather than evicting. |
 | `ui/inspect-preview.ts` | Two things the rendered call was hiding. The `π` block: `payloads` is where a program is told to put every awkward value, and the code preview then shows `π.body` with no way to see what `body` is (the sole exception being a payload bound to a `pi.write`, which the write preview renders while composing, and which the block therefore skips). Collapsed it is one dim summary line; expanded, a bold `π.key` header per payload with bounded content. And the τ helpers: `readSpindleStateNotes` / `applySpindleStateNotes` put each operation's value into its own trace row. A local module because `ui/spindle-render.ts` is in the render parity set. |

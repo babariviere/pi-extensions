@@ -23,6 +23,10 @@ const finiteNumber = (value: unknown): number | undefined =>
 
 const stringValue = (value: unknown): string | undefined => (typeof value === "string" ? value : undefined);
 
+const MAX_PROJECTED_APPLY_PATCH_CHANGES = 128;
+const MAX_PROJECTED_PATH_BYTES = 512;
+const APPLY_PATCH_CHANGE_KINDS = new Set(["add", "update", "delete", "move"]);
+
 const isWindowsDrivePath = (value: string): boolean => {
 	if (value.length < 3 || value[1] !== ":" || (value[2] !== "\\" && value[2] !== "/")) {
 		return false;
@@ -54,6 +58,11 @@ const localPath = (value: unknown): string | undefined => {
 	const fragment = value.indexOf("#");
 	const end = Math.min(query < 0 ? value.length : query, fragment < 0 ? value.length : fragment);
 	return value.slice(0, end) || undefined;
+};
+
+const boundedLocalPath = (value: unknown): string | undefined => {
+	const path = localPath(value);
+	return path !== undefined && Buffer.byteLength(path, "utf8") <= MAX_PROJECTED_PATH_BYTES ? path : undefined;
 };
 
 const copyString = (
@@ -270,11 +279,11 @@ export const projectSpindleAuditArgs = (ref: string, args: Record<string, unknow
 
 /**
  * Results are omitted except for the exact boolean creation outcome emitted by
- * pi.write, and the shape of a τ scratchpad operation: how many bytes it moved
- * and whether the key was there. The stored *value* never enters the durable
- * trace; the TUI reads its preview from the live store instead (see
- * session-store.ts `preview()`), so a reloaded transcript keeps the key and the
- * size and loses only the content.
+ * pi.write, bounded path/kind metadata from pi.applyPatch, and the shape of a τ
+ * scratchpad operation: how many bytes it moved and whether the key was there.
+ * Patch and stored-value contents never enter the durable trace; the TUI reads
+ * τ previews from the live store instead (see session-store.ts `preview()`), so
+ * a reloaded transcript keeps the key and size and loses only the content.
  */
 export const projectSpindleAuditResult = (ref: string, result: unknown): SpindleAuditProjection | undefined => {
 	if (typeof result !== "object" || result === null || Array.isArray(result)) {
@@ -292,11 +301,41 @@ export const projectSpindleAuditResult = (ref: string, result: unknown): Spindle
 		}
 		return { value, droppedValues: Math.max(0, topLevelKeyCount(record) - Object.keys(value).length) };
 	}
-	if (ref !== "pi.write") return undefined;
 	const details =
 		typeof record.details === "object" && record.details !== null && !Array.isArray(record.details)
 			? (record.details as Record<string, unknown>)
 			: undefined;
+	if (ref === "pi.applyPatch") {
+		const rawChanges = Array.isArray(record.changes)
+			? record.changes
+			: Array.isArray(details?.changes)
+				? details.changes
+				: undefined;
+		if (rawChanges === undefined) return undefined;
+		const changes: Array<{ [key: string]: SpindleTraceJsonValue }> = [];
+		let droppedValues = Math.max(0, topLevelKeyCount(record) - 1);
+		const limit = Math.min(rawChanges.length, MAX_PROJECTED_APPLY_PATCH_CHANGES);
+		for (let index = 0; index < limit; index++) {
+			const change = rawChanges[index];
+			if (typeof change !== "object" || change === null || Array.isArray(change)) {
+				droppedValues++;
+				continue;
+			}
+			const candidate = change as Record<string, unknown>;
+			const kind = candidate.kind;
+			const path = boundedLocalPath(candidate.path);
+			if (typeof kind !== "string" || !APPLY_PATCH_CHANGE_KINDS.has(kind) || path === undefined) {
+				droppedValues++;
+				continue;
+			}
+			const moveTo = kind === "move" ? boundedLocalPath(candidate.moveTo) : undefined;
+			changes.push({ kind, path, ...(moveTo !== undefined ? { moveTo } : {}) });
+			droppedValues += Math.max(0, topLevelKeyCount(candidate) - (moveTo === undefined ? 2 : 3));
+		}
+		droppedValues += rawChanges.length - limit;
+		return { value: { changes }, droppedValues };
+	}
+	if (ref !== "pi.write") return undefined;
 	if (record.created !== true && details?.created !== true) return undefined;
 	return {
 		value: { created: true },

@@ -39,6 +39,9 @@ import { SpindleUiController } from "./ui/controller.ts";
 import { configureHighlighting } from "./ui/highlight.ts";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolveSpindleEditProfile, type SpindleModelIdentity } from "./edit-profile.ts";
+
+export { resolveSpindleEditProfile, type SpindleEditProfile, type SpindleModelIdentity } from "./edit-profile.ts";
 
 const SPINDLE_EXTENSION_ENTRY_PATH = path.resolve(fileURLToPath(import.meta.url));
 
@@ -49,22 +52,12 @@ const FULL_CODE_GUIDANCE_SUFFIX =
 	" Pass V4A patch text through `payloads`, not an inline string. If `pi.edit` fails, reread the target file and retry with updated exact text. Do not use `python`, `sed`, `perl`, `awk`, `cat`, `tee`, or shell redirection for manual edits. Formatters, generators, migrations, builds, and tests are allowed.\n" +
 	'Read tools return text. `pi.bash`, `pi.exec`, `pi.edit`, `pi.write`, and `pi.applyPatch` return `{ok, output, details}`. Use `pi.exec({argv})` when arguments contain quotes, spaces, or syntax that must not be parsed by a shell; reserve `pi.bash` for shell syntax. Use `payloads` and `π.key` for multiline values. If a task names an external service or needs web research, discover tools before declaring it unavailable: `tools.search({query:"web search"})` finds registered tools. `tools` is a top-level global, not an extension tool. `extensions.tools.search(...)` is accepted only as a compatibility alias. Use `mcp.list()` or `mcp.search({query})` for lazy MCP services. Connect the selected server if needed, then search and describe its action before `mcp.call`. Use `agents.*` for subagents.';
 
-export interface SpindleModelIdentity {
-	provider?: string;
-	api?: string;
-	id?: string;
-}
-
 export const resolveSpindleEditGuidance = (model: SpindleModelIdentity | undefined): string => {
-	const provider = model?.provider?.toLowerCase() ?? "";
-	const api = model?.api?.toLowerCase() ?? "";
-	const id = model?.id?.toLowerCase() ?? "";
-	const identity = `${provider} ${api} ${id}`;
-
-	if (/\b(?:anthropic|claude)\b/.test(identity)) {
+	const profile = resolveSpindleEditProfile(model);
+	if (profile === "anthropic") {
 		return "Manual file edits must use `pi.edit({ path, edits: [{ oldText, newText }] })`, `pi.write`, or `pi.applyPatch({ patch: π.patch })`. Prefer `pi.edit`; use `pi.applyPatch` for coordinated multi-file changes.";
 	}
-	if (/\b(?:openai|gpt|codex)\b/.test(identity)) {
+	if (profile === "openai") {
 		return "Manual file edits must use `pi.edit({ path, edits: [{ oldText, newText }] })`, `pi.write`, or `pi.applyPatch({ patch: π.patch })`. Prefer `pi.applyPatch`; use `pi.edit` or `pi.write` as fallback.";
 	}
 	return "Manual file edits must use `pi.edit({ path, edits: [{ oldText, newText }] })`, `pi.write`, or `pi.applyPatch({ patch: π.patch })`. Prefer `pi.edit` or `pi.write`; use `pi.applyPatch` for multi-file V4A input.";
