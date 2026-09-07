@@ -7,7 +7,8 @@
  */
 
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { execSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -23,7 +24,7 @@ import {
 	writePreflightReport,
 } from "./preflight.ts";
 
-test("the probe list covers the seven answers a night run plans with", () => {
+test("the probe list covers the seven general answers a night run plans with", () => {
 	const ids = nightPreflightProbes({ workspacePath: "/night/clone" }).map((probe) => probe.id);
 	assert.deepEqual(ids, [
 		"https-egress",
@@ -34,6 +35,80 @@ test("the probe list covers the seven answers a night run plans with", () => {
 		"loopback-tcp-host",
 		"jj-workspace",
 	]);
+});
+
+function dependencyWorkspace(parent: string, name: string): string {
+	const workspace = join(parent, name);
+	mkdirSync(workspace, { recursive: true });
+	writeFileSync(join(workspace, "package.json"), JSON.stringify({ name: "@babariviere/pi-extensions" }));
+	return workspace;
+}
+
+function runProbeCommand(command: string): ProbeOutcome {
+	try {
+		return { exitCode: 0, output: execSync(command, { encoding: "utf-8", shell: "/bin/sh" }) };
+	} catch (error) {
+		const failure = error as { status?: number; stdout?: string; stderr?: string };
+		return { exitCode: failure.status ?? null, output: `${failure.stdout ?? ""}${failure.stderr ?? ""}` };
+	}
+}
+
+test("the pi-extensions dependency probe loads tsx in a real child process", async () => {
+	const workspace = dependencyWorkspace(process.cwd(), ".preflight-success");
+	try {
+		const probe = nightPreflightProbes({ workspacePath: workspace }).find(
+			(entry) => entry.id === "pi-extensions-tsx",
+		);
+		assert.ok(probe);
+		const [result] = await runPreflight([probe], async ({ command }) => runProbeCommand(command));
+		assert.equal(result.ok, true, result.detail);
+	} finally {
+		rmSync(workspace, { recursive: true, force: true });
+	}
+});
+
+test("the pi-extensions dependency probe reports missing tsx as actionable", async () => {
+	const root = mkdtempSync(join(tmpdir(), "preflight-missing-"));
+	try {
+		const workspace = dependencyWorkspace(root, "clone");
+		const probe = nightPreflightProbes({ workspacePath: workspace }).find(
+			(entry) => entry.id === "pi-extensions-tsx",
+		);
+		assert.ok(probe);
+		const [result] = await runPreflight([probe], async ({ command }) => runProbeCommand(command));
+		assert.equal(result.ok, false);
+		assert.match(result.detail, /tsx is missing or unloadable/);
+		assert.match(result.meaning, /restore the clone's installed dependencies/);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("the dependency probe safely quotes a workspace path", async () => {
+	const workspace = dependencyWorkspace(process.cwd(), ".preflight path's clone");
+	try {
+		const probe = nightPreflightProbes({ workspacePath: workspace }).find(
+			(entry) => entry.id === "pi-extensions-tsx",
+		);
+		assert.ok(probe);
+		const [result] = await runPreflight([probe], async ({ command }) => runProbeCommand(command));
+		assert.equal(result.ok, true, result.detail);
+	} finally {
+		rmSync(workspace, { recursive: true, force: true });
+	}
+});
+
+test("the dependency probe is omitted for a non-JavaScript workspace", () => {
+	const workspace = mkdtempSync(join(tmpdir(), "preflight-go-"));
+	try {
+		writeFileSync(join(workspace, "go.mod"), "module example.com/project\n");
+		assert.equal(
+			nightPreflightProbes({ workspacePath: workspace }).some((entry) => entry.id === "pi-extensions-tsx"),
+			false,
+		);
+	} finally {
+		rmSync(workspace, { recursive: true, force: true });
+	}
 });
 
 test("only the host-shell loopback probe skips the sandbox wrap", () => {

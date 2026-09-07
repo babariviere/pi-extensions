@@ -19,7 +19,7 @@
  * the extension host would cheerfully report an egress the children do not have.
  */
 
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { agentWorkspacesRoot } from "./agent-workspace.ts";
 import type { CapabilityEntry } from "./capability-journal.ts";
@@ -148,8 +148,30 @@ export function nightPreflightProbes(input: { workspacePath?: string } = {}): Pr
 			meaning: "a failure here is the `XDG_CONFIG_HOME` redirect not reaching this shell; nobody can commit",
 			command: `jj --ignore-working-copy -R ${shellQuote(input.workspacePath)} status 2>&1`,
 		});
+		if (isPiExtensionsWorkspace(input.workspacePath)) {
+			probes.push({
+				id: "pi-extensions-tsx",
+				label: "pi-extensions clone dependency (tsx)",
+				meaning:
+					"a failure means the clone cannot run its TypeScript tests; restore the clone's installed dependencies before assigning pi-extensions work",
+				command:
+					`cd ${shellQuote(input.workspacePath)} && ` +
+					"output=$(node --import tsx -e '' 2>&1) || { code=$?; " +
+					`printf 'tsx is missing or unloadable in this clone\n%s\n' "$output"; exit $code; }`,
+			});
+		}
 	}
 	return probes;
+}
+
+/** Restrict the dependency probe to this extension repository. */
+function isPiExtensionsWorkspace(workspacePath: string): boolean {
+	try {
+		const manifest = JSON.parse(readFileSync(join(workspacePath, "package.json"), "utf-8")) as { name?: unknown };
+		return manifest.name === "@babariviere/pi-extensions";
+	} catch {
+		return false;
+	}
 }
 
 /** Single-quote a path for a shell command line. */
