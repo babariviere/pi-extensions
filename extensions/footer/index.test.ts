@@ -24,3 +24,9 @@ test("renders Codex in blue with its weekly reset", () => {
 	assert.match(rendered, /^\x1b\[38;2;59;130;246mCodex\x1b\[0m /);
 	assert.match(stripAnsi(rendered), /Week .* 12% ⟳ Week 7d0h$/);
 });
+
+test("renders Codex pacing state", () => {
+	const snapshot = { provider: "openai" as const, windows: [] };
+	assert.equal(stripAnsi(renderUsageLine(snapshot, plainTheme, true)), "Codex pacing on");
+	assert.equal(stripAnsi(renderUsageLine(snapshot, plainTheme, false)), "Codex pacing off");
+});

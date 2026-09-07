@@ -148,6 +148,7 @@ export default function (pi: ExtensionAPI): void {
 	pi.events.on(USAGE_REQUEST_EVENT, () => {
 		if (last) pi.events.emit(USAGE_SNAPSHOT_EVENT, last);
 		else void refresh();
+		publishPacing();
 	});
 
 	pi.on("session_start", async (_event, ctx) => {
