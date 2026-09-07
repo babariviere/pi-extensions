@@ -226,6 +226,7 @@ export class SpindleState {
 				() => ({
 					timeoutMs: this.config.agents.timeoutMs,
 					waitMs: this.config.agents.waitMs,
+					parentProvider: context.model?.provider,
 					defaultModel:
 						this.config.agents.defaultModel ??
 						(context.model ? `${context.model.provider}/${context.model.id}` : undefined),

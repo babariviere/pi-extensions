@@ -73,6 +73,8 @@ export interface SpindleAgentRuntimeConfig {
 	timeoutMs: number;
 	waitMs: number;
 	defaultModel?: string;
+	/** Live caller provider. Child models cannot cross this boundary. */
+	parentProvider?: string;
 	defaultThinking?: string;
 	/** Available parent models and their configured prices. */
 	models?: readonly import("@earendil-works/pi-ai").Model<any>[];
@@ -505,7 +507,13 @@ export class SpindleAgentsProvider implements SpindleProvider {
 				? { thinking: item.thinking ?? runtimeConfig.defaultThinking }
 				: {}),
 		}));
-		const built = buildRunRequests({ tasks: withDefaults }, discovered, ref.cwd, runtimeConfig.models);
+		const built = buildRunRequests(
+			{ tasks: withDefaults },
+			discovered,
+			ref.cwd,
+			runtimeConfig.models,
+			runtimeConfig.parentProvider,
+		);
 		if ("error" in built) throw new Error(built.error);
 		return built.requests;
 	}

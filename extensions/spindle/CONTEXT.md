@@ -473,6 +473,8 @@ risk/approval hunks by hand.
 
 ## New spindle files
 
+Subagent model selection is restricted to the live caller's provider, including nested launches, runtime defaults, and per-run overrides. Bare model names are qualified with that provider before spawning; explicitly cross-provider models are rejected. Price checks use the qualified model's pricing.
+
 | File | Purpose |
 |---|---|
 | `providers/mcp-client-provider.ts` | `mcp.*` → `mcp/client-hub.ts`. **Upstream has a file with the same provider name (`mcp`) that is deliberately not vendored; this one is written here.** |

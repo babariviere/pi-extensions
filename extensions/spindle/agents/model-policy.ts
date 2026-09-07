@@ -37,9 +37,7 @@ export function subagentModelPriceError(
 	const ceiling = Math.max(...(referenceRates as number[]));
 	const bare = stripThinkingSuffix(modelName);
 	const qualified = qualifyModel(bare, defaultProvider);
-	const candidate = models.find(
-		(model) => matches(model, bare) || (qualified !== undefined && matches(model, qualified)),
-	);
+	const candidate = models.find((model) => matches(model, qualified ?? bare));
 	const candidateRate = candidate ? rate(candidate) : undefined;
 	if (candidateRate === undefined)
 		return `Model '${modelName}' is unavailable or has no pricing, so it cannot run as a subagent.`;

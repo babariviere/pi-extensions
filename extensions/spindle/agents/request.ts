@@ -46,6 +46,7 @@ export function buildRunRequests(
 	agents: DiscoveredAgent[],
 	cwd: string,
 	models?: readonly import("@earendil-works/pi-ai").Model<any>[],
+	parentProvider?: string,
 ): { requests: RunRequest[] } | { error: string } {
 	const normalized = normalizeRequests(params);
 	if ("error" in normalized) return normalized;
@@ -60,10 +61,16 @@ export function buildRunRequests(
 		const name = item.agent ?? BUILTIN_AGENT_NAME;
 		const agent = agents.find((a) => a.config.name === name);
 		if (!agent) return { error: unknownAgentError(name, agents) };
-		const model = item.model ?? agent.config.model;
-		const priceError = models ? subagentModelPriceError(model, models, readDefaultProvider(cwd)) : undefined;
+		const model = qualifyModel(item.model ?? agent.config.model, parentProvider);
+		if (parentProvider && model && !model.startsWith(`${parentProvider}/`)) {
+			return { error: `Subagent model '${model}' must use the caller's provider '${parentProvider}'.` };
+		}
+		const priceError = models
+			? subagentModelPriceError(model, models, parentProvider ?? readDefaultProvider(cwd))
+			: undefined;
 		if (priceError) return { error: priceError };
-		const overrides = item.model || item.thinking ? { model: item.model, thinking: item.thinking } : undefined;
+		const overrideModel = parentProvider ? model : item.model;
+		const overrides = overrideModel || item.thinking ? { model: overrideModel, thinking: item.thinking } : undefined;
 		rawOutputs.push(item.output ?? agent.config.output);
 		requests.push({
 			agent,
