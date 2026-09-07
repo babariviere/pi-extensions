@@ -42,10 +42,38 @@ import { fileURLToPath } from "node:url";
 
 const SPINDLE_EXTENSION_ENTRY_PATH = path.resolve(fileURLToPath(import.meta.url));
 
-export const FULL_CODE_GUIDANCE =
-	"Spindle full code mode: call Pi tools only through `spindle_exec`, using `pi.*` inside `code`. Search the repository before reading: `pi.find` locates files, `pi.grep` locates text, and `pi.ls` shows structure. Read only identified ranges with `pi.read({path, offset, limit})`; avoid whole-file reads of large, generated, vendored, log, and lock files. Return compact findings, not raw search output or file contents.\n" +
-	"Manual file edits must use `pi.edit({ path, edits: [{ oldText, newText }] })`, `pi.write`, or `pi.applyPatch({ patch: π.patch })`. Use `pi.applyPatch` for validated multi-file V4A patches and pass patch text through `payloads`, not an inline string. If `pi.edit` fails, reread the target file and retry with updated exact text. Do not use `python`, `sed`, `perl`, `awk`, `cat`, `tee`, or shell redirection for manual edits. Formatters, generators, migrations, builds, and tests are allowed.\n" +
+const FULL_CODE_GUIDANCE_PREFIX =
+	"Spindle full code mode: call Pi tools only through `spindle_exec`, using `pi.*` inside `code`. Search the repository before reading: `pi.find` locates files, `pi.grep` locates text, and `pi.ls` shows structure. Read only identified ranges with `pi.read({path, offset, limit})`; avoid whole-file reads of large, generated, vendored, log, and lock files. Return compact findings, not raw search output or file contents.\n";
+
+const FULL_CODE_GUIDANCE_SUFFIX =
+	" Pass V4A patch text through `payloads`, not an inline string. If `pi.edit` fails, reread the target file and retry with updated exact text. Do not use `python`, `sed`, `perl`, `awk`, `cat`, `tee`, or shell redirection for manual edits. Formatters, generators, migrations, builds, and tests are allowed.\n" +
 	'Read tools return text. `pi.bash`, `pi.exec`, `pi.edit`, `pi.write`, and `pi.applyPatch` return `{ok, output, details}`. Use `pi.exec({argv})` when arguments contain quotes, spaces, or syntax that must not be parsed by a shell; reserve `pi.bash` for shell syntax. Use `payloads` and `π.key` for multiline values. If a task names an external service or needs web research, discover tools before declaring it unavailable: `tools.search({query:"web search"})` finds registered tools. `tools` is a top-level global, not an extension tool. `extensions.tools.search(...)` is accepted only as a compatibility alias. Use `mcp.list()` or `mcp.search({query})` for lazy MCP services. Connect the selected server if needed, then search and describe its action before `mcp.call`. Use `agents.*` for subagents.';
+
+export interface SpindleModelIdentity {
+	provider?: string;
+	api?: string;
+	id?: string;
+}
+
+export const resolveSpindleEditGuidance = (model: SpindleModelIdentity | undefined): string => {
+	const provider = model?.provider?.toLowerCase() ?? "";
+	const api = model?.api?.toLowerCase() ?? "";
+	const id = model?.id?.toLowerCase() ?? "";
+	const identity = `${provider} ${api} ${id}`;
+
+	if (/\b(?:anthropic|claude)\b/.test(identity)) {
+		return "Manual file edits must use `pi.edit({ path, edits: [{ oldText, newText }] })`, `pi.write`, or `pi.applyPatch({ patch: π.patch })`. Prefer `pi.edit`; use `pi.applyPatch` for coordinated multi-file changes.";
+	}
+	if (/\b(?:openai|gpt|codex)\b/.test(identity)) {
+		return "Manual file edits must use `pi.edit({ path, edits: [{ oldText, newText }] })`, `pi.write`, or `pi.applyPatch({ patch: π.patch })`. Prefer `pi.applyPatch`; use `pi.edit` or `pi.write` as fallback.";
+	}
+	return "Manual file edits must use `pi.edit({ path, edits: [{ oldText, newText }] })`, `pi.write`, or `pi.applyPatch({ patch: π.patch })`. Prefer `pi.edit` or `pi.write`; use `pi.applyPatch` for multi-file V4A input.";
+};
+
+const fullCodeGuidanceFor = (model: SpindleModelIdentity | undefined): string =>
+	FULL_CODE_GUIDANCE_PREFIX + resolveSpindleEditGuidance(model) + FULL_CODE_GUIDANCE_SUFFIX;
+
+export const FULL_CODE_GUIDANCE = fullCodeGuidanceFor(undefined);
 
 const ORCHESTRATION_ONLY_GUIDANCE =
 	"Spindle is in orchestration-only mode. Pi core and registered extension tools stay on their native direct execution path; inside `spindle_exec`, `pi.*` and `extensions.*` are unavailable. Use `mcp.*`, `agents.*`, `mapLimit`, `print`, `π` and `τ` only.";
@@ -414,7 +442,7 @@ export default async function spindle(pi: ExtensionAPI): Promise<void> {
 		return changed ? { messages } : undefined;
 	});
 
-	pi.on("before_agent_start", async (event) => {
+	pi.on("before_agent_start", async (event, context) => {
 		const fullCodeMode = state.initialized ? state.config.fullCodeMode : DEFAULT_SPINDLE_CONFIG.fullCodeMode;
 		if (!pi.getActiveTools().includes("spindle_exec")) return;
 		const skills = event.systemPromptOptions.skills ?? [];
@@ -433,7 +461,7 @@ export default async function spindle(pi: ExtensionAPI): Promise<void> {
 		// so its own prompt text would otherwise never be shown.
 		const overrideGuidance = fullCodeMode ? coreOverridePromptGuidance(capturedTools).trim() : "";
 		const guidance =
-			(fullCodeMode ? FULL_CODE_GUIDANCE : ORCHESTRATION_ONLY_GUIDANCE) +
+			(fullCodeMode ? fullCodeGuidanceFor(context.model) : ORCHESTRATION_ONLY_GUIDANCE) +
 			(overrideGuidance ? `\n\n${overrideGuidance}` : "") +
 			(skillReferenceGuidance ? `\n\n${skillReferenceGuidance}` : "");
 		return {

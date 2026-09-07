@@ -43,14 +43,23 @@ accepted and silently remapped in `prepareArguments`, but it is no longer
 declared in the tool schema or named in any prompt surface, so nothing teaches a
 model to reach for it.
 
-Full-code prompt guidance requires manual file changes to use `pi.edit`,
-`pi.write`, or `pi.applyPatch`. Multi-file V4A patches are passed through a
-`payloads` entry and invoked as `pi.applyPatch({ patch: π.patch })`; patch text
-is not embedded in guest code or retained by the durable audit projection. The
-guidance keeps the canonical edit shape and reread-on-failure recovery, prohibits
-manual editing through shell utilities or redirection, and explicitly allows
-project automation such as formatters, generators, migrations, builds, and
-tests.
+Full-code prompt guidance keeps `pi.edit`, `pi.write`, and
+`pi.applyPatch` available inside the same sandbox, but changes their recommended
+order for the active model. OpenAI, GPT, and Codex identities prefer
+`pi.applyPatch`, with `pi.edit` and `pi.write` as fallbacks. Anthropic and
+Claude identities prefer `pi.edit`, with `pi.applyPatch` for coordinated
+multi-file changes. Unknown or missing identities prefer `pi.edit` and
+`pi.write`, and mention `pi.applyPatch` for multi-file V4A input. The pure
+resolver considers the model provider, API, and id. It runs from
+`before_agent_start`, so changing models changes the guidance on the next turn
+without changing tool registration or sandbox policy.
+
+V4A patches are passed through a `payloads` entry and invoked as
+`pi.applyPatch({ patch: π.patch })`; patch text is not embedded in guest code or
+retained by the durable audit projection. Every profile keeps the canonical edit
+shape and reread-on-failure recovery, prohibits manual editing through shell
+utilities or redirection, and explicitly allows project automation such as
+formatters, generators, migrations, builds, and tests.
 
 ## Upstream drift audit
 
