@@ -79,7 +79,11 @@ test("two allowWrite entries that canonicalize to the same path collapse to exac
 	const result = buildSeatbeltProfile(basePolicy({ allowWrite: [real, link] }));
 
 	const writableRootParams = result.params.filter(([key]) => key.startsWith("WRITABLE_ROOT"));
-	assert.equal(writableRootParams.length, 1, `expected exactly one WRITABLE_ROOT param, got ${writableRootParams.length}`);
+	assert.equal(
+		writableRootParams.length,
+		1,
+		`expected exactly one WRITABLE_ROOT param, got ${writableRootParams.length}`,
+	);
 	assert.equal(writableRootParams[0]?.[1], real);
 
 	const unlinkMatches = result.profile.match(

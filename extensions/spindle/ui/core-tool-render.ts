@@ -656,7 +656,9 @@ const bashCommand = (audit: SpindleRenderAudit): string => {
 	const command = stringOf(recordOf(audit.preview)?.bashCommand) ?? argString(audit, "command");
 	if (command !== undefined) return command;
 	const argv = audit.args?.argv;
-	return Array.isArray(argv) && argv.every((value) => typeof value === "string") ? argv.map((value) => JSON.stringify(value)).join(" ") : "";
+	return Array.isArray(argv) && argv.every((value) => typeof value === "string")
+		? argv.map((value) => JSON.stringify(value)).join(" ")
+		: "";
 };
 
 const writeContent = (audit: SpindleRenderAudit): string | undefined =>

@@ -22,10 +22,17 @@ export const createSpindleExecToolDefinition = (
 ): ToolDefinition<any, any, any> => ({
 	name: "exec",
 	label: "exec",
-	description: "Execute a program with literal argv arguments, without shell parsing. Use bash for pipelines, redirects, glob expansion, or shell syntax.",
+	description:
+		"Execute a program with literal argv arguments, without shell parsing. Use bash for pipelines, redirects, glob expansion, or shell syntax.",
 	parameters: schema,
 	async execute(_toolCallId, args, signal, onUpdate) {
-		const { argv, timeout, cwd: callCwd, env, stdin } = args as {
+		const {
+			argv,
+			timeout,
+			cwd: callCwd,
+			env,
+			stdin,
+		} = args as {
 			argv: string[];
 			timeout?: number;
 			cwd?: string;
@@ -33,7 +40,8 @@ export const createSpindleExecToolDefinition = (
 			stdin?: string;
 		};
 		if (callCwd !== undefined) {
-			if (!isAbsolute(callCwd)) throw new Error(`pi.exec cwd must be an absolute path (got: ${JSON.stringify(callCwd)})`);
+			if (!isAbsolute(callCwd))
+				throw new Error(`pi.exec cwd must be an absolute path (got: ${JSON.stringify(callCwd)})`);
 			const info = await stat(callCwd).catch(() => undefined);
 			if (!info?.isDirectory()) throw new Error(`pi.exec cwd is not an existing directory: ${callCwd}`);
 		}
@@ -52,7 +60,8 @@ export const createSpindleExecToolDefinition = (
 			...(env ? { env } : {}),
 			...(stdin !== undefined ? { stdin } : {}),
 		});
-		if (result.exitCode && result.exitCode !== 0) throw new Error(`${output}\n\nCommand exited with code ${result.exitCode}`);
+		if (result.exitCode && result.exitCode !== 0)
+			throw new Error(`${output}\n\nCommand exited with code ${result.exitCode}`);
 		return { content: [{ type: "text", text: output || "(no output)" }], details: undefined };
 	},
 });

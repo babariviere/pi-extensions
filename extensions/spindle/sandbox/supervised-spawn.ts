@@ -49,19 +49,22 @@ export function supervisedSpawn(options: SupervisedSpawnOptions): Promise<{ exit
 	}
 	if (argv !== undefined && argv.length === 0) throw new Error("supervisedSpawn argv must not be empty");
 	return new Promise((resolve, reject) => {
-		const child = argv === undefined ? spawn("bash", ["-c", command as string], {
-			cwd,
-			detached: true,
-			stdio: stdin === undefined ? ["ignore", "pipe", "pipe"] : ["pipe", "pipe", "pipe"],
-			...(env ? { env } : {}),
-		}) : spawn(argv[0]!, argv.slice(1), {
-			cwd,
-			detached: true,
-			// A stdin pipe only when there is text to feed; callers without stdin
-			// keep pi's "ignore" so the child never inherits our terminal.
-			stdio: stdin === undefined ? ["ignore", "pipe", "pipe"] : ["pipe", "pipe", "pipe"],
-			...(env ? { env } : {}),
-		});
+		const child =
+			argv === undefined
+				? spawn("bash", ["-c", command as string], {
+						cwd,
+						detached: true,
+						stdio: stdin === undefined ? ["ignore", "pipe", "pipe"] : ["pipe", "pipe", "pipe"],
+						...(env ? { env } : {}),
+					})
+				: spawn(argv[0]!, argv.slice(1), {
+						cwd,
+						detached: true,
+						// A stdin pipe only when there is text to feed; callers without stdin
+						// keep pi's "ignore" so the child never inherits our terminal.
+						stdio: stdin === undefined ? ["ignore", "pipe", "pipe"] : ["pipe", "pipe", "pipe"],
+						...(env ? { env } : {}),
+					});
 		// The command may never read stdin; an EPIPE on our side must not fail it.
 		if (stdin !== undefined) {
 			child.stdin?.on("error", () => {});
