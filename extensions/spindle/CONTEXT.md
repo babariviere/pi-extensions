@@ -75,6 +75,12 @@ with URL paths rejected, each path capped at 512 UTF-8 bytes, and each path list
 capped at 128 entries. The field is optional so older persisted details continue
 to render unchanged, and the existing aggregate details cap remains authoritative.
 
+## Native OpenAI apply_patch boundary
+
+The nested `pi.applyPatch` tool is the safe extension-level fallback. Native OpenAI Responses `apply_patch_call` support is intentionally not injected by this extension. Pi 0.85.1 can rewrite the outgoing provider payload through `before_provider_request`, but its OpenAI Responses parser does not decode `apply_patch_call`, and `after_provider_response` cannot replace or consume the response body. Advertising the native tool from middleware would therefore let the provider silently discard the model's edits.
+
+`NATIVE_APPLY_PATCH.md` records the upstream provider changes, round-trip requirements, compatibility checks, and Spindle integration needed before the native path can be enabled. Until that contract exists in `@earendil-works/pi-ai`, model profiles use the V4A-compatible nested tool and preserve the normal sandbox, lifecycle, audit, and metrics paths.
+
 ## Upstream drift audit
 
 Audited 2026-09-02 against upstream `main` at `1a71fff54d9bfc03de4a8df925df15e65bc82392`
