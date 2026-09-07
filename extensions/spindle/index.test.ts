@@ -53,19 +53,20 @@ for (const { name, model, expected } of editGuidanceCases) {
 	test(`edit guidance resolves the ${name} profile`, () => {
 		const guidance = resolveSpindleEditGuidance(model);
 		assert.match(guidance, expected);
-		assert.match(
-			guidance,
-			/Manual file edits must use `pi\.edit\(\{ path, edits: \[\{ oldText, newText \}\] \}\)`, `pi\.write`, or `pi\.applyPatch\(\{ patch: π\.patch \}\)`\./,
-		);
+		assert.ok(guidance.length < 100);
 	});
 }
 
-test("full-code guidance keeps sandboxed edit and automation constraints", () => {
-	assert.match(FULL_CODE_GUIDANCE, /Pass V4A patch text through `payloads`, not an inline string\./);
-	assert.match(FULL_CODE_GUIDANCE, /If `pi\.edit` fails, reread the target file and retry with updated exact text\./);
+test("full-code guidance identifies concise TypeScript code mode constraints", () => {
+	assert.match(FULL_CODE_GUIDANCE, /TypeScript code mode and exclusive tool interface/);
+	assert.match(FULL_CODE_GUIDANCE, /do not use Python as a fallback/);
 	assert.match(
 		FULL_CODE_GUIDANCE,
-		/Do not use `python`, `sed`, `perl`, `awk`, `cat`, `tee`, or shell redirection for manual edits\./,
+		/File changes use `pi\.edit\(\{ path, edits: \[\{ oldText, newText \}\] \}\)`, `pi\.write`, or `pi\.applyPatch\(\{ patch: π\.patch \}\)`\./,
 	);
-	assert.match(FULL_CODE_GUIDANCE, /Formatters, generators, migrations, builds, and tests are allowed\./);
+	assert.match(FULL_CODE_GUIDANCE, /Put V4A and other multiline content in `payloads`\./);
+	assert.match(FULL_CODE_GUIDANCE, /If `pi\.edit` misses, reread and retry\./);
+	assert.match(FULL_CODE_GUIDANCE, /Never manually edit through Python, shell text utilities, or redirection/);
+	assert.match(FULL_CODE_GUIDANCE, /formatters, generators, migrations, builds, and tests are allowed/);
+	assert.ok(Buffer.byteLength(FULL_CODE_GUIDANCE, "utf8") <= 1_000);
 });

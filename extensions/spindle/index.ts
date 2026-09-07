@@ -46,21 +46,20 @@ export { resolveSpindleEditProfile, type SpindleEditProfile, type SpindleModelId
 const SPINDLE_EXTENSION_ENTRY_PATH = path.resolve(fileURLToPath(import.meta.url));
 
 const FULL_CODE_GUIDANCE_PREFIX =
-	"Spindle full code mode: call Pi tools only through `spindle_exec`, using `pi.*` inside `code`. Search the repository before reading: `pi.find` locates files, `pi.grep` locates text, and `pi.ls` shows structure. Read only identified ranges with `pi.read({path, offset, limit})`; avoid whole-file reads of large, generated, vendored, log, and lock files. Return compact findings, not raw search output or file contents.\n";
+	"`spindle_exec` is this session's TypeScript code mode and exclusive tool interface. Write TypeScript orchestration and call `pi.*`; do not use Python as a fallback. Search with `pi.find`, `pi.grep`, or `pi.ls` before reading. Read targeted ranges and avoid large generated, vendored, log, and lock files. Return compact results.\n";
 
 const FULL_CODE_GUIDANCE_SUFFIX =
-	" Pass V4A patch text through `payloads`, not an inline string. If `pi.edit` fails, reread the target file and retry with updated exact text. Do not use `python`, `sed`, `perl`, `awk`, `cat`, `tee`, or shell redirection for manual edits. Formatters, generators, migrations, builds, and tests are allowed.\n" +
-	'Read tools return text. `pi.bash`, `pi.exec`, `pi.edit`, `pi.write`, and `pi.applyPatch` return `{ok, output, details}`. Use `pi.exec({argv})` when arguments contain quotes, spaces, or syntax that must not be parsed by a shell; reserve `pi.bash` for shell syntax. Use `payloads` and `π.key` for multiline values. If a task names an external service or needs web research, discover tools before declaring it unavailable: `tools.search({query:"web search"})` finds registered tools. `tools` is a top-level global, not an extension tool. `extensions.tools.search(...)` is accepted only as a compatibility alias. Use `mcp.list()` or `mcp.search({query})` for lazy MCP services. Connect the selected server if needed, then search and describe its action before `mcp.call`. Use `agents.*` for subagents.';
+	" File changes use `pi.edit({ path, edits: [{ oldText, newText }] })`, `pi.write`, or `pi.applyPatch({ patch: π.patch })`. Put V4A and other multiline content in `payloads`. If `pi.edit` misses, reread and retry. Never manually edit through Python, shell text utilities, or redirection; formatters, generators, migrations, builds, and tests are allowed.";
 
 export const resolveSpindleEditGuidance = (model: SpindleModelIdentity | undefined): string => {
 	const profile = resolveSpindleEditProfile(model);
 	if (profile === "anthropic") {
-		return "Manual file edits must use `pi.edit({ path, edits: [{ oldText, newText }] })`, `pi.write`, or `pi.applyPatch({ patch: π.patch })`. Prefer `pi.edit`; use `pi.applyPatch` for coordinated multi-file changes.";
+		return "Prefer `pi.edit`; use `pi.applyPatch` for coordinated multi-file changes.";
 	}
 	if (profile === "openai") {
-		return "Manual file edits must use `pi.edit({ path, edits: [{ oldText, newText }] })`, `pi.write`, or `pi.applyPatch({ patch: π.patch })`. Prefer `pi.applyPatch`; use `pi.edit` or `pi.write` as fallback.";
+		return "Prefer `pi.applyPatch`; use `pi.edit` or `pi.write` as fallback.";
 	}
-	return "Manual file edits must use `pi.edit({ path, edits: [{ oldText, newText }] })`, `pi.write`, or `pi.applyPatch({ patch: π.patch })`. Prefer `pi.edit` or `pi.write`; use `pi.applyPatch` for multi-file V4A input.";
+	return "Prefer `pi.edit` or `pi.write`; use `pi.applyPatch` for multi-file V4A input.";
 };
 
 const fullCodeGuidanceFor = (model: SpindleModelIdentity | undefined): string =>

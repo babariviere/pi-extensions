@@ -91,7 +91,7 @@ export const createSpindleExecTool = (
 			name: "spindle_exec",
 			label: "Spindle",
 			description:
-				"Execute type-checked TypeScript in an isolated QuickJS sandbox to drive Pi core tools (`pi.*`), tools registered by sibling extensions (`extensions.*`), MCP tools from `mcp.json` (`mcp.*`), and custom markdown subagents (`agents.*`). In full code mode this is the exclusive model tool path.",
+				"This session's TypeScript code mode and, in full code mode, its exclusive tool interface. Execute type-checked TypeScript in isolated QuickJS to call `pi.*`, `extensions.*`, `mcp.*`, and `agents.*`. Do not use Python as an orchestration fallback.",
 			promptSnippet: "Pi core tools, extension tools, MCP, and custom subagents",
 			promptGuidelines: [
 				"Batch independent operations in one `spindle_exec` program, not one call per tool; keep dependent/conditional steps sequential. Use `Promise.all` for a few independent calls; use `mapLimit(items, fn, N)` when fanning out over a wide list, because `Promise.all` receives promises that have already started and so cannot bound how many run at once. Return only the compact final value; intermediate results stay in the sandbox.",

@@ -43,10 +43,14 @@ accepted and silently remapped in `prepareArguments`, but it is no longer
 declared in the tool schema or named in any prompt surface, so nothing teaches a
 model to reach for it.
 
-Full-code prompt guidance keeps `pi.edit`, `pi.write`, and
-`pi.applyPatch` available inside the same sandbox, but changes their recommended
-order for the active model. OpenAI, GPT, and Codex identities prefer
-`pi.applyPatch`, with `pi.edit` and `pi.write` as fallbacks. Anthropic and
+Full-code prompt guidance identifies `spindle_exec` as the session's TypeScript
+code mode and exclusive tool interface, explicitly ruling out Python as an
+orchestration fallback. The guidance is capped by a regression test at 1,000
+UTF-8 bytes so this framing does not turn into a second tool manual. It keeps
+`pi.edit`, `pi.write`, and `pi.applyPatch` available inside the same sandbox,
+but changes their recommended order for the active model. For OpenAI, GPT, and
+Codex identities, it prefers `pi.applyPatch`, with `pi.edit` and `pi.write` as
+fallbacks. Anthropic and
 Claude identities prefer `pi.edit`, with `pi.applyPatch` for coordinated
 multi-file changes. Unknown or missing identities prefer `pi.edit` and
 `pi.write`, and mention `pi.applyPatch` for multi-file V4A input. The pure
