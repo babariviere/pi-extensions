@@ -106,6 +106,8 @@ export interface NightPlanHandoff {
 	version: 1;
 	planningSession?: string;
 	planningStartedAt: number;
+	/** Missing on legacy handoffs, which start immediately. */
+	scheduledStartAt?: number;
 	windowLabel: string;
 	cwd: string;
 	prompt: string;

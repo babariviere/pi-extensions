@@ -103,6 +103,7 @@ import {
 	hasInstructions,
 	timelineLine,
 } from "./prompt.ts";
+import { scheduledStartAt } from "./schedule.ts";
 import {
 	NIGHT_PLAN_HANDOFF_ENTRY,
 	NIGHT_PLAN_STARTED_ENTRY,
@@ -164,6 +165,10 @@ export default function (pi: ExtensionAPI): void {
 	let resumeAt: number | undefined;
 	let resumeTimer: ReturnType<typeof setTimeout> | undefined;
 	let tickTimer: ReturnType<typeof setInterval> | undefined;
+	let pendingStart: { handoff: NightPlanHandoff; ctx: ExtensionContext } | undefined;
+	let startTimer: ReturnType<typeof setTimeout> | undefined;
+	let starting = false;
+	const cancelledPlanEntry = "night-mode:approved-plan-cancelled";
 	let unsubscribeUsage: (() => void) | undefined;
 	let unsubscribePacing: (() => void) | undefined;
 	/** Session-only window override, set by `/night start`. */
@@ -467,7 +472,7 @@ export default function (pi: ExtensionAPI): void {
 
 	/** Start Astra in this session. It may explore, but it cannot create the execution run. */
 	async function startPlanning(ctx: ExtensionCommandContext, windowLabel: string): Promise<string | undefined> {
-		if (planning || run) return "night-mode: a plan or run is already in flight";
+		if (planning || run || pendingStart || starting) return "night-mode: a plan or run is already in flight";
 		const cwd = process.cwd();
 		if (readActiveNightRun()) return "night-mode: another planning or execution run is already active";
 		const config = readNightConfig(cwd);
@@ -836,6 +841,8 @@ export default function (pi: ExtensionAPI): void {
 	}
 
 	function statusText(): string | undefined {
+		if (pendingStart)
+			return `🌙 scheduled for ${formatDateTimeStamp(new Date(pendingStart.handoff.scheduledStartAt ?? Date.now()))}`;
 		if (!enabled || !inWindow) return undefined;
 		if (paused) {
 			const left = resumeAt ? formatDuration(resumeAt - Date.now()) : "?";
@@ -989,7 +996,8 @@ export default function (pi: ExtensionAPI): void {
 	}
 
 	function evaluate(): void {
-		const active = enabled && isWithinWindow(new Date(), currentWindow());
+		void startPendingPlan();
+		const active = enabled && !pendingStart && isWithinWindow(new Date(), currentWindow());
 		if (active !== inWindow) {
 			inWindow = active;
 			if (!active) {
@@ -1037,7 +1045,7 @@ export default function (pi: ExtensionAPI): void {
 			const started = new Set<number>();
 			for (const entry of entries) {
 				if (entry.customType === NIGHT_PLAN_HANDOFF_ENTRY) handoff = entry.data as NightPlanHandoff;
-				if (entry.customType === NIGHT_PLAN_STARTED_ENTRY) {
+				if (entry.customType === NIGHT_PLAN_STARTED_ENTRY || entry.customType === cancelledPlanEntry) {
 					const value = entry.data as { planningStartedAt?: number } | undefined;
 					if (typeof value?.planningStartedAt === "number") started.add(value.planningStartedAt);
 				}
@@ -1059,6 +1067,7 @@ export default function (pi: ExtensionAPI): void {
 			version: 1,
 			...(planningSession ? { planningSession } : {}),
 			planningStartedAt: state.startedAt.getTime(),
+			scheduledStartAt: scheduledStartAt(new Date()),
 			windowLabel: state.windowLabel,
 			cwd: process.cwd(),
 			prompt: state.prompt,
@@ -1163,7 +1172,39 @@ export default function (pi: ExtensionAPI): void {
 		},
 	});
 
+	function clearPendingStart(): void {
+		if (startTimer) clearTimeout(startTimer);
+		startTimer = undefined;
+		pendingStart = undefined;
+	}
+
+	async function startPendingPlan(): Promise<void> {
+		const pending = pendingStart;
+		if (!pending || starting || Date.now() < (pending.handoff.scheduledStartAt ?? 0)) return;
+		if (!pending.ctx.isIdle()) return;
+		starting = true;
+		try {
+			const { ctx, handoff } = pending;
+			const config = readNightConfig(process.cwd());
+			const modelError = await selectConfiguredModel(ctx, config.orchestratorModel);
+			if (pendingStart !== pending) return;
+			clearPendingStart();
+			enabled = true;
+			windowOverride = windowStartingAt(new Date());
+			const error = modelError ?? (await startRun(ctx, formatWindow(currentWindow()), handoff));
+			if (error) ctx.ui.notify(error, "error");
+			else pi.appendEntry(NIGHT_PLAN_STARTED_ENTRY, { planningStartedAt: handoff.planningStartedAt });
+		} catch (error) {
+			clearPendingStart();
+			pending.ctx.ui.notify(`night-mode: execution start failed: ${String(error)}`, "error");
+		} finally {
+			starting = false;
+			report();
+		}
+	}
+
 	pi.on("session_start", async (_event, ctx) => {
+		clearPendingStart();
 		ctxRef = ctx;
 		restore(ctx);
 		pi.events.emit(USAGE_REQUEST_EVENT, { reason: "night-mode-start" });
@@ -1173,13 +1214,16 @@ export default function (pi: ExtensionAPI): void {
 		}
 		const handoff = handoffFromSession(ctx);
 		if (handoff) {
-			pi.appendEntry(NIGHT_PLAN_STARTED_ENTRY, { planningStartedAt: handoff.planningStartedAt });
-			enabled = true;
-			windowOverride = windowStartingAt(new Date());
-			const config = readNightConfig(process.cwd());
-			const modelError = await selectConfiguredModel(ctx, config.orchestratorModel);
-			const error = modelError ?? (await startRun(ctx, handoff.windowLabel, handoff));
-			if (error) ctx.ui.notify(error, "error");
+			pendingStart = { handoff, ctx };
+			const delay = Math.max(0, (handoff.scheduledStartAt ?? 0) - Date.now());
+			if (delay > 0) {
+				ctx.ui.notify(
+					`night-mode: scheduled for ${formatDateTimeStamp(new Date(handoff.scheduledStartAt!))}`,
+					"info",
+				);
+				startTimer = setTimeout(() => void startPendingPlan(), delay);
+				startTimer.unref?.();
+			} else await startPendingPlan();
 		}
 		evaluate();
 	});
@@ -1264,6 +1308,7 @@ export default function (pi: ExtensionAPI): void {
 	});
 
 	pi.on("session_shutdown", async () => {
+		clearPendingStart();
 		if (planning) {
 			requestSandbox(null, "night planning session ended");
 			clearActiveNightRun();
@@ -1366,6 +1411,10 @@ export default function (pi: ExtensionAPI): void {
 			if (action === "on" || action === "off") {
 				enabled = action === "on";
 				if (!enabled) {
+					if (pendingStart) {
+						pi.appendEntry(cancelledPlanEntry, { planningStartedAt: pendingStart.handoff.planningStartedAt });
+						clearPendingStart();
+					}
 					const previous = planning?.previousModel;
 					if (planning) {
 						requestSandbox(null, "night planning turned off");
@@ -1418,7 +1467,7 @@ export default function (pi: ExtensionAPI): void {
 				`week usage: ${weekly === undefined ? "unknown" : `${Math.round(weekly)}% / ${DEFAULT_WEEKLY_THRESHOLD_PERCENT}%`}`,
 				`Codex pacing: ${pacing ? `${pacing.blocked ? "blocked" : "available"}, ${(pacing.usedWindowPercent ?? pacing.usedTodayPercent).toFixed(1)}% used in window, ${(pacing.remainingWindowPercent ?? pacing.remainingTodayPercent).toFixed(1)}% remaining` : "unavailable"}`,
 				`paused: ${paused ? `yes (${limitLabel(pausedReason)}), resume in ${resumeAt ? formatDuration(resumeAt - Date.now()) : "?"}` : "no"}`,
-				`phase: ${planning ? (planning.approved ? "plan approved, preparing handoff" : "planning with Astra") : run ? "executing approved plan" : "idle"}`,
+				`phase: ${pendingStart ? `scheduled for ${formatDateTimeStamp(new Date(pendingStart.handoff.scheduledStartAt ?? Date.now()))}` : planning ? (planning.approved ? "plan approved, preparing handoff" : "planning with Astra") : run ? "executing approved plan" : "idle"}`,
 				`run: ${run ? `since ${formatDateTimeStamp(run.startedAt)}, report ${run.reportPath}` : "none"}`,
 				`working copy: ${run?.workspacePath ?? (run ? "session checkout (no clone)" : "n/a")}`,
 				`ledger: ${ledgerSummary()}`,
