@@ -15,6 +15,7 @@ import {
 	isSandboxMode,
 	isWriteAllowed,
 	matchesPattern,
+	policyEnvironment,
 	type PolicyEnvironment,
 	type SandboxPolicy,
 	resolveSandboxPolicy,
@@ -105,6 +106,13 @@ test("read-only grants temp dirs only", () => {
 	assert.deepEqual(policy.allowWrite, ["/tmp"]);
 	assert.equal(isWriteAllowed(policy, "/work/repo/src/a.ts"), false);
 	assert.equal(isWriteAllowed(policy, "/tmp/build/out"), true);
+});
+
+test("ambient policies grant the platform temporary directory", () => {
+	const ambient = policyEnvironment("/work/repo");
+	assert.equal(ambient.tmp, tmpdir());
+	const policy = resolveSandboxPolicy({ mode: "read-only" }, ambient);
+	assert.equal(isWriteAllowed(policy, join(tmpdir(), "spindle-test")), true);
 });
 
 test("off and full enforce nothing", () => {

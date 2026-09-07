@@ -26,6 +26,7 @@
  */
 
 import { lstatSync, realpathSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative } from "node:path";
 
 export const SANDBOX_MODES = ["off", "read-only", "workspace-write", "full"] as const;
@@ -195,7 +196,7 @@ export function policyEnvironment(cwd: string, overrides: Partial<PolicyEnvironm
 		home: overrides.home ?? process.env.HOME ?? "",
 		platform: overrides.platform ?? process.platform,
 		env: overrides.env ?? process.env,
-		tmp: overrides.tmp ?? "/tmp",
+		tmp: overrides.tmp ?? tmpdir(),
 	};
 }
 

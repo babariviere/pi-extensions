@@ -772,7 +772,8 @@ Enforcement is the existing one, so there is no second mechanism to keep in
 sync: `bash` runs under the in-repo Seatbelt profile (macOS only), `write`/`edit`
 are path-checked, and the read tools honour `denyRead`.
 
-What this does not do: `read-only` still grants the temp dirs (a compiler that
+What this does not do: `read-only` still grants the platform temp directory
+reported by `os.tmpdir()` plus conventional `/tmp` aliases (a compiler that
 cannot write a temp file is a brick, not a sandbox) and leaves egress
 unrestricted, so it bounds damage rather than visibility. It also refuses tools
 that write outside temp, including `jj` without `--ignore-working-copy` (it
