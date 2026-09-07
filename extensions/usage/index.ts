@@ -214,12 +214,12 @@ export default function (pi: ExtensionAPI): void {
 	pi.on("tool_call", (_event, ctx) => {
 		if (!pacingIsEnforced() || !isOpenAIModel(ctx.model) || !pacing) return;
 		if (pacing.warningPending) {
-			markPacingWarningSent(pacingLedger, pacing.day);
+			markPacingWarningSent(pacingLedger, pacing.window ?? pacing.day);
 			pacing.warningPending = false;
 			if (pacingLedger) savePacingLedger(pacingLedger);
 			pi.sendUserMessage(
-				`[usage] Warning: you have used ${percent(pacing.usedTodayPercent)} of today's Codex pacing allowance ` +
-					`(${percent(pacing.remainingTodayPercent)} remains). You are at the ${CODEX_PACING_WARNING_PERCENT}% warning threshold. ` +
+				`[usage] Warning: you have used ${percent(pacing.usedWindowPercent ?? pacing.usedTodayPercent)} of this Codex pacing window ` +
+					`(${percent(pacing.remainingWindowPercent ?? pacing.remainingTodayPercent)} remains). You are at the ${CODEX_PACING_WARNING_PERCENT}% warning threshold. ` +
 					"Finish or checkpoint current work and avoid starting expensive new work before the allowance is exhausted.",
 				{ deliverAs: "followUp" },
 			);
@@ -228,13 +228,13 @@ export default function (pi: ExtensionAPI): void {
 		const reason =
 			pacing.weeklyUsedPercent >= 100
 				? "the Codex weekly limit is exhausted"
-				: "today's Codex pacing allowance is exhausted";
+				: "this Codex pacing window's allowance is exhausted";
 		return {
 			block: true,
 			terminate: true,
 			reason:
-				`usage: ${reason} (${percent(pacing.usedTodayPercent)} used today, ` +
-				`${percent(pacing.remainingTodayPercent)} remaining). Use /usage pacing off to continue for this session.`,
+				`usage: ${reason} (${percent(pacing.usedWindowPercent ?? pacing.usedTodayPercent)} used in this window, ` +
+				`${percent(pacing.remainingWindowPercent ?? pacing.remainingTodayPercent)} remaining). Use /usage pacing off to continue for this session.`,
 		};
 	});
 
@@ -291,11 +291,11 @@ export default function (pi: ExtensionAPI): void {
 						: `pacing: ${pacingIsEnforced() ? "enabled" : "disabled for this session"}`,
 					...(pacing
 						? [
-								`pacing period (started ${formatLocalDateTime(pacing.day)}): ${percent(pacing.usedTodayPercent)} used of ${percent(pacing.allowancePercent)}, ${percent(pacing.remainingTodayPercent)} remaining`,
-								`days through reset: ${pacing.daysRemaining}`,
+								`pacing window (started ${formatLocalDateTime(pacing.window ?? pacing.day)}): ${percent(pacing.usedWindowPercent ?? pacing.usedTodayPercent)} used of ${percent(pacing.allowancePercent)}, ${percent(pacing.remainingWindowPercent ?? pacing.remainingTodayPercent)} remaining`,
+								`windows through reset: ${pacing.windowsRemaining ?? pacing.daysRemaining}`,
 								`blocked: ${pacing.blocked ? "yes" : "no"}`,
 							]
-						: ["today's pacing: unavailable until Codex weekly usage and reset are available"]),
+						: ["pacing: unavailable until Codex weekly usage and reset are available"]),
 				].join("\n"),
 				"info",
 			);

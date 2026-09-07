@@ -12,7 +12,7 @@ Personal extensions for [pi](https://github.com/earendil-works/pi).
 | `pr` | GitHub pull request helpers |
 | `context` | Context-window usage + session token/cost footer data |
 | `footer` | Custom footer rendering (consumes `usage:snapshot`) |
-| `usage` | Single poller for Claude and Codex / ChatGPT subscription usage, republished on the event bus |
+| `usage` | Single poller for Claude and Codex / ChatGPT subscription usage, republished on the event bus ([docs](extensions/usage/README.md)) |
 | `night-mode` | Astra planning, interactive task approval, fresh Sol orchestration, wake lock, and usage guards ([docs](extensions/night-mode/README.md)) |
 | `tool-substitute` | Enforce jj writes and guide agents to Pi search tools |
 | `guardrail` | Block catastrophic bash commands (`rm -rf ~`, raw device writes, `curl \| sh`) ([docs](extensions/guardrail/README.md)) |

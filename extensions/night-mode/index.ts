@@ -1232,8 +1232,8 @@ export default function (pi: ExtensionAPI): void {
 				block: true,
 				terminate: true,
 				reason:
-					"night-mode: today's Codex pacing allowance is exhausted " +
-					`(${pacing?.usedTodayPercent.toFixed(1) ?? "?"}% used, ${pacing?.remainingTodayPercent.toFixed(1) ?? "?"}% remaining). ` +
+					"night-mode: this Codex pacing window's allowance is exhausted " +
+					`(${(pacing?.usedWindowPercent ?? pacing?.usedTodayPercent)?.toFixed(1) ?? "?"}% used, ${(pacing?.remainingWindowPercent ?? pacing?.remainingTodayPercent)?.toFixed(1) ?? "?"}% remaining). ` +
 					"Stopping here. Resume manually after a new allowance is available, or use /usage pacing off. Do not retry.",
 			};
 		}
@@ -1406,7 +1406,7 @@ export default function (pi: ExtensionAPI): void {
 				`5h usage: ${pct === undefined ? "unknown" : `${Math.round(pct)}% / ${DEFAULT_THRESHOLD_PERCENT}%`}`,
 				`5h reset: ${resets ? formatDuration(new Date(resets).getTime() - Date.now()) : "unknown"}`,
 				`week usage: ${weekly === undefined ? "unknown" : `${Math.round(weekly)}% / ${DEFAULT_WEEKLY_THRESHOLD_PERCENT}%`}`,
-				`Codex pacing: ${pacing ? `${pacing.blocked ? "blocked" : "available"}, ${pacing.usedTodayPercent.toFixed(1)}% used, ${pacing.remainingTodayPercent.toFixed(1)}% remaining today` : "unavailable"}`,
+				`Codex pacing: ${pacing ? `${pacing.blocked ? "blocked" : "available"}, ${(pacing.usedWindowPercent ?? pacing.usedTodayPercent).toFixed(1)}% used in window, ${(pacing.remainingWindowPercent ?? pacing.remainingTodayPercent).toFixed(1)}% remaining` : "unavailable"}`,
 				`paused: ${paused ? `yes (${limitLabel(pausedReason)}), resume in ${resumeAt ? formatDuration(resumeAt - Date.now()) : "?"}` : "no"}`,
 				`phase: ${planning ? (planning.approved ? "plan approved, preparing handoff" : "planning with Astra") : run ? "executing approved plan" : "idle"}`,
 				`run: ${run ? `since ${formatDateTimeStamp(run.startedAt)}, report ${run.reportPath}` : "none"}`,
