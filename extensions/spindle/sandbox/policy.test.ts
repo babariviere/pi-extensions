@@ -157,6 +157,10 @@ test("toolCacheRoots covers the platform cache home and XDG, not one or the othe
 
 	const linux = toolCacheRoots(environment({ platform: "linux" }));
 	assert.ok(linux.includes("/home/dev/.cache"));
+
+	// AWS CLI authentication needs to persist SSO and role caches.
+	assert.ok(darwin.includes("/home/dev/.aws/sso/cache"));
+	assert.ok(darwin.includes("/home/dev/.aws/cli/cache"));
 });
 
 test("assertWriteAllowed reports the mode and the writable roots", () => {

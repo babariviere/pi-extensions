@@ -149,6 +149,11 @@ export function toolCacheRoots(environment: PolicyEnvironment): string[] {
 		env.GOMODCACHE || join(goPath, "pkg", "mod"),
 		env.npm_config_cache,
 		env.CARGO_HOME,
+		// AWS CLI SSO and role-assumption flows persist short-lived credentials
+		// under these caches. Keep the cache writable without granting the agent
+		// write access to the user's AWS configuration or credential files.
+		join(home, ".aws", "sso", "cache"),
+		join(home, ".aws", "cli", "cache"),
 		// mise writes tool installs under its data dir and trust/tracked-config
 		// records under its state dir. A night task that installs a toolchain, or
 		// trusts a config it just generated, needs both. This does mean a sandboxed
