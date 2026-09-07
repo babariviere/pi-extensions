@@ -56,6 +56,7 @@
     "typebox": "*"
   },
   "scripts": {
+    "spindle:evaluate": "tsx extensions/spindle/evaluation/cli.ts",
     "test": "node --import tsx --test 'extensions/**/*.test.ts'",
     "typecheck": "tsgo -p tsconfig.json",
     "fmt": "biome format --write .",
