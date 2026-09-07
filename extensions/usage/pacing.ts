@@ -229,12 +229,11 @@ export function observeWeeklyUsage(
 		active.windows[windowKey] = record;
 	}
 
-	// A fresh ledger has no earlier poll, so its first value is conservative and
-	// attributed to the active window. A migrated ledger keeps the old cumulative
-	// observation as a baseline, preventing historical usage from blocking a new
-	// fixed window. Every later poll contributes only its positive delta.
+	// Without an earlier poll, historical usage only establishes the baseline.
+	// It already reduces the available weekly budget and must not also consume
+	// the new window's allowance. Later polls contribute only positive deltas.
 	const baseline = isNewWeek ? undefined : active.lastWeeklyPercent;
-	const delta = baseline === undefined ? weeklyUsedPercent : Math.max(0, weeklyUsedPercent - baseline);
+	const delta = baseline === undefined ? 0 : Math.max(0, weeklyUsedPercent - baseline);
 	record.usedPercent += delta;
 	active.lastWeeklyPercent = weeklyUsedPercent;
 

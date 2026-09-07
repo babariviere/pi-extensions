@@ -100,7 +100,7 @@ test("allocates the remaining weekly budget across later windows", () => {
 		now: new Date(2025, 0, 6, 7),
 	});
 	assert.ok(first);
-	assert.equal(first.status.usedWindowPercent, 20);
+	assert.equal(first.status.usedWindowPercent, 0);
 	const later = observeWeeklyUsage(first.ledger, {
 		weeklyUsedPercent: 22,
 		resetAt: resetAt,
@@ -112,21 +112,27 @@ test("allocates the remaining weekly budget across later windows", () => {
 	assert.equal(later.status.blocked, false);
 });
 
-test("attributes first-observation usage, then records only positive deltas", () => {
+test("baselines midweek historical usage, then records only positive deltas", () => {
 	const now = new Date(2025, 0, 8, 12);
 	const resetAt = new Date(2025, 0, 13, 11, 42).toISOString();
 	const first = observeWeeklyUsage(undefined, { weeklyUsedPercent: 40, resetAt, now });
 	assert.ok(first);
-	assert.equal(first.status.usedWindowPercent, 40);
+	assert.equal(first.status.usedWindowPercent, 0);
+	assert.equal(first.ledger.lastWeeklyPercent, 40);
+	assert.ok(first.status.allowancePercent > 0);
+	assert.equal(first.status.remainingWindowPercent, first.status.allowancePercent);
+	assert.equal(first.status.blocked, false);
+	assert.equal(first.status.warningPending, false);
 	const next = observeWeeklyUsage(first.ledger, { weeklyUsedPercent: 47, resetAt, now });
 	assert.ok(next);
-	assert.equal(next.status.usedWindowPercent, 47);
+	assert.equal(next.status.usedWindowPercent, 7);
+	assert.equal(next.status.allowancePercent, first.status.allowancePercent);
 	const duplicate = observeWeeklyUsage(next.ledger, { weeklyUsedPercent: 47, resetAt, now });
 	assert.ok(duplicate);
-	assert.equal(duplicate.status.usedWindowPercent, 47);
+	assert.equal(duplicate.status.usedWindowPercent, 7);
 	const lower = observeWeeklyUsage(duplicate.ledger, { weeklyUsedPercent: 42, resetAt, now });
 	assert.ok(lower);
-	assert.equal(lower.status.usedWindowPercent, 47);
+	assert.equal(lower.status.usedWindowPercent, 7);
 });
 
 test("keeps the current fixed window across a provider reset and starts fresh usage", () => {
@@ -142,7 +148,7 @@ test("keeps the current fixed window across a provider reset and starts fresh us
 		now: new Date(2025, 0, 6, 7),
 	});
 	assert.ok(nextReset);
-	assert.equal(nextReset.status.usedWindowPercent, 1);
+	assert.equal(nextReset.status.usedWindowPercent, 0);
 	assert.equal(nextReset.status.blocked, false);
 });
 
