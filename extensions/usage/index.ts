@@ -20,9 +20,13 @@ import {
 } from "./protocol.ts";
 import {
 	CODEX_PACING_WARNING_PERCENT,
+	clearPacingDisabledUntil,
+	daytimePacingEnd,
+	loadPacingDisabledUntil,
 	loadPacingLedger,
 	markPacingWarningSent,
 	observeWeeklyUsage,
+	savePacingDisabledUntil,
 	savePacingLedger,
 	type PacingStatus,
 } from "./pacing.ts";
@@ -50,9 +54,39 @@ export default function (pi: ExtensionAPI): void {
 	let pacingLedger = loadPacingLedger();
 	let pacing: PacingStatus | undefined;
 	let pacingEnabled = process.env.PI_USAGE_PACING !== "off";
+	let pacingDisabledUntil = loadPacingDisabledUntil();
+	let pacingExpiryTimer: ReturnType<typeof setTimeout> | undefined;
 
 	function provider(): UsageProvider | undefined {
 		return usageProviderForModel(model);
+	}
+
+	function activePacingDisabledUntil(): string | undefined {
+		if (!pacingDisabledUntil) return undefined;
+		const timestamp = new Date(pacingDisabledUntil).getTime();
+		if (Number.isFinite(timestamp) && timestamp > Date.now()) return pacingDisabledUntil;
+		pacingDisabledUntil = undefined;
+		clearPacingDisabledUntil();
+		return undefined;
+	}
+
+	function pacingIsEnforced(): boolean {
+		return pacingEnabled && activePacingDisabledUntil() === undefined;
+	}
+
+	function schedulePacingExpiry(): void {
+		if (pacingExpiryTimer) clearTimeout(pacingExpiryTimer);
+		pacingExpiryTimer = undefined;
+		const disabledUntil = activePacingDisabledUntil();
+		if (!disabledUntil) return;
+		const delay = new Date(disabledUntil).getTime() - Date.now();
+		if (!Number.isFinite(delay) || delay <= 0) return;
+		pacingExpiryTimer = setTimeout(() => {
+			pacingDisabledUntil = undefined;
+			clearPacingDisabledUntil();
+			publishPacing();
+		}, delay);
+		pacingExpiryTimer.unref?.();
 	}
 
 	function updatePacing(snapshot: UsageSnapshot): void {
@@ -77,9 +111,11 @@ export default function (pi: ExtensionAPI): void {
 	}
 
 	function publishPacing(): void {
+		const disabledUntil = activePacingDisabledUntil();
 		pi.events.emit(USAGE_PACING_EVENT, {
 			...(pacing ? { pacing } : {}),
-			enforced: pacingEnabled,
+			...(disabledUntil ? { disabledUntil } : {}),
+			enforced: pacingEnabled && !disabledUntil,
 		});
 	}
 
@@ -89,6 +125,8 @@ export default function (pi: ExtensionAPI): void {
 		pi.events.emit(USAGE_SNAPSHOT_EVENT, last);
 		publishPacing();
 	}
+
+	schedulePacingExpiry();
 
 	function syncWatch(): void {
 		const next = provider();
@@ -140,6 +178,8 @@ export default function (pi: ExtensionAPI): void {
 	function stop(): void {
 		if (timer) clearInterval(timer);
 		timer = undefined;
+		if (pacingExpiryTimer) clearTimeout(pacingExpiryTimer);
+		pacingExpiryTimer = undefined;
 		stopWatch?.();
 		stopWatch = undefined;
 		watchedProvider = undefined;
@@ -172,7 +212,7 @@ export default function (pi: ExtensionAPI): void {
 	});
 
 	pi.on("tool_call", (_event, ctx) => {
-		if (!pacingEnabled || !isOpenAIModel(ctx.model) || !pacing) return;
+		if (!pacingIsEnforced() || !isOpenAIModel(ctx.model) || !pacing) return;
 		if (pacing.warningPending) {
 			markPacingWarningSent(pacingLedger, pacing.day);
 			pacing.warningPending = false;
@@ -199,25 +239,46 @@ export default function (pi: ExtensionAPI): void {
 	});
 
 	pi.registerCommand("usage", {
-		description: "Show Codex subscription usage and weekly pacing (status | pacing on|off)",
+		description: "Show Codex subscription usage and weekly pacing (status | pacing on|off|off daytime)",
 		getArgumentCompletions: (prefix) =>
-			["status", "pacing on", "pacing off"]
+			["status", "pacing on", "pacing off", "pacing off daytime"]
 				.filter((value) => value.startsWith(prefix))
 				.map((value) => ({ value, label: value })),
 		handler: async (args, ctx) => {
 			const action = args.trim().toLowerCase();
 			if (action === "pacing on") {
 				pacingEnabled = true;
+				pacingDisabledUntil = undefined;
+				clearPacingDisabledUntil();
+				schedulePacingExpiry();
 				publishPacing();
 				ctx.ui.notify("usage: Codex pacing enabled", "info");
 				return;
 			}
+			if (action === "pacing off daytime") {
+				const disabledUntil = daytimePacingEnd(new Date());
+				if (disabledUntil.getTime() <= Date.now()) {
+					ctx.ui.notify("usage: daytime pacing already ended at 21:00", "warning");
+					return;
+				}
+				pacingEnabled = true;
+				pacingDisabledUntil = disabledUntil.toISOString();
+				savePacingDisabledUntil(pacingDisabledUntil);
+				schedulePacingExpiry();
+				publishPacing();
+				ctx.ui.notify(`usage: Codex pacing disabled until ${formatLocalDateTime(pacingDisabledUntil)}`, "warning");
+				return;
+			}
 			if (action === "pacing off") {
 				pacingEnabled = false;
+				pacingDisabledUntil = undefined;
+				clearPacingDisabledUntil();
+				schedulePacingExpiry();
 				publishPacing();
 				ctx.ui.notify("usage: Codex pacing disabled for this session", "warning");
 				return;
 			}
+			const disabledUntil = activePacingDisabledUntil();
 			const week = findWindow(last?.snapshot, WEEK_LABEL);
 			const fiveHour = findWindow(last?.snapshot, FIVE_HOUR_LABEL);
 			ctx.ui.notify(
@@ -225,7 +286,9 @@ export default function (pi: ExtensionAPI): void {
 					`usage provider: ${last?.snapshot.provider ?? "unknown"}`,
 					`Codex week: ${percent(week?.usedPercent)}${week?.resetsAt ? `, resets ${formatLocalDateTime(week.resetsAt)}` : ""}`,
 					`Codex 5h: ${fiveHour ? percent(fiveHour.usedPercent) : "none"} (informational)`,
-					`pacing: ${pacingEnabled ? "enabled" : "disabled for this session"}`,
+					disabledUntil
+						? `pacing: disabled until ${formatLocalDateTime(disabledUntil)}`
+						: `pacing: ${pacingIsEnforced() ? "enabled" : "disabled for this session"}`,
 					...(pacing
 						? [
 								`pacing period (started ${formatLocalDateTime(pacing.day)}): ${percent(pacing.usedTodayPercent)} used of ${percent(pacing.allowancePercent)}, ${percent(pacing.remainingTodayPercent)} remaining`,

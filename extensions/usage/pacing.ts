@@ -1,11 +1,12 @@
 /** Personal Codex weekly-usage pacing, persisted across pi sessions. */
 
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
 export const CODEX_WEEKLY_STOP_PERCENT = 100;
 export const CODEX_PACING_WARNING_PERCENT = 90;
+export const CODEX_DAYTIME_END_HOUR = 21;
 
 interface DayRecord {
 	allowancePercent: number;
@@ -54,6 +55,13 @@ export function pacingPeriodStart(now: Date, resetAt: Date): Date {
 	);
 	if (start.getTime() > now.getTime()) start.setDate(start.getDate() - 1);
 	return start;
+}
+
+/** The local 21:00 cutoff used by the daytime pacing override. */
+export function daytimePacingEnd(now: Date): Date {
+	const end = new Date(now);
+	end.setHours(CODEX_DAYTIME_END_HOUR, 0, 0, 0);
+	return end;
 }
 
 /** Number of reset-anchored local pacing periods through the weekly reset. */
@@ -171,6 +179,49 @@ function ledgerPath(): string {
 		"openai",
 		"pacing.json",
 	);
+}
+
+function overridePath(): string {
+	return join(
+		process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent"),
+		"cache",
+		"usage-status",
+		"openai",
+		"pacing-override.json",
+	);
+}
+
+/** Load a future local-time pacing override, if one has been persisted. */
+export function loadPacingDisabledUntil(): string | undefined {
+	try {
+		const parsed = JSON.parse(readFileSync(overridePath(), "utf8")) as { disabledUntil?: unknown };
+		if (typeof parsed.disabledUntil !== "string") return undefined;
+		const timestamp = new Date(parsed.disabledUntil).getTime();
+		return Number.isFinite(timestamp) && timestamp > Date.now() ? parsed.disabledUntil : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+export function savePacingDisabledUntil(disabledUntil: string): void {
+	const path = overridePath();
+	const dir = join(path, "..");
+	try {
+		mkdirSync(dir, { recursive: true });
+		const temporary = `${path}.${process.pid}.tmp`;
+		writeFileSync(temporary, JSON.stringify({ disabledUntil }), { encoding: "utf8", mode: 0o600 });
+		renameSync(temporary, path);
+	} catch {
+		// Pacing is advisory. An unwritable cache must not break usage polling.
+	}
+}
+
+export function clearPacingDisabledUntil(): void {
+	try {
+		unlinkSync(overridePath());
+	} catch {
+		// The override is already absent or the cache is unwritable.
+	}
 }
 
 export function loadPacingLedger(): PacingLedger | undefined {

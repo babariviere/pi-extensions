@@ -43,7 +43,17 @@ test("renders Codex pacing state", () => {
 		},
 	} satisfies UsagePacingEvent;
 	assert.equal(stripAnsi(renderUsageLine(snapshot, plainTheme, pacing)), "Codex pace:on 42/60%");
-	assert.equal(stripAnsi(renderUsageLine(snapshot, plainTheme, { enforced: false })), "Codex pace:off");
+	const disabledUntil = new Date();
+	disabledUntil.setHours(21, 0, 0, 0);
+	assert.equal(
+		stripAnsi(
+			renderUsageLine(snapshot, plainTheme, {
+				enforced: false,
+				disabledUntil: disabledUntil.toISOString(),
+			}),
+		),
+		`Codex pace:off →${String(disabledUntil.getHours()).padStart(2, "0")}:00`,
+	);
 	assert.equal(
 		stripAnsi(
 			renderUsageLine(snapshot, plainTheme, {

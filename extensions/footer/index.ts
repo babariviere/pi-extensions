@@ -110,8 +110,17 @@ function usageColor(p: number): "error" | "warning" | "success" {
 	return "success";
 }
 
+function formatPacingTime(value: string): string | undefined {
+	const date = new Date(value);
+	if (!Number.isFinite(date.getTime())) return undefined;
+	return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+}
+
 function formatPacingStatus(pacing: UsagePacingEvent, theme: Theme): string {
-	if (pacing.enforced === false) return theme.fg("warning", "pace:off");
+	if (pacing.enforced === false) {
+		const until = pacing.disabledUntil ? formatPacingTime(pacing.disabledUntil) : undefined;
+		return theme.fg("warning", until ? `pace:off →${until}` : "pace:off");
+	}
 	const status = pacing.pacing;
 	if (!status) return theme.fg("success", "pace:on");
 	const used = Math.round(clampPercent(status.usedTodayPercent));

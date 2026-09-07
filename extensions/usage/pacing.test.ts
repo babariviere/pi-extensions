@@ -1,6 +1,16 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { markPacingWarningSent, observeWeeklyUsage, pacingPeriodStart, remainingPacingDays } from "./pacing.ts";
+import {
+	daytimePacingEnd,
+	markPacingWarningSent,
+	observeWeeklyUsage,
+	pacingPeriodStart,
+	remainingPacingDays,
+} from "./pacing.ts";
+
+test("ends the daytime pacing override at local 21:00", () => {
+	assert.deepEqual(daytimePacingEnd(new Date(2025, 0, 1, 14, 30)), new Date(2025, 0, 1, 21, 0));
+});
 
 test("anchors pacing periods to the weekly reset's local time", () => {
 	const reset = new Date(2025, 0, 4, 8, 42, 10);

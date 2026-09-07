@@ -18,7 +18,7 @@ test("recognizes published pacing state and a cleared pacing state", () => {
 		}),
 		true,
 	);
-	assert.equal(isUsagePacingEvent({ enforced: false }), true);
+	assert.equal(isUsagePacingEvent({ enforced: false, disabledUntil: "2025-01-01T21:00:00.000Z" }), true);
 	assert.equal(isUsagePacingEvent({}), true);
 });
 

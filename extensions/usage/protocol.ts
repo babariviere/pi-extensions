@@ -14,14 +14,17 @@ export interface UsagePacingEvent {
 	pacing?: import("./pacing.ts").PacingStatus;
 	/** Whether pacing is currently allowed to stop tool calls. */
 	enforced?: boolean;
+	/** Local timestamp at which a temporary pacing override expires. */
+	disabledUntil?: string;
 }
 
 /** Narrow an untyped bus payload to a Codex pacing event. */
 export function isUsagePacingEvent(data: unknown): data is UsagePacingEvent {
 	if (!data || typeof data !== "object") return false;
-	const { pacing, enforced } = data as UsagePacingEvent;
+	const { pacing, enforced, disabledUntil } = data as UsagePacingEvent;
 	return (
 		(enforced === undefined || typeof enforced === "boolean") &&
+		(disabledUntil === undefined || typeof disabledUntil === "string") &&
 		(pacing === undefined ||
 			(typeof pacing === "object" &&
 				typeof pacing.blocked === "boolean" &&
