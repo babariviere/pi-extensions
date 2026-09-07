@@ -25,6 +25,7 @@ import {
 	USAGE_PACING_EVENT,
 	USAGE_REQUEST_EVENT,
 	USAGE_SNAPSHOT_EVENT,
+	type UsagePacingEvent,
 	type UsageSnapshot,
 } from "../usage/protocol.ts";
 
@@ -109,6 +110,16 @@ function usageColor(p: number): "error" | "warning" | "success" {
 	return "success";
 }
 
+function formatPacingStatus(pacing: UsagePacingEvent, theme: Theme): string {
+	if (pacing.enforced === false) return theme.fg("warning", "pace:off");
+	const status = pacing.pacing;
+	if (!status) return theme.fg("success", "pace:on");
+	const used = Math.round(clampPercent(status.usedTodayPercent));
+	const allowance = Math.round(clampPercent(status.allowancePercent));
+	const label = status.blocked ? `pace:blocked ${used}/${allowance}%` : `pace:on ${used}/${allowance}%`;
+	return theme.fg(status.blocked ? "error" : "success", label);
+}
+
 /** Build the left "context gauge" segment: `ctx ━━━━──── 42% 84k/200k`. */
 function renderContextGauge(
 	percent: number,
@@ -125,15 +136,12 @@ function renderContextGauge(
 }
 
 /** Build a subscription usage line, including every reported window reset. */
-export function renderUsageLine(snapshot: UsageSnapshot, theme: Theme, pacingEnabled?: boolean): string {
+export function renderUsageLine(snapshot: UsageSnapshot, theme: Theme, pacing?: UsagePacingEvent): string {
 	const dim = (s: string) => theme.fg("dim", s);
 	const isCodex = snapshot.provider === "openai";
 	const provider = isCodex ? "Codex" : "Claude";
 	const coloredProvider = isCodex ? colorizeCodex(provider) : colorizeAnthropic(provider);
-	const pacingSegment =
-		isCodex && pacingEnabled !== undefined
-			? theme.fg(pacingEnabled ? "success" : "warning", `pacing ${pacingEnabled ? "on" : "off"}`)
-			: "";
+	const pacingSegment = isCodex && pacing ? formatPacingStatus(pacing, theme) : "";
 
 	if (snapshot.error) return [coloredProvider, dim(snapshot.error), pacingSegment].filter(Boolean).join(" ");
 	if (snapshot.windows.length === 0) return pacingSegment ? `${coloredProvider} ${pacingSegment}` : "";
@@ -252,7 +260,7 @@ export default function (pi: ExtensionAPI): void {
 
 	// Claude usage state, fed by the `usage` extension over the event bus.
 	let usageSnapshot: UsageSnapshot | undefined;
-	let codexPacingEnabled: boolean | undefined;
+	let codexPacing: UsagePacingEvent | undefined;
 	let lastModel: { provider?: string; id?: string } | undefined;
 
 	pi.events.on(USAGE_SNAPSHOT_EVENT, (data) => {
@@ -264,7 +272,7 @@ export default function (pi: ExtensionAPI): void {
 	pi.events.on(USAGE_PACING_EVENT, (data) => {
 		if (!isUsagePacingEvent(data)) return;
 		// Older publishers omit `enforced`; retain their safe, enforced default.
-		codexPacingEnabled = data.enforced ?? true;
+		codexPacing = { ...data, enforced: data.enforced ?? true };
 		tuiRef?.requestRender();
 	});
 
@@ -321,10 +329,10 @@ export default function (pi: ExtensionAPI): void {
 					const showCodex = isOpenAIModel(activeModel);
 					const showClaude = isAnthropicModel(activeModel);
 					if (usageSnapshot && (usageSnapshot.provider === "openai" ? showCodex : showClaude)) {
-						const usageLine = renderUsageLine(usageSnapshot, theme, showCodex ? codexPacingEnabled : undefined);
+						const usageLine = renderUsageLine(usageSnapshot, theme, showCodex ? codexPacing : undefined);
 						if (usageLine) lines.push(truncateToWidth(usageLine, width, theme.fg("dim", "...")));
-					} else if (showCodex && codexPacingEnabled !== undefined) {
-						const pacingLine = renderUsageLine({ provider: "openai", windows: [] }, theme, codexPacingEnabled);
+					} else if (showCodex && codexPacing) {
+						const pacingLine = renderUsageLine({ provider: "openai", windows: [] }, theme, codexPacing);
 						lines.push(truncateToWidth(pacingLine, width, theme.fg("dim", "...")));
 					}
 
