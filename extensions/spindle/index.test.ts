@@ -5,8 +5,9 @@ import { FULL_CODE_GUIDANCE } from "./index.ts";
 test("full-code guidance requires dedicated tools for manual edits", () => {
 	assert.match(
 		FULL_CODE_GUIDANCE,
-		/Manual file edits must use `pi\.edit\(\{ path, edits: \[\{ oldText, newText \}\] \}\)` or `pi\.write`\./,
+		/Manual file edits must use `pi\.edit\(\{ path, edits: \[\{ oldText, newText \}\] \}\)`, `pi\.write`, or `pi\.applyPatch\(\{ patch: π\.patch \}\)`\./,
 	);
+	assert.match(FULL_CODE_GUIDANCE, /pass patch text through `payloads`, not an inline string\./);
 	assert.match(FULL_CODE_GUIDANCE, /If `pi\.edit` fails, reread the target file and retry with updated exact text\./);
 	assert.match(
 		FULL_CODE_GUIDANCE,

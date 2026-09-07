@@ -115,7 +115,7 @@ globalThis.process = Object.freeze({
   arch: __spindleProcessInfo.arch,
   cwd: () => __spindleProcessInfo.cwd,
 });
-const __piToolNames = ["read","bash","exec","edit","write","grep","find","ls"];
+const __piToolNames = ["read","bash","exec","edit","write","applyPatch","grep","find","ls"];
 const __piStringFields = { bash: "command", read: "path", ls: "path", grep: "pattern", find: "pattern" };
 // Per-tool key aliases. The runtime normalizes them to the canonical form
 // before the host validates args; unit-converting aliases are handled separately

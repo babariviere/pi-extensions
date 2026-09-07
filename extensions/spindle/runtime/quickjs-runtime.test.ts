@@ -354,6 +354,23 @@ test("a wide Promise.all reports progress without the program asking", async () 
 	);
 });
 
+test("pi.applyPatch dispatches its payload unchanged", async () => {
+	let receivedRef: string | undefined;
+	let receivedArgs: unknown;
+	const result = await new QuickJsRuntime().execute(
+		"return await pi.applyPatch({ patch: π.patch });",
+		async (ref, args) => {
+			receivedRef = ref;
+			receivedArgs = args;
+			return { ok: true };
+		},
+		{ ...baseOptions, strings: { patch: "*** Begin Patch\n*** End Patch" } },
+	);
+	assert.equal(result.terminationReason, "completed");
+	assert.equal(receivedRef, "pi.applyPatch");
+	assert.deepEqual(receivedArgs, { patch: "*** Begin Patch\n*** End Patch" });
+});
+
 test("a batch edit accepts the same short keys as the single-edit form", async () => {
 	let received: Record<string, unknown> | undefined;
 	const result = await new QuickJsRuntime().execute(

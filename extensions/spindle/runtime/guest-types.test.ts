@@ -44,6 +44,19 @@ test("guest code type-checks with process.env and pi.bash extras", () => {
 	assert.deepEqual(checked.errors, []);
 });
 
+test("guest code type-checks pi.applyPatch and its structured result", () => {
+	const checked = typeCheckSpindleCode(
+		"const result = await pi.applyPatch({ patch: π.patch }); return result.details.changes[0]?.moveTo;",
+		guestTypeDeclarations(true),
+	);
+	assert.deepEqual(checked.errors, []);
+});
+
+test("pi.applyPatch rejects unknown keys at the type level", () => {
+	const declarations = guestTypeDeclarations(true);
+	assert.ok(typeCheckSpindleCode("await pi.applyPatch({ patch: 'x', path: 'y' });", declarations).errors.length > 0);
+});
+
 test("pi.bash extras reject unknown keys at the type level", () => {
 	const checked = typeCheckSpindleCode(
 		"await pi.bash({ command: 'ls', workdirectory: '/tmp' });",

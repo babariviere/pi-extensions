@@ -99,8 +99,8 @@ interface SpindleToolsApi {
 // runtime proxy coerces it to { <primaryField>: string }. Lets the model write
 // the natural form (pi.bash("ls")) instead of pi.bash({ command: "ls" }).
 // Return shapes differ by tool: read/grep/find/ls return their text as a bare
-// string (e.g. const src: string = await pi.read({ path })); bash/edit/write
-// return { ok, output, details } (e.g. const { output } = await pi.bash(...)).
+// string (e.g. const src: string = await pi.read({ path })); bash/edit/write/
+// applyPatch return { ok, output, details } (e.g. const { output } = await pi.bash(...)).
 // Common alias keys (cmd→command, query→pattern, file→path, dir→path) and a
 // flat edit shape ({ path, oldText, newText }) are also accepted; the runtime
 // proxy normalizes them to the canonical form before the host validates args.
@@ -130,6 +130,7 @@ interface PiToolsApi {
   edit(path: string, oldText: string, newText: string): Promise<{ ok: true; output: string; details: unknown }>;
   write(args: { path: string; content: string } | { file: string; content: string } | { path: string; contents: string } | { path: string; body: string } | { path: string; text: string }): Promise<{ ok: true; output: string; details: unknown }>;
   write(path: string, content: string): Promise<{ ok: true; output: string; details: unknown }>;
+  applyPatch(args: { patch: string }): Promise<{ ok: true; output: string; details: { changes: Array<{ kind: "add" | "update" | "delete" | "move"; path: string; moveTo?: string }> } }>;
   grep(args: string | { pattern: string; path?: string; glob?: string; globPattern?: string; ignoreCase?: boolean; ic?: boolean; caseInsensitive?: boolean; literal?: boolean; context?: number; ctx?: number; limit?: number; max?: number } | { query: string; path?: string; glob?: string; globPattern?: string; ignoreCase?: boolean; ic?: boolean; caseInsensitive?: boolean; literal?: boolean; context?: number; ctx?: number; limit?: number; max?: number } | { regex: string; path?: string; glob?: string; globPattern?: string; ignoreCase?: boolean; ic?: boolean; caseInsensitive?: boolean; literal?: boolean; context?: number; ctx?: number; limit?: number; max?: number } | { search: string; path?: string; glob?: string; globPattern?: string; ignoreCase?: boolean; ic?: boolean; caseInsensitive?: boolean; literal?: boolean; context?: number; ctx?: number; limit?: number; max?: number }): Promise<string>;
   grep(pattern: string, path?: string, limit?: number): Promise<string>;
   find(args: string | { pattern: string; path?: string; limit?: number; max?: number } | { query: string; path?: string; limit?: number; max?: number } | { regex: string; path?: string; limit?: number; max?: number } | { search: string; path?: string; limit?: number; max?: number }): Promise<string>;

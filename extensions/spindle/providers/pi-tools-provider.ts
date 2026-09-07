@@ -12,6 +12,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { readFileSync, statSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
+import { createApplyPatchToolDefinition } from "./apply-patch.ts";
 import { createSpindleBashToolDefinition } from "./spindle-bash-tool.ts";
 import { createSpindleExecToolDefinition } from "./spindle-exec-tool.ts";
 import { runAbortable, throwIfAborted } from "../async-settlement.ts";
@@ -206,8 +207,8 @@ export class PiToolsProvider implements SpindleProvider {
 		this.#cwd = cwd;
 		this.#readGuard = sandbox?.readGuard;
 		this.#readMaxBytes = limits?.readMaxBytes ?? DEFAULT_SPINDLE_CONFIG.executor.readMaxBytes;
-		// The mutating tools are gated: `bash` by the OS sandbox, `write` and
-		// `edit` by a path check. The read tools keep pi's definitions (image
+		// The mutating tools are gated: `bash` by the OS sandbox, and `write`,
+		// `edit`, and `applyPatch` by path checks. The read tools keep pi's definitions (image
 		// handling, truncation and offsets stay identical) but the sandbox's
 		// denyRead roots are checked first, so a sandboxed program cannot read a
 		// credential the OS sandbox would already hide from `bash`.
@@ -220,6 +221,7 @@ export class PiToolsProvider implements SpindleProvider {
 			exec: createSpindleExecToolDefinition(cwd, { wrapArgv: sandbox?.wrapArgv }),
 			edit: createEditToolDefinition(cwd, sandbox?.edit ? { operations: sandbox.edit } : undefined),
 			write: createPreviewWriteToolDefinition(cwd, sandbox?.writeGuard),
+			applyPatch: createApplyPatchToolDefinition(cwd, sandbox?.writeGuard),
 			grep: createGrepToolDefinition(cwd),
 			find: createFindToolDefinition(cwd),
 			ls: createLsToolDefinition(cwd),

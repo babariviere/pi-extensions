@@ -229,11 +229,15 @@ export const projectSpindleAuditArgs = (ref: string, args: Record<string, unknow
 		case "pi.edit":
 		case "pi.write":
 			return projected(args, (output) => copyPath(output, args));
+		case "pi.applyPatch":
+			// Patch text can contain arbitrary file contents. Never persist it.
+			return emptyProjection(args);
 		case "pi.bash":
 			return projected(args, (output) => copyString(output, args, "command"));
 		case "pi.exec":
 			return projected(args, (output) => {
-				if (Array.isArray(args.argv) && args.argv.every((value) => typeof value === "string")) output.argv = [...args.argv];
+				if (Array.isArray(args.argv) && args.argv.every((value) => typeof value === "string"))
+					output.argv = [...args.argv];
 			});
 		case "mesh.publish":
 			return projected(args, (output) => {

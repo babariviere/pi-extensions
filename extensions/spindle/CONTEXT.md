@@ -43,11 +43,14 @@ accepted and silently remapped in `prepareArguments`, but it is no longer
 declared in the tool schema or named in any prompt surface, so nothing teaches a
 model to reach for it.
 
-Full-code prompt guidance requires manual file changes to use `pi.edit` or
-`pi.write`, including the canonical edit shape and reread-on-failure recovery.
-It prohibits manual editing through shell utilities or redirection while
-explicitly allowing project automation such as formatters, generators,
-migrations, builds, and tests.
+Full-code prompt guidance requires manual file changes to use `pi.edit`,
+`pi.write`, or `pi.applyPatch`. Multi-file V4A patches are passed through a
+`payloads` entry and invoked as `pi.applyPatch({ patch: π.patch })`; patch text
+is not embedded in guest code or retained by the durable audit projection. The
+guidance keeps the canonical edit shape and reread-on-failure recovery, prohibits
+manual editing through shell utilities or redirection, and explicitly allows
+project automation such as formatters, generators, migrations, builds, and
+tests.
 
 ## Upstream drift audit
 
@@ -446,6 +449,7 @@ risk/approval hunks by hand.
 | `ui/transcript-types.ts` | `SpindleLogLine`, copied from upstream `src/agents/types.ts`, so the transcript parser does not import a dropped subsystem. |
 | `agents/` | The absorbed `extensions/subagents` code (see below). |
 | `providers/spindle-bash-tool.ts` | Spindle's `pi.bash` definition: wraps pi's bash tool with per-call `cwd` / `env` / `stdin` extras (validated, then applied via per-call `BashOperations`); extras-free calls delegate to the base tool unchanged. The `stdin` path delegates to the shared supervised spawn (`sandbox/supervised-spawn.ts`) and routes through the OS-sandbox wrap. |
+| `providers/apply-patch.ts` | Local `pi.applyPatch` implementation for Codex/OpenAI V4A envelopes. It parses Add/Update/Delete File sections, optional Move to, context hunks, anchors, and End of File; resolves relative paths inside the workspace (including symlink containment), runs every sandbox write guard and validates every file/hunk before the first mutation, and preserves CRLF on updated files. No external patch implementation or dependency is used. |
 | `env-snapshot.ts` | The allowlisted environment snapshot injected as the guest's `process` global; secrets never enter the sandbox. |
 | `session-store.ts` | The session-scoped JSON scratchpad behind the guest's `τ` namespace: key validation, per-value/total byte budgets, the held-key listing the result envelope echoes, and the `describe()` summary a limit error names. Owned by `SpindleState`, so it outlives one program; throws rather than evicting. |
 | `ui/inspect-preview.ts` | Two things the rendered call was hiding. The `π` block: `payloads` is where a program is told to put every awkward value, and the code preview then shows `π.body` with no way to see what `body` is (the sole exception being a payload bound to a `pi.write`, which the write preview renders while composing, and which the block therefore skips). Collapsed it is one dim summary line; expanded, a bold `π.key` header per payload with bounded content. And the τ helpers: `readSpindleStateNotes` / `applySpindleStateNotes` put each operation's value into its own trace row. A local module because `ui/spindle-render.ts` is in the render parity set. |
@@ -490,7 +494,7 @@ risk/approval hunks by hand.
 ### Filesystem sandbox
 
 Upstream has no filesystem guardrail: `providers/pi-tools-provider.ts` built the
-seven core tools with no options, so a `pi.bash` inside `spindle_exec` had the
+original core tools with no options, so a `pi.bash` inside `spindle_exec` had the
 full rights of the pi process. That is fine when a human is watching and a
 liability during an unattended run.
 
@@ -500,7 +504,7 @@ agent cannot `rm -rf ~`. Two enforcement points, one policy:
 | Tool | Mechanism | Why |
 |---|---|---|
 | `bash` | an in-repo Seatbelt profile via `/usr/bin/sandbox-exec` (macOS only, see `sandbox/seatbelt.ts`) | A shell command can do anything; only the kernel can bound it |
-| `write`, `edit` | direct path check against the write allowlist | They take absolute paths and never reach a shell, so the check is exact and needs no OS support |
+| `write`, `edit`, `applyPatch` | direct path check against the write allowlist | They never reach a shell, so the check is exact and needs no OS support. `applyPatch` additionally requires relative workspace-contained paths and validates every operation before writing |
 | `read`, `grep`, `find`, `ls` | direct path check against the `denyRead` roots (`SandboxController.readGuard()` → `PiToolsSandbox.readGuard`) | The tools keep pi's own definitions (image handling / truncation / offsets stay byte-identical), but while a policy enforces, the `denyRead` roots that bind `bash` bind the read tools too. Without this, a sandboxed program could pull a credential through `pi.read` and send it out through any channel `bash` may reach. Reads outside the denied roots are untouched |
 
 There is no optional dependency and no graceful degradation. An enforcing mode

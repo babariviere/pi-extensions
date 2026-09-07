@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { test } from "node:test";
@@ -29,6 +29,49 @@ test("describe returns undefined for a tool that does not exist", async () => {
 
 test("invoke reports an unknown tool as unknown", async () => {
 	await assert.rejects(() => provider().invoke("nope", {}, context), /Unknown Pi tool: nope/);
+});
+
+test("applyPatch is described with its patch schema and invokes through the provider", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "spindle-provider-patch-"));
+	const patchProvider = new PiToolsProvider(dir, undefined, undefined);
+	const descriptor = await patchProvider.describe("applyPatch", context);
+	const schema = descriptor?.inputSchema as { properties?: { patch?: { type?: string } }; required?: string[] };
+	assert.equal(schema.properties?.patch?.type, "string");
+	assert.deepEqual(schema.required, ["patch"]);
+
+	const result = (await patchProvider.invoke(
+		"applyPatch",
+		{ patch: "*** Begin Patch\n*** Add File: added.txt\n+content\n*** End Patch" },
+		context,
+	)) as { ok: boolean; output: string; details: { changes: unknown[] } };
+	assert.equal(result.ok, true);
+	assert.match(result.output, /Applied patch successfully/);
+	assert.equal(result.details.changes.length, 1);
+	assert.equal(readFileSync(join(dir, "added.txt"), "utf8"), "content");
+});
+
+test("applyPatch enforces the sandbox write guard before changing any file", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "spindle-provider-patch-"));
+	const seen: string[] = [];
+	const patchProvider = new PiToolsProvider(dir, undefined, undefined, {
+		writeGuard: (path) => {
+			seen.push(path);
+			if (path.endsWith("denied.txt")) throw new Error("sandbox denied");
+		},
+	});
+	await assert.rejects(
+		() =>
+			patchProvider.invoke(
+				"applyPatch",
+				{
+					patch: "*** Begin Patch\n*** Add File: allowed.txt\n+ok\n*** Add File: denied.txt\n+no\n*** End Patch",
+				},
+				context,
+			),
+		/sandbox denied/,
+	);
+	assert.deepEqual(seen, [resolve(dir, "allowed.txt"), resolve(dir, "denied.txt")]);
+	assert.equal(existsSync(join(dir, "allowed.txt")), false);
 });
 
 // A subagent is bounded by its sandbox mode, not by a tool list, so the guard
