@@ -17,6 +17,25 @@ Takes no arguments. Resolves to `Array<{ name: string; scope: "project" | "user"
 return await agents.list();
 ```
 
+## `agents.models()`
+
+Call this before choosing a model override rather than guessing identifiers.
+Takes no arguments. Returns `{ defaultModel: string | null, models: [...] }`.
+Each model has an exact provider-qualified `id` accepted by the `model` override,
+plus `name`, `provider`, `reasoning`, `input` (text/image), `contextWindow`, and `maxTokens`.
+The catalog is filtered by the current runtime model catalog, caller provider,
+`enabledModels`, and the subagent price ceiling. Missing catalog or required pricing
+produces an empty list. No credentials or provider connection details are returned.
+
+`defaultModel` identifies the generic agent's configured or inherited default, not
+a guarantee that it passes policy. Named agents can have their own defaults.
+Discovery is read-only, does not launch a child, and does not check provider
+reachability. Launch-time validation remains authoritative.
+
+```ts
+return await agents.models();
+```
+
 ## `agents.run(request)`
 
 Runs one agent and resolves to a single result. Blocks for at most the wait window (`waitMs`, default `agents.waitMs` = 10 min), **not** for the child's whole lifetime.

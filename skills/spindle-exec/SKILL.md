@@ -54,6 +54,7 @@ await τ.set("index", request);
 - If a task names an external service or needs web research, discover tools before declaring the capability unavailable. `tools.search({ query: "web search" })` finds registered tools, including snake_case names such as `web_search`. `tools` is top-level, so use `tools.search(...)`, not `extensions.tools.search(...)`.
 - Use `mcp.list()` or `mcp.search({ query })` for lazy MCP services. Connect the selected server if needed, then search and describe its action before `mcp.call(server, tool, args)`.
 - `agents.run`, `agents.runAll`, `agents.start`, and `agents.wait` run subagents. A `running` result is not a failure.
+- Use `agents.models()` to discover permitted model override IDs, capabilities, and the generic agent default before selecting a subagent model.
 
 ## Execution
 

@@ -4,6 +4,16 @@ import { test } from "node:test";
 import { guestTypeDeclarations } from "./guest-types.ts";
 import { typeCheckSpindleCode } from "./type-checker.ts";
 
+test("agents.models metadata type-checks in both code modes", () => {
+	for (const full of [true, false]) {
+		const checked = typeCheckSpindleCode(
+			"const catalog = await agents.models(); const id: string | null = catalog.defaultModel; return catalog.models.map(m => ({ id: m.id, images: m.input.includes('image'), reasoning: m.reasoning }));",
+			guestTypeDeclarations(full),
+		);
+		assert.deepEqual(checked.errors, []);
+	}
+});
+
 test("full code mode declares the tools discovery namespace", () => {
 	const declarations = guestTypeDeclarations(true);
 	assert.match(declarations, /declare const tools: SpindleToolsApi;/);

@@ -346,6 +346,7 @@ globalThis.tools = new Proxy(__toolsBase, {
   deleteProperty() { return true; },
 });
 globalThis.agents = Object.freeze({
+  models: () => __call("agents.models", {}),
   list: () => __call("agents.list", {}),
   run: (args) => __call("agents.run", args),
   runAll: (args) => __call("agents.runAll", Array.isArray(args) ? { tasks: args } : args),

@@ -142,6 +142,20 @@ interface SpindleAgentDefinition {
   scope: "project" | "user";
   description?: string;
 }
+interface SpindleAgentModels {
+  /** Generic agent default, which may not be permitted as an explicit override. */
+  defaultModel: string | null;
+  models: Array<{
+    /** Exact provider-qualified identifier accepted as a model override. */
+    id: string;
+    name: string;
+    provider: string;
+    reasoning: boolean;
+    input: ("text" | "image")[];
+    contextWindow: number;
+    maxTokens: number;
+  }>;
+}
 interface SpindleAgentRequest {
   /** Name of a discovered agent (see agents.list()). */
   agent: string;
@@ -223,6 +237,8 @@ interface SpindleAgentStatus {
 }
 interface SpindleAgentsApi {
   list(): Promise<SpindleAgentDefinition[]>;
+  /** Discover permitted model overrides without launching a child or checking reachability. */
+  models(): Promise<SpindleAgentModels>;
   run(args: SpindleAgentRequest & SpindleAgentBatchTiming): Promise<SpindleAgentResult>;
   runAll(args: { tasks: SpindleAgentRequest[] } & SpindleAgentBatchTiming | SpindleAgentRequest[]): Promise<SpindleAgentResult[]>;
   /** Launch without blocking; the run is not tied to this turn. */

@@ -10,6 +10,7 @@
  *
  * Surface:
  *   agents.list()                    → discovered markdown agent definitions
+ *   agents.models()                  → permitted model overrides and default
  *   agents.run({ task, agent?, … })  → one run, blocks for the wait window
  *   agents.runAll({ tasks: [ … ] })  → batch of runs in parallel
  *   agents.start({ task, … })        → launch without blocking, returns a runId
@@ -36,8 +37,10 @@ import { RunLauncher } from "../agents/backend.ts";
 import { CauseBreaker, type CauseVerdict } from "../agents/cause-breaker.ts";
 import { recordNightCapability } from "../agents/night-journal.ts";
 import { discoverAgentsForCwd } from "../agents/discovery.ts";
+import { subagentModelPriceError } from "../agents/model-policy.ts";
+import { qualifyModel } from "../agents/pi-args.ts";
 import { newRunId } from "../agents/paths.ts";
-import { buildRunRequests, type NormalizedItem } from "../agents/request.ts";
+import { buildRunRequests, type NormalizedItem, validateOverrides } from "../agents/request.ts";
 import { allocateNightWorkspaces, relocateWorkspacePaths, releaseNightWorkspaces } from "../agents/night-workspace.ts";
 import type { OnStatus, RunContext, RunRequest, RunResult } from "../agents/run.ts";
 import { DEFAULT_SPINDLE_CONFIG, MAX_AGENT_TIMEOUT_MS, MIN_AGENT_TIMEOUT_MS } from "../config.ts";
@@ -161,6 +164,12 @@ const startSchema = {
 };
 
 const descriptors: SpindleActionDescriptor[] = [
+	{
+		name: "models",
+		description:
+			"List available subagent model overrides permitted by the caller provider, enabledModels and price ceiling, plus the generic agent default. Use returned IDs as model overrides. Does not check provider reachability.",
+		inputSchema: { type: "object", properties: {}, additionalProperties: false },
+	},
 	{
 		name: "list",
 		description: "List custom agent definitions discovered under ~/.pi/agent/agents and <cwd>/.pi/agents",
@@ -410,6 +419,28 @@ export class SpindleAgentsProvider implements SpindleProvider {
 		const runtime = this.runtimeConfig();
 		const waitMs = (): number => boundedMs(args.waitMs, runtime.waitMs, 0, MAX_AGENT_TIMEOUT_MS);
 		switch (actionName) {
+			case "models":
+				return {
+					defaultModel: qualifyModel(runtime.defaultModel, runtime.parentProvider) ?? null,
+					models: (runtime.models ?? [])
+						.filter((model) => {
+							const id = `${model.provider}/${model.id}`;
+							return (
+								(!runtime.parentProvider || model.provider === runtime.parentProvider) &&
+								!validateOverrides([{ task: "", model: id }], ref.cwd) &&
+								!subagentModelPriceError(id, runtime.models ?? [], runtime.parentProvider)
+							);
+						})
+						.map((model) => ({
+							id: `${model.provider}/${model.id}`,
+							name: model.name,
+							provider: model.provider,
+							reasoning: model.reasoning,
+							input: model.input,
+							contextWindow: model.contextWindow,
+							maxTokens: model.maxTokens,
+						})),
+				};
 			case "list":
 				return discoverAgentsForCwd(ref.cwd).map((agent) => ({
 					name: agent.config.name,

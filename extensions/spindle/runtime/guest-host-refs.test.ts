@@ -45,7 +45,7 @@ const probeCode = [
 	"await tools.call({ ref: 'pi.read', args: {} });",
 	"await mcp.list(); await mcp.search({ query: 'x' }); await mcp.describe({ tool: 'x' });",
 	"await mcp.call('s', 't', {}); await mcp.connect('s');",
-	"await agents.list(); await agents.run({ agent: 'a', task: 't' }); await agents.runAll({ tasks: [] });",
+	"await agents.models(); await agents.list(); await agents.run({ agent: 'a', task: 't' }); await agents.runAll({ tasks: [] });",
 	"await agents.start({ task: 't' }); await agents.wait({ runId: 'r' }); await agents.status(); await agents.cancel();",
 	"await τ.set('k', 1); await τ.get('k'); await τ.keys(); await τ.delete('k'); await τ.clear();",
 	"await mapLimit([1, 2, 3, 4], (x) => x);",
