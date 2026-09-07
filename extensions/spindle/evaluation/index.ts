@@ -200,6 +200,9 @@ const metricsAt = (value: unknown, location: string): SpindleEditMetricsV1 => {
 		object.droppedRepeatedAttempts === undefined
 			? undefined
 			: nonNegativeInteger(object.droppedRepeatedAttempts, `${location}.droppedRepeatedAttempts`);
+	if (droppedRepeatedAttempts !== undefined && droppedRepeatedAttempts > 0) {
+		fail(`${location}.droppedRepeatedAttempts`, "cannot evaluate truncated repeated-edit metrics");
+	}
 	return {
 		version: 1,
 		profile: object.profile as SpindleEditMetricsV1["profile"],

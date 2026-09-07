@@ -65,6 +65,18 @@ const boundedLocalPath = (value: unknown): string | undefined => {
 	return path !== undefined && Buffer.byteLength(path, "utf8") <= MAX_PROJECTED_PATH_BYTES ? path : undefined;
 };
 
+const applyPatchPaths = (patch: unknown): string[] => {
+	if (typeof patch !== "string") return [];
+	const paths = new Set<string>();
+	for (const line of patch.split(/\r?\n/)) {
+		const match = /^\*\*\* (?:(?:Add|Update|Delete) File|Move to): (.+)$/.exec(line);
+		const path = boundedLocalPath(match?.[1]);
+		if (path !== undefined) paths.add(path);
+		if (paths.size >= MAX_PROJECTED_APPLY_PATCH_CHANGES) break;
+	}
+	return [...paths].sort();
+};
+
 const copyString = (
 	output: Record<string, SpindleTraceJsonValue>,
 	args: Record<string, unknown>,
@@ -239,8 +251,11 @@ export const projectSpindleAuditArgs = (ref: string, args: Record<string, unknow
 		case "pi.write":
 			return projected(args, (output) => copyPath(output, args));
 		case "pi.applyPatch":
-			// Patch text can contain arbitrary file contents. Never persist it.
-			return emptyProjection(args);
+			// Retain only bounded operation paths. Patch and source text never persist.
+			return projected(args, (output) => {
+				const paths = applyPatchPaths(args.patch);
+				if (paths.length > 0) output.paths = paths;
+			});
 		case "pi.bash":
 			return projected(args, (output) => copyString(output, args, "command"));
 		case "pi.exec":

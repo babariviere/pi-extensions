@@ -69,9 +69,10 @@ the elapsed duration, and the active model's `anthropic` / `openai` /
 `pi.bash` / `pi.exec` route; records guard-stage refusals and overall outcome;
 and retains bounded known-file and repeated-attempt aggregates. It does not copy
 guest code, commands, patch or source bodies, prompts, credentials, or errors.
-Known direct-tool paths come from projected arguments. Successful applyPatch
-results contribute only allowlisted `kind`, `path`, and `moveTo` metadata,
-with URL paths rejected, each path capped at 512 UTF-8 bytes, and each path list
+Known direct-tool paths come from projected arguments. ApplyPatch arguments
+contribute only bounded operation paths, including failed attempts, while successful
+results add allowlisted `kind`, `path`, and `moveTo` metadata. URL paths are
+rejected, each path is capped at 512 UTF-8 bytes, and each path list
 capped at 128 entries. The field is optional so older persisted details continue
 to render unchanged, and the existing aggregate details cap remains authoritative.
 

@@ -56,10 +56,18 @@ const boundedPath = (value: unknown): string | undefined => {
 };
 
 const projectedPatchPaths = (operation: SpindleExecutionTraceOperationV1): string[] => {
-	if (typeof operation.result !== "object" || operation.result === null || Array.isArray(operation.result)) return [];
-	const changes = operation.result.changes;
-	if (!Array.isArray(changes)) return [];
 	const paths = new Set<string>();
+	if (Array.isArray(operation.args.paths)) {
+		for (const candidate of operation.args.paths) {
+			const path = boundedPath(candidate);
+			if (path !== undefined) paths.add(path);
+		}
+	}
+	if (typeof operation.result !== "object" || operation.result === null || Array.isArray(operation.result)) {
+		return [...paths];
+	}
+	const changes = operation.result.changes;
+	if (!Array.isArray(changes)) return [...paths];
 	for (const change of changes) {
 		if (typeof change !== "object" || change === null || Array.isArray(change)) continue;
 		if (typeof change.kind !== "string" || !APPLY_PATCH_CHANGE_KINDS.has(change.kind)) continue;

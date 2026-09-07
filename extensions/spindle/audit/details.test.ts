@@ -29,6 +29,10 @@ const metricTrace = () => {
 			],
 		},
 	});
+	const failedPatch = recorder.issueCall("pi.applyPatch", {
+		patch: "*** Begin Patch\n*** Update File: src/c.ts\n@@\n-private patch body\n+replacement\n*** End Patch",
+	});
+	failedPatch.fail("invoke", new Error("private error"));
 	const bash = recorder.issueCall("pi.bash", { command: "npm test" });
 	bash.succeed({ ok: true });
 	const exec = recorder.issueCall("pi.exec", { argv: ["npm", "run", "typecheck"] });
@@ -49,11 +53,14 @@ test("persisted edit metrics are deterministic aggregates of the projected trace
 		routes: {
 			edit: { attempts: 2, successes: 1, failures: 1 },
 			write: { attempts: 1, successes: 1, failures: 0 },
-			applyPatch: { attempts: 1, successes: 1, failures: 0 },
+			applyPatch: { attempts: 2, successes: 1, failures: 1 },
 			scripted: { attempts: 2, successes: 1, failures: 1 },
 		},
 		knownFiles: ["src/a.ts", "src/b.ts", "src/c.ts", "src/d.ts", "src/e.ts"],
-		repeatedAttempts: [{ path: "src/a.ts", attempts: 2 }],
+		repeatedAttempts: [
+			{ path: "src/a.ts", attempts: 2 },
+			{ path: "src/c.ts", attempts: 2 },
+		],
 		guardRefusals: 1,
 		durationMs: 124,
 		outcome: "failed",

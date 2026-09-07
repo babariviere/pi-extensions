@@ -34,7 +34,7 @@ Fields:
 - `toolCalls` is an optional non-negative integer for all tool calls in the run.
 - `tokens` is an optional pair of non-negative integer `input` and `output` token counts.
 
-Validation rejects unknown fields, malformed route counts, unsorted or duplicate path aggregates, duplicate variant/task assignments, and inputs that do not contain exactly two variants. Optional usage measurements may be omitted per record. Their summaries include `measuredRuns`, and a comparison delta is emitted only when both variants have that measurement.
+Validation rejects unknown fields, malformed route counts, unsorted or duplicate path aggregates, truncated repeated-edit aggregates, duplicate variant/task assignments, and inputs that do not contain exactly two variants. Optional usage measurements may be omitted per record. Their summaries include `measuredRuns`, and a comparison delta is emitted only when both variants have that measurement.
 
 ## Default decision protocol
 

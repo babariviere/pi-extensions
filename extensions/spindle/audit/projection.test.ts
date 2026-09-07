@@ -3,11 +3,13 @@ import { test } from "node:test";
 
 import { projectSpindleAuditArgs, projectSpindleAuditResult } from "./projection.ts";
 
-test("applyPatch audit projection drops patch contents", () => {
-	assert.deepEqual(projectSpindleAuditArgs("pi.applyPatch", { patch: "secret source text" }), {
-		value: {},
-		droppedValues: 1,
-	});
+test("applyPatch audit projection keeps paths but drops patch contents", () => {
+	assert.deepEqual(
+		projectSpindleAuditArgs("pi.applyPatch", {
+			patch: "*** Begin Patch\n*** Update File: src/a.ts\n@@\n-secret source text\n+replacement\n*** End Patch",
+		}),
+		{ value: { paths: ["src/a.ts"] }, droppedValues: 0 },
+	);
 });
 
 test("applyPatch result projection keeps only bounded local path and kind metadata", () => {

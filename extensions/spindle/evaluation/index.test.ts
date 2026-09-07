@@ -129,6 +129,11 @@ test("JSONL validation rejects malformed metrics and duplicate assignments with 
 		() => parseSpindleEvaluationJsonl(jsonl([record("a", "one"), record("a", "one")])),
 		/line 2: duplicate variant and task assignment/,
 	);
+	assert.throws(
+		() =>
+			parseSpindleEvaluationJsonl(jsonl([record("a", "one", { metrics: metrics({ droppedRepeatedAttempts: 1 }) })])),
+		/cannot evaluate truncated repeated-edit metrics/,
+	);
 });
 
 test("representative corpus covers editing and recovery tasks for both variants", () => {
