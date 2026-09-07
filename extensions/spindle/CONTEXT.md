@@ -43,6 +43,12 @@ accepted and silently remapped in `prepareArguments`, but it is no longer
 declared in the tool schema or named in any prompt surface, so nothing teaches a
 model to reach for it.
 
+Full-code prompt guidance requires manual file changes to use `pi.edit` or
+`pi.write`, including the canonical edit shape and reread-on-failure recovery.
+It prohibits manual editing through shell utilities or redirection while
+explicitly allowing project automation such as formatters, generators,
+migrations, builds, and tests.
+
 ## Upstream drift audit
 
 Audited 2026-09-02 against upstream `main` at `1a71fff54d9bfc03de4a8df925df15e65bc82392`

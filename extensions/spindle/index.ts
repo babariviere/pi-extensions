@@ -42,8 +42,9 @@ import { fileURLToPath } from "node:url";
 
 const SPINDLE_EXTENSION_ENTRY_PATH = path.resolve(fileURLToPath(import.meta.url));
 
-const FULL_CODE_GUIDANCE =
+export const FULL_CODE_GUIDANCE =
 	"Spindle full code mode: call Pi tools only through `spindle_exec`, using `pi.*` inside `code`. Search the repository before reading: `pi.find` locates files, `pi.grep` locates text, and `pi.ls` shows structure. Read only identified ranges with `pi.read({path, offset, limit})`; avoid whole-file reads of large, generated, vendored, log, and lock files. Return compact findings, not raw search output or file contents.\n" +
+	"Manual file edits must use `pi.edit({ path, edits: [{ oldText, newText }] })` or `pi.write`. If `pi.edit` fails, reread the target file and retry with updated exact text. Do not use `python`, `sed`, `perl`, `awk`, `cat`, `tee`, or shell redirection for manual edits. Formatters, generators, migrations, builds, and tests are allowed.\n" +
 	'Read tools return text. `pi.bash`, `pi.exec`, `pi.edit`, and `pi.write` return `{ok, output, details}`. Use `pi.exec({argv})` when arguments contain quotes, spaces, or syntax that must not be parsed by a shell; reserve `pi.bash` for shell syntax. Use `payloads` and `π.key` for multiline values. If a task names an external service or needs web research, discover tools before declaring it unavailable: `tools.search({query:"web search"})` finds registered tools. `tools` is a top-level global, not an extension tool. `extensions.tools.search(...)` is accepted only as a compatibility alias. Use `mcp.list()` or `mcp.search({query})` for lazy MCP services. Connect the selected server if needed, then search and describe its action before `mcp.call`. Use `agents.*` for subagents.';
 
 const ORCHESTRATION_ONLY_GUIDANCE =
