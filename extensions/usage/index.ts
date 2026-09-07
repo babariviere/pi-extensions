@@ -4,6 +4,7 @@
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { formatLocalDateTime } from "./format.ts";
 import {
 	FIVE_HOUR_LABEL,
 	USAGE_PACING_EVENT,
@@ -221,12 +222,12 @@ export default function (pi: ExtensionAPI): void {
 			ctx.ui.notify(
 				[
 					`usage provider: ${last?.snapshot.provider ?? "unknown"}`,
-					`Codex week: ${percent(week?.usedPercent)}${week?.resetsAt ? `, resets ${week.resetsAt}` : ""}`,
+					`Codex week: ${percent(week?.usedPercent)}${week?.resetsAt ? `, resets ${formatLocalDateTime(week.resetsAt)}` : ""}`,
 					`Codex 5h: ${fiveHour ? percent(fiveHour.usedPercent) : "none"} (informational)`,
 					`pacing: ${pacingEnabled ? "enabled" : "disabled for this session"}`,
 					...(pacing
 						? [
-								`pacing period (${pacing.day}): ${percent(pacing.usedTodayPercent)} used of ${percent(pacing.allowancePercent)}, ${percent(pacing.remainingTodayPercent)} remaining`,
+								`pacing period (started ${formatLocalDateTime(pacing.day)}): ${percent(pacing.usedTodayPercent)} used of ${percent(pacing.allowancePercent)}, ${percent(pacing.remainingTodayPercent)} remaining`,
 								`days through reset: ${pacing.daysRemaining}`,
 								`blocked: ${pacing.blocked ? "yes" : "no"}`,
 							]
