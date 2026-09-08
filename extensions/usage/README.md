@@ -18,8 +18,10 @@ The weekly budget is divided across fixed local-time windows:
 - Day windows are 07:00 inclusive through 21:00 exclusive.
 - Night windows are 21:00 through the next day's 07:00.
 - A weekday day window has weight 1. A weekday night window has weight 0.5.
-- Every weekend window has weight 0.5. Weekend nights are not compounded to 0.25.
+- Every weekend window has weight 0 and receives no allowance. Friday night remains enabled through Saturday 07:00.
 - Weekend classification uses the window start date. For example, Saturday 21:00 through Sunday 07:00 is a Saturday weekend window.
+
+Weekend work requires an override such as `/usage pacing off daytime` (until 21:00) or `/usage pacing off` (for the session). Override usage still consumes the weekly budget. Previously cached weekend allowances are set to zero; existing weekday allowances stay fixed. If only weekend windows remain before reset, the allowance is zero.
 
 At each window boundary, the remaining weekly budget is allocated across the current and all later windows through the provider's next reset, normalized by their weights. An allowance is fixed when a window is first observed. Unused budget is therefore available to later windows, but polling again during the same window does not change its allowance. The current window is retained when a provider reset occurs in the middle of it, so provider reset does not move the 07:00 or 21:00 calendar boundaries. The first weekly usage observation establishes a baseline, including after a provider reset. Historical usage reduces the remaining weekly budget but does not consume the new window’s allowance. Existing cached window usage is not retroactively adjusted. Persisted usage is tracked by positive cumulative deltas, without double counting.
 

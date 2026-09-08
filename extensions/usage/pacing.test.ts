@@ -59,9 +59,9 @@ test("classifies crossing-midnight windows by their start date", () => {
 	const sunday = pacingWindow(new Date(2025, 0, 12, 7));
 	const monday = pacingWindow(new Date(2025, 0, 13, 7));
 	assert.equal(friday.weight, 0.5);
-	assert.equal(saturday.weight, 0.5);
-	assert.equal(saturdayNight.weight, 0.5);
-	assert.equal(sunday.weight, 0.5);
+	assert.equal(saturday.weight, 0);
+	assert.equal(saturdayNight.weight, 0);
+	assert.equal(sunday.weight, 0);
 	assert.equal(monday.weight, 1);
 });
 
@@ -75,21 +75,66 @@ test("normalizes weekday day, weekday night, and weekend window weights", () => 
 	assert.ok(mondayDay);
 	assert.equal(remainingPacingWindows(new Date(2025, 0, 6, 7), reset), 14);
 	assert.equal(remainingPacingDays(new Date(2025, 0, 6, 7), reset), 14);
-	assert.equal(mondayDay.status.allowancePercent, 100 / 9.5);
+	assert.equal(mondayDay.status.allowancePercent, 100 / 7.5);
 	const mondayNight = observeWeeklyUsage(mondayDay.ledger, {
 		weeklyUsedPercent: 0,
 		resetAt: reset.toISOString(),
 		now: new Date(2025, 0, 6, 21),
 	});
 	assert.ok(mondayNight);
-	assert.equal(mondayNight.status.allowancePercent, 50 / 8.5);
+	assert.equal(mondayNight.status.allowancePercent, 50 / 6.5);
 	const saturdayDay = observeWeeklyUsage(mondayNight.ledger, {
 		weeklyUsedPercent: 0,
 		resetAt: reset.toISOString(),
 		now: new Date(2025, 0, 11, 7),
 	});
 	assert.ok(saturdayDay);
-	assert.equal(saturdayDay.status.allowancePercent, 25);
+	assert.equal(saturdayDay.status.allowancePercent, 0);
+});
+
+test("Friday night remains enabled until Saturday 07:00", () => {
+	const resetAt = new Date(2025, 0, 13, 7).toISOString();
+	const friday = observeWeeklyUsage(undefined, {
+		weeklyUsedPercent: 40,
+		resetAt,
+		now: new Date(2025, 0, 11, 6, 59),
+	});
+	assert.ok(friday);
+	assert.equal(friday.status.allowancePercent, 60);
+	assert.equal(friday.status.blocked, false);
+	const saturday = observeWeeklyUsage(friday.ledger, {
+		weeklyUsedPercent: 40,
+		resetAt,
+		now: new Date(2025, 0, 11, 7),
+	});
+	assert.ok(saturday);
+	assert.equal(saturday.status.allowancePercent, 0);
+	assert.equal(saturday.status.remainingWindowPercent, 0);
+	assert.equal(saturday.status.blocked, true);
+	assert.equal(saturday.status.warningPending, false);
+});
+
+test("cached weekend allowances are excluded even with weekdays remaining", () => {
+	const now = new Date(2025, 0, 12, 21);
+	const resetAt = new Date(2025, 0, 14, 7).toISOString();
+	const ledger: PacingLedger = {
+		version: 3,
+		weekResetAt: resetAt,
+		lastWeeklyPercent: 20,
+		windows: { [now.toISOString()]: { allowancePercent: 10, usedPercent: 2 } },
+	};
+	const result = observeWeeklyUsage(ledger, { weeklyUsedPercent: 23, resetAt, now });
+	assert.ok(result);
+	assert.equal(result.status.allowancePercent, 0);
+	assert.equal(result.status.usedWindowPercent, 5);
+	assert.equal(result.status.blocked, true);
+	const monday = observeWeeklyUsage(result.ledger, {
+		weeklyUsedPercent: 23,
+		resetAt,
+		now: new Date(2025, 0, 13, 7),
+	});
+	assert.ok(monday);
+	assert.equal(monday.status.allowancePercent, 77 / 1.5);
 });
 
 test("allocates the remaining weekly budget across later windows", () => {
@@ -108,7 +153,7 @@ test("allocates the remaining weekly budget across later windows", () => {
 	});
 	assert.ok(later);
 	assert.equal(later.status.usedWindowPercent, 2);
-	assert.equal(later.status.allowancePercent, (78 * 0.5) / 8.5);
+	assert.equal(later.status.allowancePercent, (78 * 0.5) / 6.5);
 	assert.equal(later.status.blocked, false);
 });
 
@@ -222,7 +267,7 @@ test("warns once per window and blocks at the weekly hard stop", () => {
 	});
 	assert.ok(first);
 	const nearLimit = observeWeeklyUsage(first.ledger, {
-		weeklyUsedPercent: 9.5,
+		weeklyUsedPercent: 12.1,
 		resetAt,
 		now: new Date(2025, 0, 6, 7),
 	});

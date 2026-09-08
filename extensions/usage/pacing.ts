@@ -71,7 +71,7 @@ function localDate(year: number, month: number, day: number, hour: number): Date
 function windowWeight(start: Date, kind: PacingWindowKind): number {
 	// Weekend classification uses the window start date. A Saturday 21:00
 	// window is therefore a weekend window even though it ends Sunday morning.
-	if (start.getDay() === 0 || start.getDay() === 6) return 0.5;
+	if (start.getDay() === 0 || start.getDay() === 6) return 0;
 	return kind === "day" ? 1 : 0.5;
 }
 
@@ -223,11 +223,14 @@ export function observeWeeklyUsage(
 	let record = active.windows[windowKey];
 	if (!record) {
 		record = {
-			allowancePercent: (Math.max(0, 100 - weeklyUsedPercent) * current.weight) / totalWeight,
+			allowancePercent: totalWeight > 0 ? (Math.max(0, 100 - weeklyUsedPercent) * current.weight) / totalWeight : 0,
 			usedPercent: 0,
 		};
 		active.windows[windowKey] = record;
 	}
+
+	// Enforce excluded windows even when an older ledger cached a weekend allowance.
+	if (current.weight === 0) record.allowancePercent = 0;
 
 	// Without an earlier poll, historical usage only establishes the baseline.
 	// It already reduces the available weekly budget and must not also consume
