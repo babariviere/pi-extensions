@@ -169,47 +169,8 @@ Globals inside `spindle_exec`:
 - `mapLimit(items, fn, N)` — bounded-concurrency fan-out, the one concurrency
   primitive `Promise.all` cannot express (its inputs have already started, so it
   can never cap width). A bare global: there is no `workflow` namespace.
-  `Promise.all` is instrumented to emit the same activity span when called with
-  4 or more entries, so a wide fan-out is observable on the path models actually
-  use (1,690 of 11,054 recorded programs, vs 47 for the old `workflow.parallel`).
-  The removed `workflow.{pipeline,phase,item,event,log,configure}` members and
-  the bare `parallel` / `pipeline` / `phase` / `log` aliases had 0-7 calls each
-  across that same corpus.
-
-  Per-item progress survived the removal of `workflow.item`, but it is now
-  **inferred rather than declared**: `mapLimit` and the instrumented
-  `Promise.all` already know each element's index, total and outcome, so they
-  emit `spindle.$items` themselves and the program is asked for nothing. This
-  is the structural fix for why `workflow.item` was never called once: its
-  payoff (a nicer widget) was invisible to the model, whose only signal is the
-  returned value, so decorative instrumentation was pure cost. Transitions are
-  batched (32 entries or 120ms, plus a final flush) so a 200-item fan-out does
-  not cost 400 host round-trips, labels come from the element itself (a string,
-  or a conventional `path` / `file` / `id` / `name` key, else `#index`), and
-  fan-outs narrower than 4 emit nothing at all. Flush failures are swallowed:
-  progress must never mask the program's own outcome.
-
-  Items alone render nothing. The **only** consumer of `run.items` in the whole
-  UI is `phaseProgress()` in `ui/widget.ts`, which filters by `phaseId` and is
-  reached only when `run.currentPhaseId` is set; `currentPhaseId` is written
-  only by `activity/store.ts` `phase()`. Removing `workflow.phase` therefore
-  left that entire render path dark. `spindle.$spanStart` now opens a phase for
-  every **top-level** fan-out (`fan-out ×N`, `total` = the width, keyed by the
-  span id so consecutive fan-outs stay distinct), which makes the existing
-  renderers light up with **no edit to any parity-set file**: items inherit
-  `currentPhaseId` automatically at `store.ts:246`, and the `◆` chips in
-  `spindle-exec-tool.ts` read `ctx.phases`. A nested span (a wide `Promise.all`
-  inside a `mapLimit` mapper) deliberately opens no phase, because
-  `store.phase()` completes the previous phase and a child would otherwise
-  close its own parent's.
-
-  `spindle.$spanEnd` closes the fan-out's phase through
-  `activity/store.ts` `completePhase()`, so a finished fan-out does not read as
-  `running` until the program ends. `currentPhaseId` is deliberately left
-  pointing at the finished phase, so the widget keeps rendering its final
-  totals rather than going blank. The same handler folds the fan-out's tally
-  into the phase name (`fan-out ×40 (38 ok, 2 failed)`), which the `◆` chips in
-  `spindle-exec-tool.ts` already render: no second surface was added for it.
+  Neither helper emits workflow spans or per-item progress. Display-only
+  workflow instrumentation and its host calls have been removed.
 
   A note on where the API is *taught*. `runtime/guest-types.ts` is compiler
   input, not prompt text: it is read only by `runtime/type-checker.ts` and

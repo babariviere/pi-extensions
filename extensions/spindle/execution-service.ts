@@ -1,20 +1,18 @@
 import type { Usage } from "@earendil-works/pi-ai";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { SpindleActivityStore } from "./activity/store.ts";
+import type { SpindleRunDisplay } from "./activity/types.ts";
 import {
-	SpindleExecutionTraceRecorder,
 	executionOutcomeFromError,
 	type SpindleExecutionFailureStageV1,
-	type SpindleExecutionTraceOperationHandle,
+	SpindleExecutionTraceRecorder,
 	type SpindleExecutionTraceV1,
 } from "./audit/trace.ts";
-import { SpindleActivityStore } from "./activity/store.ts";
-import type { SpindleRunDisplay } from "./activity/types.ts";
 import { MAX_AGENT_TIMEOUT_MS, MIN_AGENT_TIMEOUT_MS, type SpindleConfig } from "./config.ts";
-import { fullCodeProvider, hostCallTable, type HostCallContext, type SpindleStateNote } from "./host-calls.ts";
-import { ActionRegistry, type SpindleCallAudit, type SpindleRegistryActivityEvent } from "./core/action-registry.ts";
+import type { ActionRegistry, SpindleCallAudit, SpindleRegistryActivityEvent } from "./core/action-registry.ts";
 import { redactRecordedArgs } from "./core/arg-redaction.ts";
 import { spindleProcessSnapshot } from "./env-snapshot.ts";
-import { SpindleSessionStore, type SpindleSessionStoreKey } from "./session-store.ts";
+import { fullCodeProvider, type HostCallContext, hostCallTable, type SpindleStateNote } from "./host-calls.ts";
 import {
 	codeUsesOrchestration,
 	isAgentBudgetRef,
@@ -28,6 +26,7 @@ import type {
 	SpindleSandboxTerminationReason,
 } from "./runtime/quickjs-runtime.ts";
 import type { SpindleTypeError } from "./runtime/type-checker.ts";
+import { SpindleSessionStore, type SpindleSessionStoreKey } from "./session-store.ts";
 
 let runtimeDependencies:
 	| Promise<{
@@ -184,16 +183,6 @@ export class SpindleExecutionService {
 
 		const audits: SpindleCallAudit[] = [];
 		const phases: string[] = [];
-		const workflowSpans = new Map<
-			string,
-			{
-				kind: "parallel" | "pipeline";
-				operation: SpindleExecutionTraceOperationHandle;
-				phaseId?: string;
-				phaseIndex?: number;
-				itemStatus?: Map<string, string>;
-			}
-		>();
 		let agentCalls = 0;
 		const maxAgentCalls = Math.max(
 			1,
@@ -366,8 +355,6 @@ export class SpindleExecutionService {
 			activity: this.activity,
 			parentToolCallId: options.parentToolCallId,
 			fullCodeMode: effectiveFullCodeMode,
-			phases,
-			workflowSpans,
 			store: this.store,
 			noteState: (note) => {
 				stateNotes.push(note);
@@ -377,7 +364,6 @@ export class SpindleExecutionService {
 			update,
 			guardFullCodeRef,
 			traceAttempt,
-			issueCall: (ref, args) => traceRecorder.issueCall(ref, args),
 			invokeAction: (ref, args, signal) => invokeAction(ref, args, { ...baseContext, signal }),
 		};
 		let sandboxResult: SpindleSandboxResult;

@@ -221,7 +221,6 @@ export const projectSpindleAuditArgs = (ref: string, args: Record<string, unknow
 			});
 		case "spindle.workflow.event":
 			return projected(args, (output) => copyIdentifier(output, args, "level"));
-		case "spindle.workflow.parallel":
 		case "spindle.workflow.pipeline":
 			return projected(args, (output) => {
 				copyIdentifier(output, args, "kind");

@@ -1,10 +1,10 @@
 import { randomBytes } from "node:crypto";
 import releaseSyncVariant from "@jitl/quickjs-singlefile-mjs-release-sync";
 import { newQuickJSWASMModuleFromVariant } from "quickjs-emscripten-core";
-import { ENTROPY_POOL_BYTES, guestPolyfillPlan } from "./guest-polyfills.ts";
 import { runAbortable, settleWithin } from "../async-settlement.ts";
 import { piBashExitMetadata } from "../core/pi-bash-error.ts";
-import { mapGuestErrorText, parseGuestSourceMap, type GuestSourceMap } from "./source-map.ts";
+import { ENTROPY_POOL_BYTES, guestPolyfillPlan } from "./guest-polyfills.ts";
+import { type GuestSourceMap, mapGuestErrorText, parseGuestSourceMap } from "./source-map.ts";
 import { transpileSpindleCode } from "./type-checker.ts";
 
 export type SpindleSandboxTerminationReason = "completed" | "runtime_error" | "timed_out" | "aborted";
@@ -393,81 +393,6 @@ globalThis["τ"] = Object.freeze({
   delete: (key) => __call("spindle.$stateDelete", { key }),
   clear: () => __call("spindle.$stateClear", {}),
 });
-let __nextSpanId = 0;
-// Captured before the Promise.all instrumentation below, so the worker pool
-// and the wrapper never recurse through each other.
-const __nativePromiseAll = Promise.all.bind(Promise);
-const __withSpan = async (metadata, body) => {
-  const id = "span-" + __nextSpanId++;
-  await __call("spindle.$spanStart", { id, ...metadata });
-  try {
-    const value = await body(id);
-    await __call("spindle.$spanEnd", { id, outcome: "succeeded" });
-    return value;
-  } catch (error) {
-    try { await __call("spindle.$spanEnd", { id, outcome: "failed" }); } catch { /* preserve the original error */ }
-    throw error;
-  }
-};
-// Per-item progress is inferred, never declared. The runtime already knows
-// each element's index, total and outcome, so nothing is asked of the program.
-// Transitions are batched: a 200-item fan-out must not cost 400 host
-// round-trips.
-const __ITEM_MIN = 4;
-const __ITEM_FLUSH_MAX = 32;
-const __ITEM_FLUSH_MS = 120;
-const __ITEM_LABEL_CHARS = 120;
-const __itemLabelKeys = ["path", "file", "id", "name", "label", "ref", "url", "title"];
-const __clipLabel = (value) =>
-  value.length > __ITEM_LABEL_CHARS ? value.slice(0, __ITEM_LABEL_CHARS - 1) + "\u2026" : value;
-// A fan-out over strings is usually a fan-out over paths or urls, which makes
-// the element itself the most useful label. Objects expose the same thing under
-// a conventional key. Anything else falls back to its position.
-const __itemLabel = (value, index) => {
-  if (typeof value === "string" && value.length > 0) return __clipLabel(value);
-  if (typeof value === "number" || typeof value === "boolean") return String(value);
-  if (value && typeof value === "object" && !Array.isArray(value)) {
-    for (const key of __itemLabelKeys) {
-      const candidate = value[key];
-      if (typeof candidate === "string" && candidate.length > 0) return __clipLabel(candidate);
-    }
-  }
-  return "#" + (index + 1);
-};
-const __createItemSink = (spanId, label, total) => {
-  const pending = new Map();
-  let timer = null;
-  let closed = false;
-  const flush = async () => {
-    if (timer !== null) { clearTimeout(timer); timer = null; }
-    if (pending.size === 0) return;
-    const items = [];
-    for (const entry of pending.values()) items.push(entry);
-    pending.clear();
-    // Progress is best effort: a failed flush must never mask the program's
-    // own outcome.
-    try { await __call("spindle.$items", { items }); } catch { /* ignored */ }
-  };
-  const mark = (index, status) => {
-    if (closed) return;
-    pending.set(index, {
-      id: spanId + "-" + index,
-      label: label ? label(index) : "#" + (index + 1),
-      status,
-      kind: "task",
-      total,
-    });
-    if (pending.size >= __ITEM_FLUSH_MAX) { void flush(); return; }
-    if (timer === null) {
-      timer = setTimeout(() => { timer = null; void flush(); }, __ITEM_FLUSH_MS);
-    }
-  };
-  const close = async () => {
-    await flush();
-    closed = true;
-  };
-  return { mark, close };
-};
 const __runPool = async (thunks, options) => {
   if (!Array.isArray(thunks) || thunks.some((thunk) => typeof thunk !== "function")) {
     throw new TypeError("mapLimit expects an array of functions or (items, mapper)");
@@ -483,7 +408,7 @@ const __runPool = async (thunks, options) => {
   const signal = concurrencyOpt.signal;
   if (signal && signal.aborted) throw __spindleAbortReason(signal);
   let cursor = 0;
-  await __nativePromiseAll(Array.from({ length: concurrency }, async () => {
+  await Promise.all(Array.from({ length: concurrency }, async () => {
     while (cursor < thunks.length) {
       // Checked before each item rather than mid-flight: an aborted fan-out
       // stops launching new work, and the in-flight items cancel themselves if
@@ -502,82 +427,13 @@ const __runPool = async (thunks, options) => {
 const __mapLimit = async (items, arg2, arg3) => {
   const mapper = typeof arg2 === "function" ? arg2 : undefined;
   const options = mapper ? arg3 : arg2;
-  const itemCount = Array.isArray(items) ? items.length : undefined;
-  let concurrency;
-  if (itemCount !== undefined) {
-    if (itemCount === 0) concurrency = 0;
-    else {
-      const opt = typeof options === "number" ? { concurrency: options } : options ?? {};
-      const requested = Number(opt.concurrency ?? itemCount);
-      if (Number.isFinite(requested) && requested >= 1) {
-        concurrency = Math.max(1, Math.min(itemCount, Math.floor(requested)));
-      }
-    }
+  if (mapper && !Array.isArray(items)) {
+    throw new TypeError("mapLimit expects an array as the first argument");
   }
-  return __withSpan(
-    {
-      kind: "parallel",
-      ...(itemCount !== undefined ? { itemCount } : {}),
-      ...(concurrency !== undefined ? { concurrency } : {}),
-    },
-    async (spanId) => {
-      if (mapper && !Array.isArray(items)) {
-        throw new TypeError("mapLimit expects an array as the first argument");
-      }
-      const thunks = mapper ? items.map((item, index) => () => mapper(item, index)) : items;
-      if (itemCount === undefined || itemCount < __ITEM_MIN) return __runPool(thunks, options);
-      const sink = __createItemSink(spanId, (index) => __itemLabel(mapper ? items[index] : undefined, index), itemCount);
-      try {
-        return await __runPool(
-          thunks.map((thunk, index) => async () => {
-            if (typeof thunk !== "function") {
-              throw new TypeError("mapLimit expects an array of functions or (items, mapper)");
-            }
-            sink.mark(index, "running");
-            try {
-              const value = await thunk();
-              sink.mark(index, "completed");
-              return value;
-            } catch (error) {
-              sink.mark(index, "failed");
-              throw error;
-            }
-          }),
-          options,
-        );
-      } finally {
-        await sink.close();
-      }
-    },
-  );
+  const thunks = mapper ? items.map((item, index) => () => mapper(item, index)) : items;
+  return __runPool(thunks, options);
 };
 globalThis.mapLimit = __mapLimit;
-// Observability for the path the model actually uses. Promise.all cannot be
-// capped (its inputs are already running by the time it is called), but its
-// width is known at call time and each entry's outcome is observable, so a
-// wide fan-out still reports progress. Narrow fan-outs skip the whole thing so
-// the common two-call case pays no host round-trip. Entries have no labels
-// here: an already-started promise carries nothing to name it with.
-const __PROMISE_ALL_SPAN_MIN = __ITEM_MIN;
-Promise.all = function all(values) {
-  const list = Array.isArray(values) ? values : undefined;
-  if (!list || list.length < __PROMISE_ALL_SPAN_MIN) return __nativePromiseAll(values);
-  return __withSpan({ kind: "parallel", itemCount: list.length }, async (spanId) => {
-    const sink = __createItemSink(spanId, null, list.length);
-    for (let index = 0; index < list.length; index++) sink.mark(index, "running");
-    const tracked = list.map((value, index) =>
-      Promise.resolve(value).then(
-        (resolved) => { sink.mark(index, "completed"); return resolved; },
-        (error) => { sink.mark(index, "failed"); throw error; },
-      ),
-    );
-    try {
-      return await __nativePromiseAll(tracked);
-    } finally {
-      await sink.close();
-    }
-  });
-};
 globalThis.console = Object.freeze({ log: print, info: print, warn: print, error: print });
 const __timerCallbacks = new Map();
 let __nextTimerId = 1;

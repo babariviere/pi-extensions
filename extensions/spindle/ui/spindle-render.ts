@@ -522,7 +522,6 @@ const structuralCallDetail = (
 			return [argString(args, "provider"), argString(args, "namespace"), count].filter(Boolean).join(" · ");
 		case "discovery.describe":
 			return argString(args, "ref") ?? "";
-		case "workflow.parallel":
 		case "workflow.pipeline": {
 			const itemCount = typeof args.itemCount === "number" ? args.itemCount : undefined;
 			const stageCount = typeof args.stageCount === "number" ? args.stageCount : undefined;
