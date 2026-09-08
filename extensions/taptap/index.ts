@@ -15,7 +15,8 @@
  * Forwarding goes through `CustomEditor.onEscape`, which is the exact handler
  * pi installs for `app.interrupt`. That keeps every native behaviour intact:
  * restoring queued messages, aborting a running bash, leaving bash mode, and
- * the agent abort itself.
+ * the agent abort itself. If the handler leaves the active run signal live,
+ * the public context abort API is used as a fallback.
  *
  * Escape is left alone while the autocomplete popup is open, so it still
  * cancels completion on the first tap.
@@ -55,6 +56,7 @@ class DoubleEscapeEditor extends CustomEditor {
 		private readonly keys: KeybindingsManager,
 		private readonly hint: Hint,
 		private readonly isIdle: () => boolean,
+		private readonly ensureAborted: () => void,
 	) {
 		super(tui, theme, keys);
 	}
@@ -75,6 +77,7 @@ class DoubleEscapeEditor extends CustomEditor {
 
 		this.disarm();
 		this.forwardToPi(data);
+		this.ensureAborted();
 	}
 
 	/**
@@ -138,8 +141,14 @@ export default function taptap(pi: ExtensionAPI): void {
 
 		const hint = makeHint(ctx);
 		const isIdle = () => ctx.isIdle();
+		const ensureAborted = () => {
+			// Read the current signal at keypress time, not the session-start signal.
+			// Editor handlers can be missing or temporarily replaced by pi.
+			const signal = ctx.signal;
+			if (signal && !signal.aborted) ctx.abort();
+		};
 		ctx.ui.setEditorComponent(
-			(tui, theme, keybindings) => new DoubleEscapeEditor(tui, theme, keybindings, hint, isIdle),
+			(tui, theme, keybindings) => new DoubleEscapeEditor(tui, theme, keybindings, hint, isIdle, ensureAborted),
 		);
 	});
 }

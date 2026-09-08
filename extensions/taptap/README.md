@@ -18,6 +18,10 @@ pi dispatches <kbd>Esc</kbd> in `CustomEditor.handleInput` by looking up
 `CustomEditor`, intercepts <kbd>Esc</kbd> before that lookup when
 `ctx.isIdle()` is false, and forwards to `this.onEscape?.()` on the second tap.
 
+After forwarding, it checks the current run's abort signal. If the handler
+left it uncancelled, it calls `ctx.abort()` as a fallback. The signal is read
+at keypress time, so tool calls in later turns are covered too.
+
 Because it calls pi's own handler rather than reimplementing it, every native
 <kbd>Esc</kbd> behaviour still works:
 
@@ -31,6 +35,9 @@ Because it calls pi's own handler rather than reimplementing it, every native
 so it still cancels completion on the first tap.
 
 ## Notes
+
+- Cancellation is cooperative. A tool must honor its abort signal to stop
+  promptly; this extension cannot forcibly stop an unresponsive tool.
 
 - Leave `app.interrupt` bound to `escape` in `~/.pi/agent/keybindings.json`. The
   interception happens upstream of the keybinding match, so rebinding is neither
