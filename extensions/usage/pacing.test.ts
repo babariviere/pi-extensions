@@ -145,7 +145,7 @@ test("allocates the remaining weekly budget across later windows", () => {
 		now: new Date(2025, 0, 6, 7),
 	});
 	assert.ok(first);
-	assert.equal(first.status.usedWindowPercent, 0);
+	assert.equal(first.status.usedWindowPercent, 20);
 	const later = observeWeeklyUsage(first.ledger, {
 		weeklyUsedPercent: 22,
 		resetAt: resetAt,
@@ -180,6 +180,39 @@ test("baselines midweek historical usage, then records only positive deltas", ()
 	assert.equal(lower.status.usedWindowPercent, 7);
 });
 
+test("counts initial weekly usage when the week starts in the current window", () => {
+	const now = new Date(2026, 8, 8, 10);
+	const resetAt = new Date(2026, 8, 15, 9, 20).toISOString();
+	const first = observeWeeklyUsage(undefined, { weeklyUsedPercent: 2, resetAt, now });
+	assert.ok(first);
+	assert.equal(first.status.windowsRemaining, 15);
+	assert.equal(first.status.usedWindowPercent, 2);
+	assert.equal(first.status.allowancePercent, 100 / 8.5);
+	const next = observeWeeklyUsage(first.ledger, { weeklyUsedPercent: 3, resetAt, now });
+	assert.ok(next);
+	assert.equal(next.status.usedWindowPercent, 3);
+	assert.equal(next.status.allowancePercent, 100 / 8.5);
+});
+
+test("repairs an existing first-window baseline without double counting", () => {
+	const now = new Date(2026, 8, 8, 10);
+	const resetAt = new Date(2026, 8, 15, 9, 20).toISOString();
+	const ledger: PacingLedger = {
+		version: 3,
+		weekResetAt: resetAt,
+		lastWeeklyPercent: 2,
+		windows: { [new Date(2026, 8, 8, 7).toISOString()]: { allowancePercent: 98 / 8.5, usedPercent: 0 } },
+	};
+	const result = observeWeeklyUsage(ledger, { weeklyUsedPercent: 2, resetAt, now });
+	assert.ok(result);
+	assert.equal(result.status.usedWindowPercent, 2);
+	assert.ok(Math.abs(result.status.allowancePercent - 100 / 8.5) < 1e-10);
+	const again = observeWeeklyUsage(result.ledger, { weeklyUsedPercent: 2, resetAt, now });
+	assert.ok(again);
+	assert.equal(again.status.usedWindowPercent, 2);
+	assert.equal(again.status.allowancePercent, result.status.allowancePercent);
+});
+
 test("keeps the current fixed window across a provider reset and starts fresh usage", () => {
 	const first = observeWeeklyUsage(undefined, {
 		weeklyUsedPercent: 99,
@@ -190,10 +223,10 @@ test("keeps the current fixed window across a provider reset and starts fresh us
 	const nextReset = observeWeeklyUsage(first.ledger, {
 		weeklyUsedPercent: 1,
 		resetAt: new Date(2025, 0, 13, 11, 42).toISOString(),
-		now: new Date(2025, 0, 6, 7),
+		now: new Date(2025, 0, 6, 12),
 	});
 	assert.ok(nextReset);
-	assert.equal(nextReset.status.usedWindowPercent, 0);
+	assert.equal(nextReset.status.usedWindowPercent, 1);
 	assert.equal(nextReset.status.blocked, false);
 });
 

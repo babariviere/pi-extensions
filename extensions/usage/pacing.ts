@@ -220,10 +220,16 @@ export function observeWeeklyUsage(
 	const windowKey = current.start.toISOString();
 	const futureWindows = remainingWindows(input.now, reset);
 	const totalWeight = futureWindows.reduce((sum, window) => sum + window.weight, 0);
+	// Codex weekly periods span seven days. If this period began inside the
+	// current window, all cumulative usage belongs to this window.
+	const weekStartedAt = reset.getTime() - 7 * 24 * 60 * 60 * 1000;
+	const startsInCurrentWindow = weekStartedAt >= current.start.getTime() && weekStartedAt <= input.now.getTime();
+	const initialUsage = isNewWeek && startsInCurrentWindow ? weeklyUsedPercent : 0;
 	let record = active.windows[windowKey];
 	if (!record) {
 		record = {
-			allowancePercent: totalWeight > 0 ? (Math.max(0, 100 - weeklyUsedPercent) * current.weight) / totalWeight : 0,
+			allowancePercent:
+				totalWeight > 0 ? (Math.max(0, 100 - weeklyUsedPercent + initialUsage) * current.weight) / totalWeight : 0,
 			usedPercent: 0,
 		};
 		active.windows[windowKey] = record;
@@ -232,12 +238,17 @@ export function observeWeeklyUsage(
 	// Enforce excluded windows even when an older ledger cached a weekend allowance.
 	if (current.weight === 0) record.allowancePercent = 0;
 
-	// Without an earlier poll, historical usage only establishes the baseline.
-	// It already reduces the available weekly budget and must not also consume
-	// the new window's allowance. Later polls contribute only positive deltas.
+	// Unknown historical usage establishes a baseline. Usage from a week that
+	// started in this window is attributable even without an earlier poll.
 	const baseline = isNewWeek ? undefined : active.lastWeeklyPercent;
-	const delta = baseline === undefined ? 0 : Math.max(0, weeklyUsedPercent - baseline);
+	const delta = baseline === undefined ? initialUsage : Math.max(0, weeklyUsedPercent - baseline);
 	record.usedPercent += delta;
+	// Repair an earlier baseline recorded by older versions in this same window.
+	if (startsInCurrentWindow && record.usedPercent < weeklyUsedPercent) {
+		const missed = weeklyUsedPercent - record.usedPercent;
+		record.usedPercent += missed;
+		if (current.weight > 0) record.allowancePercent += (missed * current.weight) / totalWeight;
+	}
 	active.lastWeeklyPercent = weeklyUsedPercent;
 
 	const remainingWindowPercent = Math.max(0, record.allowancePercent - record.usedPercent);
