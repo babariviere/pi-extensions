@@ -51,6 +51,7 @@ import {
 	rmSync,
 	statSync,
 	symlinkSync,
+	writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
@@ -423,6 +424,7 @@ export function copyLocalFiles(source: string, destination: string, files: strin
  * links still resolves outside the writable roots and is still refused.
  */
 export const CONFIG_HOME_COPY_DIRS = ["jj"];
+const SANDBOX_JJ_CONFIG = '[signing]\nbehavior = "drop"\n';
 
 export interface PreparedConfigHome {
 	/** The new config home, or undefined when there was nothing to prepare. */
@@ -457,6 +459,12 @@ export function prepareConfigHome(
 			} catch (error) {
 				problems.push(`config home: ${entry}: ${String(error).split("\n")[0]}`);
 			}
+		}
+		const jjDir = join(destination, "jj");
+		if (existsSync(jjDir)) {
+			const overrides = join(jjDir, "conf.d");
+			mkdirSync(overrides, { recursive: true });
+			writeFileSync(join(overrides, "zz-pi-sandbox.toml"), SANDBOX_JJ_CONFIG, { mode: 0o600 });
 		}
 	} catch (error) {
 		return { problems: [`config home: ${String(error).split("\n")[0]}`] };

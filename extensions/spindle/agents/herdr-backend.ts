@@ -25,6 +25,7 @@ import {
 	baseResult,
 	prepareChildRun,
 	runCwd,
+	withChildConfigHome,
 	withPacingDisabled,
 	type RunContext,
 	type RunFailure,
@@ -180,6 +181,7 @@ interface PreparedRun {
 	outputPath: string;
 	sessionPath: string;
 	childArgs: string[];
+	configHome?: string;
 	paneId?: string;
 	error?: string;
 }
@@ -203,7 +205,13 @@ function prepareRun(req: RunRequest, ctx: RunContext, defaultProvider: string | 
 	// Flags only, all single-line: the task travels as a file path the child reads
 	// itself (`taskDelivery: "file"`).
 	const p = prepareChildRun(req, ctx, { defaultProvider, taskDelivery: "file" });
-	return { req, outputPath: p.outputPath, sessionPath: p.sessionPath, childArgs: p.childArgs };
+	return {
+		req,
+		outputPath: p.outputPath,
+		sessionPath: p.sessionPath,
+		childArgs: p.childArgs,
+		...(p.configHome ? { configHome: p.configHome } : {}),
+	};
 }
 
 /** Rename the pane, run Pi atomically, then require child evidence. */
@@ -220,7 +228,8 @@ async function launchRun(p: PreparedRun, ctx: RunContext): Promise<SpawnedRun> {
 	}
 
 	await herdr.renamePane(p.paneId, paneLabel(p.req.agent.config.name, p.req.task));
-	const env = withPacingDisabled(ctx.pacingDisabled, p.req.night ? nightChildEnv(readActiveNightRun(), {}) : {});
+	const base = p.req.night ? nightChildEnv(readActiveNightRun(), {}) : {};
+	const env = withPacingDisabled(ctx.pacingDisabled, withChildConfigHome(p.configHome, base));
 	const launched = await herdr.runPi(p.paneId, p.childArgs, env, ctx.signal);
 	if (!launched.ok || !(await childIsAlive(p, ctx))) {
 		const error = launched.error ?? "Pi did not start in the Herdr pane";

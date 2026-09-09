@@ -3,9 +3,12 @@
  */
 
 import { writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { prepareConfigHome } from "../../night-mode/sandbox-clone.ts";
 import { buildChildArgs, formatTaskMessage, type TaskFraming } from "./pi-args.ts";
 import { outputPathFor, type ResolvedOutput } from "./output.ts";
-import { ensureDir, runPaths } from "./paths.ts";
+import { ensureDir, runPaths, sanitizeSegment } from "./paths.ts";
 import { type DiscoveredAgent } from "./discovery.ts";
 
 export interface RunRequest {
@@ -114,6 +117,11 @@ export function withPacingDisabled(
 	return pacingDisabled ? { ...base, PI_USAGE_PACING: "off" } : base;
 }
 
+/** Give a child a private writable config home without dropping its inherited environment. */
+export function withChildConfigHome(configHome: string | undefined, base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+	return configHome ? { ...base, XDG_CONFIG_HOME: configHome } : base;
+}
+
 /**
  * The run-backend seam: turn a batch of requests into results. Two adapters
  * implement it (headless child processes, live herdr panes); the run launcher
@@ -209,6 +217,8 @@ export interface PreparedRun {
 	promptPath: string;
 	hasPrompt: boolean;
 	childArgs: string[];
+	/** Private writable XDG config home for an ordinary sandboxed child. */
+	configHome?: string;
 	/** Where the task was written, when it is delivered as a file. */
 	taskPath?: string;
 }
@@ -235,6 +245,16 @@ export function prepareChildRun(
 ): PreparedRun {
 	const paths = runPaths(ctx.sessionFile, ctx.sessionId, ctx.runId, req.agent.config.name, req.index);
 	ensureRunDir(paths.dir);
+	const configHome = req.night
+		? undefined
+		: prepareConfigHome(
+				join(
+					tmpdir(),
+					"pi-subagent-xdg",
+					sanitizeSegment(ctx.sessionId ?? "no-session"),
+					sanitizeSegment(ctx.runId),
+				),
+			).path;
 
 	const outputPath = outputPathFor(ctx.cwd, paths.outputPath, req.output);
 
@@ -272,6 +292,7 @@ export function prepareChildRun(
 		promptPath: paths.promptPath,
 		hasPrompt,
 		childArgs,
+		...(configHome ? { configHome } : {}),
 		...(taskPath ? { taskPath } : {}),
 	};
 }

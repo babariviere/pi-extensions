@@ -144,6 +144,9 @@ export function toolCacheRoots(environment: PolicyEnvironment): string[] {
 		// the OS API and ignore XDG_CACHE_HOME, so a machine that sets XDG would
 		// otherwise lose its build cache.
 		platformCacheHome,
+		// Cross-platform CLIs such as gh still use ~/.cache on macOS instead of
+		// asking the OS for its native cache directory.
+		join(home, ".cache"),
 		env.XDG_CACHE_HOME,
 		env.GOCACHE,
 		env.GOMODCACHE || join(goPath, "pkg", "mod"),

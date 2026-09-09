@@ -80,11 +80,12 @@ const MAX_DETAIL = 200;
  */
 const LOOPBACK_PROBE =
 	'node -e \'const net=require("net");' +
+	"let connected=false;" +
 	"const s=net.createServer(c=>c.end());" +
 	's.on("error",e=>{process.stdout.write("listen failed: "+e.message);process.exit(1)});' +
 	's.listen(0,"127.0.0.1",()=>{const p=s.address().port;' +
-	'const c=net.connect(p,"127.0.0.1",()=>{process.stdout.write("connected to 127.0.0.1:"+p);c.end();s.close()});' +
-	'c.on("error",e=>{process.stdout.write("connect failed: "+e.message);process.exit(1)})})\'';
+	'const c=net.connect(p,"127.0.0.1",()=>{connected=true;process.stdout.write("connected to 127.0.0.1:"+p);c.destroy();s.close()});' +
+	'c.on("error",e=>{if(!connected){process.stdout.write("connect failed: "+e.message);process.exit(1)}})})\'';
 
 /**
  * The probe list. Deliberately short and fixed: these are the six answers a
@@ -112,7 +113,7 @@ export function nightPreflightProbes(input: { workspacePath?: string } = {}): Pr
 			label: "SSH to github.com",
 			meaning: "when this fails, an inherited `git@github.com:` remote cannot push and must be HTTPS",
 			command:
-				"ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 -T git@github.com 2>&1",
+				"ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 -T git@github.com 2>&1",
 			// GitHub's SSH endpoint greets and exits 1 on success, so the text decides.
 			okWhen: ({ output }) => /successfully authenticated/i.test(output),
 		},

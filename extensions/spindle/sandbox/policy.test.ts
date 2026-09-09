@@ -147,6 +147,7 @@ test("denyRead defaults deny ssh and gnupg but not aws", () => {
 test("toolCacheRoots covers the platform cache home and XDG, not one or the other", () => {
 	const darwin = toolCacheRoots(environment({ platform: "darwin" }));
 	assert.ok(darwin.includes("/home/dev/Library/Caches"));
+	assert.ok(darwin.includes("/home/dev/.cache"));
 
 	// XDG_CACHE_HOME is additive: Go resolves the cache dir through the OS API
 	// and ignores XDG, so dropping the platform path would break builds.

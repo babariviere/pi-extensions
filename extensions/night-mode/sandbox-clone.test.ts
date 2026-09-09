@@ -313,6 +313,10 @@ test("prepareConfigHome copies the dirs that get written to and links the rest",
 	// and writing through a link would land outside the run's writable roots.
 	assert.equal(lstatSync(join(destination, "jj")).isSymbolicLink(), false);
 	assert.match(readFileSync(join(destination, "jj", "config.toml"), "utf-8"), /name = 'dev'/);
+	assert.equal(
+		readFileSync(join(destination, "jj", "conf.d", "zz-pi-sandbox.toml"), "utf-8"),
+		'[signing]\nbehavior = "drop"\n',
+	);
 	// Everything else keeps working, without becoming writable.
 	assert.equal(lstatSync(join(destination, "gh")).isSymbolicLink(), true);
 	assert.match(readFileSync(join(destination, "gh", "hosts.yml"), "utf-8"), /github.com/);

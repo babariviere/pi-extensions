@@ -120,6 +120,14 @@ test("only the host-shell loopback probe skips the sandbox wrap", () => {
 	assert.equal(sandboxProbe?.command, hostProbe?.command, "same probe, two boundaries");
 });
 
+test("the loopback probe stays successful when closing the connected socket", async () => {
+	const probe = nightPreflightProbes().find((entry) => entry.id === "loopback-tcp");
+	assert.ok(probe);
+	const [result] = await runPreflight([probe], async ({ command }) => runProbeCommand(command));
+	assert.equal(result.ok, true, result.detail);
+	assert.match(result.detail, /^connected to 127\.0\.0\.1:/);
+});
+
 test("the jj probe is skipped when the run has no working copy", () => {
 	const ids = nightPreflightProbes().map((probe) => probe.id);
 	assert.equal(ids.includes("jj-workspace"), false);
@@ -167,6 +175,12 @@ test("github's ssh greeting counts as success despite exit 1", async () => {
 		}),
 	);
 	assert.equal(ssh.ok, true);
+});
+
+test("the ssh probe never reads or writes the denied user known_hosts file", () => {
+	const probe = nightPreflightProbes().find((entry) => entry.id === "ssh-github");
+	assert.match(probe?.command ?? "", /UserKnownHostsFile=\/dev\/null/);
+	assert.match(probe?.command ?? "", /StrictHostKeyChecking=no/);
 });
 
 test("a hostname that does not resolve is a failed ssh probe", async () => {

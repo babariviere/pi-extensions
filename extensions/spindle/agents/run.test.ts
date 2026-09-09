@@ -6,7 +6,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { ResolvedOutput } from "./output.ts";
-import { baseResult, withPacingDisabled, type RunRequest } from "./run.ts";
+import { baseResult, withChildConfigHome, withPacingDisabled, type RunRequest } from "./run.ts";
 
 const request = (): RunRequest => ({
 	agent: {
@@ -28,6 +28,12 @@ test("a pacing-disabled parent yields a pacing-disabled child environment", () =
 	assert.equal(env.PI_USAGE_PACING, "off");
 	assert.equal(env.PATH, "/usr/bin");
 	assert.equal(withPacingDisabled(false, env).PI_USAGE_PACING, "off");
+});
+
+test("a private child config home preserves the rest of the environment", () => {
+	const env = withChildConfigHome("/tmp/child-xdg", { PATH: "/usr/bin", XDG_CONFIG_HOME: "/home/dev/.config" });
+	assert.equal(env.XDG_CONFIG_HOME, "/tmp/child-xdg");
+	assert.equal(env.PATH, "/usr/bin");
 });
 
 test("baseResult carries the failure class of a failed run", () => {
