@@ -47,7 +47,7 @@ test("applyPatch is described with its patch schema and invokes through the prov
 	assert.equal(result.ok, true);
 	assert.match(result.output, /Applied patch successfully/);
 	assert.equal(result.details.changes.length, 1);
-	assert.equal(readFileSync(join(dir, "added.txt"), "utf8"), "content");
+	assert.equal(readFileSync(join(dir, "added.txt"), "utf8"), "content\n");
 });
 
 test("applyPatch enforces the sandbox write guard before changing any file", async () => {
