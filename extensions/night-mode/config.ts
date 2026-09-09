@@ -77,10 +77,9 @@ export interface NightConfig {
 	 */
 	mcpReadOnly: boolean;
 	/**
-	 * How sleep is suppressed during a run. `auto` uses Amphetamine when it is
-	 * installed and falls back to `caffeinate`. Amphetamine is the only option
-	 * that survives closing the lid, and only when its "Allow system sleep when
-	 * display is closed" default is off.
+	 * How sleep is suppressed during a run. `auto` uses charger-only `pmset`
+	 * together with `caffeinate`, and falls back to `caffeinate` when the
+	 * passwordless sudo command is unavailable.
 	 */
 	wakeLock: WakeLockPreference;
 	/** Hard cap on pull requests a single night may open. */

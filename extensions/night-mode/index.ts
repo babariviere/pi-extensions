@@ -4,9 +4,9 @@
  * Overnight babysitting for long agent runs.
  *
  * Between 21:00 and 09:00 local:
- *  1. holds a wake lock (Amphetamine session, or `caffeinate` when Amphetamine
- *     is not installed) while an agent run is in flight (or while paused waiting
- *     for a reset) so the machine never sleeps mid-run,
+ *  1. holds a wake lock (`pmset` plus `caffeinate`, with a `caffeinate` fallback)
+ *     while an agent run is in flight (or while paused waiting for a reset) so
+ *     the machine never sleeps mid-run,
  *  2. watches the Claude 5h subscription window (published by the `usage`
  *     extension on the event bus) and pauses the agent at 95% so the session
  *     never spills past the limit,
@@ -143,7 +143,7 @@ export interface NightModeState {
 	/** True while this session holds a wake lock. */
 	caffeinated: boolean;
 	/** Mechanism holding sleep off, `"off"` when nothing is held. */
-	wakeLock: "amphetamine" | "caffeinate" | "off";
+	wakeLock: "pmset" | "caffeinate" | "off";
 }
 
 export default function (pi: ExtensionAPI): void {
@@ -784,9 +784,8 @@ export default function (pi: ExtensionAPI): void {
 	// ── wake lock ─────────────────────────────────────────────────────────
 
 	/**
-	 * The lock is built on first use rather than at load time: resolving the
-	 * backend reads settings and stats the Amphetamine bundle, and neither is
-	 * worth doing in a session that never enters the night window.
+	 * The lock is built on first use rather than at load time because reading its
+	 * settings is not worth doing in a session that never enters the night window.
 	 */
 	function lock(): WakeLock {
 		if (!wakeLock) {
@@ -832,12 +831,11 @@ export default function (pi: ExtensionAPI): void {
 		};
 	}
 
-	/** `amphetamine (holding, 27m left)` / `caffeinate (off)`. */
+	/** `pmset (holding)` / `caffeinate (idle)`. */
 	function wakeLockLine(): string {
 		const state = lock().status();
-		const left = state.expiresAt !== undefined ? `, ${formatDuration(state.expiresAt - Date.now())} left` : "";
 		if (state.configured === "none") return "off (unsupported or disabled)";
-		return `${state.configured} (${state.held ? `holding${left}` : "idle"})`;
+		return `${state.configured} (${state.held ? "holding" : "idle"})`;
 	}
 
 	function statusText(): string | undefined {
@@ -988,7 +986,7 @@ export default function (pi: ExtensionAPI): void {
 
 	/**
 	 * Take or release the wake lock to match the current state. Called from every
-	 * `evaluate`, which is also what re-arms a bounded Amphetamine session.
+	 * `evaluate` so a failed restore can be retried.
 	 */
 	function syncWakeLock(): void {
 		if (shouldHoldCaffeinate({ enabled, inWindow, agentBusy, paused })) startCaffeinate();
@@ -1315,7 +1313,7 @@ export default function (pi: ExtensionAPI): void {
 		}
 		planning = undefined;
 		endRun("session shutdown");
-		lock().releaseSync();
+		await lock().release();
 		clearResumeTimer();
 		if (tickTimer) {
 			clearInterval(tickTimer);

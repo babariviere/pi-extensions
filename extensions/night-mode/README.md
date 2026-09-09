@@ -4,43 +4,39 @@ Overnight babysitting for long agent runs.
 
 Between **21:00 and 09:00** local time:
 
-1. **wake lock**: keeps the machine awake while an agent run is in flight, and releases it on `agent_settled` (macOS only, no-op elsewhere). A pause waiting for the 5h reset also keeps it held, since sleep would stall the resume timer. See [Wake lock](#wake-lock) for the two backends.
-
-   Each pi instance owns its own lock. macOS power assertions are a union, so the machine only sleeps once *every* instance is idle: no cross-instance coordination needed.
+1. **wake lock**: keeps the machine awake while an agent run is in flight, and releases it on `agent_settled` (macOS only, no-op elsewhere). A pause waiting for the 5h reset also keeps it held, since sleep would stall the resume timer. See [Wake lock](#wake-lock) for the available backends.
 
 ## Wake lock
 
 | Backend | Survives a closed lid | Notes |
 | --- | --- | --- |
-| `amphetamine` | yes, with one setting | An [Amphetamine](https://apps.apple.com/app/amphetamine/id937984704) session driven over AppleScript |
+| `pmset` | yes, on AC power | Charger-only `disablesleep` through passwordless sudo, plus a held `caffeinate -dimsu` process |
 | `caffeinate` | no | A held `caffeinate -dimsu` child process |
 
-`wakeLock: "auto"` (the default) picks Amphetamine when `Amphetamine.app` is
-installed and falls back to `caffeinate` otherwise.
+`wakeLock: "auto"` (the default) uses the `pmset` backend and falls back to
+`caffeinate` when passwordless sudo is unavailable. `wakeLock: "pmset"` selects
+the same backend explicitly.
 
 `caffeinate` only blocks idle and display sleep. Closing the lid triggers
 clamshell sleep, which overrides power assertions, so a `caffeinate`-backed night
-run dies the moment you close the MacBook. Amphetamine is the way out of that,
-but it needs two things:
+run dies when you close the MacBook. The `pmset` backend prevents this while the
+Mac is connected to AC power. It needs narrowly scoped sudoers rules for the
+current user. Replace `YOUR_USERNAME`, then install them with
+`sudo visudo -f /etc/sudoers.d/night-mode`:
 
-- **Amphetamine -> Settings -> General -> Allow AppleScript/Automation** on, plus
-  the macOS automation prompt approved the first time night mode drives it. If
-  scripting is denied, the lock logs a warning once and falls back to
-  `caffeinate` for the rest of the session instead of retrying every tick.
-- **Amphetamine -> Settings -> Session Defaults -> Closed-Display Mode:**
-  "Allow system sleep when display is closed" **unchecked**. Closed-display mode
-  is not settable per session over AppleScript, so this default is what actually
-  governs a closed lid. Apple Silicon generally still wants the machine on AC
-  power.
+```sudoers
+YOUR_USERNAME ALL=(root) NOPASSWD: /usr/bin/pmset -c disablesleep 1, /usr/bin/pmset -c disablesleep 0
+```
 
-Amphetamine sessions outlive the process that started them, so a crashed pi must
-not leave the Mac awake until morning. Sessions are always bounded (30 minutes)
-and re-armed from the 30s night-mode tick, which also detects a session killed by
-hand or by an Amphetamine trigger and starts a new one. A crash self-heals within
-one session length.
+Night mode enables `disablesleep` when it takes the lock and restores it when the
+lock is released. It uses `sudo -n`, so a missing or incorrect rule never opens an
+interactive password prompt. It warns once and continues with `caffeinate`.
 
-For an unconditional lid-close block, independent of this extension:
-`sudo pmset -a disablesleep 1` (and `0` to restore).
+`pmset` is a persistent system setting. A normal pi shutdown restores it, but a
+crash or forced kill can leave `disablesleep 1` enabled. Restore it manually with
+`sudo -n /usr/bin/pmset -c disablesleep 0`. Multiple pi processes also share this
+global setting, so one process releasing its lock can restore sleep while another
+still runs.
 2. **Budget guard**: watches Claude's 5h and weekly subscription windows, and also respects the global Codex pacing guard published by `usage`. A spent Codex allowance pauses the run and requires a manual `/night resume` after the allowance is available. `/usage pacing off` clears the Codex pacing pause for this session.
 3. **Automated resume**: once the window has room again, sends a `continue` prompt on its own.
 
@@ -582,7 +578,7 @@ and every path is configurable. Defaults keep the night files under
 | `sandboxMode` | `workspace-write` | Filesystem sandbox requested for the run: `off`, `read-only`, `workspace-write`, `full` |
 | `sandboxAllowWrite` | `[]` | Extra writable roots for the run, on top of the derived ones |
 | `sandboxTrust` | `true` | Run `mise trust` / `direnv allow` on a fresh working copy |
-| `wakeLock` | `"auto"` | `auto` \| `amphetamine` \| `caffeinate` \| `off`, see [Wake lock](#wake-lock) |
+| `wakeLock` | `"auto"` | `auto` \| `pmset` \| `caffeinate` \| `off`, see [Wake lock](#wake-lock) |
 | `maxPullRequests` | `5` | Hard cap on PRs opened in one night |
 | `reportSections` | `Summary`, `Needs you`, `Work`, `Findings`, `Skipped / failed`, `Timeline` | `## ` headings seeded into a fresh report |
 
