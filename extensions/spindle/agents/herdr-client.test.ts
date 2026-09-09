@@ -52,6 +52,34 @@ test("runPi surfaces a pane-run failure", async () => {
 	assert.deepEqual(result, { ok: false, error: "pane unavailable" });
 });
 
+test("waitForShellReady waits for a fresh pane prompt", async () => {
+	const { transport, calls } = scriptedTransport([{ ok: true, result: {} }]);
+	const result = await new HerdrClient(transport).waitForShellReady("wA:p1", 5000);
+	assert.deepEqual(result, { ok: true });
+	assert.deepEqual(calls, [
+		[
+			"pane",
+			"wait-output",
+			"wA:p1",
+			"--regex",
+			"(^|\\n)[^\\n]*(?:[$%#>❯])\\s*$",
+			"--source",
+			"recent-unwrapped",
+			"--lines",
+			"20",
+			"--timeout",
+			"5000",
+		],
+	]);
+});
+
+test("waitForShellReady surfaces a readiness timeout", async () => {
+	const result = await new HerdrClient(
+		scriptedTransport([{ ok: false, error: "wait timed out" }]).transport,
+	).waitForShellReady("wA:p1", 5000);
+	assert.deepEqual(result, { ok: false, error: "wait timed out" });
+});
+
 test("splitPane sends the right args and returns the new pane id", async () => {
 	const { transport, calls } = scriptedTransport([{ ok: true, result: { pane_id: "wA:p2" } }]);
 	const res = await new HerdrClient(transport).splitPane("wA:p1", "right", 0.5, "/repo");

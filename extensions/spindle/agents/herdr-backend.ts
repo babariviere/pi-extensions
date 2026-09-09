@@ -2,10 +2,11 @@
  * Herdr backend: run each subagent as a Pi process in a pane of a fresh
  * "subagents" tab, then wait for its transcript to settle.
  *
- * A pane is created at an idle shell prompt, but Pi is launched with `pane run`
+ * A pane is created with an eventually-idle shell, but shell initialization is
+ * asynchronous. We wait for its prompt before launching Pi with `pane run`
  * instead of `agent start`. `pane run` submits the quoted command and Enter in
- * one operation, avoiding the shell-input race that could leave a Pi command in
- * the composer. Pi is then discovered through its pane id for lifecycle waits.
+ * one operation, and Pi is then discovered through its pane id for lifecycle
+ * waits.
  *
  * The task is still a file path, not terminal input. This avoids shell quoting
  * multi-line work and lets the child inject its first message after startup.
@@ -37,6 +38,8 @@ export const SUBAGENTS_TAB_LABEL = "subagents";
 
 /** How long to wait for a `pane run` child to appear in its transcript or pane state. */
 const CHILD_EVIDENCE_TIMEOUT_MS = 20_000;
+/** Fresh panes can outlive the Herdr server restart while their shell is still booting. */
+const SHELL_READY_TIMEOUT_MS = 10_000;
 
 export async function runInHerdr(reqs: RunRequest[], ctx: RunContext): Promise<RunResult[]> {
 	const workspaceId = currentWorkspaceId();
@@ -228,6 +231,19 @@ async function launchRun(p: PreparedRun, ctx: RunContext): Promise<SpawnedRun> {
 	}
 
 	await herdr.renamePane(p.paneId, paneLabel(p.req.agent.config.name, p.req.task));
+	const shell = await herdr.waitForShellReady(p.paneId, Math.min(SHELL_READY_TIMEOUT_MS, ctx.timeoutMs), ctx.signal);
+	if (!shell.ok) {
+		const error = `Herdr pane shell was not ready: ${shell.error ?? "timed out waiting for shell prompt"}`;
+		ctx.onStatus?.(p.req.index, { state: "failed", paneId: p.paneId, outputPath: p.outputPath });
+		return {
+			req: p.req,
+			outputPath: p.outputPath,
+			sessionPath: p.sessionPath,
+			paneId: p.paneId,
+			error,
+			scrollback: await herdr.readPane(p.paneId),
+		};
+	}
 	const base = p.req.night ? nightChildEnv(readActiveNightRun(), {}) : {};
 	const env = withPacingDisabled(ctx.pacingDisabled, withChildConfigHome(p.configHome, base));
 	const launched = await herdr.runPi(p.paneId, p.childArgs, env, ctx.signal);
@@ -240,6 +256,7 @@ async function launchRun(p: PreparedRun, ctx: RunContext): Promise<SpawnedRun> {
 			sessionPath: p.sessionPath,
 			paneId: p.paneId,
 			error,
+			scrollback: await herdr.readPane(p.paneId),
 		};
 	}
 

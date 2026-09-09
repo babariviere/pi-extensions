@@ -26,6 +26,9 @@ import { execFileTransport, type HerdrTransport } from "./herdr-transport.ts";
 
 export type SplitDirection = "right" | "down";
 
+/** A shell prompt at the end of a line, after a fresh pane has booted. */
+const SHELL_PROMPT_REGEX = "(^|\\n)[^\\n]*(?:[$%#>❯])\\s*$";
+
 /** Quote one value for the interactive POSIX shell behind `pane run`. */
 function shellQuote(value: string): string {
 	return `'${value.replaceAll("'", "'\"'\"'")}'`;
@@ -82,6 +85,37 @@ export class HerdrClient {
 	/** Set a pane's display label. Best-effort. */
 	async renamePane(paneId: string, label: string): Promise<void> {
 		await this.#transport.run(["pane", "rename", paneId, label]);
+	}
+
+	/**
+	 * Wait until the shell in a newly-created pane has printed its prompt. Herdr
+	 * can create a pane before its shell has consumed input; a following
+	 * `pane run` then succeeds but its command is lost. Waiting on pane output
+	 * closes that startup window, including after the server restored a session.
+	 */
+	async waitForShellReady(
+		paneId: string,
+		timeoutMs: number,
+		signal?: AbortSignal,
+	): Promise<{ ok: boolean; error?: string }> {
+		const res = await this.#transport.run(
+			[
+				"pane",
+				"wait-output",
+				paneId,
+				"--regex",
+				SHELL_PROMPT_REGEX,
+				"--source",
+				"recent-unwrapped",
+				"--lines",
+				"20",
+				"--timeout",
+				String(timeoutMs),
+			],
+			timeoutMs + 1000,
+			signal,
+		);
+		return res.ok ? { ok: true } : { ok: false, error: res.error ?? "shell did not become ready" };
 	}
 
 	/**
