@@ -105,6 +105,36 @@ test("every denyRead root appears as both a literal and a subpath carve-out", ()
 	assert.ok(result.profile.includes(`(require-not (subpath (param "${key}")))`));
 });
 
+test("workspace-write permits metadata access to SSH_AUTH_SOCK inside a denied root", () => {
+	const gnupg = join(fixtureDir, ".gnupg");
+	mkdirSync(gnupg);
+	const socket = join(gnupg, "S.gpg-agent.ssh");
+	const result = buildSeatbeltProfile(basePolicy({ denyRead: [gnupg] }), socket);
+	const socketKey = result.params.find(([, value]) => value === socket)?.[0];
+	const denyKey = result.params.find(([, value]) => value === gnupg)?.[0];
+
+	assert.match(socketKey ?? "", /^METADATA_READ_EXCEPTION_/);
+	assert.ok(denyKey);
+	assert.ok(
+		result.profile.includes(`(allow file-read-metadata file-test-existence (literal (param "${socketKey}")))`),
+	);
+	assert.ok(
+		result.profile.includes(
+			`(deny file-read* (require-all (subpath (param "${denyKey}")) (require-not (literal (param "${socketKey}")))))`,
+		),
+	);
+	assert.ok(result.profile.includes(`(deny file-write* (subpath (param "${denyKey}")))`));
+});
+
+test("read-only does not permit SSH_AUTH_SOCK inside a denied root", () => {
+	const gnupg = join(fixtureDir, ".gnupg");
+	mkdirSync(gnupg);
+	const socket = join(gnupg, "S.gpg-agent.ssh");
+	const result = buildSeatbeltProfile(basePolicy({ mode: "read-only", denyRead: [gnupg] }), socket);
+
+	assert.ok(!result.params.some(([key]) => key.startsWith("METADATA_READ_EXCEPTION")));
+});
+
 test("the last non-empty rule is a rename-escape deny when one is generated", () => {
 	mkdirSync(join(fixtureDir, "nested"), { recursive: true });
 	const secret = join(fixtureDir, "nested", "secret");

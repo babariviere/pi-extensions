@@ -14,7 +14,7 @@
  */
 
 import { lstatSync, realpathSync, statSync } from "node:fs";
-import { dirname } from "node:path";
+import { dirname, isAbsolute } from "node:path";
 import {
 	SEATBELT_NETWORK,
 	SEATBELT_PREFERENCES,
@@ -185,7 +185,10 @@ function staticDirPrefixOf(pattern: string): string | undefined {
 const rootFilter = (match: "literal" | "subpath", key: string): string =>
 	match === "literal" ? `(literal (param "${key}"))` : `(subpath (param "${key}"))`;
 
-export function buildSeatbeltProfile(policy: SandboxPolicy): SeatbeltProfile {
+export function buildSeatbeltProfile(
+	policy: SandboxPolicy,
+	sshAuthSock: string | undefined = process.env.SSH_AUTH_SOCK,
+): SeatbeltProfile {
 	const warnings: string[] = [];
 	const table = new ParamTable();
 	const sections: string[] = [];
@@ -218,6 +221,19 @@ export function buildSeatbeltProfile(policy: SandboxPolicy): SeatbeltProfile {
 		denyReadRoots.push({ original: root, canonical });
 	}
 
+	// SSH agents commonly place SSH_AUTH_SOCK below ~/.gnupg, which is denied
+	// by default. The inherited socket is already a capability handed to the
+	// process, so workspace-write permits metadata access to that exact path.
+	// This is enough for clients such as BuildKit to stat the socket before
+	// connecting, without exposing any other file below the denied directory.
+	const metadataReadExceptions: string[] = [];
+	if (policy.mode === "workspace-write" && sshAuthSock && isAbsolute(sshAuthSock)) {
+		const canonical = canonicalizeRoot(sshAuthSock, warnings);
+		if (canonical && denyReadRoots.some((root) => isInside(root.canonical, canonical))) {
+			metadataReadExceptions.push(canonical);
+		}
+	}
+
 	// 2. Read allow: everything under "/", minus the denyRead carve-outs. Both
 	// `literal` and `subpath` forms exclude each root, so first-time creation
 	// of the protected path itself (not just its contents) is also excluded.
@@ -232,6 +248,10 @@ export function buildSeatbeltProfile(policy: SandboxPolicy): SeatbeltProfile {
 			? `(allow file-read* file-test-existence file-map-executable\n  (require-all (subpath (param "${readRootKey}")) ${readExcludeParts.join(" ")}))`
 			: `(allow file-read* file-test-existence file-map-executable (subpath (param "${readRootKey}")))`,
 	);
+	for (const path of metadataReadExceptions) {
+		const key = table.intern("METADATA_READ_EXCEPTION", path);
+		sections.push(`(allow file-read-metadata file-test-existence (literal (param "${key}")))`);
+	}
 
 	// 3. Preferences: unrestricted apart from the same carve-outs, per its own header.
 	sections.push(SEATBELT_PREFERENCES.trim());
@@ -303,9 +323,14 @@ export function buildSeatbeltProfile(policy: SandboxPolicy): SeatbeltProfile {
 	}
 	for (const denyRoot of denyReadRoots) {
 		const key = table.intern("READABLE_ROOT_0_EXCLUDED", denyRoot.canonical);
+		const nestedExceptions = metadataReadExceptions
+			.filter((path) => isInside(denyRoot.canonical, path))
+			.map((path) => `(require-not (literal (param "${table.intern("METADATA_READ_EXCEPTION", path)}")))`);
+		const denyRead = (filter: string): string =>
+			nestedExceptions.length > 0 ? `(require-all ${filter} ${nestedExceptions.join(" ")})` : filter;
 		denyLines.push(
-			`(deny file-read* (subpath (param "${key}")))`,
-			`(deny file-read* (literal (param "${key}")))`,
+			`(deny file-read* ${denyRead(`(subpath (param "${key}"))`)})`,
+			`(deny file-read* ${denyRead(`(literal (param "${key}"))`)})`,
 			`(deny file-write* (subpath (param "${key}")))`,
 			`(deny file-write* (literal (param "${key}")))`,
 		);
