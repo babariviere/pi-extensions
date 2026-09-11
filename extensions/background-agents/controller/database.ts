@@ -11,6 +11,9 @@ import type {
 	MemoryEntry,
 	RolloutMode,
 	SourceEvent,
+	EvidenceManifest,
+	VerificationRun,
+	Confidence,
 } from "../types.ts";
 import { migrateDatabase } from "./migrations.ts";
 
@@ -326,6 +329,26 @@ export interface QuestionBriefInput {
 	limits: unknown;
 }
 
+export interface EvidenceManifestInput {
+	id?: string;
+	caseId: string;
+	manifest: EvidenceManifest;
+}
+
+export interface VerificationRunInput {
+	id?: string;
+	manifestId: string;
+	report: {
+		verdict: VerificationRun["verdict"];
+		confidence: Confidence;
+		ciChecks: Record<string, string>;
+		rationale: string;
+		uncertainties: string[];
+		replay?: { commands: Array<{ actual: unknown }> };
+	};
+	replayOf?: string;
+}
+
 export interface StoredPolicy {
 	id: string;
 	scope: string;
@@ -608,6 +631,107 @@ export class BackgroundAgentsDatabase {
 				);
 		});
 		return id;
+	}
+
+	createEvidenceManifest(input: EvidenceManifestInput): string {
+		const id = input.id ?? randomUUID();
+		const manifest = input.manifest;
+		this.withTransaction(() => {
+			const versionRow = this.database
+				.prepare("SELECT coalesce(max(version), 0) AS version FROM evidence_manifests WHERE case_id = ?")
+				.get(input.caseId) as Row;
+			const version = Number(versionRow.version) + 1;
+			this.database
+				.prepare(
+					"INSERT INTO evidence_manifests (id, case_id, version, base_sha, candidate_sha, commands, environment_requirements, outputs, checksums, manifest_json, tool_versions) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+				)
+				.run(
+					id,
+					input.caseId,
+					version,
+					manifest.baseSha,
+					manifest.candidateSha,
+					jsonBoundary(manifest.commands, "evidence commands"),
+					jsonBoundary(
+						manifest.commands.flatMap((command) => command.environment),
+						"evidence environment",
+					),
+					jsonBoundary(
+						manifest.commands.map((command) => command.actual ?? null),
+						"evidence outputs",
+					),
+					jsonBoundary(
+						manifest.commands.map((command) => command.artifactChecksums ?? {}),
+						"evidence checksums",
+					),
+					jsonBoundary(manifest, "evidence manifest"),
+					jsonBoundary(manifest.toolVersions ?? {}, "evidence tool versions"),
+				);
+		});
+		return id;
+	}
+
+	getEvidenceManifest(id: string): EvidenceManifest | undefined {
+		const row = this.database
+			.prepare(
+				"SELECT manifest_json, base_sha, candidate_sha, commands, created_at FROM evidence_manifests WHERE id = ?",
+			)
+			.get(id) as Row | undefined;
+		if (!row) return undefined;
+		if (typeof row.manifest_json === "string") return JSON.parse(row.manifest_json) as EvidenceManifest;
+		return {
+			version: 1,
+			baseSha: rowString(row, "base_sha"),
+			candidateSha: rowString(row, "candidate_sha"),
+			commands: JSON.parse(rowString(row, "commands")),
+			createdAt: rowString(row, "created_at"),
+		};
+	}
+
+	createVerificationRun(input: VerificationRunInput): string {
+		const id = input.id ?? randomUUID();
+		this.withTransaction(() => {
+			this.database
+				.prepare(
+					"INSERT INTO verification_runs (id, manifest_id, verdict, confidence, ci_checks, rationale, uncertainties, actual_results, replay_history, replay_of) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+				)
+				.run(
+					id,
+					input.manifestId,
+					input.report.verdict,
+					input.report.confidence.score,
+					jsonBoundary(input.report.ciChecks, "CI checks"),
+					input.report.rationale,
+					jsonBoundary(input.report.uncertainties, "verification uncertainties"),
+					jsonBoundary(input.report.replay?.commands.map((command) => command.actual) ?? [], "actual results"),
+					jsonBoundary(input.replayOf ? [input.replayOf] : [], "replay history"),
+					input.replayOf ?? null,
+				);
+		});
+		return id;
+	}
+
+	listVerificationRuns(manifestId: string): VerificationRun[] {
+		return this.database
+			.prepare(
+				"SELECT id, manifest_id, verdict, confidence, ci_checks, rationale, uncertainties, created_at, replay_history FROM verification_runs WHERE manifest_id = ? ORDER BY created_at, rowid",
+			)
+			.all(manifestId)
+			.map((row) => ({
+				id: rowString(row as Row, "id"),
+				manifestId: rowString(row as Row, "manifest_id"),
+				verdict: rowString(row as Row, "verdict") as VerificationRun["verdict"],
+				confidence: {
+					score: Number((row as Row).confidence),
+					rationale: rowString(row as Row, "rationale"),
+					uncertainties: JSON.parse(rowString(row as Row, "uncertainties")),
+				},
+				ciChecks: JSON.parse(rowString(row as Row, "ci_checks")),
+				rationale: rowString(row as Row, "rationale"),
+				uncertainties: JSON.parse(rowString(row as Row, "uncertainties")),
+				replayHistory: JSON.parse(rowString(row as Row, "replay_history")),
+				createdAt: rowString(row as Row, "created_at"),
+			}));
 	}
 
 	createJob(input: JobInput): string {

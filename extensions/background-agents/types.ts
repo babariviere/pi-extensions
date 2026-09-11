@@ -153,13 +153,50 @@ export interface AttemptRecord {
 	failure?: string;
 }
 
+export type EvidencePhase = "base" | "candidate";
+
+export interface EvidenceExpectedResult {
+	exitCode: number;
+}
+
+export interface EvidenceActualResult {
+	exitCode: number | null;
+	timedOut: boolean;
+	/** Bounded diagnostic captures. Hashes and byte counts describe the complete streams. */
+	stdout: string;
+	stderr: string;
+	outputHash: string;
+	outputBytes: number;
+	outputTruncated: boolean;
+	stdoutHash: string;
+	stdoutBytes: number;
+	stdoutTruncated: boolean;
+	stderrHash: string;
+	stderrBytes: number;
+	stderrTruncated: boolean;
+	artifactChecksums: Record<string, string>;
+}
+
 export interface EvidenceCommand {
+	/** The executable and argv are persisted separately so replay never invokes a shell. */
 	executable: string;
-	args: string[];
-	workingDirectory: string;
+	argv: string[];
+	/** @deprecated Use argv. Kept for readers of the initial v1 contract. */
+	args?: string[];
+	/** A repository-relative working directory. */
+	cwd: string;
+	/** @deprecated Use cwd. */
+	workingDirectory?: string;
 	timeoutMs: number;
+	/** Names only. Values are supplied from the controller-owned safe environment, never persisted. */
 	environment: string[];
-	expectedExitCode: number;
+	toolVersions?: Record<string, string>;
+	phase: EvidencePhase;
+	purpose: "reproduction" | "acceptance";
+	expected: EvidenceExpectedResult;
+	actual?: EvidenceActualResult;
+	/** @deprecated Use expected.exitCode and actual.exitCode. */
+	expectedExitCode?: number;
 	actualExitCode?: number;
 	outputHash?: string;
 	artifactChecksums?: Record<string, string>;
@@ -171,6 +208,8 @@ export interface EvidenceManifest {
 	candidateSha: string;
 	commands: EvidenceCommand[];
 	createdAt: string;
+	toolVersions?: Record<string, string>;
+	bugReproduction?: boolean;
 	acceptanceSummary?: string;
 }
 
@@ -182,6 +221,7 @@ export interface VerificationRun {
 	ciChecks: Record<string, "pass" | "fail" | "pending" | "missing">;
 	rationale: string;
 	uncertainties: string[];
+	replayHistory?: string[];
 	createdAt: string;
 }
 
