@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, lstatSync, mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -60,4 +60,113 @@ test("fails closed when a configured repository or profile path is missing", () 
 		profiles: [{ id: "profile", provider: "openai", agentDir: "/missing/agent", authFiles: [] }],
 	});
 	assert.throws(() => validateBackgroundAgentsConfig(config, { checkPaths: true }), /does not exist/);
+});
+
+test("rejects permissive source credential files", () => {
+	const root = mkdtempSync(join(tmpdir(), "background-agents-credentials-"));
+	try {
+		const credentialPath = join(root, "slack.json");
+		writeFileSync(credentialPath, '{"token":"secret"}');
+		chmodSync(credentialPath, 0o640);
+		const ownerUid = lstatSync(credentialPath).uid;
+		const config = normalizeBackgroundAgentsConfig({
+			socket: { ownerUid },
+			sources: { slack: { enabled: true, credentialPath } },
+		});
+		assert.throws(() => validateBackgroundAgentsConfig(config, { checkPaths: true }), /group- or world-accessible/);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("rejects a source credential with the wrong owner", () => {
+	const root = mkdtempSync(join(tmpdir(), "background-agents-credentials-"));
+	try {
+		const credentialPath = join(root, "linear.json");
+		writeFileSync(credentialPath, '{"token":"secret"}');
+		chmodSync(credentialPath, 0o600);
+		const stats = lstatSync(credentialPath);
+		const config = normalizeBackgroundAgentsConfig({
+			socket: { ownerUid: stats.uid },
+			sources: { linear: { enabled: true, credentialPath } },
+		});
+		assert.throws(
+			() =>
+				validateBackgroundAgentsConfig(config, {
+					checkPaths: true,
+					credentialStat: () => ({
+						uid: stats.uid + 1,
+						mode: stats.mode,
+						isFile: () => true,
+						isSymbolicLink: () => false,
+					}),
+				}),
+			/owned by the controller user/,
+		);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("rejects symlinked source credentials", () => {
+	const root = mkdtempSync(join(tmpdir(), "background-agents-credentials-"));
+	try {
+		const targetPath = join(root, "datadog.json");
+		const credentialPath = join(root, "datadog-link.json");
+		writeFileSync(targetPath, '{"apiKey":"secret","appKey":"secret"}');
+		chmodSync(targetPath, 0o600);
+		symlinkSync(targetPath, credentialPath);
+		const ownerUid = lstatSync(credentialPath).uid;
+		const config = normalizeBackgroundAgentsConfig({
+			socket: { ownerUid },
+			sources: { datadog: { enabled: true, credentialPath } },
+		});
+		assert.throws(() => validateBackgroundAgentsConfig(config, { checkPaths: true }), /must not be a symlink/);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("rejects directories as source credentials", () => {
+	const root = mkdtempSync(join(tmpdir(), "background-agents-credentials-"));
+	try {
+		const credentialPath = join(root, "slack-credentials");
+		mkdirSync(credentialPath);
+		const ownerUid = lstatSync(credentialPath).uid;
+		const config = normalizeBackgroundAgentsConfig({
+			socket: { ownerUid },
+			sources: { slack: { enabled: true, credentialPath } },
+		});
+		assert.throws(() => validateBackgroundAgentsConfig(config, { checkPaths: true }), /must be a regular file/);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("accepts 0600 credentials for enabled external sources", () => {
+	const root = mkdtempSync(join(tmpdir(), "background-agents-credentials-"));
+	try {
+		const credentialPath = join(root, "credentials.json");
+		writeFileSync(credentialPath, '{"token":"secret"}');
+		chmodSync(credentialPath, 0o600);
+		const ownerUid = lstatSync(credentialPath).uid;
+		const config = normalizeBackgroundAgentsConfig({
+			socket: { ownerUid },
+			sources: {
+				slack: { enabled: true, credentialPath },
+				linear: { enabled: true, credentialPath },
+				datadog: { enabled: true, credentialPath },
+			},
+		});
+		assert.doesNotThrow(() => validateBackgroundAgentsConfig(config, { checkPaths: true }));
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("can disable path checks for pure normalization tests", () => {
+	const config = normalizeBackgroundAgentsConfig({
+		sources: { slack: { enabled: true, credentialPath: "/missing/slack.json" } },
+	});
+	assert.doesNotThrow(() => validateBackgroundAgentsConfig(config, { checkPaths: false }));
 });

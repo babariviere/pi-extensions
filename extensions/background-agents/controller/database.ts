@@ -505,6 +505,37 @@ export class BackgroundAgentsDatabase {
 		};
 	}
 
+	getSourceEvent(eventId: string): SourceEvent | undefined {
+		const row = this.database
+			.prepare(
+				"SELECT source, source_key, revision, received_at, title, body, fingerprint, repository, service, metadata FROM source_events WHERE id = ?",
+			)
+			.get(requiredString(eventId, "eventId")) as Row | undefined;
+		if (!row) return undefined;
+		let metadata: Record<string, unknown> = {};
+		if (row.metadata != null) {
+			try {
+				const value = JSON.parse(rowString(row, "metadata"));
+				if (value && typeof value === "object" && !Array.isArray(value))
+					metadata = value as Record<string, unknown>;
+			} catch (error) {
+				throw new Error("Stored source event contains invalid metadata", { cause: error });
+			}
+		}
+		return {
+			source: source(rowString(row, "source")),
+			sourceKey: rowString(row, "source_key"),
+			revision: rowString(row, "revision"),
+			receivedAt: rowString(row, "received_at"),
+			title: rowString(row, "title"),
+			body: rowString(row, "body"),
+			...(row.fingerprint == null ? {} : { fingerprint: rowString(row, "fingerprint") }),
+			...(row.repository == null ? {} : { repository: rowString(row, "repository") }),
+			...(row.service == null ? {} : { service: rowString(row, "service") }),
+			metadata,
+		};
+	}
+
 	setSourceCursor(sourceName: BackgroundSource, cursor?: string, revision?: string): void {
 		this.withTransaction(() => this.setSourceCursorInTransaction(sourceName, cursor, revision));
 	}

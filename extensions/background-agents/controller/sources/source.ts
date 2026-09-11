@@ -30,6 +30,7 @@ export interface SourceAdapter {
 	readonly source: BackgroundSource;
 	start?(): Promise<void>;
 	stop?(): Promise<void>;
+	poll?(): Promise<unknown>;
 }
 
 export interface NormalizableSourceEvent {

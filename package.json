@@ -60,6 +60,7 @@
     "test": "node --import tsx --test 'extensions/**/*.test.ts'",
     "typecheck": "tsgo -p tsconfig.json",
     "fmt": "biome format --write .",
-    "fmt:check": "biome format ."
+    "fmt:check": "biome format .",
+    "background-agents:controller": "node --import tsx extensions/background-agents/controller/main.ts"
   }
 }

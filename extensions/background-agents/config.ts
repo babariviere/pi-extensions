@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, resolve } from "node:path";
 import type {
@@ -44,6 +44,21 @@ export const DEFAULT_BACKGROUND_AGENTS_CONFIG: BackgroundAgentsConfig = {
 		intervalMs: 60 * 60_000,
 		retention: 7,
 	},
+	sources: {
+		manual: { enabled: true },
+		slack: { enabled: false, url: "https://slack.com/api/apps.connections.open" },
+		linear: { enabled: false, url: "https://api.linear.app/graphql", repositoryMappings: {} },
+		datadog: {
+			enabled: false,
+			url: "https://api.datadoghq.com",
+			monitorQueries: [],
+			errorQueries: [],
+			repositoryMappings: {},
+			overlapMs: 5 * 60_000,
+		},
+	},
+	classifier: { modelVersion: "controller-default", exampleLimit: 12, relatedCaseLimit: 8 },
+	controller: { usageMs: 5 * 60_000, schedulerMs: 5_000, heartbeatMs: 10_000, recoveryMs: 30_000, ciMs: 60_000 },
 };
 
 type RecordValue = Record<string, unknown>;
@@ -69,6 +84,57 @@ function stringList(value: unknown, field: string): string[] {
 	if (value === undefined) return [];
 	if (!Array.isArray(value)) throw new Error(`${field} must be an array`);
 	return value.map((item, index) => stringValue(item, `${field}[${index}]`));
+}
+
+function booleanValue(value: unknown, field: string, fallback: boolean): boolean {
+	if (value === undefined) return fallback;
+	if (typeof value !== "boolean") throw new Error(`${field} must be a boolean`);
+	return value;
+}
+
+function urlValue(value: unknown, field: string, fallback: string): string {
+	const result = stringValue(value ?? fallback, field);
+	try {
+		const url = new URL(result);
+		if (url.protocol !== "https:" && url.protocol !== "http:") throw new Error("unsupported protocol");
+	} catch (error) {
+		throw new Error(`${field} must be an HTTP(S) URL`, { cause: error });
+	}
+	return result;
+}
+
+function optionalPath(value: unknown, field: string, baseDir: string): string | undefined {
+	return value === undefined ? undefined : pathValue(value, field, baseDir);
+}
+
+function mappings(value: unknown, field: string): Record<string, string> {
+	if (value === undefined) return {};
+	const input = recordValue(value, field);
+	return Object.fromEntries(
+		Object.entries(input).map(([key, target]) => [
+			stringValue(key, `${field} key`),
+			stringValue(target, `${field}.${key}`),
+		]),
+	);
+}
+
+function queryList(
+	value: unknown,
+	field: string,
+): Array<{ id: string; query: string; repository?: string; service?: string }> {
+	if (value === undefined) return [];
+	if (!Array.isArray(value)) throw new Error(`${field} must be an array`);
+	return value.map((item, index) => {
+		const query = recordValue(item, `${field}[${index}]`);
+		return {
+			id: stringValue(query.id, `${field}[${index}].id`),
+			query: stringValue(query.query, `${field}[${index}].query`),
+			...(query.repository === undefined
+				? {}
+				: { repository: stringValue(query.repository, `${field}[${index}].repository`) }),
+			...(query.service === undefined ? {} : { service: stringValue(query.service, `${field}[${index}].service`) }),
+		};
+	});
 }
 
 function enumValue<T extends string | number>(value: unknown, field: string, values: readonly T[]): T {
@@ -131,13 +197,40 @@ function repository(value: unknown, index: number, baseDir: string): RepositoryC
 	};
 }
 
+export interface CredentialFileStats {
+	uid: number;
+	mode: number;
+	isFile(): boolean;
+	isSymbolicLink(): boolean;
+}
+
+export type CredentialStat = (path: string) => CredentialFileStats;
+
 function validatePath(path: string, field: string, kind: "directory" | "file-or-directory"): void {
 	if (!existsSync(path)) throw new Error(`${field} does not exist: ${path}`);
 	const stats = statSync(path);
 	if (kind === "directory" && !stats.isDirectory()) throw new Error(`${field} must be a directory: ${path}`);
 }
 
-function validateConfig(config: BackgroundAgentsConfig, checkPaths: boolean): BackgroundAgentsConfig {
+function validateCredentialPath(path: string, field: string, ownerUid: number | undefined, stat: CredentialStat): void {
+	let stats: CredentialFileStats;
+	try {
+		stats = stat(path);
+	} catch {
+		throw new Error(`${field} cannot be accessed: ${path}`);
+	}
+	if (stats.isSymbolicLink()) throw new Error(`${field} must not be a symlink: ${path}`);
+	if (!stats.isFile()) throw new Error(`${field} must be a regular file: ${path}`);
+	if (ownerUid === undefined) throw new Error(`${field} owner cannot be verified: ${path}`);
+	if (stats.uid !== ownerUid) throw new Error(`${field} must be owned by the controller user: ${path}`);
+	if ((stats.mode & 0o077) !== 0) throw new Error(`${field} must not be group- or world-accessible: ${path}`);
+}
+
+function validateConfig(
+	config: BackgroundAgentsConfig,
+	options: { checkPaths: boolean; credentialStat: CredentialStat },
+): BackgroundAgentsConfig {
+	const { checkPaths, credentialStat } = options;
 	if (config.thresholds.noiseMax >= config.thresholds.actionableMin)
 		throw new Error("thresholds.noiseMax must be below actionableMin");
 	for (const scope of Object.values(config.thresholds.scopes ?? {})) {
@@ -145,13 +238,24 @@ function validateConfig(config: BackgroundAgentsConfig, checkPaths: boolean): Ba
 			if (item.noiseMax >= item.actionableMin) throw new Error("scoped noiseMax must be below actionableMin");
 		}
 	}
-	if (config.socket.mode < 0o600 || config.socket.mode > 0o777 || (config.socket.mode & 0o007) !== 0) {
-		throw new Error("socket.mode must be owner-readable/writable and not world-accessible");
+	if (config.socket.mode < 0o600 || config.socket.mode > 0o777 || (config.socket.mode & 0o077) !== 0) {
+		throw new Error("socket.mode must be owner-readable/writable and not group- or world-accessible");
 	}
 	if (new Set(config.repositories.map((item) => item.id)).size !== config.repositories.length)
 		throw new Error("repository ids must be unique");
 	if (new Set(config.profiles.map((item) => item.id)).size !== config.profiles.length)
 		throw new Error("profile ids must be unique");
+	const controllerUid = checkPaths ? (config.socket.ownerUid ?? process.getuid?.()) : undefined;
+	for (const [source, sourceConfig] of Object.entries(config.sources)) {
+		if (source !== "manual" && sourceConfig.enabled && !sourceConfig.credentialPath)
+			throw new Error(`sources.${source}.credentialPath is required when the source is enabled`);
+		if (sourceConfig.credentialPath && checkPaths) {
+			const field = `sources.${source}.credentialPath`;
+			if (source !== "manual" && sourceConfig.enabled)
+				validateCredentialPath(sourceConfig.credentialPath, field, controllerUid, credentialStat);
+			else validatePath(sourceConfig.credentialPath, field, "file-or-directory");
+		}
+	}
 	if (checkPaths) {
 		for (const item of config.repositories) {
 			validatePath(item.root, `repository ${item.id}.root`, "directory");
@@ -198,6 +302,13 @@ export function normalizeBackgroundAgentsConfig(
 	const rawSocket = input.socket === undefined ? {} : recordValue(input.socket, "socket");
 	const rawRollout = input.rollout === undefined ? {} : recordValue(input.rollout, "rollout");
 	const rawBackup = input.backup === undefined ? {} : recordValue(input.backup, "backup");
+	const rawSources = input.sources === undefined ? {} : recordValue(input.sources, "sources");
+	const rawManual = rawSources.manual === undefined ? {} : recordValue(rawSources.manual, "sources.manual");
+	const rawSlack = rawSources.slack === undefined ? {} : recordValue(rawSources.slack, "sources.slack");
+	const rawLinear = rawSources.linear === undefined ? {} : recordValue(rawSources.linear, "sources.linear");
+	const rawDatadog = rawSources.datadog === undefined ? {} : recordValue(rawSources.datadog, "sources.datadog");
+	const rawClassifier = input.classifier === undefined ? {} : recordValue(input.classifier, "classifier");
+	const rawController = input.controller === undefined ? {} : recordValue(input.controller, "controller");
 	const sourceOverridesInput =
 		rawRollout.sourceOverrides === undefined
 			? {}
@@ -306,15 +417,66 @@ export function normalizeBackgroundAgentsConfig(
 			syncCommand:
 				rawBackup.syncCommand === undefined ? undefined : stringList(rawBackup.syncCommand, "backup.syncCommand"),
 		},
+		sources: {
+			manual: { enabled: booleanValue(rawManual.enabled, "sources.manual.enabled", true) },
+			slack: {
+				enabled: booleanValue(rawSlack.enabled, "sources.slack.enabled", false),
+				url: urlValue(rawSlack.url, "sources.slack.url", "https://slack.com/api/apps.connections.open"),
+				...(optionalPath(rawSlack.credentialPath, "sources.slack.credentialPath", baseDir)
+					? { credentialPath: optionalPath(rawSlack.credentialPath, "sources.slack.credentialPath", baseDir) }
+					: {}),
+			},
+			linear: {
+				enabled: booleanValue(rawLinear.enabled, "sources.linear.enabled", false),
+				url: urlValue(rawLinear.url, "sources.linear.url", "https://api.linear.app/graphql"),
+				...(optionalPath(rawLinear.credentialPath, "sources.linear.credentialPath", baseDir)
+					? { credentialPath: optionalPath(rawLinear.credentialPath, "sources.linear.credentialPath", baseDir) }
+					: {}),
+				...(rawLinear.query === undefined ? {} : { query: stringValue(rawLinear.query, "sources.linear.query") }),
+				...(rawLinear.pageSize === undefined
+					? {}
+					: { pageSize: integerValue(rawLinear.pageSize, "sources.linear.pageSize", 1, 1_000) }),
+				repositoryMappings: mappings(rawLinear.repositoryMappings, "sources.linear.repositoryMappings"),
+			},
+			datadog: {
+				enabled: booleanValue(rawDatadog.enabled, "sources.datadog.enabled", false),
+				url: urlValue(rawDatadog.url, "sources.datadog.url", "https://api.datadoghq.com"),
+				...(optionalPath(rawDatadog.credentialPath, "sources.datadog.credentialPath", baseDir)
+					? { credentialPath: optionalPath(rawDatadog.credentialPath, "sources.datadog.credentialPath", baseDir) }
+					: {}),
+				monitorQueries: queryList(rawDatadog.monitorQueries, "sources.datadog.monitorQueries"),
+				errorQueries: queryList(rawDatadog.errorQueries, "sources.datadog.errorQueries"),
+				repositoryMappings: mappings(rawDatadog.repositoryMappings, "sources.datadog.repositoryMappings"),
+				overlapMs: integerValue(rawDatadog.overlapMs ?? 5 * 60_000, "sources.datadog.overlapMs", 0),
+			},
+		},
+		classifier: {
+			modelVersion: stringValue(rawClassifier.modelVersion ?? "controller-default", "classifier.modelVersion"),
+			...(rawClassifier.policyScope === undefined
+				? {}
+				: { policyScope: stringValue(rawClassifier.policyScope, "classifier.policyScope") }),
+			exampleLimit: integerValue(rawClassifier.exampleLimit ?? 12, "classifier.exampleLimit", 1, 100),
+			relatedCaseLimit: integerValue(rawClassifier.relatedCaseLimit ?? 8, "classifier.relatedCaseLimit", 1, 100),
+		},
+		controller: {
+			usageMs: integerValue(rawController.usageMs ?? 5 * 60_000, "controller.usageMs", 1_000),
+			schedulerMs: integerValue(rawController.schedulerMs ?? 5_000, "controller.schedulerMs", 1_000),
+			heartbeatMs: integerValue(rawController.heartbeatMs ?? 10_000, "controller.heartbeatMs", 1_000),
+			recoveryMs: integerValue(rawController.recoveryMs ?? 30_000, "controller.recoveryMs", 1_000),
+			ciMs: integerValue(rawController.ciMs ?? 60_000, "controller.ciMs", 1_000),
+		},
 	};
-	return validateConfig(config, false);
+	return validateConfig(config, { checkPaths: false, credentialStat: lstatSync });
 }
 
 export function validateBackgroundAgentsConfig(
 	config: BackgroundAgentsConfig,
-	options: { checkPaths?: boolean } = {},
+	options: { checkPaths?: boolean; credentialStat?: CredentialStat } = {},
 ): BackgroundAgentsConfig {
-	return validateConfig(config, options.checkPaths === true);
+	return validateConfig(config, {
+		checkPaths: options.checkPaths === true,
+		credentialStat: options.credentialStat ?? lstatSync,
+	});
 }
 
 export function loadBackgroundAgentsConfig(

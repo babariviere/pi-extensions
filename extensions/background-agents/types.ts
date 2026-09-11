@@ -305,4 +305,44 @@ export interface BackgroundAgentsConfig {
 		retention: number;
 		syncCommand?: string[];
 	};
+	sources: BackgroundSourceConfig;
+	classifier: ClassifierConfig;
+	controller: ControllerIntervals;
+}
+
+export interface BackgroundSourceConfig {
+	manual: { enabled: boolean };
+	slack: { enabled: boolean; url: string; credentialPath?: string };
+	linear: {
+		enabled: boolean;
+		url: string;
+		credentialPath?: string;
+		query?: string;
+		pageSize?: number;
+		repositoryMappings: Record<string, string>;
+	};
+	datadog: {
+		enabled: boolean;
+		url: string;
+		credentialPath?: string;
+		monitorQueries: Array<{ id: string; query: string; repository?: string; service?: string }>;
+		errorQueries: Array<{ id: string; query: string; repository?: string; service?: string }>;
+		repositoryMappings: Record<string, string>;
+		overlapMs: number;
+	};
+}
+
+export interface ClassifierConfig {
+	modelVersion: string;
+	policyScope?: string;
+	exampleLimit: number;
+	relatedCaseLimit: number;
+}
+
+export interface ControllerIntervals {
+	usageMs: number;
+	schedulerMs: number;
+	heartbeatMs: number;
+	recoveryMs: number;
+	ciMs: number;
 }

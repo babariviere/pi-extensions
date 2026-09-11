@@ -31,6 +31,7 @@ export interface DatadogSourceOptions extends SourceAdapterOptions {
 	monitorQueries?: DatadogQuery[];
 	errorQueries?: DatadogQuery[];
 	overlapMs?: number;
+	repositoryMappings?: Record<string, string>;
 }
 
 interface Watermark {
@@ -78,6 +79,7 @@ function eventFor(
 	query: DatadogQuery,
 	record: DatadogRecord,
 	receivedAt: Date,
+	repositoryMappings?: Record<string, string>,
 ): Parameters<typeof persistSourceEvent>[1] {
 	const eventFingerprint = fingerprint({ kind, query: query.id, record });
 	const id = recordId(record);
@@ -92,7 +94,7 @@ function eventFor(
 		title,
 		body,
 		fingerprint: eventFingerprint,
-		repository: query.repository,
+		repository: query.repository ? (repositoryMappings?.[query.repository] ?? query.repository) : undefined,
 		service: record.service ?? query.service,
 		metadata: { queryId: query.id, query: query.query, kind, payload: record },
 	};
@@ -124,7 +126,12 @@ export class DatadogSourceAdapter implements SourceAdapter {
 			for (const record of records) {
 				const receivedAt = recordTime(record, now);
 				watermark = Math.max(watermark, receivedAt.getTime());
-				results.push(persistSourceEvent(this.options, eventFor("monitor", query, record, receivedAt)));
+				results.push(
+					persistSourceEvent(
+						this.options,
+						eventFor("monitor", query, record, receivedAt, this.options.repositoryMappings),
+					),
+				);
 			}
 		}
 		for (const query of this.options.errorQueries ?? []) {
@@ -134,7 +141,12 @@ export class DatadogSourceAdapter implements SourceAdapter {
 			for (const record of records) {
 				const receivedAt = recordTime(record, now);
 				watermark = Math.max(watermark, receivedAt.getTime());
-				results.push(persistSourceEvent(this.options, eventFor("error", query, record, receivedAt)));
+				results.push(
+					persistSourceEvent(
+						this.options,
+						eventFor("error", query, record, receivedAt, this.options.repositoryMappings),
+					),
+				);
 			}
 		}
 		if (this.options.store.setSourceCursor) {
