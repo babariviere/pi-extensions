@@ -7,6 +7,9 @@ export interface GitHubPullRequest {
 	branch: string;
 	base: string;
 	isDraft: boolean;
+	headSha?: string;
+	title?: string;
+	body?: string;
 }
 
 export interface VerificationBoundary {
@@ -77,7 +80,6 @@ export class GitHubController {
 	}
 
 	async createDraftPullRequest(input: DraftPullRequestInput): Promise<GitHubPullRequest> {
-		await this.pushBranch(input.worktree, input.branch);
 		const args = [
 			"pr",
 			"create",
@@ -101,7 +103,7 @@ export class GitHubController {
 			"view",
 			input.branch,
 			"--json",
-			"number,url,isDraft,headRefName,baseRefName",
+			"number,url,isDraft,headRefName,baseRefName,headRefOid,title,body",
 		]);
 		const details = jsonObject(viewed.stdout.trim());
 		if (!details) throw new Error("gh pr view returned invalid JSON");
@@ -115,7 +117,33 @@ export class GitHubController {
 			branch: typeof value.headRefName === "string" ? value.headRefName : branch,
 			base: typeof value.baseRefName === "string" ? value.baseRefName : base,
 			isDraft: value.isDraft === undefined ? true : value.isDraft === true,
+			...(typeof value.headRefOid === "string" ? { headSha: value.headRefOid } : {}),
+			...(typeof value.title === "string" ? { title: value.title } : {}),
+			...(typeof value.body === "string" ? { body: value.body } : {}),
 		};
+	}
+
+	async getPullRequest(reference: number | string): Promise<GitHubPullRequest | null> {
+		const args = [
+			"pr",
+			"view",
+			String(reference),
+			"--json",
+			"number,url,isDraft,headRefName,baseRefName,headRefOid,title,body",
+		];
+		const result = await this.commandRunner("gh", args, {});
+		if (result.code !== 0) {
+			if (/not found|could not resolve to a pull request|no pull request/i.test(result.stderr)) return null;
+			throw new GitHubCommandError(args, result);
+		}
+		const details = jsonObject(result.stdout.trim());
+		if (!details) throw new Error("gh pr view returned invalid JSON");
+		return this.pullRequestFrom(details, typeof details.headRefName === "string" ? details.headRefName : "", "");
+	}
+
+	async findPullRequest(branch: string, base: string): Promise<GitHubPullRequest | null> {
+		const pullRequest = await this.getPullRequest(branch);
+		return pullRequest && pullRequest.base === base ? pullRequest : null;
 	}
 
 	async updatePullRequest(reference: number | string, metadata: { title: string; body: string }): Promise<void> {

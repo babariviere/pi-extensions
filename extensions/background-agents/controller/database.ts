@@ -206,6 +206,22 @@ export interface EffectClaim {
 	expiresAt: string;
 }
 
+export interface StoredEffect {
+	id: string;
+	operationKey: string;
+	provider: string;
+	action: string;
+	intent: unknown;
+	remoteIdentifier?: string;
+	outcome?: unknown;
+	reconciliationState: "pending" | "running" | "succeeded" | "failed" | "unknown";
+	claimOwner?: string;
+	leaseExpiresAt?: string;
+	attemptCount: number;
+	createdAt: string;
+	updatedAt: string;
+}
+
 export interface TrustedCheckpointInput {
 	attemptId: string;
 	kind: string;
@@ -975,6 +991,103 @@ export class BackgroundAgentsDatabase {
 				);
 		});
 		return id;
+	}
+
+	/** Insert an effect intent once, returning the existing record for duplicate requests. */
+	ensureEffect(input: EffectInput): string {
+		const id = input.id ?? randomUUID();
+		const operationKey = requiredString(input.operationKey, "operationKey");
+		const provider = requiredString(input.provider, "provider");
+		const action = requiredString(input.action, "action");
+		const intent = jsonBoundary(input.intent, "intent");
+		return this.withTransaction(() => {
+			const existing = this.database
+				.prepare("SELECT id, provider, action, intent FROM external_effects WHERE operation_key = ?")
+				.get(operationKey) as Row | undefined;
+			if (existing) {
+				if (
+					rowString(existing, "provider") !== provider ||
+					rowString(existing, "action") !== action ||
+					rowString(existing, "intent") !== intent
+				)
+					throw new Error("Effect operation key is already used for a different intent: " + operationKey);
+				return rowString(existing, "id");
+			}
+			this.database
+				.prepare(
+					"INSERT INTO external_effects (id, operation_key, provider, action, intent) VALUES (?, ?, ?, ?, ?)",
+				)
+				.run(id, operationKey, provider, action, intent);
+			return id;
+		});
+	}
+
+	getEffect(operationKey: string): StoredEffect | undefined {
+		const row = this.database
+			.prepare(
+				"SELECT id, operation_key, provider, action, intent, remote_identifier, outcome, reconciliation_state, claim_owner, lease_expires_at, attempt_count, created_at, updated_at FROM external_effects WHERE operation_key = ?",
+			)
+			.get(requiredString(operationKey, "operationKey")) as Row | undefined;
+		if (!row) return undefined;
+		let intent: unknown;
+		let outcome: unknown;
+		try {
+			intent = JSON.parse(rowString(row, "intent"));
+			outcome = row.outcome == null ? undefined : JSON.parse(rowString(row, "outcome"));
+		} catch (error) {
+			throw new Error("Stored external effect contains invalid JSON", { cause: error });
+		}
+		return {
+			id: rowString(row, "id"),
+			operationKey: rowString(row, "operation_key"),
+			provider: rowString(row, "provider"),
+			action: rowString(row, "action"),
+			intent,
+			...(row.remote_identifier == null ? {} : { remoteIdentifier: rowString(row, "remote_identifier") }),
+			...(outcome === undefined ? {} : { outcome }),
+			reconciliationState: rowString(row, "reconciliation_state") as StoredEffect["reconciliationState"],
+			...(row.claim_owner == null ? {} : { claimOwner: rowString(row, "claim_owner") }),
+			...(row.lease_expires_at == null ? {} : { leaseExpiresAt: rowString(row, "lease_expires_at") }),
+			attemptCount: Number(row.attempt_count),
+			createdAt: rowString(row, "created_at"),
+			updatedAt: rowString(row, "updated_at"),
+		};
+	}
+
+	completeEffect(operationKey: string, owner: string, outcome: unknown = {}, remoteIdentifier?: string): void {
+		this.setEffectOutcome(operationKey, owner, "succeeded", outcome, remoteIdentifier);
+	}
+
+	markEffectUnknown(operationKey: string, owner: string, outcome: unknown): void {
+		this.setEffectOutcome(operationKey, owner, "unknown", outcome);
+	}
+
+	failEffect(operationKey: string, owner: string, outcome: unknown): void {
+		this.setEffectOutcome(operationKey, owner, "failed", outcome);
+	}
+
+	private setEffectOutcome(
+		operationKey: string,
+		owner: string,
+		state: "succeeded" | "failed" | "unknown",
+		outcome: unknown,
+		remoteIdentifier?: string,
+	): void {
+		const changed = this.withTransaction(() =>
+			this.database
+				.prepare(
+					"UPDATE external_effects SET reconciliation_state = ?, outcome = ?, remote_identifier = coalesce(?, remote_identifier), claim_owner = NULL, lease_expires_at = NULL, updated_at = ? WHERE operation_key = ? AND reconciliation_state = 'running' AND claim_owner = ?",
+				)
+				.run(
+					state,
+					jsonBoundary(outcome, "effect outcome"),
+					remoteIdentifier ?? null,
+					new Date().toISOString(),
+					requiredString(operationKey, "operationKey"),
+					requiredString(owner, "owner"),
+				),
+		);
+		if (changed.changes !== 1) throw new Error("Effect claim is no longer owned: " + operationKey);
 	}
 
 	claimEffect(operationKey: string, owner: string, leaseMs = DEFAULT_LEASE_MS, now = new Date()): EffectClaim | null {

@@ -74,6 +74,7 @@ export class GitStackController {
 				owner: item.owner,
 				baseRef: base,
 			});
+			await this.github.pushBranch(worktree.path, branch);
 			const pullRequest = await this.github.createDraftPullRequest({
 				worktree: worktree.path,
 				branch,
