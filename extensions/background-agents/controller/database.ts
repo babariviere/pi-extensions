@@ -35,8 +35,8 @@ const CASE_TRANSITIONS: Record<CaseState, readonly CaseState[]> = {
 	"question-analysis": ["investigating", "handled", "paused", "cancelled"],
 	specification: ["awaiting-approval", "paused", "cancelled"],
 	"awaiting-approval": ["specification", "implementation", "paused", "cancelled"],
-	implementation: ["verification", "retry", "blocked", "paused", "cancelled"],
-	verification: ["pull-request-review", "handled", "retry", "blocked", "paused", "cancelled"],
+	implementation: ["verification", "retry", "blocked", "paused", "paused-usage", "cancelled"],
+	verification: ["pull-request-review", "handled", "retry", "blocked", "paused", "paused-usage", "cancelled"],
 	"pull-request-review": ["handled", "retry", "blocked", "paused", "cancelled"],
 	paused: [
 		"classified",
@@ -46,11 +46,14 @@ const CASE_TRANSITIONS: Record<CaseState, readonly CaseState[]> = {
 		"awaiting-approval",
 		"implementation",
 		"verification",
+		"pull-request-review",
+		"retry",
+		"blocked",
 		"cancelled",
 	],
 	"paused-usage": ["implementation", "verification", "retry", "cancelled"],
 	blocked: ["retry", "paused", "cancelled"],
-	retry: ["investigating", "specification", "implementation", "verification", "cancelled"],
+	retry: ["investigating", "specification", "implementation", "verification", "paused", "cancelled"],
 	handled: [],
 	cancelled: [],
 };
@@ -210,6 +213,10 @@ export class BackgroundAgentsDatabase {
 
 	exec(sql: string): void {
 		this.database.exec(sql);
+	}
+
+	run(sql: string, ...parameters: unknown[]): { changes: number } {
+		return this.database.prepare(sql).run(...(parameters as never[])) as { changes: number };
 	}
 
 	get<T extends Row = Row>(sql: string, ...parameters: unknown[]): T | undefined {
