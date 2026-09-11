@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { test } from "node:test";
-import { buildSystemdRunArgs, preflightLinuxHost } from "./systemd.ts";
+import { buildSystemdRunArgs, preflightLinuxHost, waitForTransientService } from "./systemd.ts";
 
 test("builds strict transient-service argv with only approved write paths", () => {
 	const args = buildSystemdRunArgs({
@@ -72,4 +72,17 @@ test("fails closed on portable non-Linux hosts and checks injected Linux depende
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
+});
+
+test("waits for a transient unit to report a successful terminal state", async () => {
+	const states = [
+		"ActiveState=active\nResult=running\nExecMainStatus=0\n",
+		"ActiveState=inactive\nResult=success\nExecMainStatus=0\n",
+	];
+	const result = await waitForTransientService("background-a", {
+		timeoutMs: 1000,
+		pollMs: 1,
+		inspector: { run: async () => ({ ok: true, stdout: states.shift() ?? states[0] }) },
+	});
+	assert.deepEqual(result, { state: "succeeded", exitCode: 0 });
 });

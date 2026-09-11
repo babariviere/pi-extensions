@@ -21,6 +21,18 @@ test("selects a role-safe isolated profile and stages credentials without return
 		assert.equal(readFileSync(prepared.credentialFiles[0]!, "utf8"), '{"token":"secret"}');
 		assert.equal(statSync(prepared.credentialFiles[0]!).mode & 0o077, 0);
 		assert.equal(JSON.stringify(prepared).includes("secret"), false);
+		assert.deepEqual(selectRuntimeProfile(config, "investigator", { attemptDir: join(root, "attempt") }).tools, [
+			"read",
+			"grep",
+			"find",
+			"ls",
+		]);
+		assert.deepEqual(selectRuntimeProfile(config, "spec-planner", { attemptDir: join(root, "attempt") }).tools, [
+			"read",
+			"grep",
+			"find",
+			"ls",
+		]);
 		assert.throws(
 			() => selectRuntimeProfile(config, "investigator", { attemptDir: join(root, "attempt"), tools: ["bash"] }),
 			/not tool-capable/,

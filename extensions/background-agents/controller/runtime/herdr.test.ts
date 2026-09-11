@@ -56,6 +56,12 @@ test("persists context and launch metadata while keeping secrets out of pane arg
 					createTab: async () => ({ tabId: "tab", rootPaneId: "pane" }),
 					waitForShellReady: async () => ({ ok: true }),
 					runCommand: async (_pane, argv) => {
+						const pending = database.get<{ systemd_unit: string; pane_id: string }>(
+							"SELECT systemd_unit, pane_id FROM attempts WHERE id = ?",
+							claim.attemptId,
+						);
+						assert.equal(pending?.systemd_unit, `background-agent-${claim.attemptId}`);
+						assert.equal(pending?.pane_id, `pending:background-agent-${claim.attemptId}`);
 						calls.push(argv);
 						return { ok: true };
 					},

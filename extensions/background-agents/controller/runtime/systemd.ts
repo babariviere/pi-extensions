@@ -203,6 +203,67 @@ export interface TransientServiceRunner {
 	run(args: string[], signal?: AbortSignal): Promise<CommandResult>;
 }
 
+export interface TransientServiceCompletion {
+	state: "succeeded" | "failed" | "timed-out";
+	exitCode?: number;
+	reason?: string;
+}
+
+export interface SystemdUnitInspector {
+	run(command: string, args: string[]): Promise<CommandResult>;
+}
+
+const defaultInspector: SystemdUnitInspector = defaultRunner;
+
+/** Wait for the user manager to observe the transient unit's terminal state. */
+export async function waitForTransientService(
+	unit: string,
+	options: { timeoutMs: number; inspector?: SystemdUnitInspector; signal?: AbortSignal; pollMs?: number },
+): Promise<TransientServiceCompletion> {
+	safeUnit(unit);
+	if (!Number.isSafeInteger(options.timeoutMs) || options.timeoutMs <= 0)
+		throw new Error("systemd wait timeout must be a positive integer");
+	const inspector = options.inspector ?? defaultInspector;
+	const deadline = Date.now() + options.timeoutMs;
+	let observed = false;
+	let lastError = "";
+	while (Date.now() < deadline) {
+		if (options.signal?.aborted) return { state: "timed-out", reason: "systemd wait cancelled" };
+		const result = await inspector.run("systemctl", [
+			"--user",
+			"show",
+			"--no-pager",
+			`--property=ActiveState,Result,ExecMainStatus`,
+			unit,
+		]);
+		if (result.ok) {
+			const values = Object.fromEntries(
+				(result.stdout ?? "")
+					.split("\n")
+					.map((line) => line.split("=", 2))
+					.filter(([key, value]) => Boolean(key && value !== undefined)),
+			);
+			const active = values.ActiveState;
+			if (active === "active" || active === "activating" || active === "deactivating") observed = true;
+			if (active === "inactive" || active === "failed") {
+				const exitCode = values.ExecMainStatus === undefined ? undefined : Number(values.ExecMainStatus);
+				const success = values.Result === "success" && (exitCode === undefined || exitCode === 0);
+				return success
+					? { state: "succeeded", ...(exitCode === undefined ? {} : { exitCode }) }
+					: { state: "failed", ...(exitCode === undefined ? {} : { exitCode }), reason: values.Result ?? active };
+			}
+		} else lastError = result.error ?? "systemd unit inspection failed";
+		await new Promise<void>((resolve) =>
+			setTimeout(resolve, Math.min(options.pollMs ?? 100, Math.max(1, deadline - Date.now()))),
+		);
+	}
+	return {
+		state: "timed-out",
+		reason:
+			lastError || (observed ? "systemd unit did not complete before the deadline" : "systemd unit did not start"),
+	};
+}
+
 export async function runTransientService(
 	options: SystemdLaunchOptions,
 	runner: TransientServiceRunner,

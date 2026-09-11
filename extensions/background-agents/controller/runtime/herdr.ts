@@ -1,4 +1,6 @@
+import { chmodSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { randomUUID } from "node:crypto";
 import type { HerdrTab } from "../../../spindle/agents/herdr-parse.ts";
 import { herdr as defaultHerdr, type HerdrClient } from "../../../spindle/agents/herdr-client.ts";
 import type { BackgroundAgentsDatabase } from "../database.ts";
@@ -23,6 +25,8 @@ export interface HerdrAttemptOptions {
 	unit?: string;
 	model?: string;
 	prompt?: string;
+	command?: string;
+	commandArgsPrefix?: string[];
 	preflight?: HostPreflightOptions;
 }
 
@@ -51,7 +55,7 @@ function modelArg(runtime: PreparedRuntimeProfile, override?: string): string | 
 }
 
 function piArgs(options: HerdrAttemptOptions, contextPath: string): string[] {
-	const args = ["--session", join(options.runtime.sessionDir, "session.jsonl")];
+	const args = ["--print", "--print-turn", "--session", join(options.runtime.sessionDir, "session.jsonl")];
 	const model = modelArg(options.runtime, options.model);
 	if (model) args.push("--model", model);
 	if (options.runtime.thinking !== "off") args.push("--thinking", options.runtime.thinking);
@@ -66,6 +70,31 @@ function piArgs(options: HerdrAttemptOptions, contextPath: string): string[] {
 		options.prompt ?? `Read the context manifest at ${contextPath} and perform the assigned ${options.role} task.`,
 	);
 	return args;
+}
+
+function persistLaunchIntent(options: HerdrAttemptOptions, unit: string, paneIntent: string): string {
+	const path = join(options.attemptDirectory, "launch-intent.json");
+	const content = `${JSON.stringify({
+		version: 1,
+		attemptId: options.attemptId,
+		unit,
+		paneIntent,
+		worktree: options.worktreeDirectory,
+	})}\n`;
+	mkdirSync(options.attemptDirectory, { recursive: true, mode: 0o700 });
+	const temporary = `${path}.${randomUUID()}.tmp`;
+	writeFileSync(temporary, content, { mode: 0o600 });
+	chmodSync(temporary, 0o600);
+	renameSync(temporary, path);
+	chmodSync(path, 0o600);
+	options.database.createArtifact({
+		caseId: options.caseId,
+		attemptId: options.attemptId,
+		kind: "launch-intent",
+		path,
+		metadata: { version: 1, unit, paneIntent },
+	});
+	return path;
 }
 
 /** Launch a durable attempt in a fresh Herdr pane and a transient systemd service. */
@@ -83,6 +112,16 @@ export async function launchAttemptThroughHerdr(
 		database: options.database,
 	});
 	const unit = options.unit ?? `background-agent-${options.attemptId}`;
+	const paneIntent = `pending:${unit}`;
+	persistLaunchIntent(options, unit, paneIntent);
+	options.database.run(
+		"UPDATE attempts SET systemd_unit = ?, pane_id = ?, worktree = ? WHERE id = ?",
+		unit,
+		paneIntent,
+		options.worktreeDirectory,
+		options.attemptId,
+	);
+	const childArgs = piArgs(options, contextArtifact.path);
 	const command = [
 		"systemd-run",
 		...buildSystemdRunArgs({
@@ -94,8 +133,9 @@ export async function launchAttemptThroughHerdr(
 			gitDirectory: options.gitDirectory,
 			profileDirectory: runtime.agentDir,
 			sessionDirectory: runtime.sessionDir,
-			piArgs: piArgs(options, contextArtifact.path),
+			piArgs: [...(options.commandArgsPrefix ?? []), ...childArgs],
 			limits: options.limits,
+			...(options.command ? { command: options.command } : {}),
 		}),
 	];
 	const preflight = dependencies.preflight ?? assertLinuxHostPreflight;

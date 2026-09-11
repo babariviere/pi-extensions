@@ -1,10 +1,14 @@
 import { pathToFileURL } from "node:url";
 import { loadBackgroundAgentsConfig } from "../config.ts";
+import { createProductionAttemptRunner } from "./attempt-runner.ts";
 import { createBackgroundAgentsController, type BackgroundAgentsController } from "./controller.ts";
 
 export async function runBackgroundAgentsController(configPath?: string): Promise<BackgroundAgentsController> {
 	const config = loadBackgroundAgentsConfig({ path: configPath, checkPaths: true });
-	const controller = createBackgroundAgentsController({ config });
+	const controller = createBackgroundAgentsController({
+		config,
+		attemptRunner: createProductionAttemptRunner({ config }),
+	});
 	let stopping: Promise<void> | undefined;
 	const stop = async () => {
 		if (stopping) return stopping;

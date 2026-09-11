@@ -8,14 +8,25 @@ export interface RoleRuntimeProfile {
 	tools: string[];
 	thinking: ThinkingLevel;
 	toolCapable: boolean;
+	writeCapable: boolean;
 }
 
 export const DEFAULT_ROLE_RUNTIME_PROFILES: Readonly<Record<AgentRole, RoleRuntimeProfile>> = {
-	classifier: { tools: [], thinking: "low", toolCapable: false },
-	investigator: { tools: ["read", "grep", "find", "ls"], thinking: "medium", toolCapable: false },
-	"spec-planner": { tools: ["read", "grep", "find", "ls"], thinking: "high", toolCapable: false },
-	worker: { tools: ["read", "write", "edit", "grep", "find", "ls", "bash"], thinking: "high", toolCapable: true },
-	verifier: { tools: ["read", "grep", "find", "ls", "bash"], thinking: "high", toolCapable: true },
+	classifier: { tools: [], thinking: "low", toolCapable: false, writeCapable: false },
+	investigator: { tools: ["read", "grep", "find", "ls"], thinking: "medium", toolCapable: true, writeCapable: false },
+	"spec-planner": { tools: ["read", "grep", "find", "ls"], thinking: "high", toolCapable: true, writeCapable: false },
+	worker: {
+		tools: ["read", "write", "edit", "grep", "find", "ls", "bash"],
+		thinking: "high",
+		toolCapable: true,
+		writeCapable: true,
+	},
+	verifier: {
+		tools: ["read", "grep", "find", "ls", "bash"],
+		thinking: "high",
+		toolCapable: true,
+		writeCapable: false,
+	},
 };
 
 export interface SelectedRuntimeProfile {
@@ -66,6 +77,10 @@ export function selectRuntimeProfile(
 	const defaults = DEFAULT_ROLE_RUNTIME_PROFILES[role];
 	const tools = options.tools ? [...options.tools] : [...defaults.tools];
 	if (!defaults.toolCapable && tools.length > 0) throw new Error(`${role} is not tool-capable`);
+	if (!defaults.writeCapable && tools.some((tool) => !defaults.tools.includes(tool)))
+		throw new Error(`${role} is not tool-capable for the requested boundary`);
+	if (!defaults.writeCapable && tools.some((tool) => ["write", "edit", "applyPatch"].includes(tool)))
+		throw new Error(`${role} is not write-capable`);
 	const agentDir = requiredPath(join(options.attemptDir, "pi-profile"), "isolated agent directory");
 	const sessionDir = requiredPath(join(options.attemptDir, "sessions"), "session directory");
 	return {
