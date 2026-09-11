@@ -1,0 +1,152 @@
+{
+  "configVersion": 1,
+  "databasePath": "/home/<operator>/.pi/agent/background-agents.sqlite",
+  "repositories": [
+    {
+      "id": "example-repository",
+      "root": "/srv/<operator>/src/example-repository",
+      "gitDir": "/srv/<operator>/src/example-repository/.git",
+      "requiredChecks": ["test"]
+    }
+  ],
+  "thresholds": {
+    "actionableMin": 70,
+    "noiseMax": 30,
+    "scopes": {
+      "source": {
+        "slack": { "actionableMin": 75, "noiseMax": 25 }
+      },
+      "service": {
+        "<service-name>": { "actionableMin": 80, "noiseMax": 20 }
+      },
+      "monitor": {
+        "<monitor-id>": { "actionableMin": 80, "noiseMax": 20 }
+      },
+      "environment": {
+        "production": { "actionableMin": 90, "noiseMax": 10 }
+      },
+      "repository": {
+        "example-repository": { "actionableMin": 75, "noiseMax": 25 }
+      }
+    }
+  },
+  "pollIntervalsMs": {
+    "linear": 300000,
+    "datadog": 60000,
+    "slackReconnect": 5000
+  },
+  "profiles": [
+    {
+      "id": "anthropic-background",
+      "provider": "anthropic",
+      "agentDir": "/srv/<operator>/background-profiles/anthropic",
+      "authFiles": ["/srv/<operator>/background-credentials/anthropic-auth.json"],
+      "allowedModels": ["<anthropic-model>"],
+      "allowedRoles": ["classifier", "investigator", "spec-planner", "worker", "verifier"],
+      "maxBackgroundAttempts": 1,
+      "interactiveReserve": 1,
+      "usageStaleAfterMs": 900000
+    },
+    {
+      "id": "openai-background",
+      "provider": "openai",
+      "agentDir": "/srv/<operator>/background-profiles/openai",
+      "authFiles": ["/srv/<operator>/background-credentials/openai-auth.json"],
+      "allowedModels": ["<openai-model>"],
+      "allowedRoles": ["verifier"],
+      "maxBackgroundAttempts": 1,
+      "interactiveReserve": 1,
+      "usageStaleAfterMs": 900000
+    }
+  ],
+  "systemd": {
+    "maxRuntimeMs": 86400000,
+    "memoryLimitBytes": 2147483648,
+    "cpuQuotaPercent": 100,
+    "processLimit": 256
+  },
+  "ci": {
+    "requiredChecks": ["test"],
+    "maxWaitMs": 1800000
+  },
+  "socket": {
+    "path": "/home/<operator>/.pi/agent/background-agents.sock",
+    "ownerUid": 1000,
+    "mode": 384,
+    "maxRequestBytes": 1048576
+  },
+  "rollout": {
+    "defaultMode": "observe",
+    "sourceOverrides": {
+      "manual": "observe",
+      "linear": "observe"
+    },
+    "repositoryOverrides": {
+      "example-repository": "observe"
+    }
+  },
+  "backup": {
+    "directory": "/home/<operator>/.pi/agent/background-agent-backups",
+    "intervalMs": 3600000,
+    "retention": 7,
+    "syncCommand": ["<sync-program>", "<destination>"]
+  },
+  "sources": {
+    "manual": {
+      "enabled": true
+    },
+    "slack": {
+      "enabled": false,
+      "url": "https://slack.com/api/apps.connections.open",
+      "credentialPath": "/srv/<operator>/background-credentials/slack.json"
+    },
+    "linear": {
+      "enabled": false,
+      "url": "https://api.linear.app/graphql",
+      "credentialPath": "/srv/<operator>/background-credentials/linear.json",
+      "query": "<optional GraphQL query>",
+      "pageSize": 100,
+      "repositoryMappings": {
+        "<linear-repository-value>": "example-repository"
+      }
+    },
+    "datadog": {
+      "enabled": false,
+      "url": "https://api.datadoghq.com",
+      "credentialPath": "/srv/<operator>/background-credentials/datadog.json",
+      "monitorQueries": [
+        {
+          "id": "<monitor-query-id>",
+          "query": "<datadog monitor query>",
+          "repository": "example-repository",
+          "service": "<service-name>"
+        }
+      ],
+      "errorQueries": [
+        {
+          "id": "<error-query-id>",
+          "query": "<datadog log query>",
+          "repository": "example-repository",
+          "service": "<service-name>"
+        }
+      ],
+      "repositoryMappings": {
+        "<datadog-repository-value>": "example-repository"
+      },
+      "overlapMs": 300000
+    }
+  },
+  "classifier": {
+    "modelVersion": "<classifier-model-version>",
+    "policyScope": "<optional-policy-scope>",
+    "exampleLimit": 12,
+    "relatedCaseLimit": 8
+  },
+  "controller": {
+    "usageMs": 300000,
+    "schedulerMs": 5000,
+    "heartbeatMs": 10000,
+    "recoveryMs": 30000,
+    "ciMs": 60000
+  }
+}

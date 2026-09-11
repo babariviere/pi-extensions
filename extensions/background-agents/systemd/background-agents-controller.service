@@ -1,0 +1,30 @@
+[Unit]
+Description=Background agents controller
+Wants=network-online.target
+After=network-online.target
+
+# This is a user unit. Replace every /absolute/path/to/... placeholder before enabling it.
+[Service]
+Type=simple
+Environment=BACKGROUND_AGENTS_CONFIG=%h/.pi/agent/background-agents.json
+Environment=PATH=/absolute/path/to/node24/bin:/usr/local/bin:/usr/bin
+ExecStart=/absolute/path/to/node24/bin/node --import /absolute/path/to/pi-extensions/node_modules/tsx/dist/loader.mjs /absolute/path/to/pi-extensions/extensions/background-agents/controller/main.ts
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=30s
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/.pi/agent
+# Replace with the configured worktree root. Keep primary checkout roots read-only.
+ReadWritePaths=/absolute/path/to/worktree-root
+# Add one entry per configured repository's shared Git metadata path.
+ReadWritePaths=/absolute/path/to/repository/.git
+UMask=0077
+LimitNOFILE=4096
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target
