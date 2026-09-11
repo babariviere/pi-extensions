@@ -1,0 +1,227 @@
+/** Wire-safe contracts shared by the background-agent controller and dashboard. */
+
+export type BackgroundSource = "manual" | "slack" | "linear" | "datadog";
+export type InputKind = "error" | "bug-report" | "feature" | "question" | "maintenance" | "other" | "unknown";
+export type ClassificationDisposition = "actionable" | "noise" | "ambiguous";
+export type AutonomyDisposition = "quick-fix-candidate" | "spec-required" | "needs-human";
+
+export type CaseState =
+	| "intake"
+	| "classified"
+	| "investigating"
+	| "question-analysis"
+	| "specification"
+	| "awaiting-approval"
+	| "implementation"
+	| "verification"
+	| "pull-request-review"
+	| "paused"
+	| "paused-usage"
+	| "blocked"
+	| "retry"
+	| "handled"
+	| "cancelled";
+
+export type CaseAction =
+	| "approve-specification"
+	| "request-changes"
+	| "resume"
+	| "reclassify"
+	| "cancel"
+	| "mark-handled"
+	| "reject";
+
+export type AgentRole = "classifier" | "investigator" | "spec-planner" | "worker" | "verifier";
+export type AttemptState = "queued" | "running" | "succeeded" | "failed" | "cancelled" | "paused" | "needs-human";
+export type VerificationVerdict = "pass" | "fail" | "needs-human";
+export type RolloutMode = "observe" | "supervised" | "autonomous-pr";
+export type ProviderKind = "anthropic" | "openai";
+
+/** A score is deliberately separate from a boolean decision. */
+export interface Score {
+	value: number;
+	rationale?: string;
+}
+
+export interface Confidence {
+	score: number;
+	rationale: string;
+	uncertainties: string[];
+}
+
+export interface SourceEvent {
+	source: BackgroundSource;
+	sourceKey: string;
+	revision?: string;
+	receivedAt: string;
+	title: string;
+	body: string;
+	fingerprint?: string;
+	repository?: string;
+	service?: string;
+	metadata?: Record<string, unknown>;
+}
+
+export interface Classification {
+	inputKind: InputKind;
+	disposition: ClassificationDisposition;
+	actionability: number;
+	noise: number;
+	confidence: number;
+	rationale: string;
+	fingerprint?: string;
+	policyVersion: string;
+	modelVersion: string;
+	influentialExamples: string[];
+}
+
+export interface CaseSummary {
+	id: string;
+	title: string;
+	source: BackgroundSource;
+	state: CaseState;
+	repository?: string;
+	priority?: number;
+	rollout: RolloutMode;
+	createdAt: string;
+	updatedAt: string;
+}
+
+export interface CaseRecord extends CaseSummary {
+	sourceKey: string;
+	classification?: Classification;
+	autonomy?: AutonomyDisposition;
+	confidence?: Confidence;
+}
+
+export interface RelatedCase {
+	caseId: string;
+	type: "duplicate" | "recurrence" | "related";
+	score: number;
+	rationale: string;
+}
+
+export interface AttemptRecord {
+	id: string;
+	caseId: string;
+	role: AgentRole;
+	generation: number;
+	state: AttemptState;
+	profileId?: string;
+	model?: string;
+	systemdUnit?: string;
+	paneId?: string;
+	worktree?: string;
+	branch?: string;
+	heartbeatAt?: string;
+	startedAt?: string;
+	finishedAt?: string;
+	failure?: string;
+}
+
+export interface EvidenceCommand {
+	executable: string;
+	args: string[];
+	workingDirectory: string;
+	timeoutMs: number;
+	environment: string[];
+	expectedExitCode: number;
+	actualExitCode?: number;
+	outputHash?: string;
+	artifactChecksums?: Record<string, string>;
+}
+
+export interface EvidenceManifest {
+	version: 1;
+	baseSha: string;
+	candidateSha: string;
+	commands: EvidenceCommand[];
+	createdAt: string;
+	acceptanceSummary?: string;
+}
+
+export interface VerificationRun {
+	id: string;
+	manifestId: string;
+	verdict: VerificationVerdict;
+	confidence: Confidence;
+	ciChecks: Record<string, "pass" | "fail" | "pending" | "missing">;
+	rationale: string;
+	uncertainties: string[];
+	createdAt: string;
+}
+
+export interface ProviderProfile {
+	id: string;
+	provider: ProviderKind;
+	agentDir: string;
+	authFiles: string[];
+	allowedModels: string[];
+	allowedRoles: AgentRole[];
+	maxBackgroundAttempts: number;
+	interactiveReserve: number;
+	usageStaleAfterMs: number;
+}
+
+export interface SocketContract {
+	path: string;
+	ownerUid?: number;
+	mode: number;
+	maxRequestBytes: number;
+}
+
+export interface DashboardSnapshot {
+	cases: CaseSummary[];
+	attempts: AttemptRecord[];
+	profiles: ProviderProfile[];
+	rollout: RolloutMode;
+	emergencyStop: boolean;
+	generatedAt: string;
+}
+
+export interface RepositoryConfig {
+	id: string;
+	root: string;
+	gitDir: string;
+	requiredChecks: string[];
+}
+
+export interface ThresholdConfig {
+	actionableMin: number;
+	noiseMax: number;
+}
+
+export interface BackgroundAgentsConfig {
+	configVersion: 1;
+	databasePath: string;
+	repositories: RepositoryConfig[];
+	thresholds: ThresholdConfig;
+	pollIntervalsMs: {
+		linear: number;
+		datadog: number;
+		slackReconnect: number;
+	};
+	profiles: ProviderProfile[];
+	systemd: {
+		maxRuntimeMs: number;
+		memoryLimitBytes: number;
+		cpuQuotaPercent: number;
+		processLimit: number;
+	};
+	ci: {
+		requiredChecks: string[];
+		maxWaitMs: number;
+	};
+	socket: SocketContract;
+	rollout: {
+		defaultMode: RolloutMode;
+		sourceOverrides: Partial<Record<BackgroundSource, RolloutMode>>;
+		repositoryOverrides: Record<string, RolloutMode>;
+	};
+	backup: {
+		directory: string;
+		intervalMs: number;
+		retention: number;
+		syncCommand?: string[];
+	};
+}
