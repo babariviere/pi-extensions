@@ -167,6 +167,36 @@ export interface EffectClaim {
 	expiresAt: string;
 }
 
+export interface TrustedCheckpointInput {
+	attemptId: string;
+	kind: string;
+	path?: string;
+	digest?: string;
+	metadata?: unknown;
+	createdAt?: string | Date;
+}
+
+export interface RecoveryDecisionInput {
+	attemptId: string;
+	decision: string;
+	reason: string;
+	systemdState?: string;
+	worktreeState?: string;
+	checkpointId?: string;
+	replacementAttemptId?: string;
+	metadata?: unknown;
+	createdAt?: string | Date;
+}
+
+export interface TrustedCheckpoint {
+	id: string;
+	attemptId: string;
+	kind: string;
+	path?: string;
+	digest?: string;
+	createdAt: string;
+}
+
 export interface PolicyInput {
 	id?: string;
 	scope: string;
@@ -549,6 +579,154 @@ export class BackgroundAgentsDatabase {
 				);
 		});
 		return id;
+	}
+
+	recordTrustedCheckpoint(input: TrustedCheckpointInput): string {
+		const id = randomUUID();
+		const createdAt = utcTimestamp(input.createdAt, "createdAt");
+		this.withTransaction(() => {
+			const attemptId = requiredString(input.attemptId, "attemptId");
+			if (!this.database.prepare("SELECT id FROM attempts WHERE id = ?").get(attemptId))
+				throw new Error(`Unknown attempt: ${attemptId}`);
+			this.database
+				.prepare(
+					"INSERT INTO recovery_checkpoints (id, attempt_id, kind, path, digest, metadata, created_at, trusted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+				)
+				.run(
+					id,
+					attemptId,
+					requiredString(input.kind, "kind"),
+					input.path ?? null,
+					input.digest ?? null,
+					jsonBoundary(input.metadata ?? {}, "checkpoint metadata"),
+					createdAt,
+					createdAt,
+				);
+		});
+		return id;
+	}
+
+	latestTrustedCheckpoint(jobId: string): TrustedCheckpoint | undefined {
+		const row = this.database
+			.prepare(
+				"SELECT c.id, c.attempt_id, c.kind, c.path, c.digest, c.created_at FROM recovery_checkpoints c JOIN attempts a ON a.id = c.attempt_id WHERE a.job_id = ? ORDER BY c.trusted_at DESC, c.id DESC LIMIT 1",
+			)
+			.get(requiredString(jobId, "jobId")) as Row | undefined;
+		if (!row) return undefined;
+		return {
+			id: rowString(row, "id"),
+			attemptId: rowString(row, "attempt_id"),
+			kind: rowString(row, "kind"),
+			path: row.path == null ? undefined : rowString(row, "path"),
+			digest: row.digest == null ? undefined : rowString(row, "digest"),
+			createdAt: rowString(row, "created_at"),
+		};
+	}
+
+	recordRecoveryDecision(input: RecoveryDecisionInput): string {
+		const id = randomUUID();
+		const createdAt = utcTimestamp(input.createdAt, "createdAt");
+		this.withTransaction(() => {
+			this.database
+				.prepare(
+					"INSERT INTO recovery_decisions (id, attempt_id, decision, reason, systemd_state, worktree_state, checkpoint_id, replacement_attempt_id, metadata, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+				)
+				.run(
+					id,
+					requiredString(input.attemptId, "attemptId"),
+					requiredString(input.decision, "decision"),
+					requiredString(input.reason, "reason"),
+					input.systemdState ?? null,
+					input.worktreeState ?? null,
+					input.checkpointId ?? null,
+					input.replacementAttemptId ?? null,
+					jsonBoundary(input.metadata ?? {}, "recovery metadata"),
+					createdAt,
+				);
+		});
+		return id;
+	}
+
+	replaceAttempt(attemptId: string, owner: string, leaseMs = DEFAULT_LEASE_MS, now = new Date()): JobClaim | null {
+		const timestamp = utcTimestamp(now, "now");
+		if (!Number.isSafeInteger(leaseMs) || leaseMs <= 0) throw new Error("leaseMs must be a positive integer");
+		return this.withTransaction(() => {
+			const attempt = this.database
+				.prepare("SELECT job_id, case_id, role, state FROM attempts WHERE id = ?")
+				.get(attemptId) as Row | undefined;
+			if (!attempt) throw new Error(`Unknown attempt: ${attemptId}`);
+			if (rowString(attempt, "state") !== "running") return null;
+			this.database
+				.prepare(
+					"UPDATE attempts SET state = 'failed', failure = ?, finished_at = ? WHERE id = ? AND state = 'running'",
+				)
+				.run("replaced during recovery", timestamp, attemptId);
+			this.database.prepare("DELETE FROM attempt_leases WHERE attempt_id = ?").run(attemptId);
+			this.database
+				.prepare(
+					"UPDATE jobs SET state = 'queued', claimed_by = NULL, claimed_at = NULL, updated_at = ? WHERE id = ?",
+				)
+				.run(timestamp, rowString(attempt, "job_id"));
+			const previous = this.database
+				.prepare("SELECT coalesce(max(generation), 0) AS generation FROM attempts WHERE job_id = ?")
+				.get(rowString(attempt, "job_id")) as Row;
+			const generation = Number(previous.generation) + 1;
+			const replacementAttemptId = randomUUID();
+			const leaseId = randomUUID();
+			const expiresAt = new Date(now.getTime() + leaseMs).toISOString();
+			this.database
+				.prepare(
+					"INSERT INTO attempts (id, job_id, case_id, role, generation, state, heartbeat_at, started_at) VALUES (?, ?, ?, ?, ?, 'running', ?, ?)",
+				)
+				.run(
+					replacementAttemptId,
+					rowString(attempt, "job_id"),
+					rowString(attempt, "case_id"),
+					rowString(attempt, "role"),
+					generation,
+					timestamp,
+					timestamp,
+				);
+			this.database
+				.prepare(
+					"INSERT INTO attempt_leases (id, attempt_id, owner, generation, expires_at, last_renewed_at) VALUES (?, ?, ?, ?, ?, ?)",
+				)
+				.run(leaseId, replacementAttemptId, requiredString(owner, "owner"), generation, expiresAt, timestamp);
+			this.database
+				.prepare("UPDATE jobs SET state = 'running', claimed_by = ?, claimed_at = ?, updated_at = ? WHERE id = ?")
+				.run(owner, timestamp, timestamp, rowString(attempt, "job_id"));
+			return {
+				jobId: rowString(attempt, "job_id"),
+				attemptId: replacementAttemptId,
+				leaseId,
+				generation,
+				expiresAt,
+			};
+		});
+	}
+
+	markAttemptNeedsHuman(attemptId: string, reason: string, now = new Date()): boolean {
+		const timestamp = utcTimestamp(now, "now");
+		return this.withTransaction(() => {
+			const attempt = this.get<{ job_id: string }>(
+				"SELECT job_id FROM attempts WHERE id = ? AND state = 'running'",
+				attemptId,
+			);
+			if (!attempt) return false;
+			this.run(
+				"UPDATE attempts SET state = 'needs-human', failure = ?, finished_at = ? WHERE id = ? AND state = 'running'",
+				reason,
+				timestamp,
+				attemptId,
+			);
+			this.run("DELETE FROM attempt_leases WHERE attempt_id = ?", attemptId);
+			this.run(
+				"UPDATE jobs SET state = 'needs-human', claimed_by = NULL, claimed_at = NULL, updated_at = ? WHERE id = ? AND state = 'running'",
+				timestamp,
+				attempt.job_id,
+			);
+			return true;
+		});
 	}
 }
 

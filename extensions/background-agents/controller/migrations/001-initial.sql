@@ -281,6 +281,34 @@ CREATE TABLE artifacts (
 	created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 
+CREATE TABLE recovery_checkpoints (
+	id TEXT PRIMARY KEY,
+	attempt_id TEXT NOT NULL REFERENCES attempts(id) ON DELETE CASCADE,
+	kind TEXT NOT NULL,
+	path TEXT,
+	digest TEXT,
+	metadata TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(metadata)),
+	created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+	trusted_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+CREATE INDEX recovery_checkpoints_attempt_created ON recovery_checkpoints(attempt_id, trusted_at DESC);
+
+CREATE TABLE recovery_decisions (
+	id TEXT PRIMARY KEY,
+	attempt_id TEXT NOT NULL REFERENCES attempts(id) ON DELETE CASCADE,
+	decision TEXT NOT NULL,
+	reason TEXT NOT NULL,
+	systemd_state TEXT,
+	worktree_state TEXT,
+	checkpoint_id TEXT REFERENCES recovery_checkpoints(id) ON DELETE SET NULL,
+	replacement_attempt_id TEXT REFERENCES attempts(id) ON DELETE SET NULL,
+	metadata TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(metadata)),
+	created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+);
+
+CREATE INDEX recovery_decisions_attempt_created ON recovery_decisions(attempt_id, created_at);
+
 CREATE INDEX case_events_case_created ON case_events(case_id, created_at);
 CREATE INDEX source_events_case_created ON source_events(case_id, created_at);
 CREATE INDEX jobs_queue ON jobs(state, priority DESC, created_at);
