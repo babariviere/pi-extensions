@@ -262,6 +262,70 @@ export interface MemoryEntryInput {
 	supersedesId?: string;
 }
 
+export interface SpecificationVersionInput {
+	caseId: string;
+	specification: unknown;
+	decisions?: unknown[];
+	unresolvedQuestions?: unknown[];
+	permissions?: unknown;
+	plannerSummary?: string;
+	materialHash: string;
+}
+
+export interface StoredSpecificationVersion {
+	id: string;
+	caseId: string;
+	version: number;
+	specification: unknown;
+	decisions: unknown[];
+	unresolvedQuestions: unknown[];
+	permissions: unknown;
+	plannerSummary?: string;
+	materialHash: string;
+	createdAt: string;
+}
+
+export interface SpecificationApprovalInput {
+	caseId: string;
+	specVersion: number;
+	materialHash: string;
+	permissions: string[];
+	orderedWorkItems: string[];
+	decision?: "approved" | "rejected" | "changes-requested";
+	actor: string;
+}
+
+export interface StoredSpecificationApproval {
+	id: string;
+	caseId: string;
+	specVersion: number;
+	materialHash: string;
+	decision: "approved" | "rejected" | "changes-requested";
+	actor: string;
+	permissions: string[];
+	orderedWorkItems: string[];
+	createdAt: string;
+}
+
+export interface InvestigationReportInput {
+	caseId: string;
+	attemptId?: string;
+	evidence: unknown;
+	relatedCases: unknown[];
+	report: unknown;
+}
+
+export interface QuestionBriefInput {
+	caseId: string;
+	attemptId?: string;
+	question: string;
+	findings: unknown;
+	sources: unknown[];
+	confidence: number;
+	uncertainties?: string[];
+	limits: unknown;
+}
+
 export interface StoredPolicy {
 	id: string;
 	scope: string;
@@ -594,9 +658,11 @@ export class BackgroundAgentsDatabase {
 			} else if (rowString(job, "state") !== "queued") {
 				return null;
 			}
-			const previous = this.database
-				.prepare("SELECT coalesce(max(generation), 0) AS generation FROM attempts WHERE job_id = ?")
-				.get(jobId) as Row;
+			const queuedAttempt = this.database
+				.prepare(
+					"SELECT id, generation FROM attempts WHERE job_id = ? AND state = 'queued' ORDER BY generation DESC LIMIT 1",
+				)
+				.get(jobId) as Row | undefined;
 			if (assignment?.profileId) {
 				const profile = this.database
 					.prepare("SELECT concurrency_limit FROM provider_profile_state WHERE profile_id = ?")
@@ -607,25 +673,36 @@ export class BackgroundAgentsDatabase {
 					.get(assignment.profileId) as Row;
 				if (Number(active.count) >= Number(profile.concurrency_limit)) return null;
 			}
-			const generation = Number(previous.generation) + 1;
-			const attemptId = randomUUID();
+			const previous = this.database
+				.prepare("SELECT coalesce(max(generation), 0) AS generation FROM attempts WHERE job_id = ?")
+				.get(jobId) as Row;
+			const generation = queuedAttempt ? Number(queuedAttempt.generation) : Number(previous.generation) + 1;
+			const attemptId = queuedAttempt ? rowString(queuedAttempt, "id") : randomUUID();
 			const leaseId = randomUUID();
 			const expiresAt = new Date(now.getTime() + leaseMs).toISOString();
-			this.database
-				.prepare(
-					"INSERT INTO attempts (id, job_id, case_id, role, generation, state, profile_id, model, heartbeat_at, started_at) VALUES (?, ?, ?, ?, ?, 'running', ?, ?, ?, ?)",
-				)
-				.run(
-					attemptId,
-					jobId,
-					rowString(job, "case_id"),
-					rowString(job, "role"),
-					generation,
-					assignment?.profileId ?? null,
-					assignment?.model ?? null,
-					claimedAt,
-					claimedAt,
-				);
+			if (queuedAttempt) {
+				this.database
+					.prepare(
+						"UPDATE attempts SET state = 'running', profile_id = ?, model = ?, heartbeat_at = ?, started_at = ? WHERE id = ? AND state = 'queued'",
+					)
+					.run(assignment?.profileId ?? null, assignment?.model ?? null, claimedAt, claimedAt, attemptId);
+			} else {
+				this.database
+					.prepare(
+						"INSERT INTO attempts (id, job_id, case_id, role, generation, state, profile_id, model, heartbeat_at, started_at) VALUES (?, ?, ?, ?, ?, 'running', ?, ?, ?, ?)",
+					)
+					.run(
+						attemptId,
+						jobId,
+						rowString(job, "case_id"),
+						rowString(job, "role"),
+						generation,
+						assignment?.profileId ?? null,
+						assignment?.model ?? null,
+						claimedAt,
+						claimedAt,
+					);
+			}
 			this.database
 				.prepare(
 					"INSERT INTO attempt_leases (id, attempt_id, owner, generation, expires_at, last_renewed_at) VALUES (?, ?, ?, ?, ?, ?)",
@@ -982,6 +1059,248 @@ export class BackgroundAgentsDatabase {
 			createdAt: rowString(row, "created_at"),
 			updatedAt: rowString(row, "updated_at"),
 		};
+	}
+
+	createInvestigationReport(input: InvestigationReportInput): string {
+		const id = randomUUID();
+		this.withTransaction(() => {
+			if (!this.database.prepare("SELECT id FROM cases WHERE id = ?").get(requiredString(input.caseId, "caseId")))
+				throw new Error(`Unknown case: ${input.caseId}`);
+			if (input.attemptId && !this.database.prepare("SELECT id FROM attempts WHERE id = ?").get(input.attemptId))
+				throw new Error(`Unknown attempt: ${input.attemptId}`);
+			this.database
+				.prepare(
+					"INSERT INTO investigation_reports (id, case_id, attempt_id, evidence, related_cases, report) VALUES (?, ?, ?, ?, ?, ?)",
+				)
+				.run(
+					id,
+					requiredString(input.caseId, "caseId"),
+					input.attemptId ?? null,
+					jsonBoundary(input.evidence, "evidence"),
+					jsonBoundary(input.relatedCases, "relatedCases"),
+					jsonBoundary(input.report, "report"),
+				);
+		});
+		return id;
+	}
+
+	createQuestionBrief(input: QuestionBriefInput): string {
+		const id = randomUUID();
+		if (!Number.isFinite(input.confidence) || input.confidence < 0 || input.confidence > 100)
+			throw new Error("confidence must be between 0 and 100");
+		this.withTransaction(() => {
+			if (!this.database.prepare("SELECT id FROM cases WHERE id = ?").get(requiredString(input.caseId, "caseId")))
+				throw new Error(`Unknown case: ${input.caseId}`);
+			if (input.attemptId && !this.database.prepare("SELECT id FROM attempts WHERE id = ?").get(input.attemptId))
+				throw new Error(`Unknown attempt: ${input.attemptId}`);
+			this.database
+				.prepare(
+					"INSERT INTO question_briefs (id, case_id, attempt_id, question, findings, sources, confidence, uncertainties, limits) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+				)
+				.run(
+					id,
+					requiredString(input.caseId, "caseId"),
+					input.attemptId ?? null,
+					requiredString(input.question, "question"),
+					jsonBoundary(input.findings, "findings"),
+					jsonBoundary(input.sources, "sources"),
+					input.confidence,
+					jsonBoundary(input.uncertainties ?? [], "uncertainties"),
+					jsonBoundary(input.limits, "limits"),
+				);
+		});
+		return id;
+	}
+
+	createSpecificationVersion(input: SpecificationVersionInput): StoredSpecificationVersion {
+		const caseId = requiredString(input.caseId, "caseId");
+		const materialHash = requiredString(input.materialHash, "materialHash");
+		const row = this.database.prepare("SELECT id FROM cases WHERE id = ?").get(caseId);
+		if (!row) throw new Error(`Unknown case: ${caseId}`);
+		const latest = this.database
+			.prepare("SELECT coalesce(max(version), 0) AS version FROM spec_versions WHERE case_id = ?")
+			.get(caseId) as Row;
+		const version = Number(latest.version) + 1;
+		const id = randomUUID();
+		const createdAt = new Date().toISOString();
+		const decisions = input.decisions ?? [];
+		const unresolvedQuestions = input.unresolvedQuestions ?? [];
+		const permissions = input.permissions ?? [];
+		this.withTransaction(() => {
+			this.database
+				.prepare(
+					"INSERT INTO spec_versions (id, case_id, version, specification, decisions, unresolved_questions, permissions, material_hash, planner_summary, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+				)
+				.run(
+					id,
+					caseId,
+					version,
+					jsonBoundary(input.specification, "specification"),
+					jsonBoundary(decisions, "decisions"),
+					jsonBoundary(unresolvedQuestions, "unresolvedQuestions"),
+					jsonBoundary(permissions, "permissions"),
+					materialHash,
+					input.plannerSummary ?? null,
+					createdAt,
+				);
+		});
+		return {
+			id,
+			caseId,
+			version,
+			specification: input.specification,
+			decisions,
+			unresolvedQuestions,
+			permissions,
+			...(input.plannerSummary === undefined ? {} : { plannerSummary: input.plannerSummary }),
+			materialHash,
+			createdAt,
+		};
+	}
+
+	getLatestSpecification(caseId: string): StoredSpecificationVersion | undefined {
+		const row = this.database
+			.prepare(
+				"SELECT id, case_id, version, specification, decisions, unresolved_questions, permissions, material_hash, planner_summary, created_at FROM spec_versions WHERE case_id = ? ORDER BY version DESC LIMIT 1",
+			)
+			.get(requiredString(caseId, "caseId")) as Row | undefined;
+		return row ? this.readSpecification(row) : undefined;
+	}
+
+	getSpecification(caseId: string, version: number): StoredSpecificationVersion | undefined {
+		const row = this.database
+			.prepare(
+				"SELECT id, case_id, version, specification, decisions, unresolved_questions, permissions, material_hash, planner_summary, created_at FROM spec_versions WHERE case_id = ? AND version = ?",
+			)
+			.get(requiredString(caseId, "caseId"), version) as Row | undefined;
+		return row ? this.readSpecification(row) : undefined;
+	}
+
+	private readSpecification(row: Row): StoredSpecificationVersion {
+		const parse = (field: string): unknown => {
+			try {
+				return JSON.parse(rowString(row, field));
+			} catch (error) {
+				throw new Error(`Stored specification ${field} contains invalid JSON`, { cause: error });
+			}
+		};
+		return {
+			id: rowString(row, "id"),
+			caseId: rowString(row, "case_id"),
+			version: Number(row.version),
+			specification: parse("specification"),
+			decisions: parse("decisions") as unknown[],
+			unresolvedQuestions: parse("unresolved_questions") as unknown[],
+			permissions: parse("permissions"),
+			materialHash: rowString(row, "material_hash"),
+			...(row.planner_summary == null ? {} : { plannerSummary: rowString(row, "planner_summary") }),
+			createdAt: rowString(row, "created_at"),
+		};
+	}
+
+	recordSpecificationApproval(input: SpecificationApprovalInput): string {
+		const caseId = requiredString(input.caseId, "caseId");
+		const actor = requiredString(input.actor, "actor");
+		if (!Number.isSafeInteger(input.specVersion) || input.specVersion <= 0)
+			throw new Error("specVersion must be a positive integer");
+		if (!input.permissions.every((permission) => typeof permission === "string" && permission.trim() !== ""))
+			throw new Error("permissions must contain non-empty strings");
+		const approvalId = randomUUID();
+		this.withTransaction(() => {
+			const current = this.database
+				.prepare(
+					"SELECT id, version, material_hash FROM spec_versions WHERE case_id = ? ORDER BY version DESC LIMIT 1",
+				)
+				.get(caseId) as Row | undefined;
+			if (!current || Number(current.version) !== input.specVersion)
+				throw new Error(`Specification approval is not for the current version of ${caseId}`);
+			if (rowString(current, "material_hash") !== input.materialHash)
+				throw new Error(`Specification approval material is stale for ${caseId}`);
+			const workItems = input.orderedWorkItems;
+			const unique = new Set(workItems);
+			if (unique.size !== workItems.length) throw new Error("orderedWorkItems must not contain duplicates");
+			for (const workItemId of workItems) {
+				const item = this.database
+					.prepare("SELECT id FROM work_items WHERE id = ? AND case_id = ?")
+					.get(workItemId, caseId);
+				if (!item) throw new Error(`Unknown work item for specification: ${workItemId}`);
+			}
+			this.database
+				.prepare(
+					"INSERT INTO approvals (id, spec_version_id, decision, actor, permissions, material_hash, spec_version, frozen_permissions, ordered_work_items) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+				)
+				.run(
+					approvalId,
+					rowString(current, "id"),
+					input.decision ?? "approved",
+					actor,
+					jsonBoundary(input.permissions, "permissions"),
+					input.materialHash,
+					input.specVersion,
+					jsonBoundary(input.permissions, "frozenPermissions"),
+					jsonBoundary(workItems, "orderedWorkItems"),
+				);
+		});
+		return approvalId;
+	}
+
+	createFreshPlannerAttempt(input: { caseId: string; priority?: number; workItemId?: string }): {
+		jobId: string;
+		attemptId: string;
+	} {
+		const jobId = randomUUID();
+		const attemptId = randomUUID();
+		const caseId = requiredString(input.caseId, "caseId");
+		this.withTransaction(() => {
+			if (!this.database.prepare("SELECT id FROM cases WHERE id = ?").get(caseId))
+				throw new Error(`Unknown case: ${caseId}`);
+			this.database
+				.prepare("INSERT INTO jobs (id, case_id, work_item_id, role, priority) VALUES (?, ?, ?, 'spec-planner', ?)")
+				.run(jobId, caseId, input.workItemId ?? null, input.priority ?? 0);
+			this.database
+				.prepare(
+					"INSERT INTO attempts (id, job_id, case_id, role, generation, state) VALUES (?, ?, ?, 'spec-planner', 1, 'queued')",
+				)
+				.run(attemptId, jobId, caseId);
+		});
+		return { jobId, attemptId };
+	}
+
+	recordSpecificationFeedback(input: { caseId: string; specVersion: number; feedback: string; actor: string }): {
+		feedbackId: string;
+		jobId: string;
+		attemptId: string;
+	} {
+		const caseId = requiredString(input.caseId, "caseId");
+		const actor = requiredString(input.actor, "actor");
+		if (/^(agent|system|model|classifier)(:|$)/i.test(actor))
+			throw new Error("Specification feedback requires an explicit human actor");
+		if (!Number.isSafeInteger(input.specVersion) || input.specVersion <= 0)
+			throw new Error("specVersion must be a positive integer");
+		const feedbackId = randomUUID();
+		const jobId = randomUUID();
+		const attemptId = randomUUID();
+		this.withTransaction(() => {
+			const current = this.database
+				.prepare("SELECT version FROM spec_versions WHERE case_id = ? ORDER BY version DESC LIMIT 1")
+				.get(caseId) as Row | undefined;
+			if (!current || Number(current.version) !== input.specVersion)
+				throw new Error(`Specification feedback is not for the current version of ${caseId}`);
+			this.database
+				.prepare(
+					"INSERT INTO specification_feedback (id, case_id, spec_version, feedback, actor) VALUES (?, ?, ?, ?, ?)",
+				)
+				.run(feedbackId, caseId, input.specVersion, requiredString(input.feedback, "feedback"), actor);
+			this.database
+				.prepare("INSERT INTO jobs (id, case_id, role, priority) VALUES (?, ?, 'spec-planner', 0)")
+				.run(jobId, caseId);
+			this.database
+				.prepare(
+					"INSERT INTO attempts (id, job_id, case_id, role, generation, state) VALUES (?, ?, ?, 'spec-planner', 1, 'queued')",
+				)
+				.run(attemptId, jobId, caseId);
+		});
+		return { feedbackId, jobId, attemptId };
 	}
 
 	recordTrustedCheckpoint(input: TrustedCheckpointInput): string {

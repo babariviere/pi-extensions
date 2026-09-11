@@ -36,6 +36,12 @@ export interface RelatedCaseSummary extends RelatedCase {
 	title: string;
 	source: BackgroundSource;
 	memoryIds?: string[];
+	rootCause?: string;
+	outcome?: string;
+	evidenceSummary?: string;
+	pullRequests?: number[];
+	verification?: Array<{ verdict: string; confidence: number; rationale: string }>;
+	operatorFeedback?: unknown[];
 }
 
 interface Row {
@@ -52,6 +58,15 @@ function jsonValue(value: unknown, field: string): Record<string, unknown> {
 		const parsed: unknown = JSON.parse(value);
 		if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("not an object");
 		return parsed as Record<string, unknown>;
+	} catch (error) {
+		throw new Error(`${field} is not valid JSON`, { cause: error });
+	}
+}
+
+function jsonAnyValue(value: unknown, field: string): unknown {
+	if (typeof value !== "string") throw new Error(`${field} is not valid JSON`);
+	try {
+		return JSON.parse(value) as unknown;
 	} catch (error) {
 		throw new Error(`${field} is not valid JSON`, { cause: error });
 	}
@@ -115,6 +130,30 @@ export function retrieveRelatedCases(
 						caseId,
 					)
 					.map((row) => row.id);
+		const memories = database.all<Row>(
+			"SELECT root_cause, outcome, evidence_summary FROM memory_entries WHERE case_id = ? AND approval_status = 'approved' ORDER BY updated_at DESC LIMIT 4",
+			caseId,
+		);
+		const verification = database
+			.all<Row>(
+				"SELECT vr.verdict, vr.confidence, vr.rationale FROM verification_runs vr JOIN evidence_manifests em ON em.id = vr.manifest_id WHERE em.case_id = ? ORDER BY vr.created_at DESC LIMIT 4",
+				caseId,
+			)
+			.map((row) => ({
+				verdict: stringValue(row, "verdict"),
+				confidence: Number(row.confidence),
+				rationale: stringValue(row, "rationale"),
+			}));
+		const pullRequests = database
+			.all<{ pull_request: number }>(
+				"SELECT pull_request FROM work_items WHERE case_id = ? AND pull_request IS NOT NULL ORDER BY ordinal LIMIT 8",
+				caseId,
+			)
+			.map((row) => Number(row.pull_request));
+		const operatorFeedback = database
+			.all<Row>("SELECT correction FROM feedback WHERE case_id = ? ORDER BY created_at DESC LIMIT 4", caseId)
+			.map((row) => jsonAnyValue(row.correction, "feedback correction"));
+		const firstMemory = memories[0];
 		seen.add(caseId);
 		results.push({
 			caseId,
@@ -126,6 +165,14 @@ export function retrieveRelatedCases(
 			source: details.source,
 			memoryIds: associatedMemoryIds.length ? associatedMemoryIds : undefined,
 			supersededBy: supersededBy(database, associatedMemoryIds),
+			...(firstMemory?.root_cause == null ? {} : { rootCause: stringValue(firstMemory, "root_cause") }),
+			...(firstMemory?.outcome == null ? {} : { outcome: stringValue(firstMemory, "outcome") }),
+			...(firstMemory?.evidence_summary == null
+				? {}
+				: { evidenceSummary: stringValue(firstMemory, "evidence_summary") }),
+			...(pullRequests.length ? { pullRequests } : {}),
+			...(verification.length ? { verification } : {}),
+			...(operatorFeedback.length ? { operatorFeedback } : {}),
 		});
 	};
 

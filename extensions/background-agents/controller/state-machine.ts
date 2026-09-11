@@ -62,6 +62,13 @@ export class SpecificationVersionMismatchError extends Error {
 	}
 }
 
+export class SpecificationMaterialMismatchError extends Error {
+	constructor(caseId: string) {
+		super(`Specification approval material is stale for ${caseId}`);
+		this.name = "SpecificationMaterialMismatchError";
+	}
+}
+
 export interface WorkItemInput {
 	id?: string;
 	caseId: string;
@@ -75,6 +82,11 @@ export interface WorkItemInput {
 export interface ApprovalResult {
 	approvalId: string;
 	specVersion: number;
+}
+
+export interface SpecificationApprovalOptions {
+	materialHash?: string;
+	orderedWorkItems?: string[];
 }
 
 function nonEmpty(value: string, field: string): string {
@@ -189,8 +201,23 @@ export class BackgroundAgentsStateMachine {
 		this.transitionCase(caseId, "cancelled", actor, reason ?? "cancelled");
 	}
 
-	approveSpecification(caseId: string, specVersion: number, permissions: string[], actor: string): ApprovalResult {
-		return this.decideSpecification(caseId, specVersion, "approved", permissions, actor, "specification approved");
+	approveSpecification(
+		caseId: string,
+		specVersion: number,
+		permissions: string[],
+		actor: string,
+		options: SpecificationApprovalOptions = {},
+	): ApprovalResult {
+		return this.decideSpecification(
+			caseId,
+			specVersion,
+			"approved",
+			permissions,
+			actor,
+			"specification approved",
+			"implementation",
+			options,
+		);
 	}
 
 	rejectSpecification(caseId: string, specVersion: number, actor: string): ApprovalResult {
@@ -225,6 +252,7 @@ export class BackgroundAgentsStateMachine {
 		actor: string,
 		reason: string,
 		nextState: CaseState = "implementation",
+		options: SpecificationApprovalOptions = {},
 	): ApprovalResult {
 		const id = nonEmpty(caseId, "caseId");
 		if (!Number.isSafeInteger(specVersion) || specVersion <= 0)
@@ -241,15 +269,26 @@ export class BackgroundAgentsStateMachine {
 		}
 		if (!permissions.every((permission) => typeof permission === "string" && permission.trim() !== ""))
 			throw new Error("permissions must contain non-empty strings");
-		const approvalId = randomUUID();
-		this.database.run(
-			"INSERT INTO approvals (id, spec_version_id, decision, actor, permissions) VALUES (?, ?, ?, ?, ?)",
-			approvalId,
-			latest.id,
+		const materialHash =
+			options.materialHash ??
+			this.database.get<{ material_hash: string }>("SELECT material_hash FROM spec_versions WHERE id = ?", latest.id)
+				?.material_hash;
+		if (!materialHash || (options.materialHash !== undefined && options.materialHash !== materialHash))
+			throw new SpecificationMaterialMismatchError(id);
+		const orderedWorkItems =
+			options.orderedWorkItems ??
+			this.database
+				.all<{ id: string }>("SELECT id FROM work_items WHERE case_id = ? ORDER BY ordinal ASC", id)
+				.map((row) => row.id);
+		const approvalId = this.database.recordSpecificationApproval({
+			caseId: id,
+			specVersion,
+			materialHash,
+			permissions,
+			orderedWorkItems,
 			decision,
-			nonEmpty(actor, "actor"),
-			jsonBoundary(permissions, "permissions"),
-		);
+			actor: nonEmpty(actor, "actor"),
+		});
 		this.transitionCase(id, nextState, actor, reason, { specVersion, permissions });
 		return { approvalId, specVersion };
 	}
