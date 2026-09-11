@@ -118,6 +118,17 @@ export class HerdrClient {
 		return res.ok ? { ok: true } : { ok: false, error: res.error ?? "shell did not become ready" };
 	}
 
+	/** Run an arbitrary argv command through Herdr without serializing an environment.
+	 * Every argument is shell-quoted because the Herdr pane API accepts a shell
+	 * command, not an argv array.
+	 */
+	async runCommand(paneId: string, argv: string[], signal?: AbortSignal): Promise<{ ok: boolean; error?: string }> {
+		if (argv.length === 0) return { ok: false, error: "command must not be empty" };
+		const command = argv.map(shellQuote).join(" ");
+		const res = await this.#transport.run(["pane", "run", paneId, command], undefined, signal);
+		return res.ok ? { ok: true } : { ok: false, error: res.error ?? "herdr pane run failed" };
+	}
+
 	/**
 	 * Start Pi through `pane run`, which sends the whole command and Enter as one
 	 * operation. `agent start` types through the shell but can leave the command

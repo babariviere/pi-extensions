@@ -493,6 +493,38 @@ export class BackgroundAgentsDatabase {
 			.run(randomUUID(), caseId, from, to, actor, reason ?? null, jsonBoundary(metadata, "event metadata"));
 	}
 
+	createArtifact(input: {
+		id?: string;
+		caseId?: string;
+		attemptId?: string;
+		kind: string;
+		path?: string;
+		url?: string;
+		hash?: string;
+		transcriptReference?: string;
+		metadata?: unknown;
+	}): string {
+		const id = input.id ?? randomUUID();
+		this.withTransaction(() => {
+			this.database
+				.prepare(
+					"INSERT INTO artifacts (id, case_id, attempt_id, kind, path, url, hash, transcript_reference, metadata) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+				)
+				.run(
+					id,
+					input.caseId ?? null,
+					input.attemptId ?? null,
+					requiredString(input.kind, "kind"),
+					input.path ?? null,
+					input.url ?? null,
+					input.hash ?? null,
+					input.transcriptReference ?? null,
+					jsonBoundary(input.metadata ?? {}, "artifact metadata"),
+				);
+		});
+		return id;
+	}
+
 	createJob(input: JobInput): string {
 		const id = input.id ?? randomUUID();
 		this.withTransaction(() => {

@@ -44,6 +44,13 @@ test("runPi atomically submits a quoted Pi command with explicit environment", a
 	]);
 });
 
+test("runCommand quotes argv and never serializes an environment", async () => {
+	const { transport, calls } = scriptedTransport([{ ok: true, result: {} }]);
+	const result = await new HerdrClient(transport).runCommand("wA:p1", ["systemd-run", "--unit=x", "hello; echo bad"]);
+	assert.deepEqual(result, { ok: true });
+	assert.deepEqual(calls[0], ["pane", "run", "wA:p1", "'systemd-run' '--unit=x' 'hello; echo bad'"]);
+});
+
 test("runPi surfaces a pane-run failure", async () => {
 	const result = await new HerdrClient(scriptedTransport([{ ok: false, error: "pane unavailable" }]).transport).runPi(
 		"wA:p1",
