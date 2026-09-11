@@ -44,7 +44,12 @@ export class JobScheduler {
 		return this.database.createJob(input);
 	}
 
-	claimNext(owner: string, leaseMs?: number, now = new Date()): JobClaim | null {
+	claimNext(
+		owner: string,
+		leaseMs?: number,
+		now = new Date(),
+		assignment?: { profileId?: string; model?: string },
+	): JobClaim | null {
 		if (this.stopped) return null;
 		const candidates = this.database.all<{ id: string }>(
 			`SELECT j.id
@@ -60,13 +65,19 @@ export class JobScheduler {
 		);
 		for (const candidate of candidates) {
 			if (this.stopped) return null;
-			const claim = this.database.claimJob(candidate.id, owner, leaseMs, now);
+			const claim = this.database.claimJob(candidate.id, owner, leaseMs, now, assignment);
 			if (claim) return claim;
 		}
 		return null;
 	}
 
-	claim(jobId: string, owner: string, leaseMs?: number, now = new Date()): JobClaim | null {
+	claim(
+		jobId: string,
+		owner: string,
+		leaseMs?: number,
+		now = new Date(),
+		assignment?: { profileId?: string; model?: string },
+	): JobClaim | null {
 		if (this.stopped) return null;
 		const candidate = this.database.get<{ id: string }>(
 			`SELECT j.id
@@ -82,7 +93,7 @@ export class JobScheduler {
 			jobId,
 		);
 		if (!candidate) return null;
-		return this.database.claimJob(jobId, owner, leaseMs, now);
+		return this.database.claimJob(jobId, owner, leaseMs, now, assignment);
 	}
 
 	renewLease(attemptId: string, owner: string, leaseMs?: number, now = new Date()): boolean {
@@ -95,8 +106,8 @@ export class JobScheduler {
 		const now = input.now ?? new Date();
 		const finishedAt = now.toISOString();
 		return this.database.withTransaction(() => {
-			const attempt = this.database.get<{ job_id: string; state: AttemptState }>(
-				"SELECT job_id, state FROM attempts WHERE id = ?",
+			const attempt = this.database.get<{ job_id: string; profile_id?: string; state: AttemptState }>(
+				"SELECT job_id, profile_id, state FROM attempts WHERE id = ?",
 				input.attemptId,
 			);
 			if (!attempt) throw new Error(`Unknown attempt: ${input.attemptId}`);
@@ -121,6 +132,7 @@ export class JobScheduler {
 				attempt.job_id,
 			);
 			this.database.run("DELETE FROM attempt_leases WHERE attempt_id = ?", input.attemptId);
+			if (attempt.profile_id) this.database.refreshProviderProfileActivity(attempt.profile_id, now);
 			return true;
 		});
 	}
@@ -128,8 +140,8 @@ export class JobScheduler {
 	reconcileExpiredLeases(now = new Date()): number {
 		const timestamp = now.toISOString();
 		return this.database.withTransaction(() => {
-			const expired = this.database.all<{ attempt_id: string; job_id: string }>(
-				"SELECT l.attempt_id, a.job_id FROM attempt_leases l JOIN attempts a ON a.id = l.attempt_id WHERE l.expires_at <= ?",
+			const expired = this.database.all<{ attempt_id: string; job_id: string; profile_id?: string }>(
+				"SELECT l.attempt_id, a.job_id, a.profile_id FROM attempt_leases l JOIN attempts a ON a.id = l.attempt_id WHERE l.expires_at <= ?",
 				timestamp,
 			);
 			for (const lease of expired) {
@@ -145,6 +157,7 @@ export class JobScheduler {
 					lease.job_id,
 				);
 				this.database.run("DELETE FROM attempt_leases WHERE attempt_id = ?", lease.attempt_id);
+				if (lease.profile_id) this.database.refreshProviderProfileActivity(lease.profile_id, now);
 			}
 			return expired.length;
 		});
@@ -171,6 +184,10 @@ export class JobScheduler {
 				"DELETE FROM attempt_leases WHERE attempt_id IN (SELECT a.id FROM attempts a JOIN jobs j ON j.id = a.job_id WHERE j.case_id = ?)",
 				caseId,
 			);
+			this.database.run(
+				"UPDATE provider_profile_state SET active_attempts = (SELECT count(*) FROM attempts WHERE profile_id = provider_profile_state.profile_id AND state = 'running') WHERE profile_id IN (SELECT DISTINCT profile_id FROM attempts WHERE job_id IN (SELECT id FROM jobs WHERE case_id = ?) AND profile_id IS NOT NULL)",
+				caseId,
+			);
 			const changed = this.database.run(
 				"UPDATE jobs SET state = 'paused', claimed_by = NULL, claimed_at = NULL, updated_at = ? WHERE case_id = ? AND state IN ('queued', 'running')",
 				now,
@@ -189,6 +206,41 @@ export class JobScheduler {
 		return changed.changes;
 	}
 
+	/** Stop a model run without reviving or replacing the running attempt. */
+	pauseAttemptForUsage(attemptId: string, reason = "provider usage unavailable", now = new Date()): boolean {
+		const timestamp = now.toISOString();
+		return this.database.withTransaction(() => {
+			const attempt = this.database.get<{ job_id: string; profile_id?: string }>(
+				"SELECT job_id, profile_id FROM attempts WHERE id = ? AND state = 'running'",
+				attemptId,
+			);
+			if (!attempt) return false;
+			this.database.run(
+				"UPDATE attempts SET state = 'paused', failure = ?, finished_at = ? WHERE id = ? AND state = 'running'",
+				reason,
+				timestamp,
+				attemptId,
+			);
+			this.database.run("DELETE FROM attempt_leases WHERE attempt_id = ?", attemptId);
+			if (attempt.profile_id) this.database.refreshProviderProfileActivity(attempt.profile_id, now);
+			this.database.run(
+				"UPDATE jobs SET state = 'paused', claimed_by = NULL, claimed_at = NULL, updated_at = ? WHERE id = ? AND state = 'running'",
+				timestamp,
+				attempt.job_id,
+			);
+			return true;
+		});
+	}
+
+	resumeUsageJob(jobId: string): boolean {
+		const changed = this.database.run(
+			"UPDATE jobs SET state = 'queued', claimed_by = NULL, claimed_at = NULL, updated_at = ? WHERE id = ? AND state = 'paused'",
+			new Date().toISOString(),
+			jobId,
+		);
+		return changed.changes === 1;
+	}
+
 	cancelCaseJobs(caseId: string): number {
 		return this.database.withTransaction(() => {
 			const now = new Date().toISOString();
@@ -200,6 +252,10 @@ export class JobScheduler {
 			);
 			this.database.run(
 				"DELETE FROM attempt_leases WHERE attempt_id IN (SELECT a.id FROM attempts a JOIN jobs j ON j.id = a.job_id WHERE j.case_id = ?)",
+				caseId,
+			);
+			this.database.run(
+				"UPDATE provider_profile_state SET active_attempts = (SELECT count(*) FROM attempts WHERE profile_id = provider_profile_state.profile_id AND state = 'running') WHERE profile_id IN (SELECT DISTINCT profile_id FROM attempts WHERE job_id IN (SELECT id FROM jobs WHERE case_id = ?) AND profile_id IS NOT NULL)",
 				caseId,
 			);
 			const changed = this.database.run(

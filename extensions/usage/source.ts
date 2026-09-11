@@ -186,6 +186,12 @@ async function fetchUsage(provider: UsageProvider, token: string): Promise<Fetch
 	}
 }
 
+/** Fetch one profile's subscription usage without using the shared default-profile cache. */
+export async function fetchUsageSnapshot(provider: UsageProvider, token: string): Promise<UsageSnapshot | undefined> {
+	const result = await fetchUsage(provider, token);
+	return result.snapshot.error ? undefined : result.snapshot;
+}
+
 // ── Cross-process cache ─────────────────────────────────────────────────────
 
 export interface CacheEntry {

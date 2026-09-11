@@ -166,6 +166,27 @@ export interface JobClaim {
 	leaseId: string;
 	generation: number;
 	expiresAt: string;
+	profileId?: string;
+	model?: string;
+}
+
+export interface ProviderProfileStateInput {
+	profileId: string;
+	available?: boolean;
+	activeAttempts?: number;
+	concurrencyLimit?: number;
+	interactiveReserve?: number;
+	cooldownUntil?: string;
+	updatedAt?: string | Date;
+}
+
+export interface UsageSnapshotInput {
+	profileId: string;
+	quotaWindow: string;
+	used: number;
+	remaining?: number;
+	observedAt: string | Date;
+	metadata?: unknown;
 }
 
 export interface EffectInput {
@@ -541,7 +562,13 @@ export class BackgroundAgentsDatabase {
 		return id;
 	}
 
-	claimJob(jobId: string, owner: string, leaseMs = DEFAULT_LEASE_MS, now = new Date()): JobClaim | null {
+	claimJob(
+		jobId: string,
+		owner: string,
+		leaseMs = DEFAULT_LEASE_MS,
+		now = new Date(),
+		assignment?: { profileId?: string; model?: string },
+	): JobClaim | null {
 		const claimedAt = utcTimestamp(now, "now");
 		if (!Number.isSafeInteger(leaseMs) || leaseMs <= 0) throw new Error("leaseMs must be a positive integer");
 		return this.withTransaction(() => {
@@ -570,15 +597,35 @@ export class BackgroundAgentsDatabase {
 			const previous = this.database
 				.prepare("SELECT coalesce(max(generation), 0) AS generation FROM attempts WHERE job_id = ?")
 				.get(jobId) as Row;
+			if (assignment?.profileId) {
+				const profile = this.database
+					.prepare("SELECT concurrency_limit FROM provider_profile_state WHERE profile_id = ?")
+					.get(assignment.profileId) as Row | undefined;
+				if (!profile) throw new Error(`Unknown provider profile: ${assignment.profileId}`);
+				const active = this.database
+					.prepare("SELECT count(*) AS count FROM attempts WHERE profile_id = ? AND state = 'running'")
+					.get(assignment.profileId) as Row;
+				if (Number(active.count) >= Number(profile.concurrency_limit)) return null;
+			}
 			const generation = Number(previous.generation) + 1;
 			const attemptId = randomUUID();
 			const leaseId = randomUUID();
 			const expiresAt = new Date(now.getTime() + leaseMs).toISOString();
 			this.database
 				.prepare(
-					"INSERT INTO attempts (id, job_id, case_id, role, generation, state, heartbeat_at, started_at) VALUES (?, ?, ?, ?, ?, 'running', ?, ?)",
+					"INSERT INTO attempts (id, job_id, case_id, role, generation, state, profile_id, model, heartbeat_at, started_at) VALUES (?, ?, ?, ?, ?, 'running', ?, ?, ?, ?)",
 				)
-				.run(attemptId, jobId, rowString(job, "case_id"), rowString(job, "role"), generation, claimedAt, claimedAt);
+				.run(
+					attemptId,
+					jobId,
+					rowString(job, "case_id"),
+					rowString(job, "role"),
+					generation,
+					assignment?.profileId ?? null,
+					assignment?.model ?? null,
+					claimedAt,
+					claimedAt,
+				);
 			this.database
 				.prepare(
 					"INSERT INTO attempt_leases (id, attempt_id, owner, generation, expires_at, last_renewed_at) VALUES (?, ?, ?, ?, ?, ?)",
@@ -587,7 +634,109 @@ export class BackgroundAgentsDatabase {
 			this.database
 				.prepare("UPDATE jobs SET state = 'running', claimed_by = ?, claimed_at = ?, updated_at = ? WHERE id = ?")
 				.run(owner, claimedAt, claimedAt, jobId);
-			return { jobId, attemptId, leaseId, generation, expiresAt };
+			if (assignment?.profileId) this.refreshProviderProfileActivity(assignment.profileId, now);
+			return {
+				jobId,
+				attemptId,
+				leaseId,
+				generation,
+				expiresAt,
+				...(assignment?.profileId ? { profileId: assignment.profileId } : {}),
+				...(assignment?.model ? { model: assignment.model } : {}),
+			};
+		});
+	}
+
+	upsertProviderProfileState(input: ProviderProfileStateInput): void {
+		const updatedAt = utcTimestamp(input.updatedAt, "updatedAt");
+		this.withTransaction(() => {
+			this.database
+				.prepare(
+					"INSERT INTO provider_profile_state (profile_id, available, active_attempts, concurrency_limit, interactive_reserve, cooldown_until, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(profile_id) DO UPDATE SET available = provider_profile_state.available, active_attempts = provider_profile_state.active_attempts, concurrency_limit = excluded.concurrency_limit, interactive_reserve = excluded.interactive_reserve, cooldown_until = excluded.cooldown_until, updated_at = excluded.updated_at",
+				)
+				.run(
+					requiredString(input.profileId, "profileId"),
+					input.available === undefined ? 1 : input.available ? 1 : 0,
+					input.activeAttempts ?? 0,
+					input.concurrencyLimit ?? 1,
+					input.interactiveReserve ?? 0,
+					input.cooldownUntil ?? null,
+					updatedAt,
+				);
+		});
+	}
+
+	setProviderProfileAvailability(profileId: string, available: boolean, updatedAt = new Date()): void {
+		this.run(
+			"UPDATE provider_profile_state SET available = ?, updated_at = ? WHERE profile_id = ?",
+			available ? 1 : 0,
+			utcTimestamp(updatedAt, "updatedAt"),
+			requiredString(profileId, "profileId"),
+		);
+	}
+
+	refreshProviderProfileActivity(profileId: string, updatedAt = new Date()): void {
+		this.run(
+			"UPDATE provider_profile_state SET active_attempts = (SELECT count(*) FROM attempts WHERE profile_id = ? AND state = 'running'), updated_at = ? WHERE profile_id = ?",
+			profileId,
+			utcTimestamp(updatedAt, "updatedAt"),
+			profileId,
+		);
+	}
+
+	recordUsageSnapshot(input: UsageSnapshotInput): void {
+		const observedAt = utcTimestamp(input.observedAt, "observedAt");
+		if (!Number.isSafeInteger(input.used) || input.used < 0) throw new Error("used must be a non-negative integer");
+		if (input.remaining !== undefined && (!Number.isSafeInteger(input.remaining) || input.remaining < 0))
+			throw new Error("remaining must be a non-negative integer");
+		this.withTransaction(() => {
+			if (
+				!this.database
+					.prepare("SELECT profile_id FROM provider_profile_state WHERE profile_id = ?")
+					.get(input.profileId)
+			)
+				throw new Error(`Unknown provider profile: ${input.profileId}`);
+			this.database
+				.prepare(
+					"INSERT INTO usage_snapshots (id, profile_id, quota_window, used, remaining, observed_at, metadata) VALUES (?, ?, ?, ?, ?, ?, ?)",
+				)
+				.run(
+					randomUUID(),
+					requiredString(input.profileId, "profileId"),
+					requiredString(input.quotaWindow, "quotaWindow"),
+					input.used,
+					input.remaining ?? null,
+					observedAt,
+					jsonBoundary(input.metadata ?? {}, "usage metadata"),
+				);
+		});
+	}
+
+	latestUsageSnapshots(profileId: string): Array<{
+		quotaWindow: string;
+		used: number;
+		remaining?: number;
+		observedAt: string;
+		metadata: unknown;
+	}> {
+		const rows = this.all<Row>(
+			"SELECT current.quota_window, current.used, current.remaining, current.observed_at, current.metadata FROM usage_snapshots AS current WHERE current.profile_id = ? AND current.observed_at = (SELECT max(previous.observed_at) FROM usage_snapshots AS previous WHERE previous.profile_id = current.profile_id AND previous.quota_window = current.quota_window) ORDER BY current.quota_window",
+			profileId,
+		);
+		return rows.map((row) => {
+			let metadata: unknown;
+			try {
+				metadata = JSON.parse(rowString(row, "metadata"));
+			} catch (error) {
+				throw new Error("Stored usage metadata contains invalid JSON", { cause: error });
+			}
+			return {
+				quotaWindow: rowString(row, "quota_window"),
+				used: Number(row.used),
+				...(row.remaining == null ? {} : { remaining: Number(row.remaining) }),
+				observedAt: rowString(row, "observed_at"),
+				metadata,
+			};
 		});
 	}
 
