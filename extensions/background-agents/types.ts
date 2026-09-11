@@ -75,6 +75,38 @@ export interface Classification {
 	influentialExamples: string[];
 }
 
+export interface ClassifierOutput {
+	inputKind: InputKind;
+	actionability: number;
+	noise: number;
+	confidence: number;
+	rationale: string;
+}
+
+export interface ClassifierExample {
+	id: string;
+	source?: BackgroundSource;
+	inputKind?: InputKind;
+	disposition?: ClassificationDisposition;
+	correction: Record<string, unknown>;
+	provenance: string;
+}
+
+export interface MemoryEntry {
+	id: string;
+	caseId?: string;
+	finding: string;
+	outcome?: string;
+	rootCause?: string;
+	evidenceSummary: string;
+	confidence: number;
+	scope: string;
+	approvalStatus: "pending" | "approved" | "rejected";
+	supersedesId?: string;
+	createdAt: string;
+	updatedAt: string;
+}
+
 export interface CaseSummary {
 	id: string;
 	title: string;
@@ -99,6 +131,8 @@ export interface RelatedCase {
 	type: "duplicate" | "recurrence" | "related";
 	score: number;
 	rationale: string;
+	provenance?: string;
+	supersededBy?: string[];
 }
 
 export interface AttemptRecord {
@@ -189,6 +223,13 @@ export interface RepositoryConfig {
 export interface ThresholdConfig {
 	actionableMin: number;
 	noiseMax: number;
+	scopes?: {
+		source?: Partial<Record<BackgroundSource, ThresholdConfig>>;
+		service?: Record<string, ThresholdConfig>;
+		monitor?: Record<string, ThresholdConfig>;
+		environment?: Record<string, ThresholdConfig>;
+		repository?: Record<string, ThresholdConfig>;
+	};
 }
 
 export interface BackgroundAgentsConfig {

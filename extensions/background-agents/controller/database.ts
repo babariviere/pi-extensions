@@ -3,7 +3,15 @@ import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import type { DatabaseSync as NativeDatabaseSync } from "node:sqlite";
-import type { AgentRole, BackgroundSource, CaseState, Classification, RolloutMode, SourceEvent } from "../types.ts";
+import type {
+	AgentRole,
+	BackgroundSource,
+	CaseState,
+	Classification,
+	MemoryEntry,
+	RolloutMode,
+	SourceEvent,
+} from "../types.ts";
 import { migrateDatabase } from "./migrations.ts";
 
 const require = createRequire(import.meta.url);
@@ -210,6 +218,39 @@ export interface PolicyInput {
 	version: string;
 	policy: unknown;
 	proposedBy: string;
+}
+
+export interface FeedbackInput {
+	id?: string;
+	caseId?: string;
+	classificationId?: string;
+	correction: unknown;
+	actor: string;
+}
+
+export interface MemoryEntryInput {
+	id?: string;
+	caseId?: string;
+	finding: string;
+	outcome?: string;
+	rootCause?: string;
+	evidenceSummary: string;
+	confidence: number;
+	scope: string;
+	approvalStatus?: "pending" | "approved" | "rejected";
+	supersedesId?: string;
+}
+
+export interface StoredPolicy {
+	id: string;
+	scope: string;
+	version: string;
+	policy: unknown;
+	status: "proposed" | "active" | "retired";
+	proposedBy: string;
+	activatedBy?: string;
+	createdAt: string;
+	activatedAt?: string;
 }
 
 export class IllegalCaseTransitionError extends Error {
@@ -592,15 +633,57 @@ export class BackgroundAgentsDatabase {
 		return id;
 	}
 
+	getPolicy(scope: string, version: string): StoredPolicy | undefined {
+		return this.readPolicy(
+			this.database
+				.prepare(
+					"SELECT id, scope, version, policy, status, proposed_by, activated_by, created_at, activated_at FROM classifier_policies WHERE scope = ? AND version = ?",
+				)
+				.get(requiredString(scope, "scope"), requiredString(version, "version")) as Row | undefined,
+		);
+	}
+
+	getActivePolicy(scope: string): StoredPolicy | undefined {
+		return this.readPolicy(
+			this.database
+				.prepare(
+					"SELECT id, scope, version, policy, status, proposed_by, activated_by, created_at, activated_at FROM classifier_policies WHERE scope = ? AND status = 'active'",
+				)
+				.get(requiredString(scope, "scope")) as Row | undefined,
+		);
+	}
+
+	private readPolicy(row: Row | undefined): StoredPolicy | undefined {
+		if (!row) return undefined;
+		let policy: unknown;
+		try {
+			policy = JSON.parse(rowString(row, "policy"));
+		} catch (error) {
+			throw new Error("Stored classifier policy contains invalid JSON", { cause: error });
+		}
+		return {
+			id: rowString(row, "id"),
+			scope: rowString(row, "scope"),
+			version: rowString(row, "version"),
+			policy,
+			status: rowString(row, "status") as StoredPolicy["status"],
+			proposedBy: rowString(row, "proposed_by"),
+			activatedBy: row.activated_by == null ? undefined : rowString(row, "activated_by"),
+			createdAt: rowString(row, "created_at"),
+			activatedAt: row.activated_at == null ? undefined : rowString(row, "activated_at"),
+		};
+	}
+
 	activatePolicy(policyId: string, actor: string, now = new Date()): void {
 		const activatedAt = utcTimestamp(now, "now");
+		const humanActor = requiredString(actor, "actor");
+		if (/^(agent|system|model|classifier)(:|$)/i.test(humanActor))
+			throw new Error("Only an explicit human action may activate a classifier policy");
 		this.withTransaction(() => {
 			const policy = this.database
 				.prepare("SELECT scope, status FROM classifier_policies WHERE id = ?")
 				.get(policyId) as Row | undefined;
 			if (!policy) throw new Error(`Unknown classifier policy: ${policyId}`);
-			if (rowString(policy, "status") === "retired")
-				throw new Error(`Cannot activate retired classifier policy: ${policyId}`);
 			this.database
 				.prepare(
 					"UPDATE classifier_policies SET status = 'retired', activated_at = NULL WHERE scope = ? AND status = 'active'",
@@ -610,7 +693,7 @@ export class BackgroundAgentsDatabase {
 				.prepare(
 					"UPDATE classifier_policies SET status = 'active', activated_by = ?, activated_at = ? WHERE id = ?",
 				)
-				.run(requiredString(actor, "actor"), activatedAt, policyId);
+				.run(humanActor, activatedAt, policyId);
 		});
 	}
 
@@ -637,6 +720,87 @@ export class BackgroundAgentsDatabase {
 				);
 		});
 		return id;
+	}
+
+	recordFeedback(input: FeedbackInput): string {
+		const id = input.id ?? randomUUID();
+		const actor = requiredString(input.actor, "actor");
+		if (/^(agent|system|model|classifier)(:|$)/i.test(actor))
+			throw new Error("Only explicit human action may create classifier feedback");
+		this.withTransaction(() => {
+			this.database
+				.prepare("INSERT INTO feedback (id, case_id, classification_id, correction, actor) VALUES (?, ?, ?, ?, ?)")
+				.run(
+					id,
+					input.caseId ?? null,
+					input.classificationId ?? null,
+					jsonBoundary(input.correction, "correction"),
+					actor,
+				);
+		});
+		return id;
+	}
+
+	createMemoryEntry(input: MemoryEntryInput): string {
+		const id = input.id ?? randomUUID();
+		if (input.approvalStatus === "approved")
+			throw new Error("Memory entries require an explicit human approval action");
+		if (!Number.isFinite(input.confidence) || input.confidence < 0 || input.confidence > 100)
+			throw new Error("confidence must be between 0 and 100");
+		this.withTransaction(() => {
+			this.database
+				.prepare(
+					"INSERT INTO memory_entries (id, case_id, finding, outcome, root_cause, evidence_summary, confidence, scope, approval_status, supersedes_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+				)
+				.run(
+					id,
+					input.caseId ?? null,
+					requiredString(input.finding, "finding"),
+					input.outcome ?? null,
+					input.rootCause ?? null,
+					requiredString(input.evidenceSummary, "evidenceSummary"),
+					input.confidence,
+					requiredString(input.scope, "scope"),
+					input.approvalStatus ?? "pending",
+					input.supersedesId ?? null,
+				);
+		});
+		return id;
+	}
+
+	approveMemoryEntry(memoryId: string, actor: string, status: "approved" | "rejected" = "approved"): void {
+		const humanActor = requiredString(actor, "actor");
+		if (/^(agent|system|model|classifier)(:|$)/i.test(humanActor))
+			throw new Error("Only explicit human action may approve classifier memory");
+		this.withTransaction(() => {
+			const result = this.database
+				.prepare("UPDATE memory_entries SET approval_status = ?, updated_at = ? WHERE id = ?")
+				.run(status, new Date().toISOString(), requiredString(memoryId, "memoryId"));
+			if (result.changes !== 1) throw new Error(`Unknown memory entry: ${memoryId}`);
+		});
+	}
+
+	getMemoryEntry(memoryId: string): MemoryEntry | undefined {
+		const row = this.database
+			.prepare(
+				"SELECT id, case_id, finding, outcome, root_cause, evidence_summary, confidence, scope, approval_status, supersedes_id, created_at, updated_at FROM memory_entries WHERE id = ?",
+			)
+			.get(requiredString(memoryId, "memoryId")) as Row | undefined;
+		if (!row) return undefined;
+		return {
+			id: rowString(row, "id"),
+			caseId: row.case_id == null ? undefined : rowString(row, "case_id"),
+			finding: rowString(row, "finding"),
+			outcome: row.outcome == null ? undefined : rowString(row, "outcome"),
+			rootCause: row.root_cause == null ? undefined : rowString(row, "root_cause"),
+			evidenceSummary: rowString(row, "evidence_summary"),
+			confidence: Number(row.confidence),
+			scope: rowString(row, "scope"),
+			approvalStatus: rowString(row, "approval_status") as MemoryEntry["approvalStatus"],
+			supersedesId: row.supersedes_id == null ? undefined : rowString(row, "supersedes_id"),
+			createdAt: rowString(row, "created_at"),
+			updatedAt: rowString(row, "updated_at"),
+		};
 	}
 
 	recordTrustedCheckpoint(input: TrustedCheckpointInput): string {

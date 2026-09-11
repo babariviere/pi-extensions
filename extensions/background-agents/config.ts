@@ -86,6 +86,23 @@ function threshold(value: unknown, field: string, fallback: number): number {
 	return value === undefined ? fallback : integerValue(value, field, 0, 100);
 }
 
+function scopedThresholds(value: unknown, field: string, fallback: ThresholdConfig): Record<string, ThresholdConfig> {
+	if (value === undefined) return {};
+	const input = recordValue(value, field);
+	return Object.fromEntries(
+		Object.entries(input).map(([key, item]) => {
+			const scoped = recordValue(item, `${field}.${key}`);
+			const result = {
+				actionableMin: threshold(scoped.actionableMin, `${field}.${key}.actionableMin`, fallback.actionableMin),
+				noiseMax: threshold(scoped.noiseMax, `${field}.${key}.noiseMax`, fallback.noiseMax),
+			};
+			if (result.noiseMax >= result.actionableMin)
+				throw new Error(`${field}.${key} noiseMax must be below actionableMin`);
+			return [key, result];
+		}),
+	);
+}
+
 function validateNoInlineSecrets(value: unknown, path = "config"): void {
 	if (Array.isArray(value)) {
 		value.forEach((item, index) => validateNoInlineSecrets(item, `${path}[${index}]`));
@@ -123,6 +140,11 @@ function validatePath(path: string, field: string, kind: "directory" | "file-or-
 function validateConfig(config: BackgroundAgentsConfig, checkPaths: boolean): BackgroundAgentsConfig {
 	if (config.thresholds.noiseMax >= config.thresholds.actionableMin)
 		throw new Error("thresholds.noiseMax must be below actionableMin");
+	for (const scope of Object.values(config.thresholds.scopes ?? {})) {
+		for (const item of Object.values(scope ?? {})) {
+			if (item.noiseMax >= item.actionableMin) throw new Error("scoped noiseMax must be below actionableMin");
+		}
+	}
 	if (config.socket.mode < 0o600 || config.socket.mode > 0o777 || (config.socket.mode & 0o007) !== 0) {
 		throw new Error("socket.mode must be owner-readable/writable and not world-accessible");
 	}
@@ -158,6 +180,18 @@ export function normalizeBackgroundAgentsConfig(
 		actionableMin: threshold(rawThresholds.actionableMin, "thresholds.actionableMin", 70),
 		noiseMax: threshold(rawThresholds.noiseMax, "thresholds.noiseMax", 30),
 	};
+	if (thresholds.noiseMax >= thresholds.actionableMin)
+		throw new Error("thresholds.noiseMax must be below actionableMin");
+	if (rawThresholds.scopes !== undefined) {
+		const scopes = recordValue(rawThresholds.scopes, "thresholds.scopes");
+		thresholds.scopes = {
+			source: scopedThresholds(scopes.source, "thresholds.scopes.source", thresholds),
+			service: scopedThresholds(scopes.service, "thresholds.scopes.service", thresholds),
+			monitor: scopedThresholds(scopes.monitor, "thresholds.scopes.monitor", thresholds),
+			environment: scopedThresholds(scopes.environment, "thresholds.scopes.environment", thresholds),
+			repository: scopedThresholds(scopes.repository, "thresholds.scopes.repository", thresholds),
+		};
+	}
 	const rawPolling = input.pollIntervalsMs === undefined ? {} : recordValue(input.pollIntervalsMs, "pollIntervalsMs");
 	const rawSystemd = input.systemd === undefined ? {} : recordValue(input.systemd, "systemd");
 	const rawCi = input.ci === undefined ? {} : recordValue(input.ci, "ci");

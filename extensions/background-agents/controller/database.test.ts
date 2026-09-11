@@ -36,7 +36,10 @@ describe("background-agents SQLite ownership", () => {
 		first.close();
 
 		const reopened = new BackgroundAgentsDatabase(path);
-		assert.equal(reopened.get<{ count: number }>("SELECT count(*) AS count FROM schema_migrations")?.count, 1);
+		assert.equal(
+			reopened.get<{ count: number }>("SELECT count(*) AS count FROM schema_migrations")?.count,
+			CURRENT_SCHEMA_VERSION,
+		);
 		reopened.close();
 	});
 
