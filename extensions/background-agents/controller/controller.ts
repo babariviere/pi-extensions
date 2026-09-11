@@ -31,6 +31,52 @@ import { reproduceEvidenceOperation } from "./verification/reproduce.ts";
 import { BackgroundSocketServer } from "./socket-server.ts";
 
 export type FetchLike = (input: string | URL, init?: RequestInit) => Promise<Response>;
+
+const DASHBOARD_LIMIT = 100;
+const DASHBOARD_TEXT_LIMIT = 400;
+const SECRET_KEY =
+	/(?:token|secret|password|credential|authorization|auth|api[_-]?key|reasoning|prompt|payload|body|transcript|path|directory|raw)/i;
+function dashboardText(value: unknown, limit = DASHBOARD_TEXT_LIMIT): string {
+	const text = String(value ?? "")
+		.replace(/[\u0000-\u001f\u007f]/g, " ")
+		.trim();
+	return text.length > limit ? `${text.slice(0, limit - 1)}…` : text;
+}
+function dashboardJson(value: unknown, depth = 0): unknown {
+	if (depth > 2 || value === null || typeof value !== "object")
+		return typeof value === "string" ? dashboardText(value, 160) : value;
+	if (Array.isArray(value)) return value.slice(0, 20).map((item) => dashboardJson(item, depth + 1));
+	const result: Record<string, unknown> = {};
+	for (const [key, item] of Object.entries(value as Record<string, unknown>).slice(0, 30)) {
+		if (SECRET_KEY.test(key)) continue;
+		result[dashboardText(key, 80)] = dashboardJson(item, depth + 1);
+	}
+	return result;
+}
+function dashboardJsonText(value: unknown): string {
+	try {
+		return dashboardText(JSON.stringify(dashboardJson(value)) ?? "");
+	} catch {
+		return "-";
+	}
+}
+function parseDashboardJson(row: Record<string, unknown>, field: string, fallback: unknown): unknown {
+	if (typeof row[field] !== "string") return fallback;
+	try {
+		return JSON.parse(row[field] as string);
+	} catch {
+		return fallback;
+	}
+}
+function dashboardList(value: unknown): string[] {
+	if (!Array.isArray(value)) return value === undefined || value === null ? [] : [dashboardJsonText(value)];
+	return value
+		.slice(0, 20)
+		.map((item) => dashboardText(typeof item === "string" ? item : dashboardJsonText(item), 240));
+}
+function dashboardRows<T>(rows: T[]): T[] {
+	return rows.slice(0, DASHBOARD_LIMIT);
+}
 function credentialObject(path: string | undefined): Record<string, unknown> {
 	if (!path) throw new Error("a credential file reference is required");
 	try {
@@ -455,46 +501,361 @@ export class BackgroundAgentsController {
 		}
 	}
 	snapshot(): DashboardSnapshot {
-		const cases = this.database
-			.all<Record<string, unknown>>(
-				"SELECT id, title, source, state, repository, priority, rollout_mode, created_at, updated_at FROM cases ORDER BY updated_at DESC, id DESC",
-			)
-			.map((row) => ({
-				id: String(row.id),
-				title: String(row.title),
-				source: row.source as BackgroundSource,
-				state: row.state as DashboardSnapshot["cases"][number]["state"],
-				...(row.repository == null ? {} : { repository: String(row.repository) }),
-				...(row.priority == null ? {} : { priority: Number(row.priority) }),
-				rollout: row.rollout_mode as RolloutMode,
-				createdAt: String(row.created_at),
-				updatedAt: String(row.updated_at),
-			}));
-		const attempts = this.database
-			.all<Record<string, unknown>>(
-				"SELECT id, case_id, role, generation, state, profile_id, model, systemd_unit, pane_id, worktree, branch, heartbeat_at, started_at, finished_at, failure FROM attempts ORDER BY created_at DESC",
-			)
-			.map((row) => ({
-				id: String(row.id),
-				caseId: String(row.case_id),
-				role: row.role as AgentRole,
-				generation: Number(row.generation),
-				state: row.state as AttemptState,
-				...(row.profile_id == null ? {} : { profileId: String(row.profile_id) }),
-				...(row.model == null ? {} : { model: String(row.model) }),
-				...(row.systemd_unit == null ? {} : { systemdUnit: String(row.systemd_unit) }),
-				...(row.pane_id == null ? {} : { paneId: String(row.pane_id) }),
-				...(row.worktree == null ? {} : { worktree: String(row.worktree) }),
-				...(row.branch == null ? {} : { branch: String(row.branch) }),
-				...(row.heartbeat_at == null ? {} : { heartbeatAt: String(row.heartbeat_at) }),
-				...(row.started_at == null ? {} : { startedAt: String(row.started_at) }),
-				...(row.finished_at == null ? {} : { finishedAt: String(row.finished_at) }),
-				...(row.failure == null ? {} : { failure: String(row.failure) }),
-			}));
+		const cases = dashboardRows(
+			this.database
+				.all<Record<string, unknown>>(
+					"SELECT id, title, source, state, repository, priority, rollout_mode, created_at, updated_at FROM cases ORDER BY updated_at DESC, id DESC",
+				)
+				.map((row) => ({
+					id: dashboardText(row.id, 120),
+					title: dashboardText(row.title),
+					source: row.source as BackgroundSource,
+					state: row.state as DashboardSnapshot["cases"][number]["state"],
+					...(row.repository == null ? {} : { repository: dashboardText(row.repository, 240) }),
+					...(row.priority == null ? {} : { priority: Number(row.priority) }),
+					rollout: row.rollout_mode as RolloutMode,
+					createdAt: dashboardText(row.created_at, 40),
+					updatedAt: dashboardText(row.updated_at, 40),
+				})),
+		);
+		const attempts = dashboardRows(
+			this.database
+				.all<Record<string, unknown>>(
+					"SELECT id, case_id, role, generation, state, profile_id, model, systemd_unit, pane_id, worktree, branch, heartbeat_at, started_at, finished_at, failure FROM attempts ORDER BY created_at DESC",
+				)
+				.map((row) => ({
+					id: dashboardText(row.id, 120),
+					caseId: dashboardText(row.case_id, 120),
+					role: row.role as AgentRole,
+					generation: Number(row.generation),
+					state: row.state as AttemptState,
+					...(row.profile_id == null ? {} : { profileId: dashboardText(row.profile_id, 120) }),
+					...(row.model == null ? {} : { model: dashboardText(row.model, 160) }),
+					...(row.systemd_unit == null ? {} : { systemdUnit: dashboardText(row.systemd_unit, 160) }),
+					...(row.pane_id == null ? {} : { paneId: dashboardText(row.pane_id, 160) }),
+					...(row.worktree == null ? {} : { worktree: dashboardText(row.worktree, 240) }),
+					...(row.branch == null ? {} : { branch: dashboardText(row.branch, 240) }),
+					...(row.heartbeat_at == null ? {} : { heartbeatAt: dashboardText(row.heartbeat_at, 40) }),
+					...(row.started_at == null ? {} : { startedAt: dashboardText(row.started_at, 40) }),
+					...(row.finished_at == null ? {} : { finishedAt: dashboardText(row.finished_at, 40) }),
+					...(row.failure == null ? {} : { failure: dashboardText(row.failure) }),
+				})),
+		);
+		const workItems = dashboardRows(
+			this.database
+				.all<Record<string, unknown>>(
+					"SELECT id, case_id, ordinal, parent_id, title, branch, pull_request, state, created_at, updated_at FROM work_items ORDER BY case_id, ordinal",
+				)
+				.map((row) => ({
+					id: dashboardText(row.id, 120),
+					caseId: dashboardText(row.case_id, 120),
+					ordinal: Number(row.ordinal),
+					...(row.parent_id == null ? {} : { parentId: dashboardText(row.parent_id, 120) }),
+					title: dashboardText(row.title),
+					...(row.branch == null ? {} : { branch: dashboardText(row.branch, 240) }),
+					...(row.pull_request == null ? {} : { pullRequest: Number(row.pull_request) }),
+					state: dashboardText(row.state, 40),
+					createdAt: dashboardText(row.created_at, 40),
+					updatedAt: dashboardText(row.updated_at, 40),
+				})),
+		);
+		const stacks = [...new Set(workItems.map((item) => item.caseId))].slice(0, DASHBOARD_LIMIT).map((caseId) => ({
+			caseId,
+			workItemIds: workItems
+				.filter((item) => item.caseId === caseId)
+				.map((item) => item.id)
+				.slice(0, 20),
+		}));
+		const classificationRows = this.database.all<Record<string, unknown>>(
+			"SELECT id, case_id, input_kind, disposition, actionability, noise, confidence, model_version, policy_version, created_at FROM classifications ORDER BY created_at DESC, id DESC",
+		);
+		const classifications = dashboardRows(
+			classificationRows
+				.filter((row, index, rows) => rows.findIndex((candidate) => candidate.case_id === row.case_id) === index)
+				.map((row) => ({
+					id: dashboardText(row.id, 120),
+					caseId: dashboardText(row.case_id, 120),
+					inputKind: row.input_kind as DashboardSnapshot["classifications"][number]["inputKind"],
+					disposition: row.disposition as DashboardSnapshot["classifications"][number]["disposition"],
+					actionability: Number(row.actionability),
+					noise: Number(row.noise),
+					confidence: Number(row.confidence),
+					policyVersion: dashboardText(row.policy_version, 120),
+					modelVersion: dashboardText(row.model_version, 160),
+					createdAt: dashboardText(row.created_at, 40),
+				})),
+		);
+		const policies = dashboardRows(
+			this.database
+				.all<Record<string, unknown>>(
+					"SELECT id, scope, version, status, created_at, activated_at FROM classifier_policies ORDER BY created_at DESC, id DESC",
+				)
+				.map((row) => ({
+					id: dashboardText(row.id, 120),
+					scope: dashboardText(row.scope, 120),
+					version: dashboardText(row.version, 120),
+					status: row.status as DashboardSnapshot["policies"][number]["status"],
+					createdAt: dashboardText(row.created_at, 40),
+					...(row.activated_at == null ? {} : { activatedAt: dashboardText(row.activated_at, 40) }),
+				})),
+		);
+		const memoryRows = this.database.all<Record<string, unknown>>(
+			"SELECT id, case_id, finding, outcome, root_cause, evidence_summary, confidence, scope, supersedes_id, created_at, updated_at FROM memory_entries WHERE approval_status = 'approved' ORDER BY updated_at DESC, id DESC",
+		);
+		const memory = dashboardRows(
+			memoryRows.map((row) => ({
+				id: dashboardText(row.id, 120),
+				...(row.case_id == null ? {} : { caseId: dashboardText(row.case_id, 120) }),
+				finding: dashboardText(row.finding),
+				...(row.outcome == null ? {} : { outcome: dashboardText(row.outcome) }),
+				...(row.root_cause == null ? {} : { rootCause: dashboardText(row.root_cause) }),
+				evidenceSummary: dashboardText(row.evidence_summary),
+				confidence: Number(row.confidence),
+				scope: dashboardText(row.scope, 160),
+				approvalStatus: "approved" as const,
+				...(row.supersedes_id == null ? {} : { supersedesId: dashboardText(row.supersedes_id, 120) }),
+				provenance:
+					row.case_id == null ? "operator-approved, case-independent" : `case ${dashboardText(row.case_id, 120)}`,
+				supersededByIds: memoryRows
+					.filter((candidate) => candidate.supersedes_id === row.id)
+					.map((candidate) => dashboardText(candidate.id, 120))
+					.slice(0, 20),
+				createdAt: dashboardText(row.created_at, 40),
+				updatedAt: dashboardText(row.updated_at, 40),
+			})),
+		);
+		const specRows = this.database.all<Record<string, unknown>>(
+			"SELECT id, case_id, version, specification, decisions, unresolved_questions, permissions, material_hash, planner_summary, created_at FROM spec_versions ORDER BY created_at DESC, version DESC",
+		);
+		const specifications = dashboardRows(
+			specRows.map((row) => ({
+				id: dashboardText(row.id, 120),
+				caseId: dashboardText(row.case_id, 120),
+				version: Number(row.version),
+				summary:
+					row.planner_summary == null
+						? dashboardJsonText(parseDashboardJson(row, "specification", {}))
+						: dashboardText(row.planner_summary),
+				decisions: dashboardList(parseDashboardJson(row, "decisions", [])),
+				unresolvedQuestions: dashboardList(parseDashboardJson(row, "unresolved_questions", [])),
+				permissions: dashboardList(parseDashboardJson(row, "permissions", [])),
+				materialHash: dashboardText(row.material_hash, 160),
+				createdAt: dashboardText(row.created_at, 40),
+			})),
+		);
+		const approvals = dashboardRows(
+			this.database
+				.all<Record<string, unknown>>(
+					"SELECT id, spec_version_id, spec_version, decision, actor, permissions, ordered_work_items, created_at FROM approvals ORDER BY created_at DESC, id DESC",
+				)
+				.map((row) => ({
+					id: dashboardText(row.id, 120),
+					caseId: dashboardText(
+						specRows.find((spec) => spec.id === row.spec_version_id)?.case_id ?? "unknown",
+						120,
+					),
+					specVersion: Number(row.spec_version),
+					decision: row.decision as DashboardSnapshot["approvals"][number]["decision"],
+					actor: dashboardText(row.actor, 120),
+					permissions: dashboardList(parseDashboardJson(row, "permissions", [])),
+					orderedWorkItemIds: dashboardList(parseDashboardJson(row, "ordered_work_items", [])),
+					createdAt: dashboardText(row.created_at, 40),
+				})),
+		);
+		const feedback = dashboardRows(
+			this.database
+				.all<Record<string, unknown>>(
+					"SELECT id, case_id, classification_id, correction, actor, created_at FROM feedback ORDER BY created_at DESC, id DESC",
+				)
+				.map((row) => ({
+					id: dashboardText(row.id, 120),
+					...(row.case_id == null ? {} : { caseId: dashboardText(row.case_id, 120) }),
+					...(row.classification_id == null
+						? {}
+						: { classificationId: dashboardText(row.classification_id, 120) }),
+					actor: dashboardText(row.actor, 120),
+					correction: dashboardJsonText(parseDashboardJson(row, "correction", {})),
+					createdAt: dashboardText(row.created_at, 40),
+				})),
+		);
+		const questionBriefs = dashboardRows(
+			this.database
+				.all<Record<string, unknown>>(
+					"SELECT id, case_id, attempt_id, question, findings, sources, confidence, uncertainties, limits, created_at FROM question_briefs ORDER BY created_at DESC, id DESC",
+				)
+				.map((row) => ({
+					id: dashboardText(row.id, 120),
+					caseId: dashboardText(row.case_id, 120),
+					...(row.attempt_id == null ? {} : { attemptId: dashboardText(row.attempt_id, 120) }),
+					question: dashboardText(row.question),
+					findings: dashboardList(parseDashboardJson(row, "findings", [])),
+					sources: dashboardList(parseDashboardJson(row, "sources", [])),
+					confidence: Number(row.confidence),
+					uncertainties: dashboardList(parseDashboardJson(row, "uncertainties", [])),
+					limits: dashboardJsonText(parseDashboardJson(row, "limits", {})),
+					createdAt: dashboardText(row.created_at, 40),
+				})),
+		);
+		const artifacts = dashboardRows(
+			this.database
+				.all<Record<string, unknown>>(
+					"SELECT id, case_id, attempt_id, kind, url, hash, transcript_reference, created_at FROM artifacts ORDER BY created_at DESC, id DESC",
+				)
+				.map((row) => ({
+					id: dashboardText(row.id, 120),
+					...(row.case_id == null ? {} : { caseId: dashboardText(row.case_id, 120) }),
+					...(row.attempt_id == null ? {} : { attemptId: dashboardText(row.attempt_id, 120) }),
+					kind: dashboardText(row.kind, 120),
+					...(row.url == null ? {} : { url: dashboardText(row.url, 240) }),
+					...(row.hash == null ? {} : { hash: dashboardText(row.hash, 160) }),
+					...(row.transcript_reference == null
+						? {}
+						: { transcriptReference: dashboardText(row.transcript_reference, 160) }),
+					createdAt: dashboardText(row.created_at, 40),
+				})),
+		);
+		const jobs = dashboardRows(
+			this.database
+				.all<Record<string, unknown>>(
+					"SELECT id, case_id, work_item_id, role, state, priority, claimed_by, claimed_at, created_at, updated_at FROM jobs ORDER BY updated_at DESC, id DESC",
+				)
+				.map((row) => ({
+					id: dashboardText(row.id, 120),
+					caseId: dashboardText(row.case_id, 120),
+					...(row.work_item_id == null ? {} : { workItemId: dashboardText(row.work_item_id, 120) }),
+					role: row.role as AgentRole,
+					state: row.state as AttemptState,
+					priority: Number(row.priority),
+					...(row.claimed_by == null ? {} : { claimedBy: dashboardText(row.claimed_by, 120) }),
+					...(row.claimed_at == null ? {} : { claimedAt: dashboardText(row.claimed_at, 40) }),
+					createdAt: dashboardText(row.created_at, 40),
+					updatedAt: dashboardText(row.updated_at, 40),
+				})),
+		);
+		const profiles = this.config.profiles.map((profile) => ({
+			id: dashboardText(profile.id, 120),
+			provider: profile.provider,
+			allowedModels: profile.allowedModels.slice(0, 20).map((model) => dashboardText(model, 160)),
+			allowedRoles: profile.allowedRoles,
+			maxBackgroundAttempts: profile.maxBackgroundAttempts,
+			interactiveReserve: profile.interactiveReserve,
+			usageStaleAfterMs: profile.usageStaleAfterMs,
+		}));
+		const usage = dashboardRows(
+			profiles.map((profile) => {
+				const state = this.database.get<Record<string, unknown>>(
+					"SELECT available, active_attempts, concurrency_limit, interactive_reserve, cooldown_until FROM provider_profile_state WHERE profile_id = ?",
+					profile.id,
+				);
+				return {
+					profileId: profile.id,
+					available: state ? Boolean(state.available) : true,
+					activeAttempts: Number(
+						state?.active_attempts ??
+							attempts.filter((attempt) => attempt.profileId === profile.id && attempt.state === "running")
+								.length,
+					),
+					concurrencyLimit: Number(state?.concurrency_limit ?? 1),
+					interactiveReserve: Number(state?.interactive_reserve ?? profile.interactiveReserve),
+					...(state?.cooldown_until == null ? {} : { cooldownUntil: dashboardText(state.cooldown_until, 40) }),
+					windows: this.database
+						.latestUsageSnapshots(profile.id)
+						.slice(0, 10)
+						.map((window) => ({
+							quotaWindow: dashboardText(window.quotaWindow, 80),
+							used: window.used,
+							...(window.remaining === undefined ? {} : { remaining: window.remaining }),
+							observedAt: dashboardText(window.observedAt, 40),
+						})),
+				};
+			}),
+		);
+		const manifestRows = dashboardRows(
+			this.database.all<Record<string, unknown>>(
+				"SELECT id, case_id, version, base_sha, candidate_sha, created_at FROM evidence_manifests ORDER BY created_at DESC, version DESC",
+			),
+		);
+		const evidenceManifests = manifestRows.map((row) => {
+			const manifest = this.database.getEvidenceManifest(dashboardText(row.id, 120));
+			return {
+				id: dashboardText(row.id, 120),
+				caseId: dashboardText(row.case_id, 120),
+				version: Number(row.version),
+				baseSha: dashboardText(row.base_sha, 160),
+				candidateSha: dashboardText(row.candidate_sha, 160),
+				commands: (manifest?.commands ?? []).slice(0, 20).map((command) => ({
+					executable: dashboardText(command.executable, 160),
+					argv: (command.argv ?? command.args ?? []).slice(0, 30).map((arg) => dashboardText(arg, 240)),
+					cwd: dashboardText(command.cwd ?? command.workingDirectory, 240),
+					phase: command.phase,
+					purpose: command.purpose,
+					expectedExitCode: command.expected?.exitCode ?? command.expectedExitCode ?? 0,
+					...(command.actual?.exitCode === undefined ? {} : { actualExitCode: command.actual.exitCode }),
+					...(command.actual?.outputHash === undefined
+						? {}
+						: { outputHash: dashboardText(command.actual.outputHash, 160) }),
+					...(command.actual?.outputBytes === undefined ? {} : { outputBytes: command.actual.outputBytes }),
+					...(command.actual?.outputTruncated === undefined
+						? {}
+						: { outputTruncated: command.actual.outputTruncated }),
+				})),
+				createdAt: dashboardText(row.created_at, 40),
+				toolVersions: Object.fromEntries(
+					Object.entries(manifest?.toolVersions ?? {})
+						.slice(0, 20)
+						.map(([key, value]) => [dashboardText(key, 80), dashboardText(value, 160)]),
+				),
+			};
+		});
+		const verificationRuns = dashboardRows(
+			manifestRows.flatMap((manifest) =>
+				this.database.listVerificationRuns(dashboardText(manifest.id, 120)).map((run) => ({
+					id: dashboardText(run.id, 120),
+					manifestId: dashboardText(run.manifestId, 120),
+					verdict: run.verdict,
+					confidence: run.confidence.score,
+					ciChecks: Object.fromEntries(Object.entries(run.ciChecks).slice(0, 20)),
+					rationale: dashboardText(run.rationale),
+					uncertainties: run.uncertainties.slice(0, 20).map((item) => dashboardText(item, 240)),
+					replayHistory: (run.replayHistory ?? []).slice(0, 20).map((item) => dashboardText(item, 120)),
+					createdAt: dashboardText(run.createdAt, 40),
+				})),
+			),
+		);
+		const system = {
+			started: this.started,
+			activeAttempts: Number(
+				this.database.get<{ count: number }>("SELECT count(*) AS count FROM attempts WHERE state = 'running'")
+					?.count ?? 0,
+			),
+			queuedJobs: Number(
+				this.database.get<{ count: number }>("SELECT count(*) AS count FROM jobs WHERE state = 'queued'")?.count ??
+					0,
+			),
+			controller: "connected" as const,
+			...(this.config.socket.ownerUid === undefined ? {} : { socketOwnerUid: this.config.socket.ownerUid }),
+			socketMode: this.config.socket.mode,
+			socketMaxRequestBytes: this.config.socket.maxRequestBytes,
+		};
 		return {
 			cases,
 			attempts,
-			profiles: this.config.profiles,
+			profiles,
+			workItems,
+			stacks,
+			classifications,
+			policies,
+			memory,
+			specifications,
+			approvals,
+			feedback,
+			questionBriefs,
+			artifacts,
+			jobs,
+			usage,
+			evidenceManifests,
+			verificationRuns,
+			system,
 			rollout: this.runtimeRollout.defaultMode,
 			emergencyStop: this.providerScheduler.emergencyStop,
 			generatedAt: (this.options.clock ?? (() => new Date()))().toISOString(),
@@ -565,17 +926,17 @@ export class BackgroundAgentsController {
 					result = { accepted: true };
 					break;
 				case "evidence.reproduce": {
-					const manifestId = this.database.createEvidenceManifest({
-						caseId: request.caseId,
-						manifest: request.manifest,
-					});
-					const repository = this.database.get<{ repository: string }>(
-						"SELECT repository FROM cases WHERE id = ?",
-						request.caseId,
-					)?.repository;
+					const manifestCase = this.database.get<{ case_id: string; repository: string | null }>(
+						"SELECT m.case_id, c.repository FROM evidence_manifests m JOIN cases c ON c.id = m.case_id WHERE m.id = ?",
+						request.manifestId,
+					);
+					if (!manifestCase) throw new Error(`Unknown evidence manifest: ${request.manifestId}`);
+					if (manifestCase.case_id !== request.caseId)
+						throw new Error("evidence manifest does not belong to the selected case");
+					const repository = manifestCase.repository;
 					if (!repository) throw new Error("case has no repository for evidence reproduction");
 					result = await reproduceEvidenceOperation(
-						{ operation: "evidence.reproduce", caseId: request.caseId, manifestId },
+						{ operation: "evidence.reproduce", caseId: request.caseId, manifestId: request.manifestId },
 						{ database: this.database, repository, requiredChecks: this.config.ci.requiredChecks },
 					);
 					break;

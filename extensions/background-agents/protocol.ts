@@ -1,11 +1,4 @@
-import type {
-	BackgroundSource,
-	CaseAction,
-	Classification,
-	DashboardSnapshot,
-	EvidenceManifest,
-	RolloutMode,
-} from "./types.ts";
+import type { BackgroundSource, CaseAction, Classification, RolloutMode } from "./types.ts";
 
 export const BACKGROUND_AGENTS_PROTOCOL_VERSION = 1 as const;
 export const BACKGROUND_AGENTS_PROTOCOL = "background-agents.v1" as const;
@@ -34,7 +27,7 @@ export type BackgroundRequest =
 	  }
 	| { version: 1; id: string; type: "emergency.stop"; enabled: boolean }
 	| { version: 1; id: string; type: "pane.focus"; paneId: string }
-	| { version: 1; id: string; type: "evidence.reproduce"; caseId: string; manifest: EvidenceManifest };
+	| { version: 1; id: string; type: "evidence.reproduce"; caseId: string; manifestId: string };
 
 export type BackgroundResponse =
 	| { version: 1; id: string; ok: true; result: unknown }
@@ -119,12 +112,7 @@ export function validateBackgroundRequest(value: unknown): string | undefined {
 		case "pane.focus":
 			return requiredFields(request, ["paneId"]);
 		case "evidence.reproduce":
-			if (requiredFields(request, ["caseId"])) return requiredFields(request, ["caseId"]);
-			if (!request.manifest || typeof request.manifest !== "object" || Array.isArray(request.manifest))
-				return "manifest must be an object";
-			return (request.manifest as Record<string, unknown>).version === 1
-				? undefined
-				: "manifest version is unsupported";
+			return requiredFields(request, ["caseId", "manifestId"]);
 		default:
 			return "request type is invalid";
 	}

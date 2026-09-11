@@ -75,3 +75,39 @@ test("controller rejects insecure source credentials before reading them", () =>
 		rmSync(root, { recursive: true, force: true });
 	}
 });
+
+test("evidence reproduction requires an existing manifest owned by the selected case", async () => {
+	const database = new BackgroundAgentsDatabase(":memory:");
+	databases.push(database);
+	const controller = new BackgroundAgentsController({ database, startSocket: false });
+	const caseId = database.createCase({ title: "Evidence", source: "manual", repository: "/missing" });
+	const otherCaseId = database.createCase({ title: "Other", source: "manual", repository: "/missing" });
+	const response = await controller.handle({
+		version: 1,
+		id: "missing-manifest",
+		type: "evidence.reproduce",
+		caseId,
+		manifestId: "does-not-exist",
+	});
+	assert.equal(response.ok, false);
+	assert.equal(database.get<{ count: number }>("SELECT count(*) AS count FROM evidence_manifests")?.count, 0);
+	const manifestId = database.createEvidenceManifest({
+		caseId,
+		manifest: {
+			version: 1,
+			baseSha: "base",
+			candidateSha: "candidate",
+			commands: [],
+			createdAt: new Date().toISOString(),
+		},
+	});
+	const wrongCase = await controller.handle({
+		version: 1,
+		id: "wrong-case",
+		type: "evidence.reproduce",
+		caseId: otherCaseId,
+		manifestId,
+	});
+	assert.equal(wrongCase.ok, false);
+	assert.equal(database.get<{ count: number }>("SELECT count(*) AS count FROM verification_runs")?.count, 0);
+});

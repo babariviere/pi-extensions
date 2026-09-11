@@ -190,6 +190,7 @@ export function buildSystemdRunArgs(options: SystemdLaunchOptions): string[] {
 		`--property=ReadOnlyPaths=${primary}`,
 		`--setenv=PI_CODING_AGENT_DIR=${profile}`,
 		`--setenv=PI_CODING_AGENT_SESSION_DIR=${session}`,
+		"--setenv=PI_BACKGROUND_AGENT_ATTEMPT=1",
 		`--setenv=HOME=${profile}`,
 		`--setenv=TMPDIR=${attempt}`,
 		options.command ?? "pi",

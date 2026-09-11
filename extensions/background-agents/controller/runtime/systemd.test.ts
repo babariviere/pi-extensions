@@ -24,6 +24,7 @@ test("builds strict transient-service argv with only approved write paths", () =
 	assert.ok(args.includes("--property=NoNewPrivileges=yes"));
 	assert.ok(args.includes("--property=ReadWritePaths=/tmp/primary/.git"));
 	assert.ok(args.includes("--setenv=TMPDIR=/tmp/attempt"));
+	assert.ok(args.includes("--setenv=PI_BACKGROUND_AGENT_ATTEMPT=1"));
 	assert.equal(
 		args.some((arg) => arg.includes("hello; echo bad")),
 		true,

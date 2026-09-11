@@ -237,6 +237,190 @@ export interface ProviderProfile {
 	usageStaleAfterMs: number;
 }
 
+/** Operator-safe projection of a provider profile. Credential and profile paths are never wire data. */
+export interface DashboardProfile {
+	id: string;
+	provider: ProviderKind;
+	allowedModels: string[];
+	allowedRoles: AgentRole[];
+	maxBackgroundAttempts: number;
+	interactiveReserve: number;
+	usageStaleAfterMs: number;
+	available?: boolean;
+	activeAttempts?: number;
+	cooldownUntil?: string;
+}
+
+export interface DashboardWorkItem {
+	id: string;
+	caseId: string;
+	ordinal: number;
+	parentId?: string;
+	title: string;
+	branch?: string;
+	pullRequest?: number;
+	state: string;
+	createdAt: string;
+	updatedAt: string;
+}
+
+export interface DashboardStack {
+	caseId: string;
+	workItemIds: string[];
+}
+
+export interface DashboardClassification {
+	id: string;
+	caseId: string;
+	inputKind: InputKind;
+	disposition: ClassificationDisposition;
+	actionability: number;
+	noise: number;
+	confidence: number;
+	policyVersion: string;
+	modelVersion: string;
+	createdAt: string;
+}
+
+export interface DashboardPolicy {
+	id: string;
+	scope: string;
+	version: string;
+	status: "proposed" | "active" | "retired";
+	createdAt: string;
+	activatedAt?: string;
+}
+
+export interface DashboardMemory extends MemoryEntry {
+	provenance: string;
+	supersededByIds: string[];
+}
+
+export interface DashboardSpecification {
+	id: string;
+	caseId: string;
+	version: number;
+	summary: string;
+	decisions: string[];
+	unresolvedQuestions: string[];
+	permissions: string[];
+	materialHash: string;
+	createdAt: string;
+}
+
+export interface DashboardApproval {
+	id: string;
+	caseId: string;
+	specVersion: number;
+	decision: "approved" | "rejected" | "changes-requested";
+	actor: string;
+	permissions: string[];
+	orderedWorkItemIds: string[];
+	createdAt: string;
+}
+
+export interface DashboardFeedback {
+	id: string;
+	caseId?: string;
+	classificationId?: string;
+	actor: string;
+	correction: string;
+	createdAt: string;
+}
+
+export interface DashboardQuestionBrief {
+	id: string;
+	caseId: string;
+	attemptId?: string;
+	question: string;
+	findings: string[];
+	sources: string[];
+	confidence: number;
+	uncertainties: string[];
+	limits: string;
+	createdAt: string;
+}
+
+export interface DashboardArtifact {
+	id: string;
+	caseId?: string;
+	attemptId?: string;
+	kind: string;
+	url?: string;
+	hash?: string;
+	transcriptReference?: string;
+	createdAt: string;
+}
+
+export interface DashboardJob {
+	id: string;
+	caseId: string;
+	workItemId?: string;
+	role: AgentRole;
+	state: AttemptState;
+	priority: number;
+	claimedBy?: string;
+	claimedAt?: string;
+	createdAt: string;
+	updatedAt: string;
+}
+
+export interface DashboardUsage {
+	profileId: string;
+	available: boolean;
+	activeAttempts: number;
+	concurrencyLimit: number;
+	interactiveReserve: number;
+	cooldownUntil?: string;
+	windows: Array<{ quotaWindow: string; used: number; remaining?: number; observedAt: string }>;
+}
+
+export interface DashboardEvidenceCommand {
+	executable: string;
+	argv: string[];
+	cwd: string;
+	phase: EvidencePhase;
+	purpose: "reproduction" | "acceptance";
+	expectedExitCode: number;
+	actualExitCode?: number | null;
+	outputHash?: string;
+	outputBytes?: number;
+	outputTruncated?: boolean;
+}
+
+export interface DashboardEvidenceManifest {
+	id: string;
+	caseId: string;
+	version: number;
+	baseSha: string;
+	candidateSha: string;
+	commands: DashboardEvidenceCommand[];
+	createdAt: string;
+	toolVersions: Record<string, string>;
+}
+
+export interface DashboardVerificationRun {
+	id: string;
+	manifestId: string;
+	verdict: VerificationVerdict;
+	confidence: number;
+	ciChecks: Record<string, "pass" | "fail" | "pending" | "missing">;
+	rationale: string;
+	uncertainties: string[];
+	replayHistory: string[];
+	createdAt: string;
+}
+
+export interface DashboardSystemState {
+	started: boolean;
+	activeAttempts: number;
+	queuedJobs: number;
+	controller: "connected";
+	socketOwnerUid?: number;
+	socketMode: number;
+	socketMaxRequestBytes: number;
+}
+
 export interface SocketContract {
 	path: string;
 	ownerUid?: number;
@@ -247,7 +431,22 @@ export interface SocketContract {
 export interface DashboardSnapshot {
 	cases: CaseSummary[];
 	attempts: AttemptRecord[];
-	profiles: ProviderProfile[];
+	profiles: DashboardProfile[];
+	workItems: DashboardWorkItem[];
+	stacks: DashboardStack[];
+	classifications: DashboardClassification[];
+	policies: DashboardPolicy[];
+	memory: DashboardMemory[];
+	specifications: DashboardSpecification[];
+	approvals: DashboardApproval[];
+	feedback: DashboardFeedback[];
+	questionBriefs: DashboardQuestionBrief[];
+	artifacts: DashboardArtifact[];
+	jobs: DashboardJob[];
+	usage: DashboardUsage[];
+	evidenceManifests: DashboardEvidenceManifest[];
+	verificationRuns: DashboardVerificationRun[];
+	system: DashboardSystemState;
 	rollout: RolloutMode;
 	emergencyStop: boolean;
 	generatedAt: string;
