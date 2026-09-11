@@ -137,6 +137,13 @@ export interface SourceEventResult {
 	inserted: boolean;
 }
 
+export interface SourceCursor {
+	source: BackgroundSource;
+	cursor?: string;
+	revision?: string;
+	updatedAt: string;
+}
+
 export interface JobInput {
 	id?: string;
 	caseId: string;
@@ -305,6 +312,50 @@ export class BackgroundAgentsDatabase {
 		event: SourceEvent,
 		options: { caseId?: string; rolloutMode?: RolloutMode; priority?: number } = {},
 	): SourceEventResult {
+		return this.withTransaction(() => this.recordSourceEventInTransaction(event, options));
+	}
+
+	recordSourceEventAndAdvanceCursor(
+		event: SourceEvent,
+		cursor: { cursor?: string; revision?: string },
+		options: { caseId?: string; rolloutMode?: RolloutMode; priority?: number } = {},
+	): SourceEventResult {
+		return this.withTransaction(() => {
+			const result = this.recordSourceEventInTransaction(event, options);
+			this.setSourceCursorInTransaction(event.source, cursor.cursor, cursor.revision);
+			return result;
+		});
+	}
+
+	getSourceCursor(sourceName: BackgroundSource): SourceCursor | undefined {
+		const row = this.database
+			.prepare("SELECT source, cursor, revision, updated_at FROM source_cursors WHERE source = ?")
+			.get(source(sourceName)) as Row | undefined;
+		if (!row) return undefined;
+		return {
+			source: source(rowString(row, "source")),
+			cursor: row.cursor == null ? undefined : rowString(row, "cursor"),
+			revision: row.revision == null ? undefined : rowString(row, "revision"),
+			updatedAt: rowString(row, "updated_at"),
+		};
+	}
+
+	setSourceCursor(sourceName: BackgroundSource, cursor?: string, revision?: string): void {
+		this.withTransaction(() => this.setSourceCursorInTransaction(sourceName, cursor, revision));
+	}
+
+	private setSourceCursorInTransaction(sourceName: BackgroundSource, cursor?: string, revision?: string): void {
+		this.database
+			.prepare(
+				"INSERT INTO source_cursors (source, cursor, revision, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(source) DO UPDATE SET cursor = excluded.cursor, revision = excluded.revision, updated_at = excluded.updated_at",
+			)
+			.run(source(sourceName), cursor ?? null, revision ?? null, new Date().toISOString());
+	}
+
+	private recordSourceEventInTransaction(
+		event: SourceEvent,
+		options: { caseId?: string; rolloutMode?: RolloutMode; priority?: number },
+	): SourceEventResult {
 		const caseSource = source(event.source);
 		const sourceKey = requiredString(event.sourceKey, "sourceKey");
 		const revision = event.revision ?? "";
@@ -312,18 +363,25 @@ export class BackgroundAgentsDatabase {
 		const title = requiredString(event.title, "title");
 		const body = typeof event.body === "string" ? event.body : requiredString(event.body, "body");
 		const metadata = jsonBoundary(event.metadata ?? {}, "metadata");
-		return this.withTransaction(() => {
+		{
 			const existing = this.database
 				.prepare("SELECT id, case_id FROM source_events WHERE source = ? AND source_key = ? AND revision = ?")
 				.get(caseSource, sourceKey, revision) as Row | undefined;
 			if (existing)
 				return { eventId: rowString(existing, "id"), caseId: rowString(existing, "case_id"), inserted: false };
 
-			const caseId = options.caseId ?? randomUUID();
+			const prior = options.caseId
+				? undefined
+				: (this.database
+						.prepare(
+							"SELECT case_id FROM source_events WHERE source = ? AND source_key = ? ORDER BY created_at DESC LIMIT 1",
+						)
+						.get(caseSource, sourceKey) as Row | undefined);
+			const caseId = options.caseId ?? (prior ? rowString(prior, "case_id") : randomUUID());
 			if (options.caseId) {
 				const found = this.database.prepare("SELECT id FROM cases WHERE id = ?").get(caseId);
 				if (!found) throw new Error(`Unknown case: ${caseId}`);
-			} else {
+			} else if (!prior) {
 				const createdAt = new Date().toISOString();
 				this.database
 					.prepare(
@@ -361,7 +419,7 @@ export class BackgroundAgentsDatabase {
 					metadata,
 				);
 			return { eventId, caseId, inserted: true };
-		});
+		}
 	}
 
 	transitionCase(caseId: string, to: CaseState, actor: string, reason?: string, metadata: unknown = {}): void {

@@ -63,6 +63,37 @@ describe("background-agents SQLite ownership", () => {
 		database.close();
 	});
 
+	test("links later source revisions and advances their cursor atomically", () => {
+		const database = new BackgroundAgentsDatabase(databasePath());
+		const first = database.recordSourceEvent({
+			source: "linear",
+			sourceKey: "linear:revisioned",
+			revision: "1",
+			receivedAt: "2026-01-01T00:00:00Z",
+			title: "First",
+			body: "one",
+		});
+		const second = database.recordSourceEventAndAdvanceCursor(
+			{
+				source: "linear",
+				sourceKey: "linear:revisioned",
+				revision: "2",
+				receivedAt: "2026-01-01T00:01:00Z",
+				title: "Second",
+				body: "two",
+			},
+			{ cursor: "page-2", revision: "2" },
+		);
+		assert.equal(second.caseId, first.caseId);
+		assert.deepEqual(database.getSourceCursor("linear"), {
+			source: "linear",
+			cursor: "page-2",
+			revision: "2",
+			updatedAt: database.getSourceCursor("linear")?.updatedAt,
+		});
+		database.close();
+	});
+
 	test("enforces lifecycle transition boundaries and append-only events", () => {
 		const database = new BackgroundAgentsDatabase(databasePath());
 		const caseId = database.createCase({ title: "Lifecycle", source: "manual" });
