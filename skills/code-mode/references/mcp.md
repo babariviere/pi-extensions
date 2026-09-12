@@ -1,6 +1,6 @@
 # `mcp` reference
 
-Spindle serves `mcp.*` through its own in-process client. It uses `mcp.json` configuration and stored credentials compatible with pi-mcp-adapter; that extension is not required.
+Code Mode serves `mcp.*` through its own in-process client. It uses `mcp.json` configuration and stored credentials compatible with pi-mcp-adapter; that extension is not required.
 
 ## Discovery
 
@@ -31,6 +31,6 @@ Tool calls connect lazily and return `{ text: string, content: unknown[], struct
 
 ## Authorization and policy
 
-Configured tool filters and Spindle's MCP read-only policy apply to calls. Stored tokens can refresh headlessly. If authorization requires user consent, ask the user to run `/mcp-auth <server>`; the tool cannot open a consent flow on the user's behalf.
+Configured tool filters and Code Mode's MCP read-only policy apply to calls. Stored tokens can refresh headlessly. If authorization requires user consent, ask the user to run `/mcp-auth <server>`; the tool cannot open a consent flow on the user's behalf.
 
 Use `/mcp` for status, `/mcp connect <server>` to refresh schemas, and `/mcp logout <server>` to clear stored credentials. There is no `mcp.servers()`, `mcp.reload()`, or `mcp.register()` API.

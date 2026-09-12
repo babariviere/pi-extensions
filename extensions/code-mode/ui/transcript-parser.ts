@@ -1,5 +1,5 @@
-import type { SpindleLogLine } from "./transcript-types.ts";
-import type { SpindleAgentTranscript, SpindleTranscriptEntry } from "./transcript.ts";
+import type { CodeModeLogLine } from "./transcript-types.ts";
+import type { CodeModeAgentTranscript, CodeModeTranscriptEntry } from "./transcript.ts";
 import {
 	clip,
 	compactRedactedValue,
@@ -15,25 +15,25 @@ const MAX_TOOL_SUMMARY_CHARS = 500;
 const MAX_TRANSCRIPT_MESSAGE_CHARS = 40_000;
 const TRANSCRIPT_ENTRY_LIMIT = 80;
 
-type SpindleTranscriptEntryStatus = "running" | "completed" | "failed";
+type CodeModeTranscriptEntryStatus = "running" | "completed" | "failed";
 
 export class TranscriptAccumulator {
-	readonly entries: SpindleTranscriptEntry[] = [];
-	readonly #tools = new Map<string, SpindleTranscriptEntry>();
-	readonly #anonymousTools = new Map<string, SpindleTranscriptEntry[]>();
-	readonly #activeTools: SpindleTranscriptEntry[] = [];
-	#assistant: SpindleTranscriptEntry | undefined;
+	readonly entries: CodeModeTranscriptEntry[] = [];
+	readonly #tools = new Map<string, CodeModeTranscriptEntry>();
+	readonly #anonymousTools = new Map<string, CodeModeTranscriptEntry[]>();
+	readonly #activeTools: CodeModeTranscriptEntry[] = [];
+	#assistant: CodeModeTranscriptEntry | undefined;
 	/** Live assistant text per content index, assembled from streaming deltas. */
 	readonly #streamText = new Map<number, string>();
-	#retry: SpindleTranscriptEntry | undefined;
-	#compaction: SpindleTranscriptEntry | undefined;
+	#retry: CodeModeTranscriptEntry | undefined;
+	#compaction: CodeModeTranscriptEntry | undefined;
 	#sequence = 0;
 
 	append(events: Array<Record<string, unknown>>): void {
 		for (const event of events) this.#append(event);
 	}
 
-	snapshot(olderAvailable = false, updatedAt?: number, maxEntries = TRANSCRIPT_ENTRY_LIMIT): SpindleAgentTranscript {
+	snapshot(olderAvailable = false, updatedAt?: number, maxEntries = TRANSCRIPT_ENTRY_LIMIT): CodeModeAgentTranscript {
 		const entries =
 			maxEntries > 0 && this.entries.length > maxEntries ? this.entries.slice(-maxEntries) : this.entries;
 		const omitted = entries.length < this.entries.length;
@@ -118,7 +118,7 @@ export class TranscriptAccumulator {
 		kind: "user" | "assistant",
 		id: string,
 		text: string,
-		status: SpindleTranscriptEntryStatus = "completed",
+		status: CodeModeTranscriptEntryStatus = "completed",
 		label = kind === "assistant" ? "Agent" : "User",
 	): void {
 		const safe = clip(text, MAX_TRANSCRIPT_MESSAGE_CHARS);
@@ -126,20 +126,16 @@ export class TranscriptAccumulator {
 		this.entries.push({ id, kind, label, text: safe, status });
 	}
 
-	#toolParent(id: string): SpindleTranscriptEntry | undefined {
-		if (!id.startsWith("spindle_")) return undefined;
+	#toolParent(id: string): CodeModeTranscriptEntry | undefined {
+		if (!id.startsWith("code_mode_")) return undefined;
 		for (let index = this.#activeTools.length - 1; index >= 0; index--) {
 			const candidate = this.#activeTools[index];
-			if (
-				(candidate?.toolName === "code_mode" || candidate?.toolName === "spindle_exec") &&
-				candidate.status === "running"
-			)
-				return candidate;
+			if (candidate?.toolName === "code_mode" && candidate.status === "running") return candidate;
 		}
 		return undefined;
 	}
 
-	#startTool(id: string, label: string, args: unknown): SpindleTranscriptEntry {
+	#startTool(id: string, label: string, args: unknown): CodeModeTranscriptEntry {
 		const existing = this.#tools.get(id);
 		const safeArgs = args === undefined ? undefined : redactRecord(args);
 		if (existing) {
@@ -149,7 +145,7 @@ export class TranscriptAccumulator {
 		}
 		const parent = this.#toolParent(id);
 		const safeLabel = terminalSafe(label) || "tool";
-		const entry: SpindleTranscriptEntry = {
+		const entry: CodeModeTranscriptEntry = {
 			id,
 			kind: "tool",
 			label: safeLabel,
@@ -531,7 +527,7 @@ export const parseRaw = (raw: string): Record<string, unknown> | undefined => {
 	}
 };
 
-export const parsedEvents = (lines: SpindleLogLine[]): Array<Record<string, unknown>> =>
+export const parsedEvents = (lines: CodeModeLogLine[]): Array<Record<string, unknown>> =>
 	lines
 		.map((line) => recordOf(line.parsed) ?? parseRaw(line.raw))
 		.filter((event): event is Record<string, unknown> => event !== undefined);

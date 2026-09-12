@@ -41,7 +41,7 @@ export const formatMcpStatus = (servers: McpServerStatus[], errors: string[] = [
 			: "Authorize a server with /mcp-auth <server>; refresh its tools with /mcp connect <server>.",
 	];
 	const problems = errors.length > 0 ? ["", "Config problems:", ...errors.map((error) => `  ${error}`)] : [];
-	return ["spindle MCP client", "", ...lines, ...problems, ...footer].join("\n");
+	return ["Code Mode MCP client", "", ...lines, ...problems, ...footer].join("\n");
 };
 
 /**

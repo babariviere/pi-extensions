@@ -1,16 +1,16 @@
-import type { SpindleContextMetrics } from "../context-metrics.ts";
-import type { SpindleEditProfile } from "../edit-profile.ts";
-import { createSpindleEditMetrics, type SpindleEditMetricsV1 } from "./edit-metrics.ts";
+import type { CodeModeContextMetrics } from "../context-metrics.ts";
+import type { CodeModeEditProfile } from "../edit-profile.ts";
+import { createCodeModeEditMetrics, type CodeModeEditMetricsV1 } from "./edit-metrics.ts";
 import {
-	isSpindleExecutionTraceV1,
-	type SpindleExecutionTraceOperationV1,
-	type SpindleExecutionTraceV1,
+	isCodeModeExecutionTraceV1,
+	type CodeModeExecutionTraceOperationV1,
+	type CodeModeExecutionTraceV1,
 } from "./trace.ts";
 
-export const SPINDLE_EXECUTION_DETAILS_MAX_BYTES = 512 * 1024;
+export const CODE_MODE_EXECUTION_DETAILS_MAX_BYTES = 512 * 1024;
 
 /** One type-check failure, as reported to the model and rendered in the TUI. */
-export interface SpindleRenderTypeError {
+export interface CodeModeRenderTypeError {
 	line: number;
 	column: number;
 	message: string;
@@ -19,19 +19,19 @@ export interface SpindleRenderTypeError {
 const MAX_PERSISTED_TYPE_ERRORS = 50;
 const MAX_TYPE_ERROR_MESSAGE_CHARS = 500;
 
-export interface SpindlePersistedExecutionDetailsV1 {
+export interface CodeModePersistedExecutionDetailsV1 {
 	success: boolean;
-	trace: SpindleExecutionTraceV1;
+	trace: CodeModeExecutionTraceV1;
 	outputFormat?: "yaml" | "json";
 	outputFormatStartLine?: number;
 	outputFormatLines?: number;
 	/** Present when the program failed type checking and was never executed. */
-	typeErrors?: SpindleRenderTypeError[];
-	contextMetrics?: SpindleContextMetrics;
-	editMetrics?: SpindleEditMetricsV1;
+	typeErrors?: CodeModeRenderTypeError[];
+	contextMetrics?: CodeModeContextMetrics;
+	editMetrics?: CodeModeEditMetricsV1;
 }
 
-export interface SpindleLegacyRenderAudit {
+export interface CodeModeLegacyRenderAudit {
 	ref: string;
 	tool?: string;
 	provider?: string;
@@ -45,7 +45,7 @@ export interface SpindleLegacyRenderAudit {
 	endedAt?: number;
 }
 
-export interface SpindleExecutionRenderDetails {
+export interface CodeModeExecutionRenderDetails {
 	success?: boolean;
 	error?: string;
 	progress?: string;
@@ -53,32 +53,32 @@ export interface SpindleExecutionRenderDetails {
 	outputFormatStartLine?: number;
 	outputFormatLines?: number;
 	phases: string[];
-	audits: SpindleLegacyRenderAudit[];
-	typeErrors?: SpindleRenderTypeError[];
-	contextMetrics?: SpindleContextMetrics;
+	audits: CodeModeLegacyRenderAudit[];
+	typeErrors?: CodeModeRenderTypeError[];
+	contextMetrics?: CodeModeContextMetrics;
 }
 
 const serializedBytes = (value: unknown): number => Buffer.byteLength(JSON.stringify(value), "utf8");
 
-const cloneTrace = (trace: SpindleExecutionTraceV1): SpindleExecutionTraceV1 => structuredClone(trace);
+const cloneTrace = (trace: CodeModeExecutionTraceV1): CodeModeExecutionTraceV1 => structuredClone(trace);
 
 /**
  * Creates the only object stored in final code_mode details. Rich call
  * audits remain available to live partial rendering but are deliberately not
  * copied here. The aggregate object, not each member independently, is bound.
  */
-export const createSpindlePersistedExecutionDetails = (input: {
+export const createCodeModePersistedExecutionDetails = (input: {
 	success: boolean;
-	trace: SpindleExecutionTraceV1;
+	trace: CodeModeExecutionTraceV1;
 	outputFormat?: "yaml" | "json";
 	outputFormatStartLine?: number;
 	outputFormatLines?: number;
-	typeErrors?: SpindleRenderTypeError[];
-	contextMetrics?: SpindleContextMetrics;
+	typeErrors?: CodeModeRenderTypeError[];
+	contextMetrics?: CodeModeContextMetrics;
 	elapsedMs?: number;
-	editProfile?: SpindleEditProfile;
-}): SpindlePersistedExecutionDetailsV1 => {
-	const details: SpindlePersistedExecutionDetailsV1 = {
+	editProfile?: CodeModeEditProfile;
+}): CodeModePersistedExecutionDetailsV1 => {
+	const details: CodeModePersistedExecutionDetailsV1 = {
 		success: input.success,
 		trace: cloneTrace(input.trace),
 		...(input.outputFormat ? { outputFormat: input.outputFormat } : {}),
@@ -91,7 +91,7 @@ export const createSpindlePersistedExecutionDetails = (input: {
 		...(input.contextMetrics ? { contextMetrics: input.contextMetrics } : {}),
 		...(input.elapsedMs !== undefined && input.editProfile !== undefined
 			? {
-					editMetrics: createSpindleEditMetrics({
+					editMetrics: createCodeModeEditMetrics({
 						trace: input.trace,
 						elapsedMs: input.elapsedMs,
 						profile: input.editProfile,
@@ -108,22 +108,22 @@ export const createSpindlePersistedExecutionDetails = (input: {
 				}
 			: {}),
 	};
-	while (serializedBytes(details) > SPINDLE_EXECUTION_DETAILS_MAX_BYTES && details.trace.operations.length > 0) {
+	while (serializedBytes(details) > CODE_MODE_EXECUTION_DETAILS_MAX_BYTES && details.trace.operations.length > 0) {
 		details.trace.operations.pop();
 		details.trace.counts.droppedOperations++;
 	}
-	while (serializedBytes(details) > SPINDLE_EXECUTION_DETAILS_MAX_BYTES && details.trace.phases.length > 0) {
+	while (serializedBytes(details) > CODE_MODE_EXECUTION_DETAILS_MAX_BYTES && details.trace.phases.length > 0) {
 		details.trace.phases.pop();
 		details.trace.counts.droppedValues++;
 	}
 	while (
-		serializedBytes(details) > SPINDLE_EXECUTION_DETAILS_MAX_BYTES &&
+		serializedBytes(details) > CODE_MODE_EXECUTION_DETAILS_MAX_BYTES &&
 		details.typeErrors !== undefined &&
 		details.typeErrors.length > 0
 	) {
 		details.typeErrors.pop();
 	}
-	if (serializedBytes(details) > SPINDLE_EXECUTION_DETAILS_MAX_BYTES) {
+	if (serializedBytes(details) > CODE_MODE_EXECUTION_DETAILS_MAX_BYTES) {
 		delete details.trace.error;
 		details.trace.counts.droppedValues++;
 	}
@@ -133,7 +133,7 @@ export const createSpindlePersistedExecutionDetails = (input: {
 const isRecord = (value: unknown): value is Record<string, unknown> =>
 	typeof value === "object" && value !== null && !Array.isArray(value);
 
-const legacyAudit = (value: unknown): SpindleLegacyRenderAudit | undefined => {
+const legacyAudit = (value: unknown): CodeModeLegacyRenderAudit | undefined => {
 	if (!isRecord(value) || typeof value.ref !== "string") return undefined;
 	return {
 		ref: value.ref,
@@ -150,7 +150,7 @@ const legacyAudit = (value: unknown): SpindleLegacyRenderAudit | undefined => {
 	};
 };
 
-const auditFromOperation = (operation: SpindleExecutionTraceOperationV1): SpindleLegacyRenderAudit => ({
+const auditFromOperation = (operation: CodeModeExecutionTraceOperationV1): CodeModeLegacyRenderAudit => ({
 	ref: operation.ref,
 	...(operation.action ? { tool: operation.action } : {}),
 	...(operation.provider ? { provider: operation.provider } : {}),
@@ -165,11 +165,11 @@ const auditFromOperation = (operation: SpindleExecutionTraceOperationV1): Spindl
  * for rendering. Legacy audits win when present so old transcripts retain
  * their historical rich previews.
  */
-export const readSpindleExecutionRenderDetails = (value: unknown): SpindleExecutionRenderDetails => {
+export const readCodeModeExecutionRenderDetails = (value: unknown): CodeModeExecutionRenderDetails => {
 	if (!isRecord(value)) return { audits: [], phases: [] };
-	const trace = isSpindleExecutionTraceV1(value.trace) ? value.trace : undefined;
+	const trace = isCodeModeExecutionTraceV1(value.trace) ? value.trace : undefined;
 	const oldAudits = Array.isArray(value.audits)
-		? value.audits.map(legacyAudit).filter((audit): audit is SpindleLegacyRenderAudit => audit !== undefined)
+		? value.audits.map(legacyAudit).filter((audit): audit is CodeModeLegacyRenderAudit => audit !== undefined)
 		: undefined;
 	const oldPhases = Array.isArray(value.phases)
 		? value.phases.filter((phase): phase is string => typeof phase === "string")
@@ -200,19 +200,19 @@ export const readSpindleExecutionRenderDetails = (value: unknown): SpindleExecut
 		typeof value.contextMetrics.unboundedReadCalls === "number" &&
 		typeof value.contextMetrics.readResultChars === "number" &&
 		typeof value.contextMetrics.largeUnboundedReadCalls === "number"
-			? { contextMetrics: value.contextMetrics as unknown as SpindleContextMetrics }
+			? { contextMetrics: value.contextMetrics as unknown as CodeModeContextMetrics }
 			: {}),
 		...(Array.isArray(value.typeErrors)
 			? {
 					typeErrors: value.typeErrors
 						.filter(
-							(error): error is SpindleRenderTypeError =>
+							(error): error is CodeModeRenderTypeError =>
 								typeof error === "object" &&
 								error !== null &&
 								!Array.isArray(error) &&
-								typeof (error as SpindleRenderTypeError).line === "number" &&
-								typeof (error as SpindleRenderTypeError).column === "number" &&
-								typeof (error as SpindleRenderTypeError).message === "string",
+								typeof (error as CodeModeRenderTypeError).line === "number" &&
+								typeof (error as CodeModeRenderTypeError).column === "number" &&
+								typeof (error as CodeModeRenderTypeError).message === "string",
 						)
 						.slice(0, MAX_PERSISTED_TYPE_ERRORS),
 				}

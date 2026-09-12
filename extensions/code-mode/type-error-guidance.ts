@@ -7,7 +7,7 @@
  */
 
 import { CORE_TOOL_NAMES, CORE_TOOL_PROPERTIES } from "./runtime/core-tool-properties.ts";
-import type { SpindleTypeError } from "./runtime/type-checker.ts";
+import type { CodeModeTypeError } from "./runtime/type-checker.ts";
 
 const SYNTAX_ERROR_PATTERN = /expected|unterminated|unexpected|invalid character/i;
 const PAYLOAD_CALL_PATTERN = /\bpi\.(?:edit|write)\s*\(/;
@@ -23,7 +23,7 @@ const PI_CALL_PATTERN = /\bpi\.(\w+)\s*\(/g;
 const DOUBLE_ESCAPED_QUOTE_CONCAT_PATTERN = /\\\\"\s*\+\+/;
 
 // code_mode envelope arguments that are commonly misplaced inside `code`.
-const SPINDLE_EXEC_ARGUMENT_NOTES: Readonly<Record<string, string>> = {
+const CODE_MODE_EXEC_ARGUMENT_NOTES: Readonly<Record<string, string>> = {
 	payloads:
 		"named `payloads` belong in the outer `code_mode` arguments, then become available inside `code` as `\u03c0.key`.",
 	agentBudget: "`agentBudget` belongs to the outer `code_mode` call, not inside `code`.",
@@ -40,10 +40,10 @@ const PROPERTY_NOTES: Readonly<Record<string, string>> = {
 
 const isCoreToolName = (name: string): boolean => CORE_TOOL_NAMES.includes(name);
 
-// Spindle declares core tool arguments inline, so the checked type text rarely
-// names the tool; the option bags it does name (SpindleCommandOptions) still do.
+// Code Mode declares core tool arguments inline, so the checked type text rarely
+// names the tool; the option bags it does name (CodeModeCommandOptions) still do.
 const toolFromTypeText = (typeText: string): string | undefined => {
-	for (const match of typeText.matchAll(/\bSpindle([A-Z]\w*?)Options\b/g)) {
+	for (const match of typeText.matchAll(/\bCode Mode([A-Z]\w*?)Options\b/g)) {
 		const candidate = match[1]?.toLowerCase();
 		if (candidate !== undefined && isCoreToolName(candidate)) return candidate;
 	}
@@ -53,7 +53,7 @@ const toolFromTypeText = (typeText: string): string | undefined => {
 // Fallback for anonymous argument types: find the `pi.<tool>(` call enclosing
 // the error position. Type-checker lines are 1-based and preceded by the guest
 // wrapper, so try both offsets.
-const enclosingCoreTool = (code: string, error: SpindleTypeError): string | undefined => {
+const enclosingCoreTool = (code: string, error: CodeModeTypeError): string | undefined => {
 	const lines = code.split("\n");
 	for (const lineIndex of [error.line - 2, error.line - 1]) {
 		if (lineIndex < 0 || lineIndex >= lines.length) continue;
@@ -73,7 +73,7 @@ const enclosingCoreTool = (code: string, error: SpindleTypeError): string | unde
 
 const unknownPropertyHint = (property: string, tool: string | undefined): string | undefined => {
 	if (tool === undefined) return undefined;
-	const envelopeNote = SPINDLE_EXEC_ARGUMENT_NOTES[property];
+	const envelopeNote = CODE_MODE_EXEC_ARGUMENT_NOTES[property];
 	if (envelopeNote !== undefined) {
 		return `Recovery hint: \`${property}\` is a \`code_mode\` argument, not a \`pi.${tool}\` property. ${envelopeNote}`;
 	}
@@ -84,7 +84,7 @@ const unknownPropertyHint = (property: string, tool: string | undefined): string
 	return `Recovery hint: \`${property}\` is not a \`pi.${tool}\` property \u2014 it belongs to ${owners}.${note ? ` ${note}` : ""}`;
 };
 
-const hasLiteralPayloadInterpolation = (code: string, errors: SpindleTypeError[]): boolean => {
+const hasLiteralPayloadInterpolation = (code: string, errors: CodeModeTypeError[]): boolean => {
 	if (!PAYLOAD_CALL_PATTERN.test(code)) return false;
 	return errors.some((error) => {
 		const name = MISSING_NAME_PATTERN.exec(error.message)?.[1];
@@ -92,8 +92,8 @@ const hasLiteralPayloadInterpolation = (code: string, errors: SpindleTypeError[]
 	});
 };
 
-/** One actionable recovery line for the first diagnosis Spindle recognizes. */
-export const typeErrorRecoveryHint = (code: string, errors: SpindleTypeError[]): string | undefined => {
+/** One actionable recovery line for the first diagnosis Code Mode recognizes. */
+export const typeErrorRecoveryHint = (code: string, errors: CodeModeTypeError[]): string | undefined => {
 	for (const error of errors) {
 		const matched = UNKNOWN_PROPERTY_PATTERN.exec(error.message);
 		const property = matched?.[1];
@@ -114,7 +114,7 @@ export const typeErrorRecoveryHint = (code: string, errors: SpindleTypeError[]):
 		return 'Recovery hint: a double-escaped quote before string concatenation broke a nested command string. Prefer `pi.exec({ argv: [...] })` for literal command arguments, or use `"` (not `\\"`) when an embedded quote must remain in a TypeScript string.';
 	}
 	if (hasLiteralPayloadInterpolation(code, errors)) {
-		return "Recovery hint: a `${...}` expression in an edit/write payload is being evaluated by the Spindle TypeScript program. Declare it if intentional; for literal file content, move the payload to top-level `payloads` and reference `\u03c0.key`.";
+		return "Recovery hint: a `${...}` expression in an edit/write payload is being evaluated by the Code Mode TypeScript program. Declare it if intentional; for literal file content, move the payload to top-level `payloads` and reference `\u03c0.key`.";
 	}
 	if (
 		UNQUOTED_PATH_HEAD.test(code) &&

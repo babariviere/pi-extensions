@@ -5,7 +5,7 @@ import {
 	type SourceInfo,
 	type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import type { SpindleToolCaptureConfig } from "../config.ts";
+import type { CodeModeToolCaptureConfig } from "../config.ts";
 
 export interface CapturedToolEntry {
 	name: string;
@@ -32,7 +32,7 @@ export class CapturedToolCatalog {
 	replace(
 		registeredTools: RegisteredTool[],
 		runner: ExtensionRunner,
-		config: SpindleToolCaptureConfig,
+		config: CodeModeToolCaptureConfig,
 		ownSourcePath: string,
 	): void {
 		// Always remember the runner (see field comment) before the enabled gate.

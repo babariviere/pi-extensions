@@ -1,7 +1,7 @@
 /**
  * The host half of the guest/host call contract.
  *
- * Every `spindle.$*` ref the guest bridge can emit is answered by exactly one
+ * Every `code-mode.$*` ref the guest bridge can emit is answered by exactly one
  * entry in `HOST_CALLS`: the ref name and the handler that runs it. The
  * execution service dispatches through `hostCallTable` and nothing else. The
  * guest half (who emits each ref) is the `GUEST_SETUP` string literal in
@@ -15,10 +15,10 @@
  * enumeration in the contract test to keep honest.
  */
 
-import type { SpindleExecutionFailureStageV1 } from "./audit/trace.ts";
+import type { CodeModeExecutionFailureStageV1 } from "./audit/trace.ts";
 import type { ActionRegistry } from "./core/action-registry.ts";
-import type { SpindleInvocationContext } from "./protocol.ts";
-import type { SpindleSessionStore } from "./session-store.ts";
+import type { CodeModeInvocationContext } from "./protocol.ts";
+import type { CodeModeSessionStore } from "./session-store.ts";
 
 /**
  * One τ operation, as reported to the live renderer.
@@ -29,7 +29,7 @@ import type { SpindleSessionStore } from "./session-store.ts";
  * previews already use, so a reloaded transcript keeps the key and the size from
  * the trace and loses only the content.
  */
-export interface SpindleStateNote {
+export interface CodeModeStateNote {
 	ref: string;
 	key?: string;
 	/** Bounded slice of the stored JSON, for a set or a hit. */
@@ -51,22 +51,22 @@ export const fullCodeProvider = (
 /** Per-execution state and helpers a host-call handler runs against. */
 export interface HostCallContext {
 	registry: ActionRegistry;
-	activity: import("./activity/store.ts").SpindleActivityStore | undefined;
+	activity: import("./activity/store.ts").CodeModeActivityStore | undefined;
 	parentToolCallId: string;
 	/** Effective full-code mode; gates Pi core visibility in discovery. */
 	fullCodeMode: boolean;
 	/** The registry-shaped invocation context (base context plus the call's signal). */
-	registryContext(signal: AbortSignal): SpindleInvocationContext & { signal: AbortSignal };
-	/** Progress line update (`spindle.$progress`). */
+	registryContext(signal: AbortSignal): CodeModeInvocationContext & { signal: AbortSignal };
+	/** Progress line update (`code-mode.$progress`). */
 	update(message: string): void;
 	/** Session-scoped scratchpad behind the guest's `τ` namespace. */
-	store: SpindleSessionStore;
+	store: CodeModeSessionStore;
 	/**
-	 * Report one τ operation for the live TUI row (see `SpindleStateNote`). The
+	 * Report one τ operation for the live TUI row (see `CodeModeStateNote`). The
 	 * value preview travels this way rather than through the durable trace, which
 	 * records the key and the size only.
 	 */
-	noteState(note: SpindleStateNote): void;
+	noteState(note: CodeModeStateNote): void;
 	/** Refuse Pi core refs when full-code mode is off. */
 	guardFullCodeRef(ref: string): void;
 	/** Trace one host call through its stages. */
@@ -74,24 +74,24 @@ export interface HostCallContext {
 		traceRef: string,
 		args: Record<string, unknown>,
 		signal: AbortSignal,
-		run: (setStage: (stage: SpindleExecutionFailureStageV1) => void) => T | Promise<T>,
+		run: (setStage: (stage: CodeModeExecutionFailureStageV1) => void) => T | Promise<T>,
 	): Promise<T>;
-	/** Provider dispatch with guard/trace/audit (the `spindle.$call` path). */
+	/** Provider dispatch with guard/trace/audit (the `code-mode.$call` path). */
 	invokeAction(ref: string, args: Record<string, unknown>, signal: AbortSignal): Promise<unknown>;
 }
 
 /** One guest/host call: the bridge ref it answers, and how to run it. */
 export interface HostCall {
-	/** The guest bridge ref this entry answers, e.g. "spindle.$call". */
+	/** The guest bridge ref this entry answers, e.g. "code-mode.$call". */
 	ref: string;
 	handle(args: Record<string, unknown>, ctx: HostCallContext, signal: AbortSignal): Promise<unknown> | unknown;
 }
 
 export const HOST_CALLS: readonly HostCall[] = [
 	{
-		ref: "spindle.$providers",
+		ref: "code-mode.$providers",
 		handle: (args, ctx, signal) =>
-			ctx.traceAttempt("spindle.discovery.providers", args, signal, () =>
+			ctx.traceAttempt("code-mode.discovery.providers", args, signal, () =>
 				ctx.registry
 					.providers()
 					.filter(
@@ -102,9 +102,9 @@ export const HOST_CALLS: readonly HostCall[] = [
 			),
 	},
 	{
-		ref: "spindle.$catalog",
+		ref: "code-mode.$catalog",
 		handle: (args, ctx, signal) =>
-			ctx.traceAttempt("spindle.discovery.catalog", args, signal, async (setStage) => {
+			ctx.traceAttempt("code-mode.discovery.catalog", args, signal, async (setStage) => {
 				const provider = typeof args.provider === "string" ? args.provider : undefined;
 				setStage("guard");
 				if (provider) ctx.guardFullCodeRef(`${provider}.*`);
@@ -118,9 +118,9 @@ export const HOST_CALLS: readonly HostCall[] = [
 			}),
 	},
 	{
-		ref: "spindle.$list",
+		ref: "code-mode.$list",
 		handle: (args, ctx, signal) =>
-			ctx.traceAttempt("spindle.discovery.list", args, signal, async (setStage) => {
+			ctx.traceAttempt("code-mode.discovery.list", args, signal, async (setStage) => {
 				setStage("guard");
 				if (typeof args.provider === "string") ctx.guardFullCodeRef(`${args.provider}.*`);
 				setStage(typeof args.provider === "string" && !ctx.registry.has(args.provider) ? "resolve" : "invoke");
@@ -141,9 +141,9 @@ export const HOST_CALLS: readonly HostCall[] = [
 			}),
 	},
 	{
-		ref: "spindle.$search",
+		ref: "code-mode.$search",
 		handle: (args, ctx, signal) =>
-			ctx.traceAttempt("spindle.discovery.search", args, signal, async () => {
+			ctx.traceAttempt("code-mode.discovery.search", args, signal, async () => {
 				const actions = await ctx.registry.search(
 					String(args.query ?? ""),
 					ctx.registryContext(signal),
@@ -157,9 +157,9 @@ export const HOST_CALLS: readonly HostCall[] = [
 			}),
 	},
 	{
-		ref: "spindle.$describe",
+		ref: "code-mode.$describe",
 		handle: (args, ctx, signal) =>
-			ctx.traceAttempt("spindle.discovery.describe", args, signal, async (setStage) => {
+			ctx.traceAttempt("code-mode.discovery.describe", args, signal, async (setStage) => {
 				const targetRef = String(args.ref ?? "");
 				setStage("guard");
 				ctx.guardFullCodeRef(targetRef);
@@ -168,7 +168,7 @@ export const HOST_CALLS: readonly HostCall[] = [
 			}),
 	},
 	{
-		ref: "spindle.$call",
+		ref: "code-mode.$call",
 		handle: (args, ctx, signal) => {
 			const callArgs =
 				typeof args.args === "object" && args.args !== null && !Array.isArray(args.args)
@@ -179,9 +179,9 @@ export const HOST_CALLS: readonly HostCall[] = [
 		},
 	},
 	{
-		ref: "spindle.$progress",
+		ref: "code-mode.$progress",
 		handle: (args, ctx, signal) =>
-			ctx.traceAttempt("spindle.workflow.progress", args, signal, () =>
+			ctx.traceAttempt("code-mode.workflow.progress", args, signal, () =>
 				ctx.update(String(args.message ?? "Working")),
 			),
 	},
@@ -194,12 +194,12 @@ export const HOST_CALLS: readonly HostCall[] = [
 	 * host call, so a program that overruns a limit says so in the transcript.
 	 */
 	{
-		ref: "spindle.$stateGet",
+		ref: "code-mode.$stateGet",
 		handle: (args, ctx, signal) =>
-			ctx.traceAttempt("spindle.state.get", { key: args.key }, signal, () => {
+			ctx.traceAttempt("code-mode.state.get", { key: args.key }, signal, () => {
 				const read = ctx.store.get(args.key);
 				ctx.noteState({
-					ref: "spindle.state.get",
+					ref: "code-mode.state.get",
 					key: read.key,
 					...(read.found ? { preview: ctx.store.preview(read.key) } : { detail: "not held" }),
 				});
@@ -207,12 +207,12 @@ export const HOST_CALLS: readonly HostCall[] = [
 			}),
 	},
 	{
-		ref: "spindle.$stateSet",
+		ref: "code-mode.$stateSet",
 		handle: (args, ctx, signal) =>
-			ctx.traceAttempt("spindle.state.set", { key: args.key }, signal, () => {
+			ctx.traceAttempt("code-mode.state.set", { key: args.key }, signal, () => {
 				const write = ctx.store.set(args.key, args.value);
 				ctx.noteState({
-					ref: "spindle.state.set",
+					ref: "code-mode.state.set",
 					key: write.key,
 					...(ctx.store.preview(write.key) ? { preview: ctx.store.preview(write.key) } : {}),
 				});
@@ -220,24 +220,24 @@ export const HOST_CALLS: readonly HostCall[] = [
 			}),
 	},
 	{
-		ref: "spindle.$stateKeys",
+		ref: "code-mode.$stateKeys",
 		handle: (args, ctx, signal) =>
-			ctx.traceAttempt("spindle.state.keys", args, signal, () => {
+			ctx.traceAttempt("code-mode.state.keys", args, signal, () => {
 				const keys = ctx.store.keys();
 				ctx.noteState({
-					ref: "spindle.state.keys",
+					ref: "code-mode.state.keys",
 					detail: keys.length > 0 ? ctx.store.describe() : "empty",
 				});
 				return keys;
 			}),
 	},
 	{
-		ref: "spindle.$stateDelete",
+		ref: "code-mode.$stateDelete",
 		handle: (args, ctx, signal) =>
-			ctx.traceAttempt("spindle.state.delete", { key: args.key }, signal, () => {
+			ctx.traceAttempt("code-mode.state.delete", { key: args.key }, signal, () => {
 				const removed = ctx.store.delete(args.key);
 				ctx.noteState({
-					ref: "spindle.state.delete",
+					ref: "code-mode.state.delete",
 					key: removed.key,
 					detail: removed.deleted ? "deleted" : "not held",
 				});
@@ -245,12 +245,12 @@ export const HOST_CALLS: readonly HostCall[] = [
 			}),
 	},
 	{
-		ref: "spindle.$stateClear",
+		ref: "code-mode.$stateClear",
 		handle: (args, ctx, signal) =>
-			ctx.traceAttempt("spindle.state.clear", args, signal, () => {
+			ctx.traceAttempt("code-mode.state.clear", args, signal, () => {
 				const cleared = ctx.store.clear();
 				ctx.noteState({
-					ref: "spindle.state.clear",
+					ref: "code-mode.state.clear",
 					detail: `cleared ${cleared.cleared} ${cleared.cleared === 1 ? "key" : "keys"}`,
 				});
 				return cleared;

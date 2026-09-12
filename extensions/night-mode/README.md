@@ -96,7 +96,7 @@ this extension only subscribes. State is republished as `night-mode:state`.
 
 1. The current session switches to **gpt-6-astra** and receives a planning-only prompt.
 2. Astra reads the standing routine and one-off instructions. It may spawn read-only subagents to explore repositories and services, but neither Astra nor its children implement anything.
-3. Astra submits structured candidates through `night_plan`. Each task specifies `category`, `outputs`, and `permissions` (empty arrays for read-only work). Categories are `instructions`, `linear`, `ci`, `slack`, `daily-note`, `opportunistic`, `insights`, and `auto-improvement`. Every category needs a task or an `omissions` entry with `category` and a nonempty `reason`. For custom routines, mark unused categories not applicable. Validation errors allow revision and resubmission.
+3. Astra submits structured candidates through the typed `night.plan` Code Mode provider action. Each task specifies `category`, `outputs`, and `permissions` (empty arrays for read-only work). Categories are `instructions`, `linear`, `ci`, `slack`, `daily-note`, `opportunistic`, `insights`, and `auto-improvement`. Every category needs a task or an `omissions` entry with `category` and a nonempty `reason`. For custom routines, mark unused categories not applicable. Validation errors allow revision and resubmission.
    Planning treats the configured prompt as an execution reference, not an instruction to stop discovering work. Extra instructions supplement the routine. Slack, daily-note, and insights passes are proposed unless excluded or blocked.
    The checklist shows omission reasons, task scope, outputs, and permissions. Users can still uncheck any task. Output and permission metadata survives into the ledger and execution prompt; it is a delegation contract, not a new OS permission grant. Declare `mcp-write` for MCP mutations: these tasks are rejected while `mcpReadOnly` is enabled, including after checklist edits. Filesystem capabilities still require the existing execution preflight; declared paths do not widen the sandbox. Legacy persisted handoffs remain readable.
 4. Night mode presents an interactive checklist. Tasks begin unchecked. They can be selected, edited as JSON, added, or deleted.
@@ -109,7 +109,7 @@ The execution session does not inherit the planning transcript. It receives the 
 
 The scheduled timestamp is persisted in the execution session. Reloading or resuming it restores the schedule; an overdue schedule starts immediately once the session is idle. The footer and `/night status` show the scheduled time. `/night off` cancels a pending start, including across reloads. Keep pi running and the machine awake for an on-time start: the schedule does not launch pi or wake a sleeping machine. No execution prompt, report, working copy, or ledger is created while waiting. Legacy approved handoffs without a scheduled timestamp still start immediately.
 
-The instructions file is archived and truncated when the approved run *ends*, not during planning. Cancelling the checklist leaves it untouched and keeps the current session in read-only night planning with the same model and sandbox. The planner waits for feedback instead of reopening the checklist automatically. Ask for revisions and resubmit with `night_plan`; execution starts only after approval. Use `/night off` to exit night mode explicitly.
+The instructions file is archived and truncated when the approved run *ends*, not during planning. Cancelling the checklist leaves it untouched and keeps the current session in read-only night planning with the same model and sandbox. The planner waits for feedback instead of reopening the checklist automatically. Ask for revisions and resubmit with `night.plan`; execution starts only after approval. Use `/night off` to exit night mode explicitly.
 
 Pauses and resumes are appended to the report's `## Timeline`, so a report read
 in the morning shows where the 5h window bit.
@@ -262,7 +262,7 @@ HTTPS egress, raw DNS, SSH to github.com, `gh auth status`, loopback TCP, and
 contract.
 
 Probes live in `preflight.ts` (pure: specs, classification, report) and are
-executed by `spindle/sandbox/preflight-bridge.ts`, because only spindle can run
+executed by `code-mode/sandbox/preflight-bridge.ts`, because only Code Mode can run
 a command through the same `srt` wrapper the children get. A probe run from the
 extension host would report an egress the children do not have.
 
@@ -298,7 +298,7 @@ subagent at a time per repository.
 ## Filesystem sandbox
 
 The working copy stops the agent from touching your checkout. It does not stop
-`rm -rf ~`. So `/night start` also asks Spindle to sandbox the filesystem **for
+`rm -rf ~`. So `/night start` also asks Code Mode to sandbox the filesystem **for
 the duration of the run**, and releases it when the run ends. Nothing to
 configure: an interactive session stays unsandboxed, the night does not.
 
@@ -347,7 +347,7 @@ While the run is active the sandbox is a **floor**: `/sandbox off` is refused an
 reported, so nothing can un-sandbox the night mid-flight. Tightening it (say
 `/sandbox read-only`) is allowed, and the run's own writable roots survive it.
 When the run ends, night-mode releases the floor and the session goes back to
-`spindle.json`. Two known holes: granting Docker socket access defeats the
+`code-mode.json`. Two known holes: granting Docker socket access defeats the
 filesystem boundary entirely (a container can bind-mount `/`), and the backend
 is `sandbox-exec`, which Apple has deprecated (still true, and not a
 regression: every prior backend used it too). Enforcement is macOS-only, so a
@@ -358,10 +358,10 @@ night run on Linux gets `bash` refusing to run rather than an OS sandbox; see
 
 The prose contract says "never send a message, never comment, never change a
 ticket". Prose is not enforcement: one confused subagent can post to a customer
-channel. So `/night start` also asks Spindle to refuse write-shaped MCP calls for
+channel. So `/night start` also asks Code Mode to refuse write-shaped MCP calls for
 the whole run, for the coordinator and every subagent process, in code.
 
-A call is judged by name against a declarative policy (`spindle.json`, `mcp`
+A call is judged by name against a declarative policy (`code-mode.json`, `mcp`
 block), never by the model's judgement at call time: the server's deny list of
 known write tools first, then its allow list of known read tools, then a
 name-shape heuristic (`create_`, `send_`, `save_`, `add_`, ...), then
@@ -382,7 +382,7 @@ silently. Set `mcpReadOnly: false` in `nightMode` to disable the request:
 ```
 
 Outside a night run the same machinery is available through
-`spindle.json`:
+`code-mode.json`:
 
 ```json
 {
@@ -395,7 +395,7 @@ Outside a night run the same machinery is available through
 ```
 
 Like the filesystem sandbox, the night request is a floor: `readOnly: false` in
-`spindle.json` cannot turn it back off while the run is in flight.
+`code-mode.json` cannot turn it back off while the run is in flight.
 
 
 ## The approved ledger, and finishing

@@ -16,14 +16,14 @@
  * travel in the persisted details, so an old transcript renders the same way it
  * did when it ran.
  *
- * This is a local module rather than an edit to `ui/spindle-render.ts`, which is
+ * This is a local module rather than an edit to `ui/code-mode-render.ts`, which is
  * in the render parity set (see CONTEXT.md) and must stay free of hand edits.
  */
 
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 import { formatSessionStoreBytes } from "../session-store.ts";
-import { expandHint, renderBoundedLines, safeTerminalText } from "./spindle-render.ts";
+import { expandHint, renderBoundedLines, safeTerminalText } from "./code-mode-render.ts";
 
 /** Keys previewed in the expanded block; the summary line still names them all. */
 const MAX_EXPANDED_KEYS = 6;
@@ -111,10 +111,10 @@ export const renderPayloadInspector = (input: {
 
 /**
  * One τ operation as reported by the live execution (see `host-calls.ts`
- * `SpindleStateNote`). Redeclared structurally rather than imported so the
+ * `CodeModeStateNote`). Redeclared structurally rather than imported so the
  * renderer keeps no dependency on the execution side.
  */
-export interface SpindleStateNoteView {
+export interface CodeModeStateNoteView {
 	ref: string;
 	key?: string;
 	preview?: string;
@@ -131,10 +131,10 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
  * durable trace (audit/projection.ts keeps the key and the size, nothing else),
  * so this is the same route the write previews take.
  */
-export const readSpindleStateNotes = (value: unknown): SpindleStateNoteView[] => {
+export const readCodeModeStateNotes = (value: unknown): CodeModeStateNoteView[] => {
 	if (!isRecord(value) || !Array.isArray(value.stateNotes)) return [];
 	return value.stateNotes.filter(
-		(note): note is SpindleStateNoteView => isRecord(note) && typeof note.ref === "string",
+		(note): note is CodeModeStateNoteView => isRecord(note) && typeof note.ref === "string",
 	);
 };
 
@@ -146,14 +146,14 @@ export const readSpindleStateNotes = (value: unknown): SpindleStateNoteView[] =>
  * operations in the order they happened. A reloaded transcript has no notes, so
  * the rows keep their key and size and simply show no value.
  */
-export const applySpindleStateNotes = <T extends { ref: string; result?: unknown }>(
+export const applyCodeModeStateNotes = <T extends { ref: string; result?: unknown }>(
 	audits: T[],
-	notes: SpindleStateNoteView[] | undefined,
+	notes: CodeModeStateNoteView[] | undefined,
 ): T[] => {
 	if (!notes || notes.length === 0) return audits;
 	const queue = [...notes];
 	return audits.map((audit) => {
-		if (!audit.ref.startsWith("spindle.state.")) return audit;
+		if (!audit.ref.startsWith("code-mode.state.")) return audit;
 		const note = queue.shift();
 		const body = note?.preview ?? note?.detail;
 		return body === undefined ? audit : { ...audit, result: body };

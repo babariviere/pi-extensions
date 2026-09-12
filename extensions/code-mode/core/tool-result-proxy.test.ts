@@ -1,24 +1,24 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { SpindleToolResultProxy } from "./tool-result-proxy.ts";
-import type { ResolvedSpindleAction } from "./action-registry.ts";
+import { CodeModeToolResultProxy } from "./tool-result-proxy.ts";
+import type { ResolvedCodeModeAction } from "./action-registry.ts";
 
-const action = (provider: string): ResolvedSpindleAction =>
+const action = (provider: string): ResolvedCodeModeAction =>
 	({
 		provider,
 		name: "run",
 		ref: `${provider}.run`,
 		description: "",
 		inputSchema: {},
-	}) as unknown as ResolvedSpindleAction;
+	}) as unknown as ResolvedCodeModeAction;
 
-const proxyWith = (emitToolResult: (event: any) => unknown): SpindleToolResultProxy =>
-	new SpindleToolResultProxy(() => ({ emitToolResult }) as any);
+const proxyWith = (emitToolResult: (event: any) => unknown): CodeModeToolResultProxy =>
+	new CodeModeToolResultProxy(() => ({ emitToolResult }) as any);
 
 const value = { agent: "librarian", ok: true, output: "done" };
 
-const run = (proxy: SpindleToolResultProxy, provider = "agents") =>
+const run = (proxy: CodeModeToolResultProxy, provider = "agents") =>
 	proxy.proxy({ action: action(provider), args: {}, toolCallId: "call-1", value });
 
 test("a structured result survives middleware that returns identical content", async () => {

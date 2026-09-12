@@ -1,42 +1,42 @@
 import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Container, Text, type Component } from "@earendil-works/pi-tui";
 import type { CodePreviewSettings } from "./ui/code-preview.ts";
-import { type SpindleToolShellDecorator, withCodePreviewShell } from "./ui/code-preview-shell.ts";
+import { type CodeModeToolShellDecorator, withCodePreviewShell } from "./ui/code-preview-shell.ts";
 import { Type } from "typebox";
-import { createSpindlePersistedExecutionDetails, readSpindleExecutionRenderDetails } from "./audit/index.ts";
-import { DEFAULT_SPINDLE_CONFIG } from "./config.ts";
-import type { SpindleState } from "./spindle-state.ts";
-import type { SpindleMediaBlock } from "./protocol.ts";
+import { createCodeModePersistedExecutionDetails, readCodeModeExecutionRenderDetails } from "./audit/index.ts";
+import { DEFAULT_CODE_MODE_CONFIG } from "./config.ts";
+import type { CodeModeState } from "./code-mode-state.ts";
+import type { CodeModeMediaBlock } from "./protocol.ts";
 import {
-	captureSpindleAgentPreviews,
-	captureSpindleCallHeadlinePreviews,
-	captureSpindleCoreToolPreviews,
-	captureSpindleWritePreviews,
+	captureCodeModeAgentPreviews,
+	captureCodeModeCallHeadlinePreviews,
+	captureCodeModeCoreToolPreviews,
+	captureCodeModeWritePreviews,
 	expandHint,
-	spindleMulticallCallLimit,
-	spindleWriteBindings,
+	codeModeMulticallCallLimit,
+	codeModeWriteBindings,
 	inheritComponentBackground,
 	modelReadHint,
 	nestedCallBody,
 	nestedCallTitle,
 	renderBoundedLines,
-	renderSpindleMulticallPartial,
-	renderSpindleWriteArgumentPreview,
+	renderCodeModeMulticallPartial,
+	renderCodeModeWriteArgumentPreview,
 	renderNestedAgentToolLines,
-	restoreSpindleAgentPreviews,
-	restoreSpindleCallHeadlinePreviews,
-	restoreSpindleCoreToolPreviews,
-	restoreSpindleWritePreviews,
+	restoreCodeModeAgentPreviews,
+	restoreCodeModeCallHeadlinePreviews,
+	restoreCodeModeCoreToolPreviews,
+	restoreCodeModeWritePreviews,
 	restoreLegacyBashCommands,
 	safeTerminalText,
 	singleCallProgressLine,
-	type SpindleAgentPreview,
-	type SpindleCallHeadlinePreview,
-	type SpindleCoreToolPreview,
-	type SpindleRenderAudit,
-	type SpindleWriteBinding,
-	type SpindleWritePreview,
-} from "./ui/spindle-render.ts";
+	type CodeModeAgentPreview,
+	type CodeModeCallHeadlinePreview,
+	type CodeModeCoreToolPreview,
+	type CodeModeRenderAudit,
+	type CodeModeWriteBinding,
+	type CodeModeWritePreview,
+} from "./ui/code-mode-render.ts";
 import {
 	coreToolPreviewEnabled,
 	coreToolRendererEnabled,
@@ -46,9 +46,9 @@ import {
 import { highlightCode } from "./ui/highlight.ts";
 import { HiddenRowBorrowingComponent, observeResultRows, type ResultRowBalance } from "./ui/row-balance.ts";
 import { type SpinnerTimerState, updateSpinner } from "./ui/spinner.ts";
-import { formatSpindleValue } from "./ui/structured.ts";
+import { formatCodeModeValue } from "./ui/structured.ts";
 import { countNewlines, truncateMiddle } from "./util.ts";
-import { prepareSpindleExecArguments, resolveSpindleExecPayloads } from "./code-mode-arguments.ts";
+import { prepareCodeModeExecArguments, resolveCodeModeExecPayloads } from "./code-mode-arguments.ts";
 import { normalizeRunDisplay } from "./run-display.ts";
 import { typeErrorRecoveryHint } from "./type-error-guidance.ts";
 import { formatFailureProgress } from "./failure-progress.ts";
@@ -56,43 +56,43 @@ import { contextReadWarning, summarizeContextMetrics } from "./context-metrics.t
 import { boundModelOutput, modelOutputBudget } from "./output-budget.ts";
 import { formatSessionStoreBytes } from "./session-store.ts";
 import {
-	applySpindleStateNotes,
-	readSpindleStateNotes,
+	applyCodeModeStateNotes,
+	readCodeModeStateNotes,
 	renderPayloadInspector,
-	type SpindleStateNoteView,
+	type CodeModeStateNoteView,
 } from "./ui/inspect-preview.ts";
-import { repairSpindleGuestCode } from "./runtime/guest-code-repair.ts";
-import { resolveSpindleEditProfile } from "./edit-profile.ts";
+import { repairCodeModeGuestCode } from "./runtime/guest-code-repair.ts";
+import { resolveCodeModeEditProfile } from "./edit-profile.ts";
 
 const RESULT_FORMATS = ["auto", "yaml", "json", "text"] as const;
-const MAX_SPINDLE_CODE_TRANSFER_LINES = 12;
+const MAX_CODE_MODE_CODE_TRANSFER_LINES = 12;
 
-type SpindleRendererState = {
-	spindleWriteBindingsCode?: string;
-	spindleWriteBindings?: SpindleWriteBinding[];
-	spindleWritePreviews?: SpindleWritePreview[];
-	spindleCoreToolPreviews?: SpindleCoreToolPreview[];
-	spindleCallHeadlinePreviews?: SpindleCallHeadlinePreview[];
-	spindleAgentPreviews?: SpindleAgentPreview[];
-	spindleStateNotes?: SpindleStateNoteView[];
-	spindleResultRowBalance?: ResultRowBalance;
-	spindleSpinner?: SpinnerTimerState;
+type CodeModeRendererState = {
+	codeModeWriteBindingsCode?: string;
+	codeModeWriteBindings?: CodeModeWriteBinding[];
+	codeModeWritePreviews?: CodeModeWritePreview[];
+	codeModeCoreToolPreviews?: CodeModeCoreToolPreview[];
+	codeModeCallHeadlinePreviews?: CodeModeCallHeadlinePreview[];
+	codeModeAgentPreviews?: CodeModeAgentPreview[];
+	codeModeStateNotes?: CodeModeStateNoteView[];
+	codeModeResultRowBalance?: ResultRowBalance;
+	codeModeSpinner?: SpinnerTimerState;
 };
 
 const countLabel = (count: number, singular: string): string => `${count} ${count === 1 ? singular : `${singular}s`}`;
 
-export const createSpindleExecTool = (
-	state: SpindleState,
+export const createCodeModeExecTool = (
+	state: CodeModeState,
 	codePreviewSettings: CodePreviewSettings,
-	decorateShell: SpindleToolShellDecorator = withCodePreviewShell,
+	decorateShell: CodeModeToolShellDecorator = withCodePreviewShell,
 ): ToolDefinition<any, any, any> =>
 	decorateShell(
 		defineTool({
 			name: "code_mode",
-			label: "Code mode",
+			label: "Code Mode",
 			description:
-				"Execute type-checked TypeScript in isolated QuickJS to call Pi core tools and explicitly registered capabilities, including `web.search`, `web.fetch`, `mcp.*`, and `agents.*`. Other extensions keep their native tools. Do not use Python as an orchestration fallback.",
-			promptSnippet: "Pi core tools, explicit web capabilities, MCP, and custom subagents",
+				"Execute type-checked TypeScript in isolated QuickJS to call Pi core tools and explicitly registered capabilities through `pi.*`, `web.*`, `mcp.*`, and `agents.*`. Do not use Python as an orchestration fallback.",
+			promptSnippet: "Pi core tools and explicitly registered capabilities",
 			promptGuidelines: [
 				"Batch independent operations in one `code_mode` program, not one call per tool; keep dependent/conditional steps sequential. Use `Promise.all` for a few independent calls; use `mapLimit(items, fn, N)` when fanning out over a wide list, because `Promise.all` receives promises that have already started and so cannot bound how many run at once. Return only the compact final value; intermediate results stay in the sandbox.",
 				"Awkward payloads MUST go through `payloads` and be read as `π.key`, never inlined in `code`: multi-line file content, JSON blobs, long prose, and strings with literal `${...}`. Inlining multi-line content nests it through three escape layers and the model emits literal `\\n`, corrupting the file; template literals also interpolate `${...}`. E.g. `payloads: { body }` then `pi.write({ path, content: π.body })`; JSON-encode data and `JSON.parse(π.key)`.",
@@ -153,23 +153,27 @@ export const createSpindleExecTool = (
 			// compatibility coercions for the model-facing boundary must live in the
 			// official prepareArguments hook rather than execute-time fallbacks.
 			prepareArguments(args) {
-				return prepareSpindleExecArguments(args) as any;
+				return prepareCodeModeExecArguments(args) as any;
 			},
 			renderCall(params, theme, context) {
 				const code = Array.isArray(params.code) ? params.code.join("\n") : params.code;
-				const rendererState = context.state as SpindleRendererState;
-				const spinner = updateSpinner((rendererState.spindleSpinner ??= {}), context.isPartial, context.invalidate);
-				const rowBalance = (rendererState.spindleResultRowBalance ??= {});
-				if (rendererState.spindleWriteBindingsCode !== code) {
-					rendererState.spindleWriteBindingsCode = code;
-					rendererState.spindleWriteBindings = spindleWriteBindings(code);
+				const rendererState = context.state as CodeModeRendererState;
+				const spinner = updateSpinner(
+					(rendererState.codeModeSpinner ??= {}),
+					context.isPartial,
+					context.invalidate,
+				);
+				const rowBalance = (rendererState.codeModeResultRowBalance ??= {});
+				if (rendererState.codeModeWriteBindingsCode !== code) {
+					rendererState.codeModeWriteBindingsCode = code;
+					rendererState.codeModeWriteBindings = codeModeWriteBindings(code);
 				}
 				const writePreview = context.executionStarted
 					? null
-					: renderSpindleWriteArgumentPreview(
+					: renderCodeModeWriteArgumentPreview(
 							{
-								bindings: rendererState.spindleWriteBindings ?? [],
-								payloads: resolveSpindleExecPayloads(params),
+								bindings: rendererState.codeModeWriteBindings ?? [],
+								payloads: resolveCodeModeExecPayloads(params),
 								expanded: context.expanded,
 								cwd: context.cwd,
 								settings: codePreviewSettings,
@@ -182,13 +186,13 @@ export const createSpindleExecTool = (
 				const lines = safeTerminalText(code).split("\n");
 				const runDisplayName = normalizeRunDisplay(params.display)?.name;
 				const displayName = runDisplayName ? safeTerminalText(runDisplayName) : "";
-				const title = `${theme.fg("toolTitle", theme.bold("spindle"))}${
+				const title = `${theme.fg("toolTitle", theme.bold("Code Mode"))}${
 					displayName ? ` ${theme.fg("accent", displayName)}` : ""
 				} ${theme.fg("dim", `TypeScript · ${countLabel(lines.length, "line")}`)}`;
 				const baseLimit = context.expanded ? lines.length : Math.min(lines.length, 8);
 				const maxLimit = context.expanded
 					? lines.length
-					: Math.min(lines.length, baseLimit + MAX_SPINDLE_CODE_TRANSFER_LINES);
+					: Math.min(lines.length, baseLimit + MAX_CODE_MODE_CODE_TRANSFER_LINES);
 				const renderCodePreview = (limit: number, width: number): string[] => {
 					const shown = lines.slice(0, limit);
 					const lineNumberWidth = String(Math.max(1, shown.length)).length;
@@ -211,11 +215,11 @@ export const createSpindleExecTool = (
 				// write preview already renders payloads bound to a `pi.write` while the
 				// call composes; skip those so nothing is shown twice.
 				const payloadPreview = renderPayloadInspector({
-					payloads: resolveSpindleExecPayloads(params),
+					payloads: resolveCodeModeExecPayloads(params),
 					...(writePreview
 						? {
 								skipKeys: new Set(
-									(rendererState.spindleWriteBindings ?? []).map((binding) => binding.stringKey),
+									(rendererState.codeModeWriteBindings ?? []).map((binding) => binding.stringKey),
 								),
 							}
 						: {}),
@@ -233,48 +237,48 @@ export const createSpindleExecTool = (
 				return composite;
 			},
 			renderResult(result, { expanded, isPartial }, theme, context) {
-				const details = readSpindleExecutionRenderDetails(result.details);
-				let audits = restoreLegacyBashCommands(details.audits as SpindleRenderAudit[], context.args);
-				const rendererState = context.state as SpindleRendererState;
-				const spinner = updateSpinner((rendererState.spindleSpinner ??= {}), isPartial, context.invalidate);
-				const rowBalance = (rendererState.spindleResultRowBalance ??= {});
+				const details = readCodeModeExecutionRenderDetails(result.details);
+				let audits = restoreLegacyBashCommands(details.audits as CodeModeRenderAudit[], context.args);
+				const rendererState = context.state as CodeModeRendererState;
+				const spinner = updateSpinner((rendererState.codeModeSpinner ??= {}), isPartial, context.invalidate);
+				const rowBalance = (rendererState.codeModeResultRowBalance ??= {});
 				const trackRows = (component: Component): Component =>
 					observeResultRows(inheritComponentBackground(component), rowBalance, { expanded, isPartial });
 				if (isPartial) {
-					rendererState.spindleCoreToolPreviews = captureSpindleCoreToolPreviews(
+					rendererState.codeModeCoreToolPreviews = captureCodeModeCoreToolPreviews(
 						audits,
-						rendererState.spindleCoreToolPreviews,
+						rendererState.codeModeCoreToolPreviews,
 					);
-					rendererState.spindleAgentPreviews = captureSpindleAgentPreviews(
+					rendererState.codeModeAgentPreviews = captureCodeModeAgentPreviews(
 						audits,
-						rendererState.spindleAgentPreviews,
+						rendererState.codeModeAgentPreviews,
 					);
-					const headlinePreviews = captureSpindleCallHeadlinePreviews(audits);
+					const headlinePreviews = captureCodeModeCallHeadlinePreviews(audits);
 					if (headlinePreviews.length > 0) {
-						rendererState.spindleCallHeadlinePreviews = headlinePreviews;
+						rendererState.codeModeCallHeadlinePreviews = headlinePreviews;
 					}
-					const writePreviews = captureSpindleWritePreviews(audits);
-					if (writePreviews.length > 0) rendererState.spindleWritePreviews = writePreviews;
+					const writePreviews = captureCodeModeWritePreviews(audits);
+					if (writePreviews.length > 0) rendererState.codeModeWritePreviews = writePreviews;
 					// τ values ride the live update channel, never the durable trace, so
 					// they have to be captured here to survive into the final render.
-					const stateNotes = readSpindleStateNotes(result.details);
-					if (stateNotes.length > 0) rendererState.spindleStateNotes = stateNotes;
+					const stateNotes = readCodeModeStateNotes(result.details);
+					if (stateNotes.length > 0) rendererState.codeModeStateNotes = stateNotes;
 				} else {
-					if (rendererState.spindleCoreToolPreviews) {
-						audits = restoreSpindleCoreToolPreviews(audits, rendererState.spindleCoreToolPreviews);
+					if (rendererState.codeModeCoreToolPreviews) {
+						audits = restoreCodeModeCoreToolPreviews(audits, rendererState.codeModeCoreToolPreviews);
 					}
-					if (rendererState.spindleAgentPreviews) {
-						audits = restoreSpindleAgentPreviews(audits, rendererState.spindleAgentPreviews);
+					if (rendererState.codeModeAgentPreviews) {
+						audits = restoreCodeModeAgentPreviews(audits, rendererState.codeModeAgentPreviews);
 					}
-					if (rendererState.spindleCallHeadlinePreviews) {
-						audits = restoreSpindleCallHeadlinePreviews(audits, rendererState.spindleCallHeadlinePreviews);
+					if (rendererState.codeModeCallHeadlinePreviews) {
+						audits = restoreCodeModeCallHeadlinePreviews(audits, rendererState.codeModeCallHeadlinePreviews);
 					}
-					if (rendererState.spindleWritePreviews) {
-						audits = restoreSpindleWritePreviews(audits, rendererState.spindleWritePreviews);
+					if (rendererState.codeModeWritePreviews) {
+						audits = restoreCodeModeWritePreviews(audits, rendererState.codeModeWritePreviews);
 					}
 					// The trace gives each τ operation a row and its key; this puts the
 					// value back in the body.
-					audits = applySpindleStateNotes(audits, rendererState.spindleStateNotes);
+					audits = applyCodeModeStateNotes(audits, rendererState.codeModeStateNotes);
 				}
 				const phases = details.phases;
 				const nl = "\n";
@@ -283,9 +287,9 @@ export const createSpindleExecTool = (
 				const corePreviewContext = { cwd: context.cwd, settings: codePreviewSettings };
 				const showNestedToolCalls = state.initialized
 					? state.config.ui.showNestedToolCalls
-					: DEFAULT_SPINDLE_CONFIG.ui.showNestedToolCalls;
+					: DEFAULT_CODE_MODE_CONFIG.ui.showNestedToolCalls;
 
-				const renderBody = (audit: SpindleRenderAudit, limit: number): { body: string; hidden: number } | null => {
+				const renderBody = (audit: CodeModeRenderAudit, limit: number): { body: string; hidden: number } | null => {
 					const core = renderCoreToolBody(audit, theme, {
 						cwd: context.cwd,
 						settings: codePreviewSettings,
@@ -317,7 +321,7 @@ export const createSpindleExecTool = (
 					if (audits.length === 0) {
 						return trackRows(
 							new Text(
-								theme.fg("warning", `◆ ${safeTerminalText(progress ?? "Running Code mode program…")}`),
+								theme.fg("warning", `◆ ${safeTerminalText(progress ?? "Running Code Mode program…")}`),
 								0,
 								0,
 							),
@@ -389,7 +393,7 @@ export const createSpindleExecTool = (
 						}
 					}
 					return trackRows(
-						renderSpindleMulticallPartial(
+						renderCodeModeMulticallPartial(
 							{
 								audits,
 								phases,
@@ -463,7 +467,7 @@ export const createSpindleExecTool = (
 					if (failed && details.error) {
 						return trackRows(new Text(theme.fg("error", `✗ ${safeTerminalText(details.error)}`), 0, 0));
 					}
-					if (!output) return trackRows(new Text(theme.fg("dim", "✓ Spindle"), 0, 0));
+					if (!output) return trackRows(new Text(theme.fg("dim", "✓ Code Mode"), 0, 0));
 					const lines = safeTerminalText(output).split(nl);
 					const limit = expanded ? Math.min(lines.length, 200) : 12;
 					const shown = lines.slice(0, limit);
@@ -538,11 +542,11 @@ export const createSpindleExecTool = (
 						? `${details.contextMetrics.largeUnboundedReadCalls} large unbounded read${details.contextMetrics.largeUnboundedReadCalls === 1 ? "" : "s"}`
 						: undefined,
 				].filter((value): value is string => Boolean(value));
-				let text = theme.fg(statusColor, `${failed ? "✗" : "✓"} Spindle ${status}`);
+				let text = theme.fg(statusColor, `${failed ? "✗" : "✓"} Code Mode ${status}`);
 				if (metadata.length > 0) text += theme.fg("dim", ` · ${metadata.join(" · ")}`);
 				if (phases.length > 0) text += nl + theme.fg("dim", phases.map((phase) => `◆ ${phase}`).join("  "));
 
-				const callLimit = spindleMulticallCallLimit(expanded);
+				const callLimit = codeModeMulticallCallLimit(expanded);
 				const callsShown = audits.slice(0, callLimit);
 				const callsHidden = audits.length - callsShown.length;
 				let collapsedPreview: { auditIndex: number; body: string; hidden: number } | undefined;
@@ -637,8 +641,8 @@ export const createSpindleExecTool = (
 				// parses a JSON-encoded `payloads` map before Pi validates this call; keep
 				// the same coercions here for direct internal invocations.
 				const joined = Array.isArray(params.code) ? params.code.join("\n") : params.code;
-				const code = repairSpindleGuestCode(joined);
-				const payloads = resolveSpindleExecPayloads(params);
+				const code = repairCodeModeGuestCode(joined);
+				const payloads = resolveCodeModeExecPayloads(params);
 				const runDisplay = normalizeRunDisplay(params.display);
 				const result = await state.execution.execute({
 					code,
@@ -670,7 +674,7 @@ export const createSpindleExecTool = (
 				});
 
 				const selectedResultFormat = params.resultFormat ?? state.config.executor.resultFormat;
-				const formattedValue = formatSpindleValue(result.value, selectedResultFormat);
+				const formattedValue = formatCodeModeValue(result.value, selectedResultFormat);
 				const failureProgress = formatFailureProgress(result.trace);
 				const contextMetrics = summarizeContextMetrics(result.audits);
 				const contextWarning = contextReadWarning(contextMetrics);
@@ -698,10 +702,10 @@ export const createSpindleExecTool = (
 						? formattedValue.language
 						: undefined;
 				const outputFormatStartLine = result.logs.length > 0 ? countNewlines(logPrefix) + 2 : 0;
-				const persistedDetails = createSpindlePersistedExecutionDetails({
+				const persistedDetails = createCodeModePersistedExecutionDetails({
 					...result,
 					contextMetrics,
-					editProfile: resolveSpindleEditProfile(context.model),
+					editProfile: resolveCodeModeEditProfile(context.model),
 					...(outputFormat ? { outputFormat, outputFormatStartLine } : {}),
 					...(outputFormat
 						? {
@@ -746,7 +750,7 @@ export const createSpindleExecTool = (
 				// reads. pi-vision-handoff keeps the image in the nested tool_result
 				// (its `context` hook swaps image→description on the LLM-bound
 				// code_mode clone), so every read audit carries its image here.
-				const mediaBlocks: SpindleMediaBlock[] = [];
+				const mediaBlocks: CodeModeMediaBlock[] = [];
 				for (const audit of result.audits) {
 					if (audit.media) mediaBlocks.push(...audit.media);
 				}
@@ -765,7 +769,7 @@ export const createSpindleExecTool = (
 					delete audit.media;
 					delete audit.mediaNote;
 				}
-				const content: Array<{ type: "text"; text: string } | SpindleMediaBlock> = [];
+				const content: Array<{ type: "text"; text: string } | CodeModeMediaBlock> = [];
 				if (mediaBlocks.length > 0) {
 					// Mirror a native `read`: keep the image block(s) for pi core's kitty
 					// render alongside the short note. The handoff's `context` hook

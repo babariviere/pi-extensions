@@ -39,8 +39,8 @@ include `sed -n`, ordinary `awk`, `npm install`, `git checkout`, `cargo fmt`,
 
 Literal `exec` argv is checked without treating metacharacters as shell syntax.
 An exec call such as `["printf", ">", "file"]` passes, while `["sed", "-i",
-"s/a/b/", "file"]` blocks. Nested `bash` and `exec` calls made through Spindle
-are covered by the same normal `tool_call` lifecycle hook, with no Spindle
+"s/a/b/", "file"]` blocks. Nested `bash` and `exec` calls made through Code Mode
+are covered by the same normal `tool_call` lifecycle hook, with no Code Mode
 configuration required.
 
 ## Command

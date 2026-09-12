@@ -4,10 +4,10 @@ import { runAbortable, throwIfAborted } from "../async-settlement.ts";
 import type { CapturedToolCatalog, CapturedToolEntry } from "../capture/catalog.ts";
 import { assertMcpGatewayArguments, McpReadOnlyGate, mcpNamespaceProxyServer } from "../mcp/read-only-policy.ts";
 import type {
-	SpindleActionDescriptor,
-	SpindleInvocationContext,
-	SpindleProvider,
-	SpindleProviderListRequest,
+	CodeModeActionDescriptor,
+	CodeModeInvocationContext,
+	CodeModeProvider,
+	CodeModeProviderListRequest,
 } from "../protocol.ts";
 
 export interface CapturedToolInvocationResult {
@@ -21,7 +21,7 @@ export interface CapturedToolInvocationResult {
 
 /**
  * Internal adapter for exact-name Pi core overrides. This is deliberately not
- * a SpindleProvider: only PiToolsProvider can reach it, while the public
+ * a CodeModeProvider: only PiToolsProvider can reach it, while the public
  * CapturedToolsProvider exposes the separately registered aliases below.
  */
 export class CapturedToolOverrideAdapter {
@@ -32,7 +32,7 @@ export class CapturedToolOverrideAdapter {
 		readonly mcpReadOnlyGate: () => McpReadOnlyGate = () => McpReadOnlyGate.unrestricted(),
 	) {}
 
-	describe(sourceName: string): SpindleActionDescriptor | undefined {
+	describe(sourceName: string): CodeModeActionDescriptor | undefined {
 		const entry = this.catalog.get(sourceName);
 		return entry ? descriptorFrom(entry) : undefined;
 	}
@@ -50,7 +50,7 @@ export class CapturedToolOverrideAdapter {
 	async invoke(
 		sourceName: string,
 		args: Record<string, unknown>,
-		context: SpindleInvocationContext,
+		context: CodeModeInvocationContext,
 	): Promise<CapturedToolInvocationResult> {
 		const entry = this.catalog.require(sourceName);
 		assertMcpReadOnlyFor(this.mcpReadOnlyGate, entry, args);
@@ -76,7 +76,7 @@ const sourceLabel = (sourceInfo: SourceInfo): string => {
 	return path.basename(path.dirname(sourceInfo.path)) || sourceInfo.source;
 };
 
-const descriptorFrom = (entry: CapturedToolEntry): SpindleActionDescriptor => ({
+const descriptorFrom = (entry: CapturedToolEntry): CodeModeActionDescriptor => ({
 	name: entry.name,
 	description: `${entry.definition.description} (captured from ${sourceLabel(entry.sourceInfo)})`,
 	inputSchema: entry.definition.parameters as Record<string, unknown>,
@@ -145,7 +145,7 @@ const assertMcpReadOnlyFor = (
 const invokeCaptured = async (
 	entry: CapturedToolEntry,
 	args: Record<string, unknown>,
-	context: SpindleInvocationContext,
+	context: CodeModeInvocationContext,
 ): Promise<CapturedToolInvocationResult> => {
 	const { runner, wrappedTool } = entry;
 	const toolCallId = context.nestedToolCallId;
@@ -223,7 +223,7 @@ const invokeCaptured = async (
 	return asInvocationResult(entry, result, false);
 };
 
-export class CapturedToolsProvider implements SpindleProvider {
+export class CapturedToolsProvider implements CodeModeProvider {
 	readonly name = "web";
 	readonly description: string;
 	readonly #aliases: Readonly<Record<string, string>>;
@@ -259,9 +259,9 @@ export class CapturedToolsProvider implements SpindleProvider {
 	}
 
 	async list(
-		request: SpindleProviderListRequest,
-		_context: SpindleInvocationContext,
-	): Promise<SpindleActionDescriptor[]> {
+		request: CodeModeProviderListRequest,
+		_context: CodeModeInvocationContext,
+	): Promise<CodeModeActionDescriptor[]> {
 		const query = request.query?.trim().toLowerCase();
 		const descriptors = this.catalog
 			.list()
@@ -276,8 +276,8 @@ export class CapturedToolsProvider implements SpindleProvider {
 
 	async describe(
 		actionName: string,
-		_context: SpindleInvocationContext,
-	): Promise<SpindleActionDescriptor | undefined> {
+		_context: CodeModeInvocationContext,
+	): Promise<CodeModeActionDescriptor | undefined> {
 		const sourceName = this.#sourceName(actionName);
 		if (sourceName === undefined) return undefined;
 		const descriptor = this.#adapter.describe(sourceName);
@@ -293,7 +293,7 @@ export class CapturedToolsProvider implements SpindleProvider {
 	async invoke(
 		actionName: string,
 		args: Record<string, unknown>,
-		context: SpindleInvocationContext,
+		context: CodeModeInvocationContext,
 	): Promise<CapturedToolInvocationResult> {
 		const sourceName = this.#sourceName(actionName);
 		if (sourceName === undefined) throw new Error(`Unknown captured extension tool: ${actionName}`);

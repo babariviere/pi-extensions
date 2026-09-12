@@ -78,7 +78,7 @@ test("buildChildArgs hands the task over as a file instead of an inline arg", ()
 	const idx = args.indexOf(`--${TASK_FILE_FLAG}`);
 	assert.ok(idx !== -1);
 	assert.equal(args[idx + 1], taskFile);
-	// Spindle registers the flag itself: an unsandboxed agent needs no injected
+	// Code Mode registers the flag itself: an unsandboxed agent needs no injected
 	// child extension to accept a task.
 	assert.equal(args.includes("--extension"), false);
 });

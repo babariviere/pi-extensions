@@ -15,12 +15,12 @@ import { Value } from "typebox/value";
 import { RunLauncher } from "../agents/backend.ts";
 import { CauseBreaker } from "../agents/cause-breaker.ts";
 import type { RunBackend, RunContext, RunResult } from "../agents/run.ts";
-import type { SpindleInvocationContext } from "../protocol.ts";
+import type { CodeModeInvocationContext } from "../protocol.ts";
 import { AgentRunBook } from "./agent-run-book.ts";
-import { SpindleAgentRunRegistry } from "./agent-run-monitor.ts";
-import { bindApprovedNightTasks, SpindleAgentsProvider } from "./agents-provider.ts";
+import { CodeModeAgentRunRegistry } from "./agent-run-monitor.ts";
+import { bindApprovedNightTasks, CodeModeAgentsProvider } from "./agents-provider.ts";
 
-const invocationContext = (signal?: AbortSignal): SpindleInvocationContext => ({
+const invocationContext = (signal?: AbortSignal): CodeModeInvocationContext => ({
 	cwd: tmpdir(),
 	signal,
 	parentToolCallId: "call-1",
@@ -30,7 +30,7 @@ const invocationContext = (signal?: AbortSignal): SpindleInvocationContext => ({
 });
 
 interface Harness {
-	provider: SpindleAgentsProvider;
+	provider: CodeModeAgentsProvider;
 	book: AgentRunBook;
 	/** The run context the fake backend was invoked with. */
 	contextOf: () => RunContext | undefined;
@@ -68,9 +68,9 @@ const harness = (waitMs = 0, pacingDisabled = false): Harness => {
 		});
 	};
 	const book = new AgentRunBook({ announceDelayMs: 5 });
-	const provider = new SpindleAgentsProvider(
+	const provider = new CodeModeAgentsProvider(
 		() => ({ sessionId: undefined, sessionFile: undefined, cwd: tmpdir() }),
-		new SpindleAgentRunRegistry(),
+		new CodeModeAgentRunRegistry(),
 		() => ({ timeoutMs: 60_000, waitMs, pacingDisabled }),
 		book,
 		new RunLauncher({ inHerdr: () => false, headless }),
@@ -277,9 +277,9 @@ test("the breaker refuses to relaunch into a cause that already failed twice", a
 			failure: "launch" as const,
 		}));
 	};
-	const provider = new SpindleAgentsProvider(
+	const provider = new CodeModeAgentsProvider(
 		() => ({ sessionId: undefined, sessionFile: undefined, cwd: tmpdir() }),
-		new SpindleAgentRunRegistry(),
+		new CodeModeAgentRunRegistry(),
 		() => ({ timeoutMs: 60_000, waitMs: 1_000 }),
 		new AgentRunBook({ announceDelayMs: 5 }),
 		new RunLauncher({ inHerdr: () => false, headless }),
@@ -321,9 +321,9 @@ test("a run that reaches its child clears the breaker", async () => {
 		);
 	};
 	const breaker = new CauseBreaker({ limit: 2, retryAfterMs: 60_000, now: () => 1_000 });
-	const provider = new SpindleAgentsProvider(
+	const provider = new CodeModeAgentsProvider(
 		() => ({ sessionId: undefined, sessionFile: undefined, cwd: tmpdir() }),
-		new SpindleAgentRunRegistry(),
+		new CodeModeAgentRunRegistry(),
 		() => ({ timeoutMs: 60_000, waitMs: 1_000 }),
 		new AgentRunBook({ announceDelayMs: 5 }),
 		new RunLauncher({ inHerdr: () => false, headless }),

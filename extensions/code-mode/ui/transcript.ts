@@ -1,14 +1,14 @@
 import { TranscriptAccumulator } from "./transcript-parser.ts";
 import { recordOf } from "./transcript-sanitization.ts";
 
-type SpindleTranscriptEntryStatus = "running" | "completed" | "failed";
+type CodeModeTranscriptEntryStatus = "running" | "completed" | "failed";
 
-export interface SpindleTranscriptEntry {
+export interface CodeModeTranscriptEntry {
 	id: string;
 	kind: "user" | "assistant" | "tool" | "error" | "status";
 	label: string;
 	text?: string;
-	status?: SpindleTranscriptEntryStatus;
+	status?: CodeModeTranscriptEntryStatus;
 	toolName?: string;
 	args?: Record<string, unknown>;
 	result?: unknown;
@@ -16,8 +16,8 @@ export interface SpindleTranscriptEntry {
 	depth?: number;
 }
 
-export interface SpindleAgentTranscript {
-	entries: SpindleTranscriptEntry[];
+export interface CodeModeAgentTranscript {
+	entries: CodeModeTranscriptEntry[];
 	/** Kept for compatibility; true means older pages are available. */
 	truncated: boolean;
 	hasMore?: boolean;
@@ -25,36 +25,36 @@ export interface SpindleAgentTranscript {
 	updatedAt?: number;
 }
 
-export interface SpindleTranscriptSource {
+export interface CodeModeTranscriptSource {
 	id: string;
 	status: string;
 	logFile?: string;
 }
 
-export interface SpindleNestedToolPreview {
-	kind: "spindle-agent-tools";
+export interface CodeModeNestedToolPreview {
+	kind: "code-mode-agent-tools";
 	id: string;
 	name: string;
 	status: string;
 	runner?: "pi" | "claude";
 	owner: "agent" | "actor";
 	text?: string;
-	tools: SpindleTranscriptEntry[];
+	tools: CodeModeTranscriptEntry[];
 }
 
 export const projectAgentTranscript = (
 	events: Array<Record<string, unknown>>,
 	olderAvailable = false,
-): SpindleAgentTranscript => {
+): CodeModeAgentTranscript => {
 	const accumulator = new TranscriptAccumulator();
 	accumulator.append(events);
 	return accumulator.snapshot(olderAvailable);
 };
 
-export const isSpindleNestedToolPreview = (value: unknown): value is SpindleNestedToolPreview => {
+export const isCodeModeNestedToolPreview = (value: unknown): value is CodeModeNestedToolPreview => {
 	const record = recordOf(value);
 	return (
-		record?.kind === "spindle-agent-tools" &&
+		record?.kind === "code-mode-agent-tools" &&
 		typeof record.id === "string" &&
 		typeof record.name === "string" &&
 		(record.text === undefined || typeof record.text === "string") &&
@@ -62,7 +62,7 @@ export const isSpindleNestedToolPreview = (value: unknown): value is SpindleNest
 	);
 };
 
-export const recentTranscriptTools = (transcript: SpindleAgentTranscript, limit = 2): SpindleTranscriptEntry[] => {
+export const recentTranscriptTools = (transcript: CodeModeAgentTranscript, limit = 2): CodeModeTranscriptEntry[] => {
 	const tools = transcript.entries.filter((entry) => entry.kind === "tool");
 	const boundedLimit = Math.max(1, limit);
 	const running = tools.filter((entry) => entry.status === "running");

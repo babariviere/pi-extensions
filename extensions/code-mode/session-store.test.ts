@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { SpindleSessionStore } from "./session-store.ts";
+import { CodeModeSessionStore } from "./session-store.ts";
 
 test("a value survives round-tripping through JSON", () => {
-	const store = new SpindleSessionStore();
+	const store = new CodeModeSessionStore();
 	const write = store.set("index", { files: ["a.ts", "b.ts"], count: 2 });
 	assert.equal(write.key, "index");
 	assert.equal(write.replaced, false);
@@ -18,14 +18,14 @@ test("a value survives round-tripping through JSON", () => {
 });
 
 test("a miss is distinguishable from a stored null", () => {
-	const store = new SpindleSessionStore();
+	const store = new CodeModeSessionStore();
 	store.set("nothing", null);
 	assert.deepEqual(store.get("nothing"), { key: "nothing", found: true, bytes: 4, value: null });
 	assert.deepEqual(store.get("absent"), { key: "absent", found: false });
 });
 
 test("a stored value is a snapshot, not a live reference", () => {
-	const store = new SpindleSessionStore();
+	const store = new CodeModeSessionStore();
 	const source = { items: [1] };
 	store.set("snapshot", source);
 	source.items.push(2);
@@ -33,7 +33,7 @@ test("a stored value is a snapshot, not a live reference", () => {
 });
 
 test("delete and clear keep the byte accounting honest", () => {
-	const store = new SpindleSessionStore();
+	const store = new CodeModeSessionStore();
 	store.set("a", "x".repeat(100));
 	store.set("b", "y".repeat(100));
 	assert.equal(store.size, 2);
@@ -48,21 +48,21 @@ test("delete and clear keep the byte accounting honest", () => {
 });
 
 test("undefined and functions are refused, and say what to do instead", () => {
-	const store = new SpindleSessionStore();
+	const store = new CodeModeSessionStore();
 	assert.throws(() => store.set("k", undefined), /cannot store undefined/);
 	assert.throws(() => store.set("k", () => 1), /cannot store undefined/);
 	assert.equal(store.size, 0);
 });
 
 test("a cyclic value is refused instead of crashing the program", () => {
-	const store = new SpindleSessionStore();
+	const store = new CodeModeSessionStore();
 	const cyclic: Record<string, unknown> = {};
 	cyclic.self = cyclic;
 	assert.throws(() => store.set("k", cyclic), /JSON-serializable/);
 });
 
 test("keys are validated", () => {
-	const store = new SpindleSessionStore();
+	const store = new CodeModeSessionStore();
 	assert.throws(() => store.set("", 1), /non-empty string key/);
 	assert.throws(() => store.set(42, 1), /non-empty string key/);
 	assert.throws(() => store.set("has space", 1), /is not allowed/);
@@ -70,7 +70,7 @@ test("keys are validated", () => {
 });
 
 test("limits throw and name what is held, rather than evicting", () => {
-	const store = new SpindleSessionStore({ maxKeys: 2, maxTotalBytes: 350, maxValueBytes: 200 });
+	const store = new CodeModeSessionStore({ maxKeys: 2, maxTotalBytes: 350, maxValueBytes: 200 });
 	store.set("a", "x".repeat(100));
 	store.set("b", "y".repeat(100));
 	assert.throws(() => store.set("c", 1), /limit of 2 keys \(a, b\)/);
@@ -82,7 +82,7 @@ test("limits throw and name what is held, rather than evicting", () => {
 });
 
 test("preview is a bounded slice of the stored JSON, and only for held keys", () => {
-	const store = new SpindleSessionStore();
+	const store = new CodeModeSessionStore();
 	store.set("small", { n: 1 });
 	store.set("big", "x".repeat(1000));
 	assert.equal(store.preview("small"), '{"n":1}');
@@ -92,7 +92,7 @@ test("preview is a bounded slice of the stored JSON, and only for held keys", ()
 });
 
 test("describe summarizes what a result envelope should echo", () => {
-	const store = new SpindleSessionStore();
+	const store = new CodeModeSessionStore();
 	store.set("small", "x".repeat(10));
 	store.set("big", "y".repeat(4096));
 	assert.equal(store.describe(), "small (12 B), big (4.0 KB)");

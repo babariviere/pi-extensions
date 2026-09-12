@@ -28,9 +28,9 @@ test("an unmatched name suggests instead of repairing", () => {
 });
 
 test("the failure message keeps its prefix and names candidates", () => {
-	assert.equal(formatUnknownActionMessage("agents.nope", []), "Unknown Spindle action: agents.nope");
+	assert.equal(formatUnknownActionMessage("agents.nope", []), "Unknown Code Mode action: agents.nope");
 	assert.equal(
 		formatUnknownActionMessage("agents.nope", ["agents.run", "agents.wait"]),
-		"Unknown Spindle action: agents.nope (did you mean: agents.run, agents.wait?)",
+		"Unknown Code Mode action: agents.nope (did you mean: agents.run, agents.wait?)",
 	);
 });

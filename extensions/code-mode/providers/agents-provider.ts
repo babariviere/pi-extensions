@@ -2,7 +2,7 @@
  * `agents.*` namespace, backed by the absorbed subagents code in
  * `../agents/`.
  *
- * NOTE: this is a NEW spindle file. Upstream has a same-named
+ * NOTE: this is a NEW code-mode file. Upstream has a same-named
  * `src/providers/agents-provider.ts` that fronts its own RLM/handoff agent
  * runtime; that file is deliberately NOT vendored. The local `../agents/`
  * directory is the absorbed `extensions/subagents` code and is unrelated to
@@ -24,8 +24,8 @@
  * live. `agents.wait` also accepts `timeoutMs` as an alias for `waitMs`.
  *
  * Progress does NOT go out as `progress.ts`'s ANSI block: each row is mirrored
- * into the spindle widget through the run registry, and `renderProgress` is
- * reused as the one-line-per-tick `context.update(...)` body so the spindle
+ * into the code-mode widget through the run registry, and `renderProgress` is
+ * reused as the one-line-per-tick `context.update(...)` body so the code-mode
  * renderer shows an in-flight ticker.
  */
 
@@ -39,16 +39,16 @@ import { newRunId } from "../agents/paths.ts";
 import { buildRunRequests, type NormalizedItem, validateOverrides } from "../agents/request.ts";
 import { allocateNightWorkspaces, relocateWorkspacePaths, releaseNightWorkspaces } from "../agents/night-workspace.ts";
 import type { OnStatus, RunContext, RunRequest, RunResult } from "../agents/run.ts";
-import { DEFAULT_SPINDLE_CONFIG, MAX_AGENT_TIMEOUT_MS } from "../config.ts";
+import { DEFAULT_CODE_MODE_CONFIG, MAX_AGENT_TIMEOUT_MS } from "../config.ts";
 import type {
-	SpindleActionDescriptor,
-	SpindleInvocationContext,
-	SpindleProvider,
-	SpindleProviderListRequest,
+	CodeModeActionDescriptor,
+	CodeModeInvocationContext,
+	CodeModeProvider,
+	CodeModeProviderListRequest,
 } from "../protocol.ts";
 import { actionArgNormalizer } from "./arg-normalization.ts";
-import { AgentRunBook, type AgentWaitOutcome, type SpindleAgentResult } from "./agent-run-book.ts";
-import { RunProgressMonitor, SpindleAgentRunRegistry } from "./agent-run-monitor.ts";
+import { AgentRunBook, type AgentWaitOutcome, type CodeModeAgentResult } from "./agent-run-book.ts";
+import { RunProgressMonitor, CodeModeAgentRunRegistry } from "./agent-run-monitor.ts";
 import { isNightRunParticipant, type ActiveNightRun, readActiveNightRun } from "../../night-mode/night-run.ts";
 
 /** Parent session the child runs are attributed to. */
@@ -68,7 +68,7 @@ const PENDING_NOTE =
 	"still running in the background: resume waiting with agents.wait({ runId }), or stop it with agents.cancel({ runId }). " +
 	"Its result is delivered to this session as a follow-up message if nobody claims it.";
 
-export interface SpindleAgentRuntimeConfig {
+export interface CodeModeAgentRuntimeConfig {
 	timeoutMs: number;
 	waitMs: number;
 	defaultModel?: string;
@@ -138,7 +138,7 @@ const startSchema = {
 	additionalProperties: false,
 };
 
-const descriptors: SpindleActionDescriptor[] = [
+const descriptors: CodeModeActionDescriptor[] = [
 	{
 		name: "models",
 		description:
@@ -240,7 +240,7 @@ const normalizedItem = (value: unknown): NormalizedItem => {
 	};
 };
 
-const agentResult = (result: RunResult, runId: string): SpindleAgentResult => ({
+const agentResult = (result: RunResult, runId: string): CodeModeAgentResult => ({
 	agent: result.agent,
 	ok: result.ok,
 	output: result.output,
@@ -275,7 +275,7 @@ const refusedResult = (request: RunRequest, verdict: CauseVerdict, onStatus: OnS
 };
 
 /** The placeholder result a still-running run reports. */
-const pendingResult = (agent: string, runId: string, elapsedMs: number): SpindleAgentResult => ({
+const pendingResult = (agent: string, runId: string, elapsedMs: number): CodeModeAgentResult => ({
 	agent,
 	ok: false,
 	state: "running",
@@ -329,15 +329,15 @@ export function bindApprovedNightTasks(
 	});
 }
 
-export class SpindleAgentsProvider implements SpindleProvider {
+export class CodeModeAgentsProvider implements CodeModeProvider {
 	readonly name = "agents";
 	readonly description =
 		"Custom markdown agents discovered on disk, run as child Pi sessions (headless, or live herdr panes)";
 
 	constructor(
 		readonly session: () => SessionRef,
-		readonly registry: SpindleAgentRunRegistry,
-		readonly runtimeConfig: () => SpindleAgentRuntimeConfig,
+		readonly registry: CodeModeAgentRunRegistry,
+		readonly runtimeConfig: () => CodeModeAgentRuntimeConfig,
 		/** Live batches, so a run can outlive the program that started it. */
 		readonly runs: AgentRunBook = new AgentRunBook(),
 		/** Adapter selection and herdr drift containment (see agents/backend.ts). */
@@ -350,16 +350,16 @@ export class SpindleAgentsProvider implements SpindleProvider {
 	#launchBroken = false;
 
 	async list(
-		_request: SpindleProviderListRequest,
-		_context: SpindleInvocationContext,
-	): Promise<SpindleActionDescriptor[]> {
+		_request: CodeModeProviderListRequest,
+		_context: CodeModeInvocationContext,
+	): Promise<CodeModeActionDescriptor[]> {
 		return descriptors;
 	}
 
 	async describe(
 		actionName: string,
-		_context: SpindleInvocationContext,
-	): Promise<SpindleActionDescriptor | undefined> {
+		_context: CodeModeInvocationContext,
+	): Promise<CodeModeActionDescriptor | undefined> {
 		return descriptors.find((descriptor) => descriptor.name === actionName);
 	}
 
@@ -374,7 +374,7 @@ export class SpindleAgentsProvider implements SpindleProvider {
 	async invoke(
 		actionName: string,
 		args: Record<string, unknown>,
-		context: SpindleInvocationContext,
+		context: CodeModeInvocationContext,
 	): Promise<unknown> {
 		const ref = this.session();
 		const runtime = this.runtimeConfig();
@@ -478,7 +478,7 @@ export class SpindleAgentsProvider implements SpindleProvider {
 	}
 
 	/** Settled results, or one pending placeholder per agent still running. */
-	#resultsOf(batch: LaunchedBatch, outcome: AgentWaitOutcome): SpindleAgentResult[] {
+	#resultsOf(batch: LaunchedBatch, outcome: AgentWaitOutcome): CodeModeAgentResult[] {
 		if (outcome.results) return outcome.results;
 		return batch.agents.map((agent) => pendingResult(agent, batch.runId, outcome.snapshot.elapsedMs));
 	}
@@ -488,7 +488,7 @@ export class SpindleAgentsProvider implements SpindleProvider {
 	 * built-in personaless one), apply the runtime model/thinking defaults, then
 	 * build and validate the requests. Pure of UI and spawning.
 	 */
-	#resolveRequests(items: NormalizedItem[], ref: SessionRef, runtimeConfig: SpindleAgentRuntimeConfig): RunRequest[] {
+	#resolveRequests(items: NormalizedItem[], ref: SessionRef, runtimeConfig: CodeModeAgentRuntimeConfig): RunRequest[] {
 		const discovered = discoverAgentsForCwd(ref.cwd);
 		const withDefaults = items.map((item) => ({
 			...item,
@@ -520,7 +520,7 @@ export class SpindleAgentsProvider implements SpindleProvider {
 	 */
 	async #launch(
 		items: NormalizedItem[],
-		context: SpindleInvocationContext,
+		context: CodeModeInvocationContext,
 		options: { attach: boolean },
 	): Promise<LaunchedBatch> {
 		const ref = this.session();
@@ -555,7 +555,7 @@ export class SpindleAgentsProvider implements SpindleProvider {
 		};
 		const unlink = (): void => parentSignal?.removeEventListener("abort", onParentAbort);
 
-		const configuredTimeoutMs = runtimeConfig.timeoutMs || DEFAULT_SPINDLE_CONFIG.agents.timeoutMs;
+		const configuredTimeoutMs = runtimeConfig.timeoutMs || DEFAULT_CODE_MODE_CONFIG.agents.timeoutMs;
 		const runContext: RunContext = {
 			sessionId: ref.sessionId,
 			sessionFile: ref.sessionFile,
@@ -573,7 +573,7 @@ export class SpindleAgentsProvider implements SpindleProvider {
 			onStatus: monitor.onStatus,
 		};
 
-		const promise = (async (): Promise<SpindleAgentResult[]> => {
+		const promise = (async (): Promise<CodeModeAgentResult[]> => {
 			try {
 				// A cause that has already failed the last N launches is not paid for
 				// again: the batch is refused on the spot with the recorded reason, so a

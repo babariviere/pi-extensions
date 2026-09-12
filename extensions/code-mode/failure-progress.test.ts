@@ -1,15 +1,15 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import type { SpindleExecutionTraceV1 } from "./audit/trace.ts";
+import type { CodeModeExecutionTraceV1 } from "./audit/trace.ts";
 import { formatFailureProgress } from "./failure-progress.ts";
 
-const trace = (overrides: Partial<SpindleExecutionTraceV1>): SpindleExecutionTraceV1 =>
+const trace = (overrides: Partial<CodeModeExecutionTraceV1>): CodeModeExecutionTraceV1 =>
 	({
 		outcome: "failed",
 		operations: [],
 		...overrides,
-	}) as SpindleExecutionTraceV1;
+	}) as CodeModeExecutionTraceV1;
 
 const operation = (ref: string, outcome: string, path?: string) =>
 	({ ref, outcome, args: path === undefined ? {} : { path } }) as never;

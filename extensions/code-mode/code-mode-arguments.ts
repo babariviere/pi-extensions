@@ -7,9 +7,9 @@
  */
 
 import { normalizeRunDisplay } from "./run-display.ts";
-import { repairSpindleGuestCode } from "./runtime/guest-code-repair.ts";
+import { repairCodeModeGuestCode } from "./runtime/guest-code-repair.ts";
 
-const OPTIONAL_SPINDLE_EXEC_KEYS = [
+const OPTIONAL_CODE_MODE_EXEC_KEYS = [
 	"payloads",
 	"strings",
 	"resultFormat",
@@ -59,7 +59,7 @@ const normalizeNamedPayloads = (input: unknown): Record<string, string> | undefi
 	return parsed ? asStringRecord(parsed) : undefined;
 };
 
-export const resolveSpindleExecPayloads = (params: {
+export const resolveCodeModeExecPayloads = (params: {
 	payloads?: unknown;
 	strings?: unknown;
 }): Record<string, string> | undefined =>
@@ -71,8 +71,8 @@ export const resolveSpindleExecPayloads = (params: {
  * parse a JSON-encoded `payloads` map, drop nullish optionals, and normalize a
  * bare `display` string.
  */
-export const prepareSpindleExecArguments = (input: unknown): unknown => {
-	if (typeof input === "string") return { code: repairSpindleGuestCode(input) };
+export const prepareCodeModeExecArguments = (input: unknown): unknown => {
+	if (typeof input === "string") return { code: repairCodeModeGuestCode(input) };
 	if (!isRecord(input)) return input;
 
 	let prepared = input;
@@ -85,11 +85,11 @@ export const prepareSpindleExecArguments = (input: unknown): unknown => {
 		writable().code = prepared.code.join("\n");
 	}
 	if (typeof prepared.code === "string") {
-		const repaired = repairSpindleGuestCode(prepared.code);
+		const repaired = repairCodeModeGuestCode(prepared.code);
 		if (repaired !== prepared.code) writable().code = repaired;
 	}
 
-	for (const key of OPTIONAL_SPINDLE_EXEC_KEYS) {
+	for (const key of OPTIONAL_CODE_MODE_EXEC_KEYS) {
 		if (!Object.hasOwn(prepared, key)) continue;
 		if (prepared[key] === null || prepared[key] === undefined) delete writable()[key];
 	}

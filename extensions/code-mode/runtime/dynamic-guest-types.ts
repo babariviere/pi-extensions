@@ -16,10 +16,11 @@
  */
 
 import type {
-	SpindleDynamicGuestDeclarations,
-	SpindleGuestTypeSources,
-	SpindleMcpServerTypeSource,
-	SpindleNamedActionTypeSource,
+	CodeModeDynamicGuestDeclarations,
+	CodeModeGuestTypeSources,
+	CodeModeMcpServerTypeSource,
+	CodeModeNamedActionTypeSource,
+	CodeModeProviderTypeSource,
 } from "../protocol.ts";
 
 const MAX_DEPTH = 6;
@@ -57,7 +58,7 @@ const typeList = (value: unknown): string[] => {
 	return [];
 };
 
-const objectType = (schema: Record<string, unknown>, depth: number): string => {
+const objectType = (schema: Record<string, unknown>, depth: number, exactObjects: boolean): string => {
 	const properties = isRecord(schema.properties) ? schema.properties : {};
 	const required = new Set(
 		Array.isArray(schema.required)
@@ -66,18 +67,23 @@ const objectType = (schema: Record<string, unknown>, depth: number): string => {
 	);
 	const members: string[] = [];
 	for (const key of Object.keys(properties).sort()) {
-		members.push(`${propertyKey(key)}${required.has(key) ? "" : "?"}: ${schemaType(properties[key], depth + 1)}`);
-	}
-	const additional = schema.additionalProperties;
-	if (additional !== false) {
 		members.push(
-			isRecord(additional) ? `[key: string]: ${schemaType(additional, depth + 1)}` : "[key: string]: unknown",
+			`${propertyKey(key)}${required.has(key) ? "" : "?"}: ${schemaType(properties[key], depth + 1, exactObjects)}`,
 		);
 	}
+	const additional = schema.additionalProperties;
+	if (additional !== false && !(exactObjects && additional === undefined)) {
+		members.push(
+			isRecord(additional)
+				? `[key: string]: ${schemaType(additional, depth + 1, exactObjects)}`
+				: "[key: string]: unknown",
+		);
+	}
+	if (members.length === 0) return "Record<string, never>";
 	return `{ ${members.join("; ")} }`;
 };
 
-const schemaType = (schema: unknown, depth: number): string => {
+const schemaType = (schema: unknown, depth: number, exactObjects = false): string => {
 	if (depth > MAX_DEPTH) return "unknown";
 	if (schema === true || schema === undefined) return "unknown";
 	if (schema === false) return "never";
@@ -93,23 +99,25 @@ const schemaType = (schema: unknown, depth: number): string => {
 			: undefined;
 	if (alternates) {
 		if (alternates.length === 0) return "unknown";
-		return unionType(alternates.slice(0, MAX_UNION_MEMBERS).map((entry) => schemaType(entry, depth + 1)));
+		return unionType(
+			alternates.slice(0, MAX_UNION_MEMBERS).map((entry) => schemaType(entry, depth + 1, exactObjects)),
+		);
 	}
 	if (Array.isArray(schema.allOf) && schema.allOf.length > 0) {
 		return schema.allOf
 			.slice(0, MAX_UNION_MEMBERS)
 			.map((entry) => {
-				const rendered = schemaType(entry, depth + 1);
+				const rendered = schemaType(entry, depth + 1, exactObjects);
 				return rendered.includes(" | ") ? `(${rendered})` : rendered;
 			})
 			.join(" & ");
 	}
 	const types = typeList(schema.type);
 	if (types.length > 1) {
-		return unionType(types.map((type) => schemaType({ ...schema, type }, depth + 1)));
+		return unionType(types.map((type) => schemaType({ ...schema, type }, depth + 1, exactObjects)));
 	}
 	const type = types[0];
-	if (type === "object" || (!type && isRecord(schema.properties))) return objectType(schema, depth);
+	if (type === "object" || (!type && isRecord(schema.properties))) return objectType(schema, depth, exactObjects);
 	if (type === "string") return "string";
 	if (type === "number" || type === "integer") return "number";
 	if (type === "boolean") return "boolean";
@@ -119,10 +127,10 @@ const schemaType = (schema: unknown, depth: number): string => {
 		if (Array.isArray(items)) {
 			return `[${items
 				.slice(0, MAX_UNION_MEMBERS)
-				.map((entry) => schemaType(entry, depth + 1))
+				.map((entry) => schemaType(entry, depth + 1, exactObjects))
 				.join(", ")}]`;
 		}
-		return isRecord(items) || items === true ? `Array<${schemaType(items, depth + 1)}>` : "unknown[]";
+		return isRecord(items) || items === true ? `Array<${schemaType(items, depth + 1, exactObjects)}>` : "unknown[]";
 	}
 	return "unknown";
 };
@@ -137,27 +145,39 @@ const spend = (budget: RenderBudget, text: string): boolean => {
 	return true;
 };
 
-const hasRequiredArgs = (source: SpindleNamedActionTypeSource): boolean =>
+const hasRequiredArgs = (source: CodeModeNamedActionTypeSource): boolean =>
 	Array.isArray(source.inputSchema.required) &&
 	source.inputSchema.required.length > 0 &&
 	isRecord(source.inputSchema.properties);
 
-const renderMember = (source: SpindleNamedActionTypeSource, resultType: string): string => {
+const renderMember = (
+	source: CodeModeNamedActionTypeSource,
+	resultType: string,
+	exactObjects = false,
+	exactArgsType?: string,
+): string => {
 	const loose = `${propertyKey(source.name)}(args?: Record<string, unknown>): ${resultType};`;
 	const schemaJson = JSON.stringify(source.inputSchema);
 	if (!schemaJson || schemaJson.length > MAX_SCHEMA_SOURCE_CHARS) return loose;
-	const rendered = schemaType(source.inputSchema, 0);
+	const rendered = schemaType(source.inputSchema, 0, exactObjects);
 	if (rendered.length > MAX_MEMBER_TYPE_CHARS) return loose;
+	if (exactArgsType) {
+		const checked = `<Args>(args: Args, ...invalid: ${exactArgsType}<Args, ${rendered}> extends true ? [] : [never]): ${resultType};`;
+		if (hasRequiredArgs(source)) return `${propertyKey(source.name)}${checked}`;
+		return `${propertyKey(source.name)}(): ${resultType};\n  ${propertyKey(source.name)}${checked}`;
+	}
 	return `${propertyKey(source.name)}(args${hasRequiredArgs(source) ? "" : "?"}: ${rendered}): ${resultType};`;
 };
 
 const renderMemberBlock = (
-	sources: SpindleNamedActionTypeSource[],
-	resultType: string,
+	sources: CodeModeNamedActionTypeSource[],
+	resultType: string | ((source: CodeModeNamedActionTypeSource) => string),
 	limit: number,
 	budget: RenderBudget,
+	exactObjects = false,
+	exactArgsType?: string,
 ): { lines: string[]; dropped: number } => {
-	const byName = new Map<string, SpindleNamedActionTypeSource>();
+	const byName = new Map<string, CodeModeNamedActionTypeSource>();
 	let dropped = Math.max(0, sources.length - limit);
 	for (const source of sources.slice(0, limit)) {
 		if (byName.has(source.name)) dropped += 1;
@@ -165,7 +185,9 @@ const renderMemberBlock = (
 	}
 	const lines: string[] = [];
 	for (const name of [...byName.keys()].sort((left, right) => left.localeCompare(right))) {
-		const text = `  ${renderMember(byName.get(name)!, resultType)}`;
+		const source = byName.get(name)!;
+		const resolvedResultType = typeof resultType === "function" ? resultType(source) : resultType;
+		const text = `  ${renderMember(source, resolvedResultType, exactObjects, exactArgsType)}`;
 		if (!spend(budget, text)) {
 			dropped += 1;
 			continue;
@@ -186,20 +208,20 @@ const renderMemberBlock = (
  * whose schema is known.
  *
  * What ships instead is one signature indexing a generated map,
- * `args?: SpindleMcpToolMap[S][T]`, with index signatures at both levels so an
+ * `args?: CodeModeMcpToolMap[S][T]`, with index signatures at both levels so an
  * uncached tool or a computed server name still types as
  * `Record<string, unknown>`.
  *
  * What that catches, exactly: an unknown or misspelled property on a cached
  * tool, which is the common failure. What it does not catch: a wrongly typed
- * property, or a missing required one. `SpindleMcpToolMap[S][T]` is a generic
+ * property, or a missing required one. `CodeModeMcpToolMap[S][T]` is a generic
  * indexed access and therefore deferred, and TypeScript runs excess-property
  * checking against a deferred target but skips assignability. Both slip through
  * to dispatch, where the server's own schema validation refuses them with a
  * message naming the argument. Strengthening this further needs a negated type
  * (`tool: string except the cached names`), which TypeScript does not have.
  */
-const renderMcpToolEntry = (source: SpindleNamedActionTypeSource, budget: RenderBudget): string | undefined => {
+const renderMcpToolEntry = (source: CodeModeNamedActionTypeSource, budget: RenderBudget): string | undefined => {
 	const schemaJson = JSON.stringify(source.inputSchema);
 	const rendered =
 		schemaJson && schemaJson.length <= MAX_SCHEMA_SOURCE_CHARS ? schemaType(source.inputSchema, 0) : undefined;
@@ -208,7 +230,7 @@ const renderMcpToolEntry = (source: SpindleNamedActionTypeSource, budget: Render
 	return spend(budget, text) ? text : undefined;
 };
 
-const renderMcpDeclaration = (servers: SpindleMcpServerTypeSource[]): string => {
+const renderMcpDeclaration = (servers: CodeModeMcpServerTypeSource[]): string => {
 	const budget: RenderBudget = { chars: MAX_SECTION_CHARS };
 	const blocks: string[] = [];
 	let dropped = 0;
@@ -254,17 +276,63 @@ const renderMcpDeclaration = (servers: SpindleMcpServerTypeSource[]): string => 
 		"// never connects to a server, so it can never trigger an auth prompt.\n" +
 		note +
 		`// Cached servers: ${serverNames.join(", ")}\n` +
-		`interface SpindleMcpToolMap {\n${blocks.join("\n")}\n  [server: string]: Record<string, Record<string, unknown>>;\n}\n` +
-		"type SpindleMcpApiDynamic = {\n" +
-		"  call<S extends string, T extends string>(server: S, tool: T, args?: SpindleMcpToolMap[S][T]): Promise<SpindleMcpResult>;\n" +
-		"  call(args: { server?: string; tool: string; args?: Record<string, unknown> }): Promise<SpindleMcpResult | unknown>;\n" +
+		`interface CodeModeMcpToolMap {\n${blocks.join("\n")}\n  [server: string]: Record<string, Record<string, unknown>>;\n}\n` +
+		"type CodeModeMcpApiDynamic = {\n" +
+		"  call<S extends string, T extends string>(server: S, tool: T, args?: CodeModeMcpToolMap[S][T]): Promise<CodeModeMcpResult>;\n" +
+		"  call(args: { server?: string; tool: string; args?: Record<string, unknown> }): Promise<CodeModeMcpResult | unknown>;\n" +
 		"  list(server: string): Promise<unknown>;\n" +
 		"  list(args?: { server?: string }): Promise<unknown>;\n" +
 		"  connect(server: string): Promise<unknown>;\n" +
 		"  search(args: string | { query: string; server?: string; regex?: boolean; includeSchemas?: boolean }): Promise<unknown>;\n" +
 		"  describe(args: string | { tool: string; server?: string }): Promise<unknown>;\n" +
 		"};\n" +
-		"declare const mcp: SpindleMcpApiDynamic;\n"
+		"declare const mcp: CodeModeMcpApiDynamic;\n"
+	);
+};
+
+const renderedOutputType = (source: CodeModeNamedActionTypeSource): string => {
+	if (!source.outputSchema) return "unknown";
+	const schemaJson = JSON.stringify(source.outputSchema);
+	if (!schemaJson || schemaJson.length > MAX_SCHEMA_SOURCE_CHARS) return "unknown";
+	const rendered = schemaType(source.outputSchema, 0, true);
+	return rendered.length <= MAX_MEMBER_TYPE_CHARS ? rendered : "unknown";
+};
+
+const providerInterfaceName = (provider: string): string =>
+	`CodeModeProviderApi_${[...provider]
+		.map((character) =>
+			/^[A-Za-z0-9]$/.test(character) ? character : `_x${character.codePointAt(0)!.toString(16)}_`,
+		)
+		.join("")}`;
+
+const renderProviderDeclaration = (source: CodeModeProviderTypeSource): string => {
+	const budget: RenderBudget = { chars: MAX_SECTION_CHARS };
+	const interfaceName = providerInterfaceName(source.name);
+	const exactArgsType = `${interfaceName}ExactArgs`;
+	const members = renderMemberBlock(
+		source.actions,
+		(action) => `Promise<${renderedOutputType(action)}>`,
+		MAX_EXTENSION_TOOLS,
+		budget,
+		true,
+		exactArgsType,
+	);
+	// A partial interface would reject real registered methods. Keep the loose
+	// declaration when the complete listed surface cannot be represented.
+	if (members.dropped > 0) return "";
+	return (
+		`// Generated from the live ${source.name} provider action descriptors.\n` +
+		`type ${exactArgsType}<Actual, Expected> = Actual extends Expected\n` +
+		"  ? Expected extends readonly (infer ExpectedItem)[]\n" +
+		`    ? Actual extends readonly (infer ActualItem)[] ? ${exactArgsType}<ActualItem, ExpectedItem> : false\n` +
+		"    : Expected extends object\n" +
+		"      ? Exclude<keyof Actual, keyof Expected> extends never\n" +
+		`        ? false extends { [Key in keyof Actual]: Key extends keyof Expected ? ${exactArgsType}<Actual[Key], Expected[Key]> : false }[keyof Actual] ? false : true\n` +
+		"        : false\n" +
+		"      : true\n" +
+		"  : false;\n" +
+		`interface ${interfaceName} {\n${members.lines.join("\n")}\n}\n` +
+		`declare const ${source.name}: ${interfaceName} & { [unknownAction: string]: never };\n`
 	);
 };
 
@@ -272,11 +340,19 @@ const renderMcpDeclaration = (servers: SpindleMcpServerTypeSource[]): string => 
  * Render replacement `declare const` blocks for guestTypeDeclarations(). Missing
  * or empty sections return nothing so the loose static lines survive.
  */
-export const buildDynamicGuestDeclarations = (sources: SpindleGuestTypeSources): SpindleDynamicGuestDeclarations => {
-	const dynamic: SpindleDynamicGuestDeclarations = {};
+export const buildDynamicGuestDeclarations = (sources: CodeModeGuestTypeSources): CodeModeDynamicGuestDeclarations => {
+	const dynamic: CodeModeDynamicGuestDeclarations = {};
 	if (sources.mcpServers && sources.mcpServers.length > 0) {
 		const mcp = renderMcpDeclaration(sources.mcpServers);
 		if (mcp) dynamic.mcp = mcp;
+	}
+	if (sources.providers && sources.providers.length > 0) {
+		const providers: Record<string, string> = {};
+		for (const source of [...sources.providers].sort((left, right) => left.name.localeCompare(right.name))) {
+			const declaration = renderProviderDeclaration(source);
+			if (declaration) providers[source.name] = declaration;
+		}
+		if (Object.keys(providers).length > 0) dynamic.providers = providers;
 	}
 	return dynamic;
 };

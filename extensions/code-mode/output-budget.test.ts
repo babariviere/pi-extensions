@@ -20,13 +20,13 @@ test("oversized output spills to an artifact and names its path", async () => {
 	const written: string[] = [];
 	const bounded = await boundModelOutput("x".repeat(5_000), 500, "x".repeat(5_000), async (content) => {
 		written.push(content);
-		return "/tmp/spindle-test/output.txt";
+		return "/tmp/code-mode-test/output.txt";
 	});
 	assert.equal(written.length, 1);
 	assert.equal(written[0]?.length, 5_000);
 	assert.ok(bounded.text.length <= 500);
-	assert.match(bounded.text, /Full output \(5000 chars\) saved to: \/tmp\/spindle-test\/output\.txt/);
-	assert.equal(bounded.artifactPath, "/tmp/spindle-test/output.txt");
+	assert.match(bounded.text, /Full output \(5000 chars\) saved to: \/tmp\/code-mode-test\/output\.txt/);
+	assert.equal(bounded.artifactPath, "/tmp/code-mode-test/output.txt");
 });
 
 test("a failing artifact writer still returns bounded text", async () => {

@@ -39,12 +39,12 @@ const probe = async (code: string): Promise<unknown> => {
 /**
  * Everything `GUEST_SETUP` installs, plus the two names the runtime itself
  * needs in guest scope. Filtered out of the engine inventory below so this
- * test fails on an *engine* change, not on a deliberate change to the Spindle
+ * test fails on an *engine* change, not on a deliberate change to the Code Mode
  * surface (which `guest-host-refs.test.ts` and the type declarations cover).
  */
-const SPINDLE_OWNED = new Set([
-	"__piSpindleMain",
-	"__spindleExecutionGate",
+const CODE_MODE_OWNED = new Set([
+	"__piCodeModeMain",
+	"__codeModeExecutionGate",
 	"agents",
 	"clearInterval",
 	"clearTimeout",
@@ -131,7 +131,7 @@ test("the engine global inventory is the pinned baseline", async () => {
 	const value = await probe("return Object.getOwnPropertyNames(globalThis).sort().join(',');");
 	const observed = String(value)
 		.split(",")
-		.filter((name) => !SPINDLE_OWNED.has(name));
+		.filter((name) => !CODE_MODE_OWNED.has(name));
 	assert.deepEqual(observed, ENGINE_GLOBALS);
 });
 
@@ -202,7 +202,7 @@ const ABSENT_FROM_ENGINE = [
 	"Temporal",
 ];
 
-test("the bare engine ships none of the host APIs Spindle polyfills", async () => {
+test("the bare engine ships none of the host APIs Code Mode polyfills", async () => {
 	// polyfills: false keeps this a statement about the engine. The probe names
 	// the polyfilled globals as literals, which would otherwise trigger the
 	// text-scan injection in runtime/guest-polyfills.ts and install them.
@@ -216,7 +216,7 @@ test("the bare engine ships none of the host APIs Spindle polyfills", async () =
 	assert.deepEqual(result.value, []);
 });
 
-test("the engine ships no ES2024+ features Spindle must not promise", async () => {
+test("the engine ships no ES2024+ features Code Mode must not promise", async () => {
 	const value = await probe(
 		"return ['Array.fromAsync', typeof Array.fromAsync, 'JSON.rawJSON', typeof JSON.rawJSON, 'Symbol.dispose', typeof Symbol.dispose].join('|');",
 	);

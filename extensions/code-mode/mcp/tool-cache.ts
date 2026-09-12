@@ -1,10 +1,10 @@
 /**
- * On-disk tool metadata for the Spindle MCP client.
+ * On-disk tool metadata for the Code Mode MCP client.
  *
  * Exists so metadata reads (`mcp.list`, `mcp.search`, `mcp.describe`) never
  * force a connect. The bridge to pi-mcp-adapter could not do this: the gateway
  * re-resolved metadata per call and connecting could trigger an OAuth prompt,
- * so Spindle was limited to stub descriptors. With schemas on disk, discovery
+ * so Code Mode was limited to stub descriptors. With schemas on disk, discovery
  * is free, works offline, and cannot provoke a credential prompt.
  *
  * The cache is keyed by server name and validated against the endpoint it was
@@ -40,7 +40,7 @@ interface CacheDocument {
 
 const EMPTY: CacheDocument = { version: 1, servers: {} };
 
-export const defaultMcpToolCachePath = (): string => path.join(mcpAgentDir(), "spindle-mcp-tools.json");
+export const defaultMcpToolCachePath = (): string => path.join(mcpAgentDir(), "code-mode-mcp-tools.json");
 
 export interface McpToolCacheOptions {
 	filePath?: string;

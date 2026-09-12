@@ -1,8 +1,8 @@
 // A shared, provider-agnostic heuristic for the one-line "headline" argument
-// of a nested Spindle call — the value shown beside a tool's name in the chat
+// of a nested Code Mode call — the value shown beside a tool's name in the chat
 // preview (e.g. `recall <query>`) and appended to its ref in the dashboard
 // (e.g. `extensions.vcc_recall · <query>`). Pi core tools and the first-class
-// Spindle providers (agents/mesh/mcp management) keep their bespoke, tuned
+// Code Mode providers (agents/mesh/mcp management) keep their bespoke, tuned
 // previews; this picks up everything else — captured extension tools and
 // arbitrary MCP tools — so they no longer render as a bare tool name.
 //

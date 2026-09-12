@@ -1,5 +1,5 @@
 /**
- * `OAuthClientProvider` for the Spindle MCP client, backed by
+ * `OAuthClientProvider` for the Code Mode MCP client, backed by
  * `McpTokenStore` (and therefore by pi-mcp-adapter's own credential-store
  * records, so no re-authentication is needed when switching clients).
  *
@@ -85,7 +85,7 @@ export class McpOAuthProvider implements OAuthClientProvider {
 		const config = this.#options.config;
 		const redirectUris = this.#options.redirectUrl ? [this.#options.redirectUrl] : [];
 		const metadata: Record<string, unknown> = {
-			client_name: this.#options.clientName ?? "pi-spindle",
+			client_name: this.#options.clientName ?? "pi-code-mode",
 			redirect_uris: redirectUris,
 			grant_types: ["authorization_code", "refresh_token"],
 			response_types: ["code"],

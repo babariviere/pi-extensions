@@ -1,11 +1,11 @@
 /**
- * Reading a Spindle flag straight off `process.argv`.
+ * Reading a Code Mode flag straight off `process.argv`.
  *
  * Flags the parent sets on a subagent's `pi` process (the sandbox mode, and
  * historically the tool allowlist) cannot be read with `pi.getFlag`: that only
  * resolves flags the *reading* extension registered, and pi rejects the same
  * flag name registered twice, so the child-side extension registers them (to
- * keep startup from failing on an unknown option) while Spindle reads the raw
+ * keep startup from failing on an unknown option) while Code Mode reads the raw
  * argv here.
  *
  * Pure, so the accepted spellings are testable without a process.

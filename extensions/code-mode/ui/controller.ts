@@ -11,39 +11,39 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { TUI } from "@earendil-works/pi-tui";
 import type { CodePreviewSettings } from "./code-preview.ts";
-import type { SpindleActivityRun } from "../activity/types.ts";
-import type { SpindleState } from "../spindle-state.ts";
+import type { CodeModeActivityRun } from "../activity/types.ts";
+import type { CodeModeState } from "../code-mode-state.ts";
 import { createDashboardSnapshot } from "./snapshot.ts";
-import { isActiveStatus, type SpindleDashboardSnapshot } from "./types.ts";
-import { SpindleWidget, shouldShowSpindleWidget } from "./widget.ts";
+import { isActiveStatus, type CodeModeDashboardSnapshot } from "./types.ts";
+import { CodeModeWidget, shouldShowCodeModeWidget } from "./widget.ts";
 
-const WIDGET_ID = "spindle";
+const WIDGET_ID = "code-mode";
 const ACTIVITY_REFRESH_MS = 100;
 
-const emptySnapshot = (): SpindleDashboardSnapshot => ({
+const emptySnapshot = (): CodeModeDashboardSnapshot => ({
 	now: Date.now(),
 	runs: [],
 	agents: [],
 	actors: [],
 });
 
-export class SpindleUiController {
+export class CodeModeUiController {
 	#context: ExtensionContext | undefined;
-	#snapshot: SpindleDashboardSnapshot = emptySnapshot();
+	#snapshot: CodeModeDashboardSnapshot = emptySnapshot();
 	#timer: NodeJS.Timeout | undefined;
 	#activityUnsubscribe: (() => void) | undefined;
 	#agentUnsubscribe: (() => void) | undefined;
 	#scheduledRefresh: NodeJS.Timeout | undefined;
 	#widgetTui: TUI | undefined;
 	#widgetMounted = false;
-	#widget: SpindleWidget | undefined;
+	#widget: CodeModeWidget | undefined;
 	#lastRefreshErrorAt = 0;
 	#lastRefreshAt = 0;
 	#activityRevision: number | undefined;
-	#activityRuns: SpindleActivityRun[] = [];
+	#activityRuns: CodeModeActivityRun[] = [];
 
 	constructor(
-		readonly state: SpindleState,
+		readonly state: CodeModeState,
 		readonly codePreviewSettings?: CodePreviewSettings,
 	) {}
 
@@ -80,7 +80,7 @@ export class SpindleUiController {
 		this.#activityRuns = [];
 	}
 
-	snapshot(): SpindleDashboardSnapshot {
+	snapshot(): CodeModeDashboardSnapshot {
 		return structuredClone(this.#snapshot);
 	}
 
@@ -133,14 +133,14 @@ export class SpindleUiController {
 			if (now - this.#lastRefreshErrorAt >= 10_000) {
 				this.#lastRefreshErrorAt = now;
 				const message = error instanceof Error ? error.message : String(error);
-				context.ui.notify(`Spindle widget refresh failed: ${message}`, "warning");
+				context.ui.notify(`Code Mode widget refresh failed: ${message}`, "warning");
 			}
 		}
 	}
 
 	#renderWidget(context: ExtensionContext): void {
 		const config = this.state.config.ui;
-		const shouldShow = context.mode === "tui" && shouldShowSpindleWidget(this.#snapshot, config.widget);
+		const shouldShow = context.mode === "tui" && shouldShowCodeModeWidget(this.#snapshot, config.widget);
 		if (shouldShow) {
 			if (this.#widgetMounted) return;
 			this.#widgetMounted = true;
@@ -148,7 +148,7 @@ export class SpindleUiController {
 				WIDGET_ID,
 				(tui, theme) => {
 					this.#widgetTui = tui;
-					this.#widget = new SpindleWidget(theme, () => this.#snapshot, config.maxRows);
+					this.#widget = new CodeModeWidget(theme, () => this.#snapshot, config.maxRows);
 					return this.#widget;
 				},
 				{ placement: "aboveEditor" },

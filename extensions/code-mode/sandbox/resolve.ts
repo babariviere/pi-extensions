@@ -1,7 +1,7 @@
 /**
  * Which policy actually applies, given three inputs that can disagree:
  *
- *  - `spindle.json`, the session's baseline,
+ *  - `code-mode.json`, the session's baseline,
  *  - a request from `/sandbox` or another extension,
  *  - the floor an active night run imposes,
  *  - the floor the parent imposed on a subagent (its `sandbox:` frontmatter).
@@ -23,7 +23,7 @@
 import { type SandboxMode, tighterMode } from "./policy.ts";
 import type { SandboxRequest } from "./protocol.ts";
 
-/** The `sandbox` block of `spindle.json`. */
+/** The `sandbox` block of `code-mode.json`. */
 export interface SandboxSettings {
 	mode: SandboxMode;
 	allowWrite: string[];

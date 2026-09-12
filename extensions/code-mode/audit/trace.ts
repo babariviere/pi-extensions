@@ -1,8 +1,8 @@
-import { projectSpindleAuditArgs, projectSpindleAuditResult } from "./projection.ts";
+import { projectCodeModeAuditArgs, projectCodeModeAuditResult } from "./projection.ts";
 
-export const SPINDLE_EXECUTION_TRACE_KIND = "pi-spindle.execution" as const;
-export const SPINDLE_EXECUTION_TRACE_VERSION = 1 as const;
-export const SPINDLE_EXECUTION_TRACE_MAX_BYTES = 512 * 1024;
+export const CODE_MODE_EXECUTION_TRACE_KIND = "pi-code-mode.execution" as const;
+export const CODE_MODE_EXECUTION_TRACE_VERSION = 1 as const;
+export const CODE_MODE_EXECUTION_TRACE_MAX_BYTES = 512 * 1024;
 
 const MAX_IDENTIFIER_BYTES = 1_024;
 const MAX_PHASE_BYTES = 1_024;
@@ -16,42 +16,42 @@ const MAX_ARRAY_ITEMS = 128;
 const MAX_NODES = 8_192;
 const MAX_RECORDED_OPERATIONS = 2_048;
 const MAX_PHASES = 512;
-export type SpindleTraceJsonPrimitive = string | number | boolean | null;
-export type SpindleTraceJsonValue =
-	| SpindleTraceJsonPrimitive
-	| SpindleTraceJsonValue[]
-	| { [key: string]: SpindleTraceJsonValue };
+export type CodeModeTraceJsonPrimitive = string | number | boolean | null;
+export type CodeModeTraceJsonValue =
+	| CodeModeTraceJsonPrimitive
+	| CodeModeTraceJsonValue[]
+	| { [key: string]: CodeModeTraceJsonValue };
 
-export type SpindleExecutionOutcomeV1 = "succeeded" | "failed" | "aborted" | "timed_out";
-export type SpindleExecutionFailureStageV1 = "resolve" | "prepare" | "validate" | "invoke" | "guard";
+export type CodeModeExecutionOutcomeV1 = "succeeded" | "failed" | "aborted" | "timed_out";
+export type CodeModeExecutionFailureStageV1 = "resolve" | "prepare" | "validate" | "invoke" | "guard";
 
-export interface SpindleExecutionTraceOperationV1 {
+export interface CodeModeExecutionTraceOperationV1 {
 	type: "call";
 	sequence: number;
 	ref: string;
 	provider?: string;
 	action?: string;
-	args: { [key: string]: SpindleTraceJsonValue };
-	outcome: SpindleExecutionOutcomeV1;
-	failureStage?: SpindleExecutionFailureStageV1;
+	args: { [key: string]: CodeModeTraceJsonValue };
+	outcome: CodeModeExecutionOutcomeV1;
+	failureStage?: CodeModeExecutionFailureStageV1;
 	error?: string;
-	result?: SpindleTraceJsonValue;
+	result?: CodeModeTraceJsonValue;
 }
 
-export interface SpindleExecutionTraceCountsV1 {
+export interface CodeModeExecutionTraceCountsV1 {
 	droppedValues: number;
 	truncatedValues: number;
 	redactedValues: number;
 	droppedOperations: number;
 }
 
-export interface SpindleExecutionTraceV1 {
-	kind: typeof SPINDLE_EXECUTION_TRACE_KIND;
-	version: typeof SPINDLE_EXECUTION_TRACE_VERSION;
-	outcome: SpindleExecutionOutcomeV1;
+export interface CodeModeExecutionTraceV1 {
+	kind: typeof CODE_MODE_EXECUTION_TRACE_KIND;
+	version: typeof CODE_MODE_EXECUTION_TRACE_VERSION;
+	outcome: CodeModeExecutionOutcomeV1;
 	phases: string[];
-	operations: SpindleExecutionTraceOperationV1[];
-	counts: SpindleExecutionTraceCountsV1;
+	operations: CodeModeExecutionTraceOperationV1[];
+	counts: CodeModeExecutionTraceCountsV1;
 	error?: string;
 }
 
@@ -61,7 +61,7 @@ interface MutableCounts {
 	redactedValues: number;
 }
 
-interface Sanitized<T extends SpindleTraceJsonValue> {
+interface Sanitized<T extends CodeModeTraceJsonValue> {
 	value: T;
 	counts: MutableCounts;
 }
@@ -73,16 +73,16 @@ interface MutableOperation {
 	projectionRef: string;
 	provider?: string;
 	action?: string;
-	args: Sanitized<{ [key: string]: SpindleTraceJsonValue }>;
-	outcome?: SpindleExecutionOutcomeV1;
-	failureStage?: SpindleExecutionFailureStageV1;
+	args: Sanitized<{ [key: string]: CodeModeTraceJsonValue }>;
+	outcome?: CodeModeExecutionOutcomeV1;
+	failureStage?: CodeModeExecutionFailureStageV1;
 	error?: Sanitized<string>;
-	result?: Sanitized<SpindleTraceJsonValue>;
+	result?: Sanitized<CodeModeTraceJsonValue>;
 	droppedResultValues: number;
 }
 
 const DROP = Symbol("drop");
-type SanitizedNode = SpindleTraceJsonValue | typeof DROP;
+type SanitizedNode = CodeModeTraceJsonValue | typeof DROP;
 
 const emptyCounts = (): MutableCounts => ({
 	droppedValues: 0,
@@ -173,7 +173,7 @@ const looksLikeBase64 = (value: string): boolean => {
 	return true;
 };
 
-const sanitize = (input: unknown, maxBytes: number): Sanitized<SpindleTraceJsonValue> => {
+const sanitize = (input: unknown, maxBytes: number): Sanitized<CodeModeTraceJsonValue> => {
 	const counts = emptyCounts();
 	const ancestors = new Set<object>();
 	let nodes = 0;
@@ -234,7 +234,7 @@ const sanitize = (input: unknown, maxBytes: number): Sanitized<SpindleTraceJsonV
 		}
 		ancestors.add(value);
 		if (Array.isArray(value)) {
-			const output: SpindleTraceJsonValue[] = [];
+			const output: CodeModeTraceJsonValue[] = [];
 			const limit = Math.min(value.length, MAX_ARRAY_ITEMS);
 			for (let index = 0; index < limit; index++) {
 				const item = visit(value[index], depth + 1);
@@ -247,7 +247,7 @@ const sanitize = (input: unknown, maxBytes: number): Sanitized<SpindleTraceJsonV
 			ancestors.delete(value);
 			return output;
 		}
-		const output: { [key: string]: SpindleTraceJsonValue } = {};
+		const output: { [key: string]: CodeModeTraceJsonValue } = {};
 		const keys = Object.keys(record).sort();
 		const limit = Math.min(keys.length, MAX_KEYS);
 		for (let index = 0; index < limit; index++) {
@@ -269,7 +269,7 @@ const sanitize = (input: unknown, maxBytes: number): Sanitized<SpindleTraceJsonV
 	if (originalBytes > maxBytes) {
 		counts.truncatedValues++;
 		if (Array.isArray(value)) {
-			const output: SpindleTraceJsonValue[] = [];
+			const output: CodeModeTraceJsonValue[] = [];
 			for (const item of value) {
 				const next = [...output, item];
 				if (serializedBytes(next) > maxBytes - 128) break;
@@ -278,7 +278,7 @@ const sanitize = (input: unknown, maxBytes: number): Sanitized<SpindleTraceJsonV
 			counts.droppedValues += value.length - output.length;
 			value = output;
 		} else if (typeof value === "object" && value !== null) {
-			const output: { [key: string]: SpindleTraceJsonValue } = {};
+			const output: { [key: string]: CodeModeTraceJsonValue } = {};
 			const entries = Object.entries(value);
 			let included = 0;
 			for (const [childKey, child] of entries) {
@@ -297,11 +297,11 @@ const sanitize = (input: unknown, maxBytes: number): Sanitized<SpindleTraceJsonV
 const sanitizeObject = (
 	value: Record<string, unknown>,
 	droppedValues = 0,
-): Sanitized<{ [key: string]: SpindleTraceJsonValue }> => {
+): Sanitized<{ [key: string]: CodeModeTraceJsonValue }> => {
 	const sanitized = sanitize(value, MAX_ARGS_BYTES);
 	sanitized.counts.droppedValues += droppedValues;
 	if (typeof sanitized.value === "object" && sanitized.value !== null && !Array.isArray(sanitized.value)) {
-		return sanitized as Sanitized<{ [key: string]: SpindleTraceJsonValue }>;
+		return sanitized as Sanitized<{ [key: string]: CodeModeTraceJsonValue }>;
 	}
 	sanitized.counts.droppedValues++;
 	return { value: {}, counts: sanitized.counts };
@@ -310,8 +310,8 @@ const sanitizeObject = (
 const projectedArgs = (
 	ref: string,
 	args: Record<string, unknown>,
-): Sanitized<{ [key: string]: SpindleTraceJsonValue }> => {
-	const projection = projectSpindleAuditArgs(ref, args);
+): Sanitized<{ [key: string]: CodeModeTraceJsonValue }> => {
+	const projection = projectCodeModeAuditArgs(ref, args);
 	return sanitizeObject(projection.value, projection.droppedValues);
 };
 
@@ -326,7 +326,7 @@ const sanitizeString = (value: string, maxBytes: number): Sanitized<string> => {
 	};
 };
 
-const addCounts = (target: SpindleExecutionTraceCountsV1, source: MutableCounts): void => {
+const addCounts = (target: CodeModeExecutionTraceCountsV1, source: MutableCounts): void => {
 	target.droppedValues += source.droppedValues;
 	target.truncatedValues += source.truncatedValues;
 	target.redactedValues += source.redactedValues;
@@ -348,8 +348,8 @@ const errorCause = (error: unknown): string | undefined => {
 };
 
 const failureMessage = (
-	stage: SpindleExecutionFailureStageV1,
-	outcome: SpindleExecutionOutcomeV1,
+	stage: CodeModeExecutionFailureStageV1,
+	outcome: CodeModeExecutionOutcomeV1,
 	cause?: string,
 ): string => {
 	if (outcome === "timed_out") return "Call timed out";
@@ -358,16 +358,16 @@ const failureMessage = (
 	return cause ? `${summary}: ${cause}` : summary;
 };
 
-const executionErrorMessage = (outcome: SpindleExecutionOutcomeV1): string | undefined => {
+const executionErrorMessage = (outcome: CodeModeExecutionOutcomeV1): string | undefined => {
 	if (outcome === "succeeded") return undefined;
 	if (outcome === "timed_out") return "Execution timed out";
 	if (outcome === "aborted") return "Execution aborted";
 	return "Execution failed";
 };
 
-export class SpindleExecutionTraceOperationHandle {
+export class CodeModeExecutionTraceOperationHandle {
 	constructor(
-		private readonly recorder: SpindleExecutionTraceRecorder,
+		private readonly recorder: CodeModeExecutionTraceRecorder,
 		private readonly operation: MutableOperation | undefined,
 	) {}
 
@@ -390,7 +390,7 @@ export class SpindleExecutionTraceOperationHandle {
 
 	succeed(result: unknown): void {
 		if (!this.operation || this.recorder.sealed) return;
-		const projected = projectSpindleAuditResult(this.operation.projectionRef, result);
+		const projected = projectCodeModeAuditResult(this.operation.projectionRef, result);
 		if (projected !== undefined) {
 			this.operation.result = sanitize(projected.value, MAX_RESULT_BYTES);
 			this.operation.result.counts.droppedValues += projected.droppedValues;
@@ -401,9 +401,9 @@ export class SpindleExecutionTraceOperationHandle {
 	}
 
 	fail(
-		stage: SpindleExecutionFailureStageV1,
+		stage: CodeModeExecutionFailureStageV1,
 		error: unknown,
-		outcome: SpindleExecutionOutcomeV1 = "failed",
+		outcome: CodeModeExecutionOutcomeV1 = "failed",
 		result?: unknown,
 	): void {
 		if (!this.operation || this.recorder.sealed) return;
@@ -414,7 +414,7 @@ export class SpindleExecutionTraceOperationHandle {
 				: undefined;
 		this.operation.error = sanitizeString(failureMessage(stage, outcome, cause), MAX_ERROR_BYTES);
 		this.operation.outcome = outcome;
-		const projected = projectSpindleAuditResult(this.operation.projectionRef, result);
+		const projected = projectCodeModeAuditResult(this.operation.projectionRef, result);
 		if (projected !== undefined) {
 			this.operation.result = sanitize(projected.value, MAX_RESULT_BYTES);
 			this.operation.result.counts.droppedValues += projected.droppedValues;
@@ -424,7 +424,7 @@ export class SpindleExecutionTraceOperationHandle {
 	}
 }
 
-export class SpindleExecutionTraceRecorder {
+export class CodeModeExecutionTraceRecorder {
 	readonly #operations: MutableOperation[] = [];
 	#nextSequence = 0;
 	#droppedOperations = 0;
@@ -437,11 +437,11 @@ export class SpindleExecutionTraceRecorder {
 		return bounded;
 	}
 
-	issueCall(ref: string, args: Record<string, unknown>): SpindleExecutionTraceOperationHandle {
+	issueCall(ref: string, args: Record<string, unknown>): CodeModeExecutionTraceOperationHandle {
 		const sequence = this.#nextSequence++;
 		if (this.sealed || this.#operations.length >= MAX_RECORDED_OPERATIONS) {
 			this.#droppedOperations++;
-			return new SpindleExecutionTraceOperationHandle(this, undefined);
+			return new CodeModeExecutionTraceOperationHandle(this, undefined);
 		}
 		const identity = lexicalIdentity(ref);
 		const operation: MutableOperation = {
@@ -455,10 +455,10 @@ export class SpindleExecutionTraceRecorder {
 			droppedResultValues: 0,
 		};
 		this.#operations.push(operation);
-		return new SpindleExecutionTraceOperationHandle(this, operation);
+		return new CodeModeExecutionTraceOperationHandle(this, operation);
 	}
 
-	seal(outcome: SpindleExecutionOutcomeV1, phases: readonly string[], error?: string): SpindleExecutionTraceV1 {
+	seal(outcome: CodeModeExecutionOutcomeV1, phases: readonly string[], error?: string): CodeModeExecutionTraceV1 {
 		this.sealed = true;
 		for (const operation of this.#operations) {
 			if (!operation.outcome) {
@@ -482,13 +482,13 @@ export class SpindleExecutionTraceRecorder {
 			}
 		}
 
-		const counts: SpindleExecutionTraceCountsV1 = {
+		const counts: CodeModeExecutionTraceCountsV1 = {
 			droppedValues: 0,
 			truncatedValues: this.#truncatedIdentifiers,
 			redactedValues: 0,
 			droppedOperations: this.#droppedOperations,
 		};
-		const operations = this.#operations.map((operation): SpindleExecutionTraceOperationV1 => {
+		const operations = this.#operations.map((operation): CodeModeExecutionTraceOperationV1 => {
 			addCounts(counts, operation.args.counts);
 			counts.droppedValues += operation.droppedResultValues;
 			if (operation.error) addCounts(counts, operation.error.counts);
@@ -521,9 +521,9 @@ export class SpindleExecutionTraceRecorder {
 		const safeRunError = error?.trim() ? error : executionErrorMessage(outcome);
 		const runError = safeRunError ? sanitizeString(safeRunError, MAX_ERROR_BYTES) : undefined;
 		if (runError) addCounts(counts, runError.counts);
-		const trace: SpindleExecutionTraceV1 = {
-			kind: SPINDLE_EXECUTION_TRACE_KIND,
-			version: SPINDLE_EXECUTION_TRACE_VERSION,
+		const trace: CodeModeExecutionTraceV1 = {
+			kind: CODE_MODE_EXECUTION_TRACE_KIND,
+			version: CODE_MODE_EXECUTION_TRACE_VERSION,
 			outcome,
 			phases: boundedPhases,
 			operations,
@@ -537,7 +537,7 @@ export class SpindleExecutionTraceRecorder {
 		};
 		for (
 			let index = trace.operations.length - 1;
-			traceBytes > SPINDLE_EXECUTION_TRACE_MAX_BYTES && index >= 0;
+			traceBytes > CODE_MODE_EXECUTION_TRACE_MAX_BYTES && index >= 0;
 			index--
 		) {
 			const operation = trace.operations[index]!;
@@ -550,7 +550,7 @@ export class SpindleExecutionTraceRecorder {
 		}
 		for (
 			let index = trace.operations.length - 1;
-			traceBytes > SPINDLE_EXECUTION_TRACE_MAX_BYTES && index >= 0;
+			traceBytes > CODE_MODE_EXECUTION_TRACE_MAX_BYTES && index >= 0;
 			index--
 		) {
 			const operation = trace.operations[index]!;
@@ -562,7 +562,7 @@ export class SpindleExecutionTraceRecorder {
 			trace.counts.truncatedValues++;
 			adjustMutation(beforeOperationBytes, serializedBytes(operation), beforeCountsBytes);
 		}
-		while (traceBytes > SPINDLE_EXECUTION_TRACE_MAX_BYTES && trace.operations.length > 0) {
+		while (traceBytes > CODE_MODE_EXECUTION_TRACE_MAX_BYTES && trace.operations.length > 0) {
 			const beforeCountsBytes = serializedBytes(trace.counts);
 			const operation = trace.operations.pop()!;
 			traceBytes -= serializedBytes(operation);
@@ -570,7 +570,7 @@ export class SpindleExecutionTraceRecorder {
 			trace.counts.droppedOperations++;
 			traceBytes += serializedBytes(trace.counts) - beforeCountsBytes;
 		}
-		while (traceBytes > SPINDLE_EXECUTION_TRACE_MAX_BYTES && trace.phases.length > 0) {
+		while (traceBytes > CODE_MODE_EXECUTION_TRACE_MAX_BYTES && trace.phases.length > 0) {
 			const beforeCountsBytes = serializedBytes(trace.counts);
 			const phase = trace.phases.pop()!;
 			traceBytes -= serializedBytes(phase);
@@ -582,7 +582,7 @@ export class SpindleExecutionTraceRecorder {
 	}
 }
 
-export const executionOutcomeFromError = (error: unknown, signal?: AbortSignal): SpindleExecutionOutcomeV1 => {
+export const executionOutcomeFromError = (error: unknown, signal?: AbortSignal): CodeModeExecutionOutcomeV1 => {
 	if (signal?.aborted) return "aborted";
 	return error === undefined ? "succeeded" : "failed";
 };
@@ -593,10 +593,10 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 const hasOnlyKeys = (value: Record<string, unknown>, keys: readonly string[]): boolean =>
 	Object.keys(value).every((key) => keys.includes(key));
 
-const outcomes = new Set<SpindleExecutionOutcomeV1>(["succeeded", "failed", "aborted", "timed_out"]);
-const stages = new Set<SpindleExecutionFailureStageV1>(["resolve", "prepare", "validate", "invoke", "guard"]);
+const outcomes = new Set<CodeModeExecutionOutcomeV1>(["succeeded", "failed", "aborted", "timed_out"]);
+const stages = new Set<CodeModeExecutionFailureStageV1>(["resolve", "prepare", "validate", "invoke", "guard"]);
 
-const isJsonValue = (value: unknown, ancestors = new Set<object>(), depth = 0): value is SpindleTraceJsonValue => {
+const isJsonValue = (value: unknown, ancestors = new Set<object>(), depth = 0): value is CodeModeTraceJsonValue => {
 	if (value === null || typeof value === "string" || typeof value === "boolean") return true;
 	if (typeof value === "number") return Number.isFinite(value);
 	if (typeof value !== "object" || depth > MAX_DEPTH + 2 || ancestors.has(value)) return false;
@@ -608,7 +608,7 @@ const isJsonValue = (value: unknown, ancestors = new Set<object>(), depth = 0): 
 	return valid;
 };
 
-const isSpindleExecutionTraceOperationV1Unchecked = (value: unknown): value is SpindleExecutionTraceOperationV1 => {
+const isCodeModeExecutionTraceOperationV1Unchecked = (value: unknown): value is CodeModeExecutionTraceOperationV1 => {
 	if (!isRecord(value)) return false;
 	if (
 		!hasOnlyKeys(value, [
@@ -627,30 +627,31 @@ const isSpindleExecutionTraceOperationV1Unchecked = (value: unknown): value is S
 		return false;
 	if (value.type !== "call" || !Number.isSafeInteger(value.sequence) || (value.sequence as number) < 0) return false;
 	if (typeof value.ref !== "string" || !isRecord(value.args) || !isJsonValue(value.args)) return false;
-	if (!outcomes.has(value.outcome as SpindleExecutionOutcomeV1)) return false;
+	if (!outcomes.has(value.outcome as CodeModeExecutionOutcomeV1)) return false;
 	if (value.provider !== undefined && typeof value.provider !== "string") return false;
 	if (value.action !== undefined && typeof value.action !== "string") return false;
-	if (value.failureStage !== undefined && !stages.has(value.failureStage as SpindleExecutionFailureStageV1))
+	if (value.failureStage !== undefined && !stages.has(value.failureStage as CodeModeExecutionFailureStageV1))
 		return false;
 	if (value.error !== undefined && typeof value.error !== "string") return false;
 	return value.result === undefined || isJsonValue(value.result);
 };
 
-export const isSpindleExecutionTraceOperationV1 = (value: unknown): value is SpindleExecutionTraceOperationV1 => {
+export const isCodeModeExecutionTraceOperationV1 = (value: unknown): value is CodeModeExecutionTraceOperationV1 => {
 	try {
-		return isSpindleExecutionTraceOperationV1Unchecked(value);
+		return isCodeModeExecutionTraceOperationV1Unchecked(value);
 	} catch {
 		return false;
 	}
 };
 
-const isSpindleExecutionTraceV1Unchecked = (value: unknown): value is SpindleExecutionTraceV1 => {
+const isCodeModeExecutionTraceV1Unchecked = (value: unknown): value is CodeModeExecutionTraceV1 => {
 	if (!isRecord(value)) return false;
 	if (!hasOnlyKeys(value, ["kind", "version", "outcome", "phases", "operations", "counts", "error"])) return false;
-	if (value.kind !== SPINDLE_EXECUTION_TRACE_KIND || value.version !== SPINDLE_EXECUTION_TRACE_VERSION) return false;
-	if (!outcomes.has(value.outcome as SpindleExecutionOutcomeV1)) return false;
+	if (value.kind !== CODE_MODE_EXECUTION_TRACE_KIND || value.version !== CODE_MODE_EXECUTION_TRACE_VERSION)
+		return false;
+	if (!outcomes.has(value.outcome as CodeModeExecutionOutcomeV1)) return false;
 	if (!Array.isArray(value.phases) || !value.phases.every((phase) => typeof phase === "string")) return false;
-	if (!Array.isArray(value.operations) || !value.operations.every(isSpindleExecutionTraceOperationV1)) return false;
+	if (!Array.isArray(value.operations) || !value.operations.every(isCodeModeExecutionTraceOperationV1)) return false;
 	if (
 		!isRecord(value.counts) ||
 		!hasOnlyKeys(value.counts, ["droppedValues", "truncatedValues", "redactedValues", "droppedOperations"])
@@ -667,16 +668,16 @@ const isSpindleExecutionTraceV1Unchecked = (value: unknown): value is SpindleExe
 	for (let index = 1; index < value.operations.length; index++) {
 		if (value.operations[index]!.sequence <= value.operations[index - 1]!.sequence) return false;
 	}
-	return serializedBytes(value) <= SPINDLE_EXECUTION_TRACE_MAX_BYTES;
+	return serializedBytes(value) <= CODE_MODE_EXECUTION_TRACE_MAX_BYTES;
 };
 
-export const isSpindleExecutionTraceV1 = (value: unknown): value is SpindleExecutionTraceV1 => {
+export const isCodeModeExecutionTraceV1 = (value: unknown): value is CodeModeExecutionTraceV1 => {
 	try {
-		return isSpindleExecutionTraceV1Unchecked(value);
+		return isCodeModeExecutionTraceV1Unchecked(value);
 	} catch {
 		return false;
 	}
 };
 
-export const readSpindleExecutionTraceV1 = (value: unknown): SpindleExecutionTraceV1 | undefined =>
-	isSpindleExecutionTraceV1(value) ? value : undefined;
+export const readCodeModeExecutionTraceV1 = (value: unknown): CodeModeExecutionTraceV1 | undefined =>
+	isCodeModeExecutionTraceV1(value) ? value : undefined;

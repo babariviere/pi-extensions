@@ -1,11 +1,16 @@
 import type { Component } from "@earendil-works/pi-tui";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import type { SpindleUiWidgetMode } from "../config.ts";
+import type { CodeModeUiWidgetMode } from "../config.ts";
 import { spinnerFrame } from "./spinner.ts";
-import type { SpindleActivityRun, SpindleActivityStatus } from "../activity/types.ts";
+import type { CodeModeActivityRun, CodeModeActivityStatus } from "../activity/types.ts";
 import { formatDuration, formatTokens, safeText } from "./format.ts";
-import { isActiveStatus, orderAgentsByCreation, type SpindleDashboardSnapshot, type SpindleUiAgent } from "./types.ts";
+import {
+	isActiveStatus,
+	orderAgentsByCreation,
+	type CodeModeDashboardSnapshot,
+	type CodeModeUiAgent,
+} from "./types.ts";
 
 const statusGlyph = (status: string): string => {
 	if (status === "completed" || status === "done") return "✓";
@@ -25,9 +30,9 @@ const colorStatus = (theme: Theme, status: string, value: string): string => {
 	return theme.fg("dim", value);
 };
 
-const phaseProgress = (run: SpindleActivityRun, phaseId: string): { completed: number; total: number } => {
+const phaseProgress = (run: CodeModeActivityRun, phaseId: string): { completed: number; total: number } => {
 	const phase = run.phases.find((candidate) => candidate.id === phaseId);
-	const statuses: SpindleActivityStatus[] = [
+	const statuses: CodeModeActivityStatus[] = [
 		...run.calls.filter((call) => call.phaseId === phaseId).map((call) => call.status),
 		...run.items.filter((item) => item.phaseId === phaseId).map((item) => item.status),
 	];
@@ -35,12 +40,12 @@ const phaseProgress = (run: SpindleActivityRun, phaseId: string): { completed: n
 	return { completed, total: Math.max(phase?.total ?? 0, statuses.length) };
 };
 
-const totalTokens = (snapshot: SpindleDashboardSnapshot, run: SpindleActivityRun | undefined): number =>
+const totalTokens = (snapshot: CodeModeDashboardSnapshot, run: CodeModeActivityRun | undefined): number =>
 	snapshot.agents
 		.filter((agent) => (run ? agent.runId === run.id : isActiveStatus(agent.status)))
 		.reduce((sum, agent) => sum + (agent.usage ? agent.usage.input + agent.usage.output : 0), 0);
 
-const agentLines = (theme: Theme, agent: SpindleUiAgent, now: number): string[] => {
+const agentLines = (theme: Theme, agent: CodeModeUiAgent, now: number): string[] => {
 	const status = colorStatus(theme, agent.status, statusGlyph(agent.status));
 	const activity =
 		agent.currentTool ??
@@ -64,7 +69,7 @@ const agentLines = (theme: Theme, agent: SpindleUiAgent, now: number): string[] 
 	];
 };
 
-export const shouldShowSpindleWidget = (snapshot: SpindleDashboardSnapshot, mode: SpindleUiWidgetMode): boolean => {
+export const shouldShowCodeModeWidget = (snapshot: CodeModeDashboardSnapshot, mode: CodeModeUiWidgetMode): boolean => {
 	if (mode === "hidden") return false;
 	if (mode === "always") return true;
 	if (snapshot.agents.some((agent) => isActiveStatus(agent.status))) return true;
@@ -76,19 +81,19 @@ export const shouldShowSpindleWidget = (snapshot: SpindleDashboardSnapshot, mode
 	return finishedAt > (snapshot.widgetDismissedAt ?? 0);
 };
 
-export class SpindleWidget implements Component {
+export class CodeModeWidget implements Component {
 	constructor(
 		readonly theme: Theme,
-		readonly snapshot: () => SpindleDashboardSnapshot,
+		readonly snapshot: () => CodeModeDashboardSnapshot,
 		readonly maxRows: number,
 	) {}
 
 	#lastWidth: number | undefined;
-	#lastSnapshot: SpindleDashboardSnapshot | undefined;
+	#lastSnapshot: CodeModeDashboardSnapshot | undefined;
 	#lastLines: string[] | undefined;
 	#leaseKey: string | undefined;
 	#leasedRows = 0;
-	#pending: { width: number; snapshot: SpindleDashboardSnapshot; lines: string[] } | undefined;
+	#pending: { width: number; snapshot: CodeModeDashboardSnapshot; lines: string[] } | undefined;
 
 	render(width: number): string[] {
 		if (width <= 0) return [];
@@ -121,12 +126,12 @@ export class SpindleWidget implements Component {
 		this.#lastLines = undefined;
 	}
 
-	#renderLines(snapshot: SpindleDashboardSnapshot, width: number): string[] {
+	#renderLines(snapshot: CodeModeDashboardSnapshot, width: number): string[] {
 		const { lines: content, leaseKey } = this.#buildContent(snapshot);
 		return this.#leaseContent(this.#boundContent(content, width), leaseKey);
 	}
 
-	#buildContent(snapshot: SpindleDashboardSnapshot): { lines: string[]; leaseKey: string } {
+	#buildContent(snapshot: CodeModeDashboardSnapshot): { lines: string[]; leaseKey: string } {
 		const candidateRun = snapshot.runs[0];
 		const candidateFinishedAt = candidateRun?.finishedAt ?? candidateRun?.updatedAt ?? 0;
 		const run =
@@ -149,7 +154,7 @@ export class SpindleWidget implements Component {
 			.filter((actor) => actor.worker && !isActiveStatus(actor.worker.status))
 			.map((actor) => ({ ...actor.worker!, name: actor.name }));
 		const nestedCalls = run?.calls.filter((call) => call.kind !== "agent" && call.kind !== "actor") ?? [];
-		const title = run?.name ?? "Code mode session";
+		const title = run?.name ?? "Code Mode session";
 		const headerStatus =
 			run?.status ?? (activeAgents.length > 0 || activeActorWorkers.length > 0 ? "running" : "idle");
 		const parts: string[] = [];
@@ -178,7 +183,7 @@ export class SpindleWidget implements Component {
 		if (run) parts.push(formatDuration((run.finishedAt ?? snapshot.now) - run.startedAt));
 
 		const glyph = colorStatus(this.theme, headerStatus, statusGlyph(headerStatus));
-		const header = `${glyph} ${this.theme.fg("accent", "Code mode")} ${this.theme.fg(
+		const header = `${glyph} ${this.theme.fg("accent", "Code Mode")} ${this.theme.fg(
 			"text",
 			safeText(title),
 		)}${parts.length > 0 ? this.theme.fg("dim", ` · ${parts.join(" · ")}`) : ""}`;

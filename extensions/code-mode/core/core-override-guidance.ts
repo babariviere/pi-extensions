@@ -3,7 +3,7 @@
  *
  * An extension may override a Pi core tool by exact name (this repository's own
  * `tool-substitute` extension does). In full code mode the override is reachable
- * only as `pi.<name>` inside a Spindle program, so its authored prompt text is
+ * only as `pi.<name>` inside a Code Mode program, so its authored prompt text is
  * never presented as a separate extension tool. Append that guidance instead of
  * losing it.
  */

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { applySpindleStateNotes, payloadInspectorLines, readSpindleStateNotes } from "./inspect-preview.ts";
+import { applyCodeModeStateNotes, payloadInspectorLines, readCodeModeStateNotes } from "./inspect-preview.ts";
 
 /** A theme that marks bold with «» and passes colors through, so lines read plainly. */
 const theme = {
@@ -74,25 +74,25 @@ test("no payloads renders nothing at all", () => {
 });
 
 test("τ notes are read off a partial update and ignored otherwise", () => {
-	assert.deepEqual(readSpindleStateNotes({ stateNotes: [{ ref: "spindle.state.set", key: "a" }] }), [
-		{ ref: "spindle.state.set", key: "a" },
+	assert.deepEqual(readCodeModeStateNotes({ stateNotes: [{ ref: "code-mode.state.set", key: "a" }] }), [
+		{ ref: "code-mode.state.set", key: "a" },
 	]);
-	assert.deepEqual(readSpindleStateNotes({ stateNotes: ["nope", { key: "no ref" }] }), []);
-	assert.deepEqual(readSpindleStateNotes({}), []);
-	assert.deepEqual(readSpindleStateNotes(undefined), []);
+	assert.deepEqual(readCodeModeStateNotes({ stateNotes: ["nope", { key: "no ref" }] }), []);
+	assert.deepEqual(readCodeModeStateNotes({}), []);
+	assert.deepEqual(readCodeModeStateNotes(undefined), []);
 });
 
 test("τ notes fill in each operation's body, in order", () => {
 	const audits = [
-		{ ref: "spindle.state.set" },
+		{ ref: "code-mode.state.set" },
 		{ ref: "pi.read", result: "file" },
-		{ ref: "spindle.state.get" },
-		{ ref: "spindle.state.delete" },
+		{ ref: "code-mode.state.get" },
+		{ ref: "code-mode.state.delete" },
 	];
-	const applied = applySpindleStateNotes(audits, [
-		{ ref: "spindle.state.set", key: "a", preview: '{"n":1}' },
-		{ ref: "spindle.state.get", key: "a", preview: '{"n":1}' },
-		{ ref: "spindle.state.delete", key: "a", detail: "deleted" },
+	const applied = applyCodeModeStateNotes(audits, [
+		{ ref: "code-mode.state.set", key: "a", preview: '{"n":1}' },
+		{ ref: "code-mode.state.get", key: "a", preview: '{"n":1}' },
+		{ ref: "code-mode.state.delete", key: "a", detail: "deleted" },
 	]);
 	assert.deepEqual(
 		applied.map((audit) => audit.result),
@@ -101,7 +101,7 @@ test("τ notes fill in each operation's body, in order", () => {
 });
 
 test("a reloaded transcript has no notes and keeps its rows unchanged", () => {
-	const audits = [{ ref: "spindle.state.set" }];
-	assert.equal(applySpindleStateNotes(audits, undefined), audits);
-	assert.equal(applySpindleStateNotes(audits, []), audits);
+	const audits = [{ ref: "code-mode.state.set" }];
+	assert.equal(applyCodeModeStateNotes(audits, undefined), audits);
+	assert.equal(applyCodeModeStateNotes(audits, []), audits);
 });

@@ -11,9 +11,9 @@ import {
 import { highlightCode, languageFromPath } from "./highlight.ts";
 import { headlineArg } from "../core/call-preview.ts";
 import { coreToolTitle, renderCoreToolBody } from "./core-tool-render.ts";
-import { isSpindleNestedToolPreview, type SpindleTranscriptEntry } from "./transcript.ts";
-import { spindleStringLiterals, spindleWriteBindings, type SpindleWriteBinding } from "./spindle-code-parser.ts";
-export { spindleWriteBindings, type SpindleWriteBinding } from "./spindle-code-parser.ts";
+import { isCodeModeNestedToolPreview, type CodeModeTranscriptEntry } from "./transcript.ts";
+import { codeModeStringLiterals, codeModeWriteBindings, type CodeModeWriteBinding } from "./code-mode-code-parser.ts";
+export { codeModeWriteBindings, type CodeModeWriteBinding } from "./code-mode-code-parser.ts";
 import {
 	applyDiffBackground,
 	createDiffBackgroundResolver,
@@ -22,7 +22,7 @@ import {
 	type DiffBackgroundIntensity,
 } from "./diff-background.ts";
 
-export interface SpindleRenderAudit {
+export interface CodeModeRenderAudit {
 	ref: string;
 	tool?: string;
 	provider?: string;
@@ -182,14 +182,14 @@ export const renderBoundedLines = (
 	wrapLineIndexes?: ReadonlySet<number>,
 ): Component => new BoundedLineList(lines, theme, diffIntensity, wrapLineIndexes);
 
-export const spindleMulticallCallLimit = (expanded: boolean): number =>
+export const codeModeMulticallCallLimit = (expanded: boolean): number =>
 	expanded ? EXPANDED_MULTICALL_LIMIT : COLLAPSED_MULTICALL_LIMIT;
 
 const visibleMulticallAudits = (
-	audits: SpindleRenderAudit[],
+	audits: CodeModeRenderAudit[],
 	expanded: boolean,
-): Array<{ audit: SpindleRenderAudit; auditIndex: number }> => {
-	const limit = spindleMulticallCallLimit(expanded);
+): Array<{ audit: CodeModeRenderAudit; auditIndex: number }> => {
+	const limit = codeModeMulticallCallLimit(expanded);
 	if (expanded || audits.length <= limit) {
 		return audits.slice(0, limit).map((audit, auditIndex) => ({ audit, auditIndex }));
 	}
@@ -235,8 +235,8 @@ const recordOf = (value: unknown): Record<string, unknown> | undefined =>
 		? (value as Record<string, unknown>)
 		: undefined;
 
-const legacyCommandsFrom = (spindleArgs: unknown): ReadonlyMap<string, string> => {
-	const args = recordOf(spindleArgs);
+const legacyCommandsFrom = (codeModeArgs: unknown): ReadonlyMap<string, string> => {
+	const args = recordOf(codeModeArgs);
 	if (!args) return new Map();
 	const cached = legacyCommandCache.get(args);
 	if (cached) return cached;
@@ -257,20 +257,23 @@ const legacyCommandsFrom = (spindleArgs: unknown): ReadonlyMap<string, string> =
 				? rawCode.join("\n")
 				: undefined;
 	if (code) {
-		for (const literal of spindleStringLiterals(code)) remember(literal);
+		for (const literal of codeModeStringLiterals(code)) remember(literal);
 	}
 	legacyCommandCache.set(args, commands);
 	return commands;
 };
 
-export const restoreLegacyBashCommands = (audits: SpindleRenderAudit[], spindleArgs: unknown): SpindleRenderAudit[] => {
+export const restoreLegacyBashCommands = (
+	audits: CodeModeRenderAudit[],
+	codeModeArgs: unknown,
+): CodeModeRenderAudit[] => {
 	const hasLegacyCommand = audits.some((audit) => {
 		const digest = audit.ref === "pi.bash" ? argString(audit.args ?? {}, "commandDigest") : undefined;
 		return Boolean(digest && LEGACY_COMMAND_DIGEST.test(digest));
 	});
 	if (!hasLegacyCommand) return audits;
 
-	const commands = legacyCommandsFrom(spindleArgs);
+	const commands = legacyCommandsFrom(codeModeArgs);
 	return audits.map((audit) => {
 		if (audit.ref !== "pi.bash" || !audit.args) return audit;
 		const digest = argString(audit.args, "commandDigest");
@@ -284,8 +287,8 @@ export const restoreLegacyBashCommands = (audits: SpindleRenderAudit[], spindleA
 	});
 };
 
-export interface SpindleWriteArgumentPreviewInput {
-	bindings: SpindleWriteBinding[];
+export interface CodeModeWriteArgumentPreviewInput {
+	bindings: CodeModeWriteBinding[];
 	payloads?: Record<string, string> | undefined;
 	expanded: boolean;
 	cwd?: string | undefined;
@@ -327,8 +330,8 @@ const renderWriteArgumentBody = (
 	};
 };
 
-export const renderSpindleWriteArgumentPreview = (
-	input: SpindleWriteArgumentPreviewInput,
+export const renderCodeModeWriteArgumentPreview = (
+	input: CodeModeWriteArgumentPreviewInput,
 	theme: Theme,
 	invalidate?: () => void,
 ): Component | null => {
@@ -373,8 +376,8 @@ export const renderSpindleWriteArgumentPreview = (
 	}
 
 	const completed = Math.max(0, available.filter((value) => typeof value === "string").length - 1);
-	const rows = [theme.fg("warning", `◆ Spindle composing · ${completed}/${input.bindings.length} writes`)];
-	const callLimit = spindleMulticallCallLimit(input.expanded);
+	const rows = [theme.fg("warning", `◆ Code Mode composing · ${completed}/${input.bindings.length} writes`)];
+	const callLimit = codeModeMulticallCallLimit(input.expanded);
 	const shownBindings = input.bindings.slice(0, callLimit);
 	for (let index = 0; index < shownBindings.length; index++) {
 		const binding = shownBindings[index]!;
@@ -440,7 +443,7 @@ const providerCallDetail = (
 	if (provider === "agents") {
 		if (previewHeadline) return previewHeadline;
 		const name = argString(args, "name");
-		const previewName = isSpindleNestedToolPreview(preview) ? preview.name : undefined;
+		const previewName = isCodeModeNestedToolPreview(preview) ? preview.name : undefined;
 		const id = shortIdOf(args.id);
 		const message = argString(args, "message");
 		const task = argString(args, "task");
@@ -511,7 +514,7 @@ const structuralCallDetail = (
 	args: Record<string, unknown>,
 	result: unknown,
 ): string => {
-	if (provider !== "spindle") return "";
+	if (provider !== "code-mode") return "";
 	const count = countOf(result);
 	switch (tool) {
 		case "discovery.providers":
@@ -537,7 +540,7 @@ const structuralCallDetail = (
 	}
 };
 
-const callHeadlinePreview = (audit: SpindleRenderAudit): string | undefined => {
+const callHeadlinePreview = (audit: CodeModeRenderAudit): string | undefined => {
 	const ref = audit.ref;
 	const provider = audit.provider ?? ref.split(".")[0] ?? ref;
 	const tool = audit.tool ?? ref.split(".")[1] ?? ref;
@@ -549,9 +552,9 @@ const callHeadlinePreview = (audit: SpindleRenderAudit): string | undefined => {
 	);
 };
 
-/** Compact one-line title for a nested Spindle call, e.g. `read src/index.ts` or `$ ls -la`. */
+/** Compact one-line title for a nested Code Mode call, e.g. `read src/index.ts` or `$ ls -la`. */
 export function nestedCallTitle(
-	audit: SpindleRenderAudit,
+	audit: CodeModeRenderAudit,
 	theme: Theme,
 	invalidate?: () => void,
 	core?: { cwd: string; settings: CodePreviewSettings },
@@ -586,7 +589,7 @@ export function nestedCallTitle(
 	return detail ? `${title} ${theme.fg("accent", detail)}` : title;
 }
 
-const transcriptToolAudit = (entry: SpindleTranscriptEntry): SpindleRenderAudit => {
+const transcriptToolAudit = (entry: CodeModeTranscriptEntry): CodeModeRenderAudit => {
 	const rawName = entry.toolName ?? entry.label;
 	const normalized = rawName.toLowerCase();
 	const tool =
@@ -616,7 +619,7 @@ const transcriptToolAudit = (entry: SpindleTranscriptEntry): SpindleRenderAudit 
 };
 
 export const renderNestedAgentToolLines = (
-	audit: SpindleRenderAudit,
+	audit: CodeModeRenderAudit,
 	theme: Theme,
 	options: {
 		expanded: boolean;
@@ -626,7 +629,7 @@ export const renderNestedAgentToolLines = (
 		invalidate?: (() => void) | undefined;
 	},
 ): string[] => {
-	if (!isSpindleNestedToolPreview(audit.preview)) return [];
+	if (!isCodeModeNestedToolPreview(audit.preview)) return [];
 	const rawPreviewText = safeTerminalText(audit.preview.text ?? "").trim();
 	const responseLines = rawPreviewText
 		? options.compact
@@ -699,18 +702,18 @@ export const renderNestedAgentToolLines = (
 	return lines;
 };
 
-interface SpindleMulticallPreview {
+interface CodeModeMulticallPreview {
 	auditIndex: number;
 	body: string;
 	hidden: number;
 }
 
-export interface SpindleMulticallPartialInput {
-	audits: SpindleRenderAudit[];
+export interface CodeModeMulticallPartialInput {
+	audits: CodeModeRenderAudit[];
 	phases: string[];
 	progress?: string | undefined;
 	expanded: boolean;
-	preview?: SpindleMulticallPreview | undefined;
+	preview?: CodeModeMulticallPreview | undefined;
 	core?: { cwd: string; settings: CodePreviewSettings } | undefined;
 	showNestedToolCalls?: boolean | undefined;
 	spinner?: string | undefined;
@@ -729,13 +732,13 @@ export const compactProgressPreview = (progress: string): string => {
 	return `… ${lines.length - 1} ${lines.length === 2 ? "line" : "lines"} · ${latest}`;
 };
 
-export const renderSpindleMulticallPartial = (
-	input: SpindleMulticallPartialInput,
+export const renderCodeModeMulticallPartial = (
+	input: CodeModeMulticallPartialInput,
 	theme: Theme,
 	invalidate?: () => void,
 ): Component => {
 	const done = input.audits.filter((audit) => audit.success !== undefined).length;
-	let header = theme.fg("warning", `◆ Spindle running · ${done}/${input.audits.length} calls`);
+	let header = theme.fg("warning", `◆ Code Mode running · ${done}/${input.audits.length} calls`);
 	const progress = input.progress ? compactProgressPreview(input.progress) : "";
 	if (progress) header += theme.fg("dim", ` · ${progress}`);
 
@@ -794,16 +797,16 @@ export const renderSpindleMulticallPartial = (
 	return renderBoundedLines(rows, theme, input.core?.settings.diffIntensity ?? "off", wrapLineIndexes);
 };
 
-export interface SpindleCoreToolPreview extends SpindleRenderAudit {
+export interface CodeModeCoreToolPreview extends CodeModeRenderAudit {
 	ref: string;
 }
 
 const CORE_TOOL_NAMES = new Set(["bash", "exec", "read", "write", "edit", "grep", "find", "ls"]);
 
-export const captureSpindleCoreToolPreviews = (
-	audits: SpindleRenderAudit[],
-	previous: SpindleCoreToolPreview[] = [],
-): SpindleCoreToolPreview[] => {
+export const captureCodeModeCoreToolPreviews = (
+	audits: CodeModeRenderAudit[],
+	previous: CodeModeCoreToolPreview[] = [],
+): CodeModeCoreToolPreview[] => {
 	const prior = previous.slice();
 	return audits.flatMap((audit) => {
 		if (
@@ -837,10 +840,10 @@ export const captureSpindleCoreToolPreviews = (
 	});
 };
 
-export const restoreSpindleCoreToolPreviews = (
-	audits: SpindleRenderAudit[],
-	previews: SpindleCoreToolPreview[],
-): SpindleRenderAudit[] => {
+export const restoreCodeModeCoreToolPreviews = (
+	audits: CodeModeRenderAudit[],
+	previews: CodeModeCoreToolPreview[],
+): CodeModeRenderAudit[] => {
 	const remaining = previews.slice();
 	return audits.map((audit) => {
 		if (
@@ -880,20 +883,20 @@ export const restoreSpindleCoreToolPreviews = (
 	});
 };
 
-export interface SpindleAgentPreview {
+export interface CodeModeAgentPreview {
 	ref: string;
 	id: string;
 	preview: unknown;
 }
 
-export const captureSpindleAgentPreviews = (
-	audits: SpindleRenderAudit[],
-	previous: SpindleAgentPreview[] = [],
-): SpindleAgentPreview[] => {
+export const captureCodeModeAgentPreviews = (
+	audits: CodeModeRenderAudit[],
+	previous: CodeModeAgentPreview[] = [],
+): CodeModeAgentPreview[] => {
 	const captured = previous.slice();
 	const indexes = new Map(captured.map((preview, index) => [`${preview.ref}\0${preview.id}`, index]));
 	for (const audit of audits) {
-		if (!isSpindleNestedToolPreview(audit.preview)) continue;
+		if (!isCodeModeNestedToolPreview(audit.preview)) continue;
 		const entry = { ref: audit.ref, id: audit.preview.id, preview: audit.preview };
 		const key = `${entry.ref}\0${entry.id}`;
 		const index = indexes.get(key);
@@ -905,13 +908,13 @@ export const captureSpindleAgentPreviews = (
 	return captured;
 };
 
-export const restoreSpindleAgentPreviews = (
-	audits: SpindleRenderAudit[],
-	previews: SpindleAgentPreview[],
-): SpindleRenderAudit[] => {
+export const restoreCodeModeAgentPreviews = (
+	audits: CodeModeRenderAudit[],
+	previews: CodeModeAgentPreview[],
+): CodeModeRenderAudit[] => {
 	const remaining = previews.slice();
 	return audits.map((audit) => {
-		if (isSpindleNestedToolPreview(audit.preview)) return audit;
+		if (isCodeModeNestedToolPreview(audit.preview)) return audit;
 		const requestedId = argString(audit.args ?? {}, "id");
 		let index = requestedId
 			? remaining.findIndex((preview) => preview.ref === audit.ref && preview.id === requestedId)
@@ -923,13 +926,13 @@ export const restoreSpindleAgentPreviews = (
 	});
 };
 
-export interface SpindleWritePreview {
+export interface CodeModeWritePreview {
 	ref: string;
 	path?: string | undefined;
 	content: string;
 }
 
-export const captureSpindleWritePreviews = (audits: SpindleRenderAudit[]): SpindleWritePreview[] =>
+export const captureCodeModeWritePreviews = (audits: CodeModeRenderAudit[]): CodeModeWritePreview[] =>
 	audits.flatMap((audit) => {
 		const rendererPreview =
 			typeof audit.preview === "object" && audit.preview !== null && !Array.isArray(audit.preview)
@@ -948,21 +951,21 @@ export const captureSpindleWritePreviews = (audits: SpindleRenderAudit[]): Spind
 // Arbitrary provider arguments are deliberately absent from persisted traces.
 // Keep only their selected one-line headlines in renderer state so completion
 // does not erase a preview that was already visible while the call was live.
-export interface SpindleCallHeadlinePreview {
+export interface CodeModeCallHeadlinePreview {
 	ref: string;
 	headline: string;
 }
 
-export const captureSpindleCallHeadlinePreviews = (audits: SpindleRenderAudit[]): SpindleCallHeadlinePreview[] =>
+export const captureCodeModeCallHeadlinePreviews = (audits: CodeModeRenderAudit[]): CodeModeCallHeadlinePreview[] =>
 	audits.flatMap((audit) => {
 		const headline = callHeadlinePreview(audit);
 		return headline ? [{ ref: audit.ref, headline }] : [];
 	});
 
-export const restoreSpindleCallHeadlinePreviews = (
-	audits: SpindleRenderAudit[],
-	previews: SpindleCallHeadlinePreview[],
-): SpindleRenderAudit[] => {
+export const restoreCodeModeCallHeadlinePreviews = (
+	audits: CodeModeRenderAudit[],
+	previews: CodeModeCallHeadlinePreview[],
+): CodeModeRenderAudit[] => {
 	const remaining = previews.slice();
 	return audits.map((audit) => {
 		const index = remaining.findIndex((preview) => preview.ref === audit.ref);
@@ -975,10 +978,10 @@ export const restoreSpindleCallHeadlinePreviews = (
 
 // Write content is also absent from persisted traces. Keep bounded live content
 // so a fast write can still render when its final result replaces the partial.
-export const restoreSpindleWritePreviews = (
-	audits: SpindleRenderAudit[],
-	previews: SpindleWritePreview[],
-): SpindleRenderAudit[] => {
+export const restoreCodeModeWritePreviews = (
+	audits: CodeModeRenderAudit[],
+	previews: CodeModeWritePreview[],
+): CodeModeRenderAudit[] => {
 	const remaining = previews.slice();
 	return audits.map((audit) => {
 		if (audit.tool !== "write" || typeof audit.args?.content === "string") return audit;
@@ -991,7 +994,7 @@ export const restoreSpindleWritePreviews = (
 };
 
 /** Extract the human-readable body text from a nested call result or write arguments, if any. */
-export function nestedCallBody(audit: SpindleRenderAudit): string | undefined {
+export function nestedCallBody(audit: CodeModeRenderAudit): string | undefined {
 	if (audit.tool === "write" && typeof audit.args?.content === "string") {
 		return audit.args.content;
 	}
@@ -1006,7 +1009,7 @@ export function nestedCallBody(audit: SpindleRenderAudit): string | undefined {
 }
 
 /** Source code + language for syntax highlighting, for reads (file content) and writes (content being written). */
-export function nestedCallCode(audit: SpindleRenderAudit): { code: string; lang: string } | null {
+export function nestedCallCode(audit: CodeModeRenderAudit): { code: string; lang: string } | null {
 	const args = audit.args ?? {};
 	const path = typeof args.path === "string" ? args.path : undefined;
 	const lang = languageFromPath(path);
@@ -1077,7 +1080,7 @@ const lineDiff = (oldLines: string[], newLines: string[]): DiffLine[] => {
 };
 
 /** Render a syntax-highlighted line diff for a nested `pi.edit` call, or null. */
-export function nestedEditDiff(audit: SpindleRenderAudit, theme: Theme, invalidate?: () => void): string[] | null {
+export function nestedEditDiff(audit: CodeModeRenderAudit, theme: Theme, invalidate?: () => void): string[] | null {
 	if (audit.tool !== "edit") return null;
 	const args = audit.args ?? {};
 	const edits = Array.isArray(args.edits) ? args.edits : [];
@@ -1126,7 +1129,7 @@ const lineCountTrimmed = (value: string): number => {
 // Mirrors pi core's read range notice: surface how many lines a code_mode
 // program sent to the model vs. how many its nested read(s) returned, so
 // sliced reads don't look like full-file reads. The audited body is unchanged.
-export function modelReadHint(audits: SpindleRenderAudit[], output: string, theme: Theme): string {
+export function modelReadHint(audits: CodeModeRenderAudit[], output: string, theme: Theme): string {
 	if (!output) return "";
 	const modelLines = lineCountTrimmed(output);
 	let readLines = 0;

@@ -1,8 +1,8 @@
 /**
  * LOCAL REWRITE of upstream `src/index.ts`.
  *
- * Spindle registers exactly one tool (`code_mode`) and one widget
- * (`aboveEditor`). Upstream's actor host-event observers, `/spindle` command,
+ * Code Mode registers exactly one tool (`code_mode`) and one widget
+ * (`aboveEditor`). Upstream's actor host-event observers, `/code-mode` command,
  * prewalk handoff boundary, compaction hook, ESC halt-the-world gate and the
  * bundled-skills `resources_discover` contribution all belong to dropped
  * subsystems and are gone.
@@ -13,9 +13,9 @@ import { isSandboxMode, SANDBOX_MODES } from "./sandbox/policy.ts";
 import { SANDBOX_STATE_EVENT, type SandboxStateEvent } from "./sandbox/protocol.ts";
 
 /** Footer key for the sandbox indicator. */
-const SANDBOX_STATUS_KEY = "spindle-sandbox";
+const SANDBOX_STATUS_KEY = "code-mode-sandbox";
 /** Footer key for the MCP connection indicator. */
-const MCP_STATUS_KEY = "spindle-mcp";
+const MCP_STATUS_KEY = "code-mode-mcp";
 
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -23,38 +23,38 @@ import { cleanupOldRuns } from "./agents/paths.ts";
 import { registerTaskFileFlag, taskDeliveryFor } from "./agents/task-delivery.ts";
 import { CapturedToolCatalog } from "./capture/catalog.ts";
 import { installRegisteredToolCapture } from "./capture/interceptor.ts";
-import { createSpindleExecTool } from "./code-mode-tool.ts";
-import { DEFAULT_SPINDLE_CONFIG, effectiveToolCaptureConfig } from "./config.ts";
+import { createCodeModeExecTool } from "./code-mode-tool.ts";
+import { DEFAULT_CODE_MODE_CONFIG, effectiveToolCaptureConfig } from "./config.ts";
 import { coreOverridePromptGuidance } from "./core/core-override-guidance.ts";
 import { PI_CORE_TOOL_NAMES } from "./core/pi-tools.ts";
 import { expandSkillDirMarkersForRead, expandSkillDirMarkersInSkillBlock } from "./core/skill-dir.ts";
 import { restoreSkillsForFullCodePrompt } from "./core/skill-prompt.ts";
 import { buildSkillReferenceGuidance } from "./core/skill-references.ts";
-import { ownsSpindleToolSource, SpindleToolLifecycle, SpindleToolOwnership } from "./core/tool-ownership.ts";
-import { resolveSpindleEditProfile, type SpindleModelIdentity } from "./edit-profile.ts";
+import { ownsCodeModeToolSource, CodeModeToolLifecycle, CodeModeToolOwnership } from "./core/tool-ownership.ts";
+import { resolveCodeModeEditProfile, type CodeModeModelIdentity } from "./edit-profile.ts";
 import { piHostCompatibilityWarning } from "./host-compatibility.ts";
 import { authorizeMcpServer, logoutMcpServer } from "./mcp/auth-flow.ts";
 import { loadMcpServerConfig } from "./mcp/server-config.ts";
 import { formatMcpFooterStatus, formatMcpStatus, formatMcpTools, mcpFooterSummary } from "./mcp/status-report.ts";
-import { SPINDLE_PROVIDER_REGISTER_EVENT, type SpindleProviderRegistration } from "./protocol.ts";
-import { CAPTURED_WEB_ALIASES, SpindleState } from "./spindle-state.ts";
+import { CODE_MODE_PROVIDER_REGISTER_EVENT, type CodeModeProviderRegistration } from "./protocol.ts";
+import { CodeModeState } from "./code-mode-state.ts";
 import { loadCodePreviewSettings } from "./ui/code-preview.ts";
-import { type SpindleToolShellDecorator, withCodePreviewShell } from "./ui/code-preview-shell.ts";
-import { SpindleUiController } from "./ui/controller.ts";
+import { type CodeModeToolShellDecorator, withCodePreviewShell } from "./ui/code-preview-shell.ts";
+import { CodeModeUiController } from "./ui/controller.ts";
 import { configureHighlighting } from "./ui/highlight.ts";
 
-export { resolveSpindleEditProfile, type SpindleEditProfile, type SpindleModelIdentity } from "./edit-profile.ts";
+export { resolveCodeModeEditProfile, type CodeModeEditProfile, type CodeModeModelIdentity } from "./edit-profile.ts";
 
-const SPINDLE_EXTENSION_ENTRY_PATH = path.resolve(fileURLToPath(import.meta.url));
+const CODE_MODE_EXTENSION_ENTRY_PATH = path.resolve(fileURLToPath(import.meta.url));
 
 const FULL_CODE_GUIDANCE_PREFIX =
-	"Use `code_mode` for Pi core tools and registered capabilities. Other extensions keep their native tools. Write TypeScript orchestration; do not use Python as a fallback.\n";
+	"Use `code_mode` for Pi core tools and explicitly registered capabilities. Call them through `pi.*`, `web.*`, `mcp.*`, and `agents.*`. Write TypeScript orchestration; do not use Python as a fallback.\n";
 
 const FULL_CODE_GUIDANCE_SUFFIX =
 	" If the `code-mode` skill is available, load its listed SKILL.md through `pi.read` inside `code_mode` before other tool work, unless already loaded.";
 
-export const resolveSpindleEditGuidance = (model: SpindleModelIdentity | undefined): string => {
-	const profile = resolveSpindleEditProfile(model);
+export const resolveCodeModeEditGuidance = (model: CodeModeModelIdentity | undefined): string => {
+	const profile = resolveCodeModeEditProfile(model);
 	if (profile === "anthropic") {
 		return "Prefer `pi.edit`; use `pi.applyPatch` for coordinated multi-file changes.";
 	}
@@ -64,17 +64,17 @@ export const resolveSpindleEditGuidance = (model: SpindleModelIdentity | undefin
 	return "Prefer `pi.edit` or `pi.write`; use `pi.applyPatch` for multi-file V4A input.";
 };
 
-const fullCodeGuidanceFor = (model: SpindleModelIdentity | undefined): string =>
-	FULL_CODE_GUIDANCE_PREFIX + resolveSpindleEditGuidance(model) + FULL_CODE_GUIDANCE_SUFFIX;
+const fullCodeGuidanceFor = (model: CodeModeModelIdentity | undefined): string =>
+	FULL_CODE_GUIDANCE_PREFIX + resolveCodeModeEditGuidance(model) + FULL_CODE_GUIDANCE_SUFFIX;
 
 export const FULL_CODE_GUIDANCE = fullCodeGuidanceFor(undefined);
 
 const ORCHESTRATION_ONLY_GUIDANCE =
-	"Code mode is in orchestration-only mode. Pi core and explicitly registered web tools stay on their native direct execution path; inside `code_mode`, `pi.*` and `web.*` are unavailable. Trusted custom providers remain available unless they are marked full-code-only. Use `mcp.*`, `agents.*`, trusted custom providers, `mapLimit`, `print`, `π` and `τ` only.";
+	"Code Mode is in orchestration-only mode. Pi core and explicitly registered web tools stay on their native direct execution path; inside `code_mode`, `pi.*` and `web.*` are unavailable. Trusted custom providers remain available unless they are marked full-code-only. Use `mcp.*`, `agents.*`, trusted custom providers, `mapLimit`, `print`, `π` and `τ` only.";
 
-const registrationFrom = (value: unknown): SpindleProviderRegistration | undefined => {
+const registrationFrom = (value: unknown): CodeModeProviderRegistration | undefined => {
 	if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
-	const registration = value as Partial<SpindleProviderRegistration>;
+	const registration = value as Partial<CodeModeProviderRegistration>;
 	const provider = registration.provider;
 	if (
 		registration.version !== 1 ||
@@ -88,56 +88,55 @@ const registrationFrom = (value: unknown): SpindleProviderRegistration | undefin
 	) {
 		return undefined;
 	}
-	return registration as SpindleProviderRegistration;
+	return registration as CodeModeProviderRegistration;
 };
 
-export default async function spindle(pi: ExtensionAPI): Promise<void> {
+export default async function codeMode(pi: ExtensionAPI): Promise<void> {
 	const codePreviewSettings = await loadCodePreviewSettings();
-	const decorateShell: SpindleToolShellDecorator = withCodePreviewShell;
+	const decorateShell: CodeModeToolShellDecorator = withCodePreviewShell;
 	let compatibilityWarningShown = false;
 	configureHighlighting(codePreviewSettings.shikiTheme, codePreviewSettings.syntaxHighlighting);
 	const capturedTools = new CapturedToolCatalog();
-	const state = new SpindleState(pi, capturedTools);
-	const toolOwnership = new SpindleToolOwnership(pi);
-	const spindleUi = new SpindleUiController(state, codePreviewSettings);
+	const state = new CodeModeState(pi, capturedTools);
+	const toolOwnership = new CodeModeToolOwnership(pi);
+	const codeModeUi = new CodeModeUiController(state, codePreviewSettings);
 
 	// A subagent's task arrives as a file path rather than as typed input (see
-	// `agents/task-delivery.ts`). Registered here, in Spindle itself, so it works
+	// `agents/task-delivery.ts`). Registered here, in Code Mode itself, so it works
 	// for every child - including one with no `sandbox:`, which gets no injected
 	// child extension.
 	registerTaskFileFlag(pi);
 	const deliverTask = taskDeliveryFor(pi);
 
-	const unsubscribeProviderRegistration = pi.events.on(SPINDLE_PROVIDER_REGISTER_EVENT, (value: unknown) => {
+	const unsubscribeProviderRegistration = pi.events.on(CODE_MODE_PROVIDER_REGISTER_EVENT, (value: unknown) => {
 		const registration = registrationFrom(value);
-		if (!registration) throw new Error("Invalid Spindle provider registration");
+		if (!registration) throw new Error("Invalid Code Mode provider registration");
 		state.registerExternal(
 			registration.provider,
 			registration.overwrite === undefined ? {} : { overwrite: registration.overwrite },
 		);
 	});
 
-	const spindleTool = createSpindleExecTool(state, codePreviewSettings, decorateShell);
-	const spindleToolLifecycle = new SpindleToolLifecycle(() =>
-		ownsSpindleToolSource(pi.getAllTools(), SPINDLE_EXTENSION_ENTRY_PATH),
+	const codeModeTool = createCodeModeExecTool(state, codePreviewSettings, decorateShell);
+	const codeModeToolLifecycle = new CodeModeToolLifecycle(() =>
+		ownsCodeModeToolSource(pi.getAllTools(), CODE_MODE_EXTENSION_ENTRY_PATH),
 	);
 
 	const inactiveCapturePolicy = {
-		...structuredClone(DEFAULT_SPINDLE_CONFIG.capture),
+		...structuredClone(DEFAULT_CODE_MODE_CONFIG.capture),
 		enabled: false,
 		hideFromModel: false,
 	};
 	const toolCapture = await installRegisteredToolCapture({
-		anchorDefinition: spindleTool,
+		anchorDefinition: codeModeTool,
 		catalog: capturedTools,
 		initialPolicy: inactiveCapturePolicy,
-		hiddenToolNames: [...Object.values(CAPTURED_WEB_ALIASES), ...PI_CORE_TOOL_NAMES],
 	});
-	pi.registerTool(spindleTool);
+	pi.registerTool(codeModeTool);
 
-	const applySpindleMode = (): void => {
+	const applyCodeModeMode = (): void => {
 		toolCapture.setPolicy(effectiveToolCaptureConfig(state.config));
-		pi.registerTool(spindleTool);
+		pi.registerTool(codeModeTool);
 		toolOwnership.apply(state.config.fullCodeMode);
 	};
 	const suspendToolCapture = (): void => {
@@ -145,7 +144,7 @@ export default async function spindle(pi: ExtensionAPI): Promise<void> {
 	};
 
 	pi.on("session_start", async (event, context) => {
-		spindleUi.stop();
+		codeModeUi.stop();
 		suspendToolCapture();
 		if (!compatibilityWarningShown) {
 			compatibilityWarningShown = true;
@@ -159,13 +158,13 @@ export default async function spindle(pi: ExtensionAPI): Promise<void> {
 		try {
 			Object.assign(codePreviewSettings, await loadCodePreviewSettings(context.cwd, projectTrusted));
 			configureHighlighting(codePreviewSettings.shikiTheme, codePreviewSettings.syntaxHighlighting);
-			Object.assign(spindleTool, createSpindleExecTool(state, codePreviewSettings, decorateShell));
+			Object.assign(codeModeTool, createCodeModeExecTool(state, codePreviewSettings, decorateShell));
 		} catch (error) {
 			console.warn("[code-mode] Failed to refresh code preview settings.", error);
 		}
 		await state.initialize(context);
-		applySpindleMode();
-		spindleUi.start(context);
+		applyCodeModeMode();
+		codeModeUi.start(context);
 		sandboxContext = context;
 		renderSandboxStatus(context, state.sandboxState());
 		state.onMcpStatusChange(() => {
@@ -181,7 +180,7 @@ export default async function spindle(pi: ExtensionAPI): Promise<void> {
 		}
 		// Last: a subagent's task starts a turn, so the sandbox floor, tool mode and
 		// UI have to be in place before it lands. No-op unless this process was
-		// launched with `--spindle-task-file`.
+		// launched with `--code-mode-task-file`.
 		deliverTask(event.reason);
 	});
 
@@ -264,7 +263,7 @@ export default async function spindle(pi: ExtensionAPI): Promise<void> {
 				return;
 			}
 
-			// `off` is a revert to spindle.json rather than a forced "no enforcement",
+			// `off` is a revert to code-mode.json rather than a forced "no enforcement",
 			// so it cannot loosen what the config (or a night run) asks for.
 			const applied = await state.applySandboxRequest(
 				action === "off" ? null : { mode: action, ...(rest.length ? { allowWrite: rest } : {}) },
@@ -281,7 +280,7 @@ export default async function spindle(pi: ExtensionAPI): Promise<void> {
 
 	// `/mcp` and `/mcp-auth`. These used to come from pi-mcp-adapter; with the
 	// in-tree client they have to come from here, and `/mcp-auth` is the ONLY
-	// path in spindle that may open a consent screen (see mcp/auth-flow.ts).
+	// path in code-mode that may open a consent screen (see mcp/auth-flow.ts).
 	const mcpSubcommands = [
 		{ value: "status", label: "status — servers, states and tool counts" },
 		{ value: "tools", label: "tools [server] — cached tools" },
@@ -394,11 +393,11 @@ export default async function spindle(pi: ExtensionAPI): Promise<void> {
 		},
 	});
 
-	pi.on("tool_call", (event) => spindleToolLifecycle.toolCall(event));
+	pi.on("tool_call", (event) => codeModeToolLifecycle.toolCall(event));
 
 	// Pi 0.80.6 intentionally ignores `isError` returned by custom-tool
 	// execute(). Repair the finalized outer result through official middleware.
-	pi.on("tool_result", (event) => spindleToolLifecycle.toolResult(event));
+	pi.on("tool_result", (event) => codeModeToolLifecycle.toolResult(event));
 
 	pi.on("tool_result", (event, context) => {
 		if (event.toolName !== "read" || event.isError) return undefined;
@@ -438,12 +437,12 @@ export default async function spindle(pi: ExtensionAPI): Promise<void> {
 	});
 
 	pi.on("before_agent_start", async (event, context) => {
-		const fullCodeMode = state.initialized ? state.config.fullCodeMode : DEFAULT_SPINDLE_CONFIG.fullCodeMode;
+		const fullCodeMode = state.initialized ? state.config.fullCodeMode : DEFAULT_CODE_MODE_CONFIG.fullCodeMode;
 		if (!pi.getActiveTools().includes("code_mode")) return;
 		const skills = event.systemPromptOptions.skills ?? [];
 		// Pi omits its entire skill catalog when the active tool set lacks a tool
 		// named read. Restore that catalog in full code mode with only the loader
-		// instruction adapted to Spindle's nested pi.read path.
+		// instruction adapted to Code Mode's nested pi.read path.
 		const systemPrompt = fullCodeMode
 			? restoreSkillsForFullCodePrompt(event.systemPrompt, skills)
 			: event.systemPrompt;
@@ -469,10 +468,10 @@ export default async function spindle(pi: ExtensionAPI): Promise<void> {
 		sandboxContext = undefined;
 		state.onMcpStatusChange(undefined);
 		try {
-			spindleUi.stop();
+			codeModeUi.stop();
 			suspendToolCapture();
 			toolOwnership.release();
-			spindleToolLifecycle.clear();
+			codeModeToolLifecycle.clear();
 			await state.shutdown();
 		} finally {
 			toolCapture.dispose();

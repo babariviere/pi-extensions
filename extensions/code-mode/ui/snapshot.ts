@@ -2,19 +2,24 @@
  * LOCAL REWRITE of upstream `src/ui/snapshot.ts`.
  *
  * Upstream built a full dashboard snapshot from the mesh store, the participant
- * directory and spindle's own agent manager. Spindle has none of those: the
+ * directory and code-mode's own agent manager. Code Mode has none of those: the
  * snapshot is the activity runs plus the subagent run registry, mapped onto the
- * `SpindleUiAgent` shape `ui/widget.ts` already renders.
+ * `CodeModeUiAgent` shape `ui/widget.ts` already renders.
  */
 
-import type { SpindleActivityRun } from "../activity/types.ts";
-import type { SpindleState } from "../spindle-state.ts";
-import type { SpindleAgentRun } from "../providers/agent-run-monitor.ts";
-import { activeStatuses, orderAgentsByCreation, type SpindleDashboardSnapshot, type SpindleUiAgent } from "./types.ts";
+import type { CodeModeActivityRun } from "../activity/types.ts";
+import type { CodeModeState } from "../code-mode-state.ts";
+import type { CodeModeAgentRun } from "../providers/agent-run-monitor.ts";
+import {
+	activeStatuses,
+	orderAgentsByCreation,
+	type CodeModeDashboardSnapshot,
+	type CodeModeUiAgent,
+} from "./types.ts";
 
 const MAX_UI_AGENTS = 240;
 
-const agentFromRun = (run: SpindleAgentRun): SpindleUiAgent => ({
+const agentFromRun = (run: CodeModeAgentRun): CodeModeUiAgent => ({
 	id: run.id,
 	name: run.name,
 	status: run.status,
@@ -26,17 +31,17 @@ const agentFromRun = (run: SpindleAgentRun): SpindleUiAgent => ({
 	...(run.runId ? { runId: run.runId } : {}),
 });
 
-const boundedUiAgents = (agents: SpindleUiAgent[]): SpindleUiAgent[] => {
+const boundedUiAgents = (agents: CodeModeUiAgent[]): CodeModeUiAgent[] => {
 	const ordered = orderAgentsByCreation(agents);
 	if (ordered.length <= MAX_UI_AGENTS) return ordered;
 	return ordered.slice(ordered.length - MAX_UI_AGENTS);
 };
 
 export const createDashboardSnapshot = (
-	state: SpindleState,
+	state: CodeModeState,
 	_context?: unknown,
-	activityRuns?: SpindleActivityRun[],
-): SpindleDashboardSnapshot => {
+	activityRuns?: CodeModeActivityRun[],
+): CodeModeDashboardSnapshot => {
 	const runs = activityRuns ?? state.activity.runs();
 	const agents = boundedUiAgents(state.agentRuns.list().map(agentFromRun));
 	const activeRunIds = new Set(

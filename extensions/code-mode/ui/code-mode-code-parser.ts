@@ -1,4 +1,4 @@
-export interface SpindleWriteBinding {
+export interface CodeModeWriteBinding {
 	path: string;
 	stringKey: string;
 }
@@ -98,7 +98,7 @@ const tokenize = (source: string): Token[] => {
 	return tokens;
 };
 
-export const spindleStringLiterals = (code: string): string[] =>
+export const codeModeStringLiterals = (code: string): string[] =>
 	tokenize(code)
 		.filter((token) => token.kind === "string")
 		.map((token) => token.text);
@@ -122,7 +122,7 @@ const namedStringKey = (tokens: Token[], start: number, end: number): string | u
 	return undefined;
 };
 
-const objectBinding = (tokens: Token[], start: number): { binding?: SpindleWriteBinding; next: number } => {
+const objectBinding = (tokens: Token[], start: number): { binding?: CodeModeWriteBinding; next: number } => {
 	let depth = 1;
 	let index = start + 1;
 	let path: string | undefined;
@@ -173,9 +173,9 @@ const objectBinding = (tokens: Token[], start: number): { binding?: SpindleWrite
 		: { next: index };
 };
 
-export const spindleWriteBindings = (code: string): SpindleWriteBinding[] => {
+export const codeModeWriteBindings = (code: string): CodeModeWriteBinding[] => {
 	const tokens = tokenize(code);
-	const bindings: SpindleWriteBinding[] = [];
+	const bindings: CodeModeWriteBinding[] = [];
 	for (let index = 0; index < tokens.length - 5; index++) {
 		if (
 			tokens[index]?.text !== "pi" ||

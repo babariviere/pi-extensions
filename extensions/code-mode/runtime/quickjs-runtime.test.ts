@@ -95,7 +95,7 @@ test("log output is truncated at maxLogChars", async () => {
 		...baseOptions,
 		maxLogChars: 10,
 	});
-	assert.ok(result.logs.includes("[Code mode log output truncated]"));
+	assert.ok(result.logs.includes("[Code Mode log output truncated]"));
 });
 
 test("an infinite loop is stopped by the deadline", async () => {
@@ -206,9 +206,9 @@ test("runtime errors map back to the program's lines", async () => {
 
 test("a caller-supplied map is honored for caller-supplied code", async () => {
 	const runtime = new QuickJsRuntime();
-	const { transpileSpindleCode } = await import("./type-checker.ts");
+	const { transpileCodeModeCode } = await import("./type-checker.ts");
 	const code = "return (() => { throw new Error('late'); })();";
-	const transpiled = transpileSpindleCode(code);
+	const transpiled = transpileCodeModeCode(code);
 	const result = await runtime.execute("unused", unexpectedHostCall, {
 		...baseOptions,
 		transpiledCode: transpiled.javascript,

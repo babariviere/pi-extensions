@@ -71,7 +71,7 @@ export const piHostCompatibilityWarning = (version: string | undefined = detectP
 	const comparison = compareVersions(version, MINIMUM_PI_HOST_VERSION);
 	if (comparison === undefined || comparison >= 0) return undefined;
 	return (
-		"Pi Spindle requires Pi >= " +
+		"Pi Code Mode requires Pi >= " +
 		MINIMUM_PI_HOST_VERSION +
 		"; detected " +
 		version +

@@ -1,4 +1,4 @@
-import type { SpindleRunDisplay } from "./activity/types.ts";
+import type { CodeModeRunDisplay } from "./activity/types.ts";
 
 // Silent repair for code_mode `display` near-misses. The declared shape is
 // the object { name?, description? }, but models reliably cold-start with a
@@ -7,8 +7,8 @@ import type { SpindleRunDisplay } from "./activity/types.ts";
 // Both spellings carry identical intent, so coerce them. See the
 // flat-tool-schema note in code-mode-tool.ts.
 
-const recordDisplay = (record: Record<string, unknown>): SpindleRunDisplay | undefined => {
-	const display: SpindleRunDisplay = {};
+const recordDisplay = (record: Record<string, unknown>): CodeModeRunDisplay | undefined => {
+	const display: CodeModeRunDisplay = {};
 	if (typeof record.name === "string") display.name = record.name;
 	if (typeof record.description === "string") display.description = record.description;
 	return display.name !== undefined || display.description !== undefined ? display : undefined;
@@ -26,7 +26,7 @@ const parseObjectString = (text: string): Record<string, unknown> | undefined =>
 	}
 };
 
-export const normalizeRunDisplay = (input: unknown): SpindleRunDisplay | undefined => {
+export const normalizeRunDisplay = (input: unknown): CodeModeRunDisplay | undefined => {
 	if (typeof input === "string") {
 		const text = input.trim();
 		if (!text) return undefined;

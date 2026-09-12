@@ -1,4 +1,4 @@
-// Adapted from pi-code-previews with Spindle result isolation; see THIRD_PARTY_NOTICES.md.
+// Adapted from pi-code-previews with Code Mode result isolation; see THIRD_PARTY_NOTICES.md.
 import { homedir } from "node:os";
 import { dirname, isAbsolute, resolve } from "node:path";
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";

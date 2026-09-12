@@ -4,7 +4,7 @@
  * The mode cannot be decided once at startup: an unattended run wants
  * enforcement that an interactive session would find obstructive, and it starts
  * long after the session did. So another extension (night-mode) asks for a
- * policy over pi's event bus, and Spindle answers with the resulting state.
+ * policy over pi's event bus, and Code Mode answers with the resulting state.
  *
  * This is extension-level trust, not model-level: `pi.events` is not reachable
  * from inside `code_mode`, so the agent cannot request its own sandbox.
@@ -12,8 +12,8 @@
 
 import { isSandboxMode, type SandboxMode } from "./policy.ts";
 
-export const SANDBOX_REQUEST_EVENT = "spindle:sandbox-request";
-export const SANDBOX_STATE_EVENT = "spindle:sandbox-state";
+export const SANDBOX_REQUEST_EVENT = "code-mode:sandbox-request";
+export const SANDBOX_STATE_EVENT = "code-mode:sandbox-state";
 
 export interface SandboxRequest {
 	mode: SandboxMode;
@@ -25,7 +25,7 @@ export interface SandboxRequest {
 
 /**
  * A request to change the sandbox. `policy: null` (or absent) reverts to what
- * `spindle.json` configures, which is how a night run releases enforcement when
+ * `code-mode.json` configures, which is how a night run releases enforcement when
  * it ends.
  */
 export interface SandboxRequestEvent {

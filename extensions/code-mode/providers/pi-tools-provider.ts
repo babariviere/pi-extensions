@@ -14,22 +14,22 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { runAbortable, throwIfAborted } from "../async-settlement.ts";
 import type { CapturedToolCatalog } from "../capture/catalog.ts";
-import { DEFAULT_SPINDLE_CONFIG } from "../config.ts";
+import { DEFAULT_CODE_MODE_CONFIG } from "../config.ts";
 import { classifyPiBashError, piBashResultError } from "../core/pi-bash-error.ts";
 import { PI_CORE_TOOL_NAMES, type PiCoreToolName } from "../core/pi-tools.ts";
 import { expandSkillDirMarkersForRead } from "../core/skill-dir.ts";
 import type {
-	SpindleActionDescriptor,
-	SpindleInvocationContext,
-	SpindleMediaBlock,
-	SpindleProvider,
-	SpindleProviderListRequest,
+	CodeModeActionDescriptor,
+	CodeModeInvocationContext,
+	CodeModeMediaBlock,
+	CodeModeProvider,
+	CodeModeProviderListRequest,
 } from "../protocol.ts";
 import { countContentLines } from "../ui/preview-lines.ts";
 import { createApplyPatchToolDefinition } from "./apply-patch.ts";
 import { CapturedToolOverrideAdapter } from "./captured-tools-provider.ts";
-import { createSpindleExecToolDefinition } from "./code-mode-tool.ts";
-import { createSpindleBashToolDefinition } from "./spindle-bash-tool.ts";
+import { createCodeModeExecToolDefinition } from "./code-mode-tool.ts";
+import { createCodeModeBashToolDefinition } from "./code-mode-bash-tool.ts";
 import { createPreviewWriteToolDefinition, writeContentForPreview } from "./write-preview.ts";
 
 const MAX_RENDERER_ARGUMENT_CHARS = 200_000;
@@ -43,9 +43,9 @@ const textContent = (content: ToolContent): string =>
 		.map((part) => part.text)
 		.join("\n");
 
-const imageBlocks = (content: unknown): SpindleMediaBlock[] => {
+const imageBlocks = (content: unknown): CodeModeMediaBlock[] => {
 	if (!Array.isArray(content)) return [];
-	const blocks: SpindleMediaBlock[] = [];
+	const blocks: CodeModeMediaBlock[] = [];
 	for (const part of content) {
 		if (
 			typeof part === "object" &&
@@ -166,7 +166,7 @@ interface PiToolResult {
 }
 
 /**
- * Sandbox hooks for the mutating core tools. Built by `SpindleSandbox`; absent
+ * Sandbox hooks for the mutating core tools. Built by `CodeModeSandbox`; absent
  * when the policy enforces nothing, in which case pi's defaults are used
  * unchanged.
  */
@@ -186,7 +186,7 @@ export interface PiToolsSandbox {
 	readGuard?: (absolutePath: string) => void;
 }
 
-export class PiToolsProvider implements SpindleProvider {
+export class PiToolsProvider implements CodeModeProvider {
 	readonly name = "pi";
 	readonly description = "Pi's built-in coding tools";
 	readonly fullCodeOnly = true;
@@ -207,7 +207,7 @@ export class PiToolsProvider implements SpindleProvider {
 	) {
 		this.#cwd = cwd;
 		this.#readGuard = sandbox?.readGuard;
-		this.#readMaxBytes = limits?.readMaxBytes ?? DEFAULT_SPINDLE_CONFIG.executor.readMaxBytes;
+		this.#readMaxBytes = limits?.readMaxBytes ?? DEFAULT_CODE_MODE_CONFIG.executor.readMaxBytes;
 		// The mutating tools are gated: `bash` by the OS sandbox, and `write`,
 		// `edit`, and `applyPatch` by path checks. The read tools keep pi's definitions (image
 		// handling, truncation and offsets stay identical) but the sandbox's
@@ -215,11 +215,11 @@ export class PiToolsProvider implements SpindleProvider {
 		// credential the OS sandbox would already hide from `bash`.
 		this.#tools = {
 			read: createReadToolDefinition(cwd),
-			bash: createSpindleBashToolDefinition(cwd, {
+			bash: createCodeModeBashToolDefinition(cwd, {
 				operations: sandbox?.bash,
 				wrapCommand: sandbox?.wrapCommand,
 			}),
-			exec: createSpindleExecToolDefinition(cwd, { wrapArgv: sandbox?.wrapArgv }),
+			exec: createCodeModeExecToolDefinition(cwd, { wrapArgv: sandbox?.wrapArgv }),
 			edit: createEditToolDefinition(cwd, sandbox?.edit ? { operations: sandbox.edit } : undefined),
 			write: createPreviewWriteToolDefinition(cwd, sandbox?.writeGuard),
 			applyPatch: createApplyPatchToolDefinition(cwd, sandbox?.writeGuard),
@@ -232,13 +232,13 @@ export class PiToolsProvider implements SpindleProvider {
 	}
 
 	async list(
-		request: SpindleProviderListRequest,
-		_context: SpindleInvocationContext,
-	): Promise<SpindleActionDescriptor[]> {
+		request: CodeModeProviderListRequest,
+		_context: CodeModeInvocationContext,
+	): Promise<CodeModeActionDescriptor[]> {
 		const query = request.query?.toLowerCase();
 		const descriptors = await Promise.all(PI_CORE_TOOL_NAMES.map((name) => this.describe(name, _context)));
 		return descriptors
-			.filter((descriptor): descriptor is SpindleActionDescriptor => descriptor !== undefined)
+			.filter((descriptor): descriptor is CodeModeActionDescriptor => descriptor !== undefined)
 			.filter((descriptor) =>
 				query ? `${descriptor.name} ${descriptor.description}`.toLowerCase().includes(query) : true,
 			);
@@ -246,8 +246,8 @@ export class PiToolsProvider implements SpindleProvider {
 
 	async describe(
 		actionName: string,
-		_context: SpindleInvocationContext,
-	): Promise<SpindleActionDescriptor | undefined> {
+		_context: CodeModeInvocationContext,
+	): Promise<CodeModeActionDescriptor | undefined> {
 		if (!(actionName in this.#tools)) return undefined;
 		const name = actionName as PiCoreToolName;
 		const override = this.#capturedTools?.describe(name);
@@ -273,7 +273,7 @@ export class PiToolsProvider implements SpindleProvider {
 	async invoke(
 		actionName: string,
 		args: Record<string, unknown>,
-		context: SpindleInvocationContext,
+		context: CodeModeInvocationContext,
 	): Promise<unknown> {
 		if (!(actionName in this.#tools)) throw new Error(`Unknown Pi tool: ${actionName}`);
 		const name = actionName as PiCoreToolName;
@@ -337,7 +337,7 @@ export class PiToolsProvider implements SpindleProvider {
 		name: PiCoreToolName,
 		tool: ToolDefinition<any, any, any>,
 		args: Record<string, unknown>,
-		context: SpindleInvocationContext,
+		context: CodeModeInvocationContext,
 		runner: ExtensionRunner,
 	): Promise<unknown> {
 		const toolCallId = context.nestedToolCallId;
@@ -516,7 +516,7 @@ export class PiToolsProvider implements SpindleProvider {
 		name: PiCoreToolName,
 		partialResult: { content: ToolContent; details?: unknown; isError?: boolean },
 		args: Record<string, unknown>,
-		context: SpindleInvocationContext,
+		context: CodeModeInvocationContext,
 	): void {
 		const progress = textContent(partialResult.content).trim();
 		const boundedProgress = Array.from(progress).slice(-4_000).join("");
@@ -535,7 +535,7 @@ export class PiToolsProvider implements SpindleProvider {
 		name: PiCoreToolName,
 		result: { content: ToolContent; details?: unknown; isError?: boolean },
 		args: Record<string, unknown>,
-		context: SpindleInvocationContext,
+		context: CodeModeInvocationContext,
 	): void {
 		if (result.isError) return;
 		const details = result.details;
@@ -583,7 +583,7 @@ export class PiToolsProvider implements SpindleProvider {
 	// the single-call render show the kitty image, and the handoff's `context`
 	// hook supplies the description to the model — exactly how a native `read`
 	// keeps its image for kitty and swaps it only on the LLM-bound clone.
-	#attachReadMedia(name: PiCoreToolName, result: { content?: unknown }, context: SpindleInvocationContext): void {
+	#attachReadMedia(name: PiCoreToolName, result: { content?: unknown }, context: CodeModeInvocationContext): void {
 		if (name !== "read") return;
 		const blocks = imageBlocks(result?.content);
 		if (blocks.length > 0) context.attachMedia?.(blocks);
@@ -596,7 +596,7 @@ export class PiToolsProvider implements SpindleProvider {
 	// and content text so the preview shows the kitty image + the clean note
 	// instead of the handoff's verbose description; the model still receives the
 	// description via the handoff's `context` hook swapping the image block.
-	#attachReadNote(name: PiCoreToolName, result: { content?: unknown }, context: SpindleInvocationContext): void {
+	#attachReadNote(name: PiCoreToolName, result: { content?: unknown }, context: CodeModeInvocationContext): void {
 		if (name !== "read") return;
 		const content = result?.content;
 		if (!Array.isArray(content)) return;
@@ -613,7 +613,7 @@ export class PiToolsProvider implements SpindleProvider {
 		}
 	}
 
-	#descriptor(name: PiCoreToolName, tool: ToolDefinition<any, any, any>): SpindleActionDescriptor {
+	#descriptor(name: PiCoreToolName, tool: ToolDefinition<any, any, any>): CodeModeActionDescriptor {
 		return {
 			name,
 			description: tool.description,

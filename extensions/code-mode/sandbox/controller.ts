@@ -70,7 +70,7 @@ export class SandboxController {
 	 * Why the OS sandbox is not up, and therefore why `bash` refuses to run.
 	 * Undefined when the sandbox is up, or when nothing is enforced. On the wire
 	 * as `SandboxStateEvent.degradedReason` (`protocol.ts`), read by
-	 * `spindle-state.ts`.
+	 * `code-mode-state.ts`.
 	 */
 	get degradedReason(): string | undefined {
 		return this.#degradedReason;
@@ -145,7 +145,7 @@ export class SandboxController {
 
 	/**
 	 * Wrap a command for the OS sandbox when one is active; identity otherwise.
-	 * Used by spindle-owned exec paths (pi.bash stdin) so they stay bounded by
+	 * Used by code-mode-owned exec paths (pi.bash stdin) so they stay bounded by
 	 * the same policy as the operations above.
 	 */
 	wrapCommand(command: string): Promise<string> {
@@ -163,7 +163,7 @@ export class SandboxController {
 		return Promise.resolve(argv);
 	}
 
-	/** Path check for Spindle's preview write tool, which does its own writing. */
+	/** Path check for Code Mode's preview write tool, which does its own writing. */
 	writeGuard(): (absolutePath: string) => void {
 		return (absolutePath: string) => {
 			if (!this.enforcing) return;

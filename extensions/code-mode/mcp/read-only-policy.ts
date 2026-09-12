@@ -20,7 +20,7 @@
  * Defaulting the unknown case to `deny` is the whole point: a server that grows a
  * new tool overnight, or a server nobody wrote a profile for, must fail closed.
  * The cost is a read that gets refused with a message saying exactly which line
- * of `spindle.json` would allow it; the alternative cost is a message sent to a
+ * of `code-mode.json` would allow it; the alternative cost is a message sent to a
  * customer at 3am. Set `unknownToolPolicy: "allow-reads"` to fall back on the
  * read-shape heuristic instead, or `"allow"` to only block the known writes.
  */
@@ -53,7 +53,7 @@ export interface McpServerPolicy {
 	unknownToolPolicy?: McpUnknownToolPolicy;
 }
 
-/** The `mcp` block of `spindle.json`. Declarative on purpose: one reviewable place. */
+/** The `mcp` block of `code-mode.json`. Declarative on purpose: one reviewable place. */
 export interface McpReadOnlyConfig {
 	/** Master switch. A night run turns it on for its participants. */
 	readOnly: boolean;
@@ -605,7 +605,7 @@ export class McpReadOnlyGate {
 			`MCP call ${label} is refused: read-only MCP mode is on and ${decision.reason}. ` +
 				"An unattended night run may read from MCP servers but must not write. " +
 				`Use a read tool instead, report the intended change in your final message, or add '${decision.tool}' to ` +
-				`mcp.servers.${scope}.allow in spindle.json.`,
+				`mcp.servers.${scope}.allow in code-mode.json.`,
 		);
 	}
 }
@@ -651,7 +651,7 @@ const serverDefault = (value: unknown): McpServerDefault | undefined =>
 const unknownPolicy = (value: unknown): McpUnknownToolPolicy | undefined =>
 	value === "deny" || value === "allow" || value === "allow-reads" ? value : undefined;
 
-/** Narrow an untrusted `spindle.json` `mcp` block. Junk falls back to the defaults. */
+/** Narrow an untrusted `code-mode.json` `mcp` block. Junk falls back to the defaults. */
 export const normalizeMcpReadOnlyConfig = (input: unknown): McpReadOnlyConfig => {
 	const record = asRecord(input);
 	const servers: Record<string, McpServerPolicy> = {};
@@ -681,7 +681,7 @@ export const normalizeMcpReadOnlyConfig = (input: unknown): McpReadOnlyConfig =>
 
 /**
  * The night floor: a run that asked for read-only MCP turns it on, and nothing
- * in `spindle.json` can turn it back off for the duration. Mirrors how the
+ * in `code-mode.json` can turn it back off for the duration. Mirrors how the
  * filesystem sandbox treats a night request (see `sandbox/resolve.ts`).
  */
 export const effectiveMcpReadOnlyConfig = (config: McpReadOnlyConfig, nightReadOnly: boolean): McpReadOnlyConfig =>

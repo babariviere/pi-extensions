@@ -1,11 +1,11 @@
-import type { SpindleTraceJsonValue } from "./trace.ts";
+import type { CodeModeTraceJsonValue } from "./trace.ts";
 
-export interface SpindleAuditProjection {
-	value: { [key: string]: SpindleTraceJsonValue };
+export interface CodeModeAuditProjection {
+	value: { [key: string]: CodeModeTraceJsonValue };
 	droppedValues: number;
 }
 
-const emptyProjection = (args: Record<string, unknown>): SpindleAuditProjection => ({
+const emptyProjection = (args: Record<string, unknown>): CodeModeAuditProjection => ({
 	value: {},
 	droppedValues: topLevelKeyCount(args),
 });
@@ -48,8 +48,8 @@ const localPath = (value: unknown): string | undefined => {
 			// construction without a base.
 		}
 		try {
-			const based = new URL(value, "https://spindle.invalid/");
-			if (based.hostname !== "spindle.invalid") return undefined;
+			const based = new URL(value, "https://code-mode.invalid/");
+			if (based.hostname !== "code-mode.invalid") return undefined;
 		} catch {
 			return undefined;
 		}
@@ -78,7 +78,7 @@ const applyPatchPaths = (patch: unknown): string[] => {
 };
 
 const copyString = (
-	output: Record<string, SpindleTraceJsonValue>,
+	output: Record<string, CodeModeTraceJsonValue>,
 	args: Record<string, unknown>,
 	key: string,
 ): void => {
@@ -87,7 +87,7 @@ const copyString = (
 };
 
 const copyNumber = (
-	output: Record<string, SpindleTraceJsonValue>,
+	output: Record<string, CodeModeTraceJsonValue>,
 	args: Record<string, unknown>,
 	key: string,
 ): void => {
@@ -110,7 +110,7 @@ const structuralIdentifier = (value: unknown): string | undefined => {
 };
 
 const copyIdentifier = (
-	output: Record<string, SpindleTraceJsonValue>,
+	output: Record<string, CodeModeTraceJsonValue>,
 	args: Record<string, unknown>,
 	key: string,
 ): void => {
@@ -118,16 +118,16 @@ const copyIdentifier = (
 	if (value !== undefined) output[key] = value;
 };
 
-const copyPath = (output: Record<string, SpindleTraceJsonValue>, args: Record<string, unknown>): void => {
+const copyPath = (output: Record<string, CodeModeTraceJsonValue>, args: Record<string, unknown>): void => {
 	const value = localPath(args.path);
 	if (value !== undefined) output.path = value;
 };
 
 const projected = (
 	args: Record<string, unknown>,
-	build: (output: Record<string, SpindleTraceJsonValue>) => void,
-): SpindleAuditProjection => {
-	const value: Record<string, SpindleTraceJsonValue> = {};
+	build: (output: Record<string, CodeModeTraceJsonValue>) => void,
+): CodeModeAuditProjection => {
+	const value: Record<string, CodeModeTraceJsonValue> = {};
 	try {
 		build(value);
 	} catch {
@@ -172,18 +172,18 @@ const idOnlyAgentActions = new Set([
  * arguments. This allowlist, rather than secret-looking string matching, is
  * the durable trace's primary confidentiality boundary.
  */
-export const projectSpindleAuditArgs = (ref: string, args: Record<string, unknown>): SpindleAuditProjection => {
+export const projectCodeModeAuditArgs = (ref: string, args: Record<string, unknown>): CodeModeAuditProjection => {
 	switch (ref) {
-		case "spindle.discovery.providers":
-		case "spindle.discovery.models":
-		case "spindle.workflow.progress":
+		case "code-mode.discovery.providers":
+		case "code-mode.discovery.models":
+		case "code-mode.workflow.progress":
 			return emptyProjection(args);
-		case "spindle.discovery.catalog":
+		case "code-mode.discovery.catalog":
 			return projected(args, (output) => {
 				copyIdentifier(output, args, "provider");
 				copyNumber(output, args, "limit");
 			});
-		case "spindle.discovery.list":
+		case "code-mode.discovery.list":
 			return projected(args, (output) => {
 				copyIdentifier(output, args, "provider");
 				copyIdentifier(output, args, "namespace");
@@ -191,26 +191,26 @@ export const projectSpindleAuditArgs = (ref: string, args: Record<string, unknow
 			});
 		// τ scratchpad operations keep the key, which is a plain identifier the
 		// program chose, and nothing else. The value never enters the trace.
-		case "spindle.state.get":
-		case "spindle.state.set":
-		case "spindle.state.delete":
+		case "code-mode.state.get":
+		case "code-mode.state.set":
+		case "code-mode.state.delete":
 			return projected(args, (output) => copyIdentifier(output, args, "key"));
-		case "spindle.state.keys":
-		case "spindle.state.clear":
+		case "code-mode.state.keys":
+		case "code-mode.state.clear":
 			return emptyProjection(args);
-		case "spindle.discovery.search":
+		case "code-mode.discovery.search":
 			return projected(args, (output) => copyNumber(output, args, "limit"));
-		case "spindle.discovery.describe":
+		case "code-mode.discovery.describe":
 			return projected(args, (output) => copyIdentifier(output, args, "ref"));
-		case "spindle.workflow.configure":
+		case "code-mode.workflow.configure":
 			return projected(args, (output) => copyString(output, args, "name"));
-		case "spindle.workflow.phase":
+		case "code-mode.workflow.phase":
 			return projected(args, (output) => {
 				copyString(output, args, "name");
 				copyIdentifier(output, args, "id");
 				copyNumber(output, args, "total");
 			});
-		case "spindle.workflow.item":
+		case "code-mode.workflow.item":
 			return projected(args, (output) => {
 				copyIdentifier(output, args, "id");
 				copyIdentifier(output, args, "status");
@@ -219,9 +219,9 @@ export const projectSpindleAuditArgs = (ref: string, args: Record<string, unknow
 				copyNumber(output, args, "total");
 				copyNumber(output, args, "completed");
 			});
-		case "spindle.workflow.event":
+		case "code-mode.workflow.event":
 			return projected(args, (output) => copyIdentifier(output, args, "level"));
-		case "spindle.workflow.pipeline":
+		case "code-mode.workflow.pipeline":
 			return projected(args, (output) => {
 				copyIdentifier(output, args, "kind");
 				copyNumber(output, args, "itemCount");
@@ -299,13 +299,13 @@ export const projectSpindleAuditArgs = (ref: string, args: Record<string, unknow
  * τ previews from the live store instead (see session-store.ts `preview()`), so
  * a reloaded transcript keeps the key and size and loses only the content.
  */
-export const projectSpindleAuditResult = (ref: string, result: unknown): SpindleAuditProjection | undefined => {
+export const projectCodeModeAuditResult = (ref: string, result: unknown): CodeModeAuditProjection | undefined => {
 	if (typeof result !== "object" || result === null || Array.isArray(result)) {
 		return undefined;
 	}
 	const record = result as Record<string, unknown>;
-	if (ref.startsWith("spindle.state.")) {
-		const value: Record<string, SpindleTraceJsonValue> = {};
+	if (ref.startsWith("code-mode.state.")) {
+		const value: Record<string, CodeModeTraceJsonValue> = {};
 		const bytes = finiteNumber(record.bytes);
 		if (bytes !== undefined) value.bytes = bytes;
 		const cleared = finiteNumber(record.cleared);
@@ -326,7 +326,7 @@ export const projectSpindleAuditResult = (ref: string, result: unknown): Spindle
 				? details.changes
 				: undefined;
 		if (rawChanges === undefined) return undefined;
-		const changes: Array<{ [key: string]: SpindleTraceJsonValue }> = [];
+		const changes: Array<{ [key: string]: CodeModeTraceJsonValue }> = [];
 		let droppedValues = Math.max(0, topLevelKeyCount(record) - 1);
 		const limit = Math.min(rawChanges.length, MAX_PROJECTED_APPLY_PATCH_CHANGES);
 		for (let index = 0; index < limit; index++) {

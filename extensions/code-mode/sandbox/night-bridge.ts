@@ -6,8 +6,8 @@
  * instead, the same way they already inherit the report path and the hard rules
  * (see `agents/pi-args.ts`, which reads the same file).
  *
- * The dependency direction is deliberate and one-way: spindle reads night-mode,
- * never the reverse, so night-mode stays usable without spindle.
+ * The dependency direction is deliberate and one-way: code-mode reads night-mode,
+ * never the reverse, so night-mode stays usable without code-mode.
  */
 
 import { isNightRunParticipant, readActiveNightRun } from "../../night-mode/night-run.ts";
@@ -24,7 +24,7 @@ export interface NightSessionRef {
  * The active night run's requested policy, if any. Returns undefined when no run
  * is in flight, the run did not ask for a sandbox, or **this process is not part
  * of the run** — a handshake file is global, and a session the user opens while a
- * run is in flight keeps whatever `spindle.json` configures.
+ * run is in flight keeps whatever `code-mode.json` configures.
  */
 export function activeNightSandboxRequest(ref: NightSessionRef = {}): SandboxRequest | undefined {
 	const run = readActiveNightRun();

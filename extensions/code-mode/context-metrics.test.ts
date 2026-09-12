@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { contextReadWarning, summarizeContextMetrics } from "./context-metrics.ts";
-import type { SpindleCallAudit } from "./core/action-registry.ts";
+import type { CodeModeCallAudit } from "./core/action-registry.ts";
 
-const read = (args: Record<string, unknown>, resultChars: number): SpindleCallAudit => ({
+const read = (args: Record<string, unknown>, resultChars: number): CodeModeCallAudit => ({
 	ref: "pi.read",
 	nestedToolCallId: "call",
 	startedAt: 0,

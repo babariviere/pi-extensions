@@ -4,7 +4,7 @@
  * unattended run.
  *
  * Pure except for `readNightConfig`, which reads pi's settings files the same
- * way `spindle/agents/settings.ts` does (project overrides user).
+ * way `code-mode/agents/settings.ts` does (project overrides user).
  */
 
 import { existsSync, readFileSync } from "node:fs";
@@ -51,7 +51,7 @@ export interface NightConfig {
 	 */
 	sandboxCopyFiles: string[];
 	/**
-	 * Filesystem sandbox requested from Spindle for the duration of the run. The
+	 * Filesystem sandbox requested from Code Mode for the duration of the run. The
 	 * working copy, the report directory and the ledger store stay writable;
 	 * everything else on the disk does not. `"off"` disables the request.
 	 */
@@ -72,7 +72,7 @@ export interface NightConfig {
 	/**
 	 * Refuse write-shaped MCP tool calls for the whole run: no Slack message, no
 	 * Linear mutation, no Datadog monitor edit, enforced in code rather than in
-	 * the prose contract (see `spindle/mcp/read-only-policy.ts`). Applies to the
+	 * the prose contract (see `code-mode/mcp/read-only-policy.ts`). Applies to the
 	 * coordinator and to every subagent process.
 	 */
 	mcpReadOnly: boolean;

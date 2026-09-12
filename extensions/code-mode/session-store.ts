@@ -30,7 +30,7 @@
  */
 
 /** Byte and count budgets for one session's store. */
-export interface SpindleSessionStoreLimits {
+export interface CodeModeSessionStoreLimits {
 	/** Maximum number of live keys. */
 	maxKeys: number;
 	/** Maximum serialized size of a single value. */
@@ -41,7 +41,7 @@ export interface SpindleSessionStoreLimits {
 	maxKeyChars: number;
 }
 
-export const DEFAULT_SESSION_STORE_LIMITS: SpindleSessionStoreLimits = {
+export const DEFAULT_SESSION_STORE_LIMITS: CodeModeSessionStoreLimits = {
 	maxKeys: 64,
 	maxValueBytes: 4 * 1024 * 1024,
 	maxTotalBytes: 16 * 1024 * 1024,
@@ -52,14 +52,14 @@ export const DEFAULT_SESSION_STORE_LIMITS: SpindleSessionStoreLimits = {
 const KEY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.:-]*$/;
 
 /** One held key, as echoed back to the model. */
-export interface SpindleSessionStoreKey {
+export interface CodeModeSessionStoreKey {
 	key: string;
 	bytes: number;
 	updatedAt: number;
 }
 
 /** The outcome of a `τ.set`. */
-export interface SpindleSessionStoreWrite {
+export interface CodeModeSessionStoreWrite {
 	key: string;
 	bytes: number;
 	/** True when the write replaced an existing entry. */
@@ -68,7 +68,7 @@ export interface SpindleSessionStoreWrite {
 }
 
 /** The outcome of a `τ.get`; `found` distinguishes a stored null from a miss. */
-export interface SpindleSessionStoreRead {
+export interface CodeModeSessionStoreRead {
 	key: string;
 	found: boolean;
 	/** Serialized size of the value read; absent on a miss. */
@@ -88,16 +88,16 @@ const formatBytes = (bytes: number): string => {
 	return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 };
 
-export class SpindleSessionStore {
+export class CodeModeSessionStore {
 	readonly #entries = new Map<string, Entry>();
-	readonly #limits: SpindleSessionStoreLimits;
+	readonly #limits: CodeModeSessionStoreLimits;
 	#bytes = 0;
 
-	constructor(limits: Partial<SpindleSessionStoreLimits> = {}) {
+	constructor(limits: Partial<CodeModeSessionStoreLimits> = {}) {
 		this.#limits = { ...DEFAULT_SESSION_STORE_LIMITS, ...limits };
 	}
 
-	get limits(): SpindleSessionStoreLimits {
+	get limits(): CodeModeSessionStoreLimits {
 		return this.#limits;
 	}
 
@@ -131,7 +131,7 @@ export class SpindleSessionStore {
 	 * Throws rather than evicting: a program that overruns a budget must find out
 	 * at the write, not discover a missing key three steps later.
 	 */
-	set(key: unknown, value: unknown): SpindleSessionStoreWrite {
+	set(key: unknown, value: unknown): CodeModeSessionStoreWrite {
 		const name = this.#key(key, "set");
 		let json: string | undefined;
 		try {
@@ -176,7 +176,7 @@ export class SpindleSessionStore {
 	 * distinguishable from a miss across the guest bridge, where both would
 	 * otherwise arrive as a nullish value.
 	 */
-	get(key: unknown): SpindleSessionStoreRead {
+	get(key: unknown): CodeModeSessionStoreRead {
 		const name = this.#key(key, "get");
 		const entry = this.#entries.get(name);
 		if (!entry) return { key: name, found: false };
@@ -200,7 +200,7 @@ export class SpindleSessionStore {
 	}
 
 	/** Held keys, newest write last, with their serialized sizes. */
-	keys(): SpindleSessionStoreKey[] {
+	keys(): CodeModeSessionStoreKey[] {
 		return [...this.#entries.entries()].map(([key, entry]) => ({
 			key,
 			bytes: entry.bytes,

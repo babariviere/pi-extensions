@@ -5,7 +5,7 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { CodePreviewSettings } from "./code-preview.ts";
 import { diffLines } from "diff";
 import { bundledLanguages } from "shiki";
-import type { SpindleRenderAudit } from "./spindle-render.ts";
+import type { CodeModeRenderAudit } from "./code-mode-render.ts";
 import { activeShikiThemeIsLight, highlightCode, languageFromPath } from "./highlight.ts";
 import { markDiffLine } from "./diff-background.ts";
 import { countContentLines, selectPreviewTextLines } from "./preview-lines.ts";
@@ -40,7 +40,7 @@ type DiffSummary = {
 
 const CORE_TOOLS = new Set(["bash", "exec", "read", "write", "edit", "grep", "find", "ls"]);
 
-export const isCoreToolAudit = (audit: SpindleRenderAudit): boolean =>
+export const isCoreToolAudit = (audit: CodeModeRenderAudit): boolean =>
 	audit.tool !== undefined &&
 	CORE_TOOLS.has(audit.tool) &&
 	(audit.provider === "pi" || audit.ref === `pi.${audit.tool}`);
@@ -63,7 +63,7 @@ const stringOf = (value: unknown): string | undefined => (typeof value === "stri
 const numberOf = (value: unknown): number | undefined =>
 	typeof value === "number" && Number.isFinite(value) ? value : undefined;
 
-const argString = (audit: SpindleRenderAudit, key: string): string | undefined => stringOf(audit.args?.[key]);
+const argString = (audit: CodeModeRenderAudit, key: string): string | undefined => stringOf(audit.args?.[key]);
 
 const escapeControlChars = (text: string): string =>
 	text
@@ -106,7 +106,7 @@ const formatDisplayPath = (filePath: string, cwd: string): string => {
 const renderPath = (filePath: string, cwd: string, theme: Theme, fallback = "..."): string =>
 	theme.fg("accent", escapeControlChars(formatDisplayPath(filePath, cwd) || fallback));
 
-const normalizedResult = (audit: SpindleRenderAudit): unknown => {
+const normalizedResult = (audit: CodeModeRenderAudit): unknown => {
 	const preview = recordOf(audit.preview);
 	return preview && "result" in preview ? preview.result : audit.result;
 };
@@ -123,21 +123,21 @@ const contentOutput = (value: unknown): string | undefined => {
 	return text || undefined;
 };
 
-const resultOutput = (audit: SpindleRenderAudit): string | undefined => {
+const resultOutput = (audit: CodeModeRenderAudit): string | undefined => {
 	const result = normalizedResult(audit);
 	if (typeof result === "string") return result;
 	const record = recordOf(result);
 	return stringOf(record?.output) ?? stringOf(record?.text) ?? contentOutput(record?.content);
 };
 
-const resultDetails = (audit: SpindleRenderAudit): Record<string, unknown> | undefined => {
+const resultDetails = (audit: CodeModeRenderAudit): Record<string, unknown> | undefined => {
 	const preview = recordOf(audit.preview);
 	const previewDetails = recordOf(preview?.details);
 	if (previewDetails) return previewDetails;
 	return recordOf(recordOf(normalizedResult(audit))?.details);
 };
 
-const nativeTruncated = (audit: SpindleRenderAudit): boolean => {
+const nativeTruncated = (audit: CodeModeRenderAudit): boolean => {
 	const truncation = recordOf(resultDetails(audit)?.truncation);
 	return truncation?.truncated === true || audit.resultTruncated === true;
 };
@@ -152,7 +152,7 @@ const splitReadContinuationNotice = (text: string): { content: string; notice?: 
 	return { content: match[1] ?? "", notice: notice.slice(1, -1) };
 };
 
-const toolLimit = (audit: SpindleRenderAudit, options: CoreToolRenderOptions): number => {
+const toolLimit = (audit: CodeModeRenderAudit, options: CoreToolRenderOptions): number => {
 	if (options.expanded) return options.maxLines;
 	const configured = (() => {
 		switch (audit.tool) {
@@ -622,7 +622,7 @@ const renderDiff = (
 };
 
 const renderRead = (
-	audit: SpindleRenderAudit,
+	audit: CodeModeRenderAudit,
 	theme: Theme,
 	options: CoreToolRenderOptions,
 ): RenderedCoreToolBody | null => {
@@ -647,12 +647,12 @@ const renderRead = (
 	return rendered;
 };
 
-const getWriteBefore = (audit: SpindleRenderAudit): unknown => {
+const getWriteBefore = (audit: CodeModeRenderAudit): unknown => {
 	const details = resultDetails(audit);
 	return details?.codePreviewBeforeWrite ?? recordOf(audit.preview)?.codePreviewBeforeWrite;
 };
 
-const bashCommand = (audit: SpindleRenderAudit): string => {
+const bashCommand = (audit: CodeModeRenderAudit): string => {
 	const command = stringOf(recordOf(audit.preview)?.bashCommand) ?? argString(audit, "command");
 	if (command !== undefined) return command;
 	const argv = audit.args?.argv;
@@ -661,11 +661,11 @@ const bashCommand = (audit: SpindleRenderAudit): string => {
 		: "";
 };
 
-const writeContent = (audit: SpindleRenderAudit): string | undefined =>
+const writeContent = (audit: CodeModeRenderAudit): string | undefined =>
 	stringOf(recordOf(audit.preview)?.writeContent) ?? argString(audit, "content");
 
 const renderWrite = (
-	audit: SpindleRenderAudit,
+	audit: CodeModeRenderAudit,
 	theme: Theme,
 	options: CoreToolRenderOptions,
 ): RenderedCoreToolBody | null => {
@@ -743,7 +743,7 @@ const renderWrite = (
 	});
 };
 
-const editOperations = (audit: SpindleRenderAudit): Array<{ oldText: string; newText: string }> => {
+const editOperations = (audit: CodeModeRenderAudit): Array<{ oldText: string; newText: string }> => {
 	const edits = Array.isArray(audit.args?.edits) ? audit.args.edits : [];
 	return edits.flatMap((edit) => {
 		const record = recordOf(edit);
@@ -754,7 +754,7 @@ const editOperations = (audit: SpindleRenderAudit): Array<{ oldText: string; new
 };
 
 const renderEdit = (
-	audit: SpindleRenderAudit,
+	audit: CodeModeRenderAudit,
 	theme: Theme,
 	options: CoreToolRenderOptions,
 ): RenderedCoreToolBody | null => {
@@ -820,7 +820,7 @@ const grepMatchRanges = (
 
 const renderGrepLine = (
 	raw: string,
-	audit: SpindleRenderAudit,
+	audit: CodeModeRenderAudit,
 	theme: Theme,
 	options: CoreToolRenderOptions,
 	currentPath: { value: string; language: string | undefined },
@@ -869,7 +869,7 @@ const renderGrepLine = (
 };
 
 const renderGrep = (
-	audit: SpindleRenderAudit,
+	audit: CodeModeRenderAudit,
 	theme: Theme,
 	options: CoreToolRenderOptions,
 ): RenderedCoreToolBody | null => {
@@ -963,7 +963,7 @@ const pathIcon = (filePath: string, directory: boolean, mode: CodePreviewSetting
 };
 
 const renderPathList = (
-	audit: SpindleRenderAudit,
+	audit: CodeModeRenderAudit,
 	theme: Theme,
 	options: CoreToolRenderOptions,
 ): RenderedCoreToolBody | null => {
@@ -1047,7 +1047,7 @@ const renderPathList = (
 };
 
 const renderBash = (
-	audit: SpindleRenderAudit,
+	audit: CodeModeRenderAudit,
 	theme: Theme,
 	options: CoreToolRenderOptions,
 ): RenderedCoreToolBody | null => {
@@ -1096,12 +1096,12 @@ const renderBash = (
 	return { lines, hidden: selected.hidden };
 };
 
-export const coreToolRendererEnabled = (audit: SpindleRenderAudit, settings: CodePreviewSettings): boolean =>
+export const coreToolRendererEnabled = (audit: CodeModeRenderAudit, settings: CodePreviewSettings): boolean =>
 	isCoreToolAudit(audit) &&
 	audit.tool !== undefined &&
 	settings.tools.includes(audit.tool as CodePreviewSettings["tools"][number]);
 
-export const coreToolPreviewEnabled = (audit: SpindleRenderAudit, settings: CodePreviewSettings): boolean => {
+export const coreToolPreviewEnabled = (audit: CodeModeRenderAudit, settings: CodePreviewSettings): boolean => {
 	if (!coreToolRendererEnabled(audit, settings)) return true;
 	switch (audit.tool) {
 		case "read":
@@ -1133,7 +1133,7 @@ export const coreToolPreviewEnabled = (audit: SpindleRenderAudit, settings: Code
 };
 
 export const renderCoreToolBody = (
-	audit: SpindleRenderAudit,
+	audit: CodeModeRenderAudit,
 	theme: Theme,
 	options: CoreToolRenderOptions,
 ): RenderedCoreToolBody | null => {
@@ -1159,7 +1159,7 @@ export const renderCoreToolBody = (
 };
 
 export const coreToolTitle = (
-	audit: SpindleRenderAudit,
+	audit: CodeModeRenderAudit,
 	theme: Theme,
 	options: Pick<CoreToolRenderOptions, "cwd" | "settings" | "invalidate">,
 ): string | null => {

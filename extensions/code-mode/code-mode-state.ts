@@ -4,7 +4,7 @@
  *
  * Upstream wired the actor manager, mesh store, lifecycle broker, control
  * plane, participant directory, prewalk controller, schema controller, state
- * store, compaction controller and its own agent manager. Spindle drops
+ * store, compaction controller and its own agent manager. Code Mode drops
  * all of them: this holds the config, the action registry, the four providers
  * (`pi`, explicit `web`, `mcp`, `agents`), the execution service, the activity
  * store and the subagent run registry.
@@ -15,19 +15,23 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { type ExtensionContext, getAgentDir } from "@earendil-works/pi-coding-agent";
 import { applyNightRunEnv } from "../night-mode/night-run.ts";
 import { isUsagePacingEvent, USAGE_PACING_EVENT } from "../usage/protocol.ts";
-import { SpindleActivityStore } from "./activity/store.ts";
+import { CodeModeActivityStore } from "./activity/store.ts";
 import type { CapturedToolCatalog } from "./capture/catalog.ts";
-import { loadSpindleConfig, type SpindleConfig } from "./config.ts";
+import { loadCodeModeConfig, type CodeModeConfig } from "./config.ts";
 import { ActionRegistry } from "./core/action-registry.ts";
-import { SpindleToolResultProxy } from "./core/tool-result-proxy.ts";
-import { SpindleExecutionService } from "./execution-service.ts";
+import { CodeModeToolResultProxy } from "./core/tool-result-proxy.ts";
+import { CodeModeExecutionService } from "./execution-service.ts";
 import { McpClientHub } from "./mcp/client-hub.ts";
 import { activeNightMcpReadOnly } from "./mcp/night-bridge.ts";
 import { effectiveMcpReadOnlyConfig, McpReadOnlyGate } from "./mcp/read-only-policy.ts";
-import { SPINDLE_PROVIDER_DISCOVER_EVENT, type SpindleProvider, type SpindleProviderDiscovery } from "./protocol.ts";
+import {
+	CODE_MODE_PROVIDER_DISCOVER_EVENT,
+	type CodeModeProvider,
+	type CodeModeProviderDiscovery,
+} from "./protocol.ts";
 import { type AgentCompletionEvent, AgentRunBook } from "./providers/agent-run-book.ts";
-import { SpindleAgentRunRegistry } from "./providers/agent-run-monitor.ts";
-import { type SessionRef, SpindleAgentsProvider } from "./providers/agents-provider.ts";
+import { CodeModeAgentRunRegistry } from "./providers/agent-run-monitor.ts";
+import { type SessionRef, CodeModeAgentsProvider } from "./providers/agents-provider.ts";
 import { CapturedToolOverrideAdapter, CapturedToolsProvider } from "./providers/captured-tools-provider.ts";
 import { McpClientProvider } from "./providers/mcp-client-provider.ts";
 import { PiToolsProvider } from "./providers/pi-tools-provider.ts";
@@ -44,22 +48,22 @@ import {
 	type SandboxStateEvent,
 } from "./sandbox/protocol.ts";
 import { effectiveSandbox } from "./sandbox/resolve.ts";
-import { SpindleSessionStore } from "./session-store.ts";
+import { CodeModeSessionStore } from "./session-store.ts";
 
-const RESERVED_PROVIDER_NAMES = ["pi", "mcp", "agents", "web", "spindle"];
+const RESERVED_PROVIDER_NAMES = ["pi", "mcp", "agents", "web", "code-mode"];
 export const CAPTURED_WEB_ALIASES = { search: "web_search", fetch: "fetch_content" } as const;
 
 /** How long session teardown waits for cancelled subagent children to die. */
 const AGENT_DRAIN_TIMEOUT_MS = 5_000;
 
-export class SpindleState {
+export class CodeModeState {
 	#registry: ActionRegistry | undefined;
-	#config: SpindleConfig | undefined;
-	#execution: SpindleExecutionService | undefined;
+	#config: CodeModeConfig | undefined;
+	#execution: CodeModeExecutionService | undefined;
 	#cwd: string | undefined;
 	/** Filesystem guardrail for the mutating core tools; undefined until initialize(). */
 	#sandbox: SandboxController | undefined;
-	/** Spindle's own MCP client, created on first `mcp.*` use or first `/mcp` command. */
+	/** Code Mode's own MCP client, created on first `mcp.*` use or first `/mcp` command. */
 	#mcpHub: McpClientHub | undefined;
 	#mcpStatusListener: (() => void) | undefined;
 	/** Unsubscribe for the mid-session sandbox request listener. */
@@ -79,13 +83,13 @@ export class SpindleState {
 	#sandboxRequest: SandboxRequest | undefined;
 	/**
 	 * Sandbox floor the parent imposed on this process via the agent's
-	 * `sandbox:` frontmatter. Set only when this pi process is a Spindle
+	 * `sandbox:` frontmatter. Set only when this pi process is a Code Mode
 	 * subagent; undefined for a normal session.
 	 */
 	#agentSandbox: SandboxRequest | undefined;
-	readonly #externalProviders = new Map<string, SpindleProvider>();
-	readonly activity = new SpindleActivityStore();
-	readonly agentRuns = new SpindleAgentRunRegistry();
+	readonly #externalProviders = new Map<string, CodeModeProvider>();
+	readonly activity = new CodeModeActivityStore();
+	readonly agentRuns = new CodeModeAgentRunRegistry();
 	/**
 	 * Live subagent batches. Lives on the state (not the provider) because it
 	 * outlives a single `code_mode` program: a detached run is cancelled at
@@ -99,7 +103,7 @@ export class SpindleState {
 	 * hand a large intermediate to the next without routing it through the
 	 * model's context. Reset on every session, never persisted to disk.
 	 */
-	readonly sessionStore = new SpindleSessionStore();
+	readonly sessionStore = new CodeModeSessionStore();
 	readonly #sessionRef: SessionRef = {
 		sessionId: undefined,
 		sessionFile: undefined,
@@ -134,18 +138,18 @@ export class SpindleState {
 		return this.#sessionRef;
 	}
 
-	get config(): SpindleConfig {
-		if (!this.#config) throw new Error("Spindle has not initialized");
+	get config(): CodeModeConfig {
+		if (!this.#config) throw new Error("Code Mode has not initialized");
 		return this.#config;
 	}
 
 	get registry(): ActionRegistry {
-		if (!this.#registry) throw new Error("Spindle has not initialized");
+		if (!this.#registry) throw new Error("Code Mode has not initialized");
 		return this.#registry;
 	}
 
-	get execution(): SpindleExecutionService {
-		if (!this.#execution) throw new Error("Spindle has not initialized");
+	get execution(): CodeModeExecutionService {
+		if (!this.#execution) throw new Error("Code Mode has not initialized");
 		return this.#execution;
 	}
 
@@ -164,7 +168,7 @@ export class SpindleState {
 		this.sessionStore.reset();
 		this.agentRunBook.setSink((event) => this.#announceAgentCompletion(event));
 		const projectTrusted = context.isProjectTrusted();
-		this.#config = loadSpindleConfig({
+		this.#config = loadCodeModeConfig({
 			cwd: context.cwd,
 			agentDir: getAgentDir(),
 			projectTrusted,
@@ -181,7 +185,7 @@ export class SpindleState {
 		} catch {
 			this.#sessionRef.sessionFile = undefined;
 		}
-		this.#registry = new ActionRegistry(new SpindleToolResultProxy(() => this.capturedTools.runner));
+		this.#registry = new ActionRegistry(new CodeModeToolResultProxy(() => this.capturedTools.runner));
 		const capturedToolOverrides = this.#config.fullCodeMode
 			? new CapturedToolOverrideAdapter(this.capturedTools, () => this.#mcpReadOnlyGate())
 			: undefined;
@@ -212,7 +216,7 @@ export class SpindleState {
 			);
 		}
 		if (capturedToolsProvider) this.#registry.register(capturedToolsProvider);
-		// `mcp.*` is served by Spindle's own MCP client over ~/.pi/agent/mcp.json.
+		// `mcp.*` is served by Code Mode's own MCP client over ~/.pi/agent/mcp.json.
 		// The hub is built on first use so a session with no MCP program pays
 		// nothing and never touches the credential store.
 		this.#registry.register(
@@ -226,7 +230,7 @@ export class SpindleState {
 				? context.scopedModels.map((entry) => entry.model)
 				: await context.modelRegistry.getAvailable();
 		this.#registry.register(
-			new SpindleAgentsProvider(
+			new CodeModeAgentsProvider(
 				() => this.#sessionRef,
 				this.agentRuns,
 				() => ({
@@ -246,12 +250,12 @@ export class SpindleState {
 		for (const provider of this.#externalProviders.values()) {
 			this.#registry.register(provider);
 		}
-		this.#execution = new SpindleExecutionService(this.#registry, this.#config, this.activity, this.sessionStore);
-		const discovery: SpindleProviderDiscovery = {
+		this.#execution = new CodeModeExecutionService(this.#registry, this.#config, this.activity, this.sessionStore);
+		const discovery: CodeModeProviderDiscovery = {
 			version: 1,
 			register: (provider, options) => this.registerExternal(provider, options),
 		};
-		this.pi.events.emit(SPINDLE_PROVIDER_DISCOVER_EVENT, discovery);
+		this.pi.events.emit(CODE_MODE_PROVIDER_DISCOVER_EVENT, discovery);
 	}
 
 	async ensure(context: ExtensionContext): Promise<void> {
@@ -260,7 +264,7 @@ export class SpindleState {
 
 	reloadConfig(context: ExtensionContext): void {
 		if (!this.#config || !this.#cwd) return;
-		const next = loadSpindleConfig({
+		const next = loadCodeModeConfig({
 			cwd: context.cwd,
 			agentDir: getAgentDir(),
 			projectTrusted: context.isProjectTrusted(),
@@ -268,12 +272,12 @@ export class SpindleState {
 		deepAssign(this.#config as unknown as Record<string, unknown>, next as unknown as Record<string, unknown>);
 	}
 
-	registerExternal(provider: SpindleProvider, options: { overwrite?: boolean } = {}): void {
+	registerExternal(provider: CodeModeProvider, options: { overwrite?: boolean } = {}): void {
 		if (RESERVED_PROVIDER_NAMES.includes(provider.name)) {
-			throw new Error(`Reserved Spindle provider name: ${provider.name}`);
+			throw new Error(`Reserved Code Mode provider name: ${provider.name}`);
 		}
 		if (this.#externalProviders.has(provider.name) && !options.overwrite) {
-			throw new Error(`Spindle provider already registered: ${provider.name}`);
+			throw new Error(`Code Mode provider already registered: ${provider.name}`);
 		}
 		this.#externalProviders.set(provider.name, provider);
 		if (this.#registry) this.#registry.register(provider, options);
@@ -302,7 +306,7 @@ export class SpindleState {
 	}
 
 	/**
-	 * Resolve the effective policy from `spindle.json`, the last request, and two
+	 * Resolve the effective policy from `code-mode.json`, the last request, and two
 	 * floors: an active night run, and the agent definition this process was
 	 * launched from (see `sandbox/resolve.ts`).
 	 *
@@ -339,7 +343,7 @@ export class SpindleState {
 	}
 
 	/**
-	 * Read-only MCP guardrail for this session: `spindle.json` plus the floor an
+	 * Read-only MCP guardrail for this session: `code-mode.json` plus the floor an
 	 * active night run imposes. Rebuilt per call, like `#resolveSandbox`, so a run
 	 * that starts mid-session (or a `/reload`) is picked up without touching the
 	 * providers, and so a subagent process inherits it just by starting up.
@@ -363,13 +367,13 @@ export class SpindleState {
 		const controller = new SandboxController(policy, source);
 		const state = await controller.apply(policy, source);
 		if (state.enforcing && state.degradedReason) {
-			context.ui.notify(`spindle: ${controller.describe()}`, "error");
+			context.ui.notify(`code-mode: ${controller.describe()}`, "error");
 		}
 		// A canonicalized root (e.g. a symlinked writable root or denyRead root)
 		// is not fatal, but an operator should still see it once, the same way a
 		// degraded sandbox is surfaced above.
 		if (state.warnings?.length) {
-			context.ui.notify(`spindle: ${state.warnings.join("; ")}`, "warning");
+			context.ui.notify(`code-mode: ${state.warnings.join("; ")}`, "warning");
 		}
 		this.pi.events.emit(SANDBOX_STATE_EVENT, state);
 
@@ -385,12 +389,12 @@ export class SpindleState {
 	}
 
 	/**
-	 * Adopt a sandbox request. `null` reverts to `spindle.json`. An active night
+	 * Adopt a sandbox request. `null` reverts to `code-mode.json`. An active night
 	 * run acts as a floor: a request that would loosen it is refused and reported,
 	 * so nothing can un-sandbox an unattended run mid-flight.
 	 *
 	 * Returns the resulting state, or undefined when there is no sandbox to change
-	 * (Spindle not in full code mode).
+	 * (Code Mode not in full code mode).
 	 */
 	async applySandboxRequest(
 		request: SandboxRequest | null,
@@ -416,7 +420,7 @@ export class SpindleState {
 		})
 			.then((path) => {
 				if (path && this.#isCurrentSandbox(controller, generation)) {
-					context.ui.notify(`spindle: sandbox capabilities probed, see ${path}`, "info");
+					context.ui.notify(`code-mode: sandbox capabilities probed, see ${path}`, "info");
 				}
 			})
 			.catch(() => {
@@ -425,19 +429,19 @@ export class SpindleState {
 		if (effective.refused) {
 			const holder = effective.source === "agent" ? "this subagent's definition" : "an active night run";
 			context.ui.notify(
-				`spindle: '${effective.refused.asked}' refused, ${holder} holds the sandbox at ` +
+				`code-mode: '${effective.refused.asked}' refused, ${holder} holds the sandbox at ` +
 					`'${effective.refused.enforced}'. ${controller.describe()}`,
 				"warning",
 			);
 			return state;
 		}
 		const suffix = reason ? ` (${reason})` : "";
-		context.ui.notify(`spindle: ${controller.describe()}${suffix}`, "info");
+		context.ui.notify(`code-mode: ${controller.describe()}${suffix}`, "info");
 		return state;
 	}
 
 	/**
-	 * Spindle's MCP client, created on demand.
+	 * Code Mode's MCP client, created on demand.
 	 *
 	 * Shared with the `/mcp` and `/mcp-auth` commands so a status read reflects
 	 * the connections this session actually holds, and so an authorization is
@@ -500,7 +504,7 @@ export class SpindleState {
 		try {
 			this.pi.sendMessage(
 				{
-					customType: "spindle.agent_result",
+					customType: "code-mode.agent_result",
 					content: `${header}\n\n${body}`,
 					display: true,
 					// Outputs are already in `content`; the details carry the handles only,
@@ -537,11 +541,11 @@ export class SpindleState {
 			.catch((error: unknown) => {
 				const message = error instanceof Error ? error.message : String(error);
 				if (generation !== this.#sandboxGeneration) {
-					console.warn(`[spindle] Sandbox request failed during session teardown: ${message}`);
+					console.warn(`[code-mode] Sandbox request failed during session teardown: ${message}`);
 					return;
 				}
-				console.error(`[spindle] Failed to apply sandbox request: ${message}`);
-				context.ui.notify(`spindle: failed to apply sandbox request: ${message}`, "error");
+				console.error(`[code-mode] Failed to apply sandbox request: ${message}`);
+				context.ui.notify(`code-mode: failed to apply sandbox request: ${message}`, "error");
 			})
 			.finally(() => this.#pendingSandboxRequests.delete(pending));
 		this.#pendingSandboxRequests.add(pending);

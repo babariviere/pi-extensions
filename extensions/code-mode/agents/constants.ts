@@ -4,12 +4,12 @@
  * module so the child extension can import them without pulling in backend code.
  */
 
-/** Spindle's sandbox tool; the child's only tool path in full code mode. */
-export const SPINDLE_EXEC_TOOL = "code_mode";
+/** Code Mode's sandbox tool; the child's only tool path in full code mode. */
+export const CODE_MODE_EXEC_TOOL = "code_mode";
 
 /**
  * CLI flag carrying the sandbox mode the agent's `sandbox:` frontmatter asks
- * for into the child. The child's Spindle applies it as a *floor*: `/sandbox`
+ * for into the child. The child's Code Mode applies it as a *floor*: `/sandbox`
  * inside a subagent can tighten it but never loosen it, the same way an active
  * night run holds the sandbox for its whole duration.
  *
@@ -23,7 +23,7 @@ export const SPINDLE_EXEC_TOOL = "code_mode";
  * an env var so the child can be launched by `herdr agent start`, which passes
  * native args after `--` but cannot inject environment variables.
  */
-export const SANDBOX_MODE_FLAG = "spindle-sandbox";
+export const SANDBOX_MODE_FLAG = "code-mode-sandbox";
 
 /**
  * CLI flag carrying the path to the file holding this run's task message.
@@ -36,10 +36,10 @@ export const SANDBOX_MODE_FLAG = "spindle-sandbox";
  * empty composer and a run that failed at its timeout with no output.
  *
  * So the parent writes the task to a file and passes its path here; the child's
- * Spindle reads it and delivers it as the initial user message from inside pi
+ * Code Mode reads it and delivers it as the initial user message from inside pi
  * (see `agents/task-delivery.ts`), where no startup race exists.
  *
- * Unlike {@link SANDBOX_MODE_FLAG} this flag is registered by Spindle itself,
+ * Unlike {@link SANDBOX_MODE_FLAG} this flag is registered by Code Mode itself,
  * not by the injected child extension: task delivery has nothing to do with
  * sandboxing, so it must work for an agent that declares no `sandbox:` and gets
  * no `--extension` at all.
@@ -48,4 +48,4 @@ export const SANDBOX_MODE_FLAG = "spindle-sandbox";
  * that content in `<file name="...">...</file>`, so the task would reach the
  * model framed as an attachment instead of as the instruction it is.
  */
-export const TASK_FILE_FLAG = "spindle-task-file";
+export const TASK_FILE_FLAG = "code-mode-task-file";

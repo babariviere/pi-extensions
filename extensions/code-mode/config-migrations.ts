@@ -1,6 +1,6 @@
-export const CURRENT_SPINDLE_CONFIG_VERSION = 1;
+export const CURRENT_CODE_MODE_CONFIG_VERSION = 1;
 
-export interface SpindleConfigMigrationResult {
+export interface CodeModeConfigMigrationResult {
 	document: Record<string, unknown>;
 	fromVersion: number;
 	toVersion: number;
@@ -8,7 +8,7 @@ export interface SpindleConfigMigrationResult {
 	changed: boolean;
 }
 
-interface SpindleConfigMigration {
+interface CodeModeConfigMigration {
 	from: number;
 	to: number;
 	migrate(document: Readonly<Record<string, unknown>>): Record<string, unknown>;
@@ -26,7 +26,7 @@ const mergeObjects = (base: Record<string, unknown>, override: Record<string, un
 	return merged;
 };
 
-const migrations: readonly SpindleConfigMigration[] = [
+const migrations: readonly CodeModeConfigMigration[] = [
 	{
 		from: 0,
 		to: 1,
@@ -36,7 +36,7 @@ const migrations: readonly SpindleConfigMigration[] = [
 			const canonical = migrated.agents;
 			if (legacy !== undefined) {
 				if (canonical !== undefined && isObject(legacy) !== isObject(canonical)) {
-					throw new Error("Spindle configuration cannot merge legacy subagents with a malformed agents section");
+					throw new Error("Code Mode configuration cannot merge legacy subagents with a malformed agents section");
 				}
 				migrated.agents =
 					isObject(legacy) && isObject(canonical) ? mergeObjects(legacy, canonical) : (canonical ?? legacy);
@@ -51,28 +51,28 @@ const configVersion = (document: Readonly<Record<string, unknown>>): number => {
 	const value = document.configVersion;
 	if (value === undefined) return 0;
 	if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
-		throw new Error("Spindle configuration configVersion must be a non-negative integer");
+		throw new Error("Code Mode configuration configVersion must be a non-negative integer");
 	}
-	if (value > CURRENT_SPINDLE_CONFIG_VERSION) {
+	if (value > CURRENT_CODE_MODE_CONFIG_VERSION) {
 		throw new Error(
-			`Spindle configuration version ${value} is newer than supported version ${CURRENT_SPINDLE_CONFIG_VERSION}`,
+			`Code Mode configuration version ${value} is newer than supported version ${CURRENT_CODE_MODE_CONFIG_VERSION}`,
 		);
 	}
 	return value;
 };
 
-export const migrateSpindleConfigDocument = (
+export const migrateCodeModeConfigDocument = (
 	input: Readonly<Record<string, unknown>>,
-): SpindleConfigMigrationResult => {
+): CodeModeConfigMigrationResult => {
 	const fromVersion = configVersion(input);
 	let version = fromVersion;
 	let document = structuredClone(input) as Record<string, unknown>;
 	const appliedVersions: number[] = [];
 
-	while (version < CURRENT_SPINDLE_CONFIG_VERSION) {
+	while (version < CURRENT_CODE_MODE_CONFIG_VERSION) {
 		const migration = migrations.find((candidate) => candidate.from === version);
 		if (!migration || migration.to !== version + 1) {
-			throw new Error(`No Spindle configuration migration exists for version ${version}`);
+			throw new Error(`No Code Mode configuration migration exists for version ${version}`);
 		}
 		document = migration.migrate(document);
 		version = migration.to;
@@ -81,7 +81,7 @@ export const migrateSpindleConfigDocument = (
 	}
 
 	if (Object.hasOwn(document, "subagents")) {
-		throw new Error("Current Spindle configuration contains removed key subagents");
+		throw new Error("Current Code Mode configuration contains removed key subagents");
 	}
 
 	return {

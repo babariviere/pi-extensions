@@ -1,8 +1,8 @@
-import type { SpindleCallAudit } from "./core/action-registry.ts";
+import type { CodeModeCallAudit } from "./core/action-registry.ts";
 
 export const CONTEXT_READ_WARNING_BYTES = 50 * 1024;
 
-export interface SpindleContextMetrics {
+export interface CodeModeContextMetrics {
 	readCalls: number;
 	unboundedReadCalls: number;
 	readResultChars: number;
@@ -12,8 +12,8 @@ export interface SpindleContextMetrics {
 const numeric = (value: unknown): number | undefined =>
 	typeof value === "number" && Number.isFinite(value) ? value : undefined;
 
-export const summarizeContextMetrics = (audits: readonly SpindleCallAudit[]): SpindleContextMetrics => {
-	const metrics: SpindleContextMetrics = {
+export const summarizeContextMetrics = (audits: readonly CodeModeCallAudit[]): CodeModeContextMetrics => {
+	const metrics: CodeModeContextMetrics = {
 		readCalls: 0,
 		unboundedReadCalls: 0,
 		readResultChars: 0,
@@ -32,7 +32,7 @@ export const summarizeContextMetrics = (audits: readonly SpindleCallAudit[]): Sp
 	return metrics;
 };
 
-export const contextReadWarning = (metrics: SpindleContextMetrics): string | undefined => {
+export const contextReadWarning = (metrics: CodeModeContextMetrics): string | undefined => {
 	if (metrics.largeUnboundedReadCalls === 0) return undefined;
 	return `Context advisory: ${metrics.largeUnboundedReadCalls} large unbounded pi.read call${
 		metrics.largeUnboundedReadCalls === 1 ? "" : "s"

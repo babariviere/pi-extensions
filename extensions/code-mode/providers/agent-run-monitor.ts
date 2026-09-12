@@ -1,7 +1,7 @@
 /**
  * Widget-facing projection of a running batch.
  *
- * `SpindleAgentRunRegistry` is the live store the single `aboveEditor` widget
+ * `CodeModeAgentRunRegistry` is the live store the single `aboveEditor` widget
  * reads (via `ui/snapshot.ts`). `RunProgressMonitor` turns a backend's status
  * updates into the two render targets that share one progress model: the
  * registry rows, and the compact one-line ticker pushed through
@@ -16,12 +16,12 @@
 
 import { type AgentProgress, applyStatus, renderProgress } from "../agents/progress.ts";
 import type { OnStatus, RunRequest, RunState } from "../agents/run.ts";
-import type { SpindleInvocationContext } from "../protocol.ts";
+import type { CodeModeInvocationContext } from "../protocol.ts";
 
 const PROGRESS_TICK_MS = 100;
 
 /** Widget-facing view of one in-flight or finished subagent run. */
-export interface SpindleAgentRun {
+export interface CodeModeAgentRun {
 	id: string;
 	name: string;
 	status: string;
@@ -44,15 +44,15 @@ const STATUS_FROM_STATE: Record<RunState, string> = {
  * `aboveEditor` widget renders one spinner row per run through `ui/widget.ts`'s
  * existing `agentLines()`.
  */
-export class SpindleAgentRunRegistry {
-	readonly #runs = new Map<string, SpindleAgentRun>();
+export class CodeModeAgentRunRegistry {
+	readonly #runs = new Map<string, CodeModeAgentRun>();
 	readonly #listeners = new Set<() => void>();
 
-	list(): SpindleAgentRun[] {
+	list(): CodeModeAgentRun[] {
 		return [...this.#runs.values()];
 	}
 
-	upsert(run: SpindleAgentRun): void {
+	upsert(run: CodeModeAgentRun): void {
 		this.#runs.set(run.id, run);
 		this.#notify();
 	}
@@ -87,8 +87,8 @@ export class SpindleAgentRunRegistry {
  * `RunContext`, and `stop()` in a `finally`.
  */
 export class RunProgressMonitor {
-	readonly #registry: SpindleAgentRunRegistry;
-	readonly #context: SpindleInvocationContext;
+	readonly #registry: CodeModeAgentRunRegistry;
+	readonly #context: CodeModeInvocationContext;
 	readonly #runId: string;
 	readonly #progress: AgentProgress[];
 	readonly #ids: string[];
@@ -99,8 +99,8 @@ export class RunProgressMonitor {
 
 	constructor(
 		deps: {
-			registry: SpindleAgentRunRegistry;
-			context: SpindleInvocationContext;
+			registry: CodeModeAgentRunRegistry;
+			context: CodeModeInvocationContext;
 			runId: string;
 			/** Prefix for the ticker line, e.g. the run launcher's fallback reason. */
 			note?: string;
@@ -177,7 +177,7 @@ export class RunProgressMonitor {
 		}
 		if (!this.#live) return;
 		// renderProgress stays the tested renderer; one line per tick keeps the
-		// spindle progress line compact instead of dumping an ANSI block.
+		// code-mode progress line compact instead of dumping an ANSI block.
 		let message = renderProgress(this.#progress, now, { frame: this.#frame }).split("\n").join(" · ");
 		if (this.#note) message = `${this.#note} · ${message}`;
 		this.#context.update(message);

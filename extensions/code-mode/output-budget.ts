@@ -27,7 +27,7 @@ export interface BoundedModelOutput {
 type ArtifactWriter = (content: string) => Promise<string>;
 
 const writeOutputArtifact: ArtifactWriter = async (content) => {
-	const directory = await mkdtemp(path.join(tmpdir(), "pi-spindle-output-"));
+	const directory = await mkdtemp(path.join(tmpdir(), "pi-code-mode-output-"));
 	const artifactPath = path.join(directory, "output.txt");
 	await writeFile(artifactPath, content, { encoding: "utf8", mode: 0o600 });
 	return artifactPath;

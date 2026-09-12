@@ -1,20 +1,20 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { RunRequest } from "../agents/run.ts";
-import type { SpindleInvocationContext } from "../protocol.ts";
-import { RunProgressMonitor, SpindleAgentRunRegistry } from "./agent-run-monitor.ts";
+import type { CodeModeInvocationContext } from "../protocol.ts";
+import { RunProgressMonitor, CodeModeAgentRunRegistry } from "./agent-run-monitor.ts";
 
 const req = (name: string, index: number): RunRequest =>
 	({ agent: { config: { name }, scope: "user" }, task: "t", index }) as unknown as RunRequest;
 
 function fixture() {
-	const registry = new SpindleAgentRunRegistry();
+	const registry = new CodeModeAgentRunRegistry();
 	const updates: string[] = [];
 	const context = {
 		parentToolCallId: "call-1",
 		update: (message: string) => updates.push(message),
 		activity: () => {},
-	} as unknown as SpindleInvocationContext;
+	} as unknown as CodeModeInvocationContext;
 	const monitor = new RunProgressMonitor({ registry, context, runId: "run-1" }, [
 		req("worker", 0),
 		req("reviewer", 1),
@@ -22,7 +22,7 @@ function fixture() {
 	return { registry, updates, monitor };
 }
 
-const byName = (registry: SpindleAgentRunRegistry, name: string) => registry.list().find((run) => run.name === name);
+const byName = (registry: CodeModeAgentRunRegistry, name: string) => registry.list().find((run) => run.name === name);
 
 test("start seeds one queued registry row per request, tagged with the parent tool call", () => {
 	const { registry, monitor, updates } = fixture();

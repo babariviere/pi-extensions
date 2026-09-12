@@ -12,4 +12,4 @@ Translated and adapted sources include:
 - https://github.com/openai/codex/blob/9e868bd9dc007c05e84a98e0b1f4e31dc98c5e6a/codex-rs/apply-patch/src/text_file.rs
 - https://github.com/openai/codex/tree/9e868bd9dc007c05e84a98e0b1f4e31dc98c5e6a/codex-rs/apply-patch/tests
 
-Modifications in this port include translation from Rust to TypeScript, integration with Pi's `pi.applyPatch({ patch })` API, and integration with Spindle's mandatory filesystem sandbox. The upstream Apache License 2.0 text is provided in `apply-patch.LICENSE`.
+Modifications in this port include translation from Rust to TypeScript, integration with Pi's `pi.applyPatch({ patch })` API, and integration with Code Mode's mandatory filesystem sandbox. The upstream Apache License 2.0 text is provided in `apply-patch.LICENSE`.

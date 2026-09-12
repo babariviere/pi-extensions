@@ -2,12 +2,12 @@
  * Cross-extension bridge: run the night's capability probe in the sandbox.
  *
  * The probes themselves and their report live in night-mode (`preflight.ts`),
- * which is pure. They are executed here because only spindle can run a command
+ * which is pure. They are executed here because only code-mode can run a command
  * through the same `srt` wrapper a subagent's bash gets: a probe run from the
  * extension host would report an egress, a DNS and a loopback that the children
  * do not have, which is worse than no probe at all.
  *
- * The dependency direction is the usual one: spindle reads night-mode, never
+ * The dependency direction is the usual one: code-mode reads night-mode, never
  * the reverse.
  */
 

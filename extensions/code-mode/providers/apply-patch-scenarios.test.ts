@@ -213,7 +213,7 @@ function snapshot(root: string, prefix = ""): Snapshot {
 
 for (const scenario of scenarios) {
 	test(`Codex scenario: ${scenario.name}`, async (t) => {
-		const cwd = mkdtempSync(join(tmpdir(), "spindle-codex-scenario-"));
+		const cwd = mkdtempSync(join(tmpdir(), "code-mode-codex-scenario-"));
 		t.after(() => rmSync(cwd, { recursive: true, force: true }));
 		for (const [name, content] of Object.entries(scenario.input)) {
 			const path = join(cwd, name);

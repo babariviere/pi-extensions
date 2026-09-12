@@ -112,7 +112,7 @@ export function composePlanningPrompt(input: {
 		"Turn the result into concrete tasks with exact scope, repository, definition of done, briefs, required capabilities,",
 		"and concise findings that the fresh execution session will need. Do not include speculative work.",
 		"",
-		"When the plan is complete, call `night_plan`. If validation rejects it, correct the missing coverage or permissions and resubmit. The user will check and refine tasks in an interactive",
+		"When the plan is complete, submit it through `code_mode` with `night.plan({ tasks, omissions })`. If validation rejects it, correct the missing coverage or permissions and resubmit. The user will check and refine tasks in an interactive",
 		"checklist. After approval or dismissal, stop immediately. A separate fresh session will execute the approved tasks.",
 		"",
 		"## Execution reference: standing night routine and brief routing",

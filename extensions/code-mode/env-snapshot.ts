@@ -13,17 +13,17 @@ const EXACT_ENV_KEYS = ["HOME", "USER", "LOGNAME", "SHELL", "LANG", "TERM", "TMP
 
 const ENV_KEY_PREFIXES = ["LC_", "XDG_"] as const;
 
-export interface SpindleProcessSnapshot {
+export interface CodeModeProcessSnapshot {
 	env: Record<string, string>;
 	platform: string;
 	arch: string;
 	cwd: string;
 }
 
-export const spindleProcessSnapshot = (
+export const codeModeProcessSnapshot = (
 	cwd: string,
 	source: Record<string, string | undefined> = process.env,
-): SpindleProcessSnapshot => {
+): CodeModeProcessSnapshot => {
 	const env: Record<string, string> = {};
 	for (const key of EXACT_ENV_KEYS) {
 		const value = source[key];

@@ -6,7 +6,7 @@ import { applyPiTheme } from "./highlight.ts";
 type ToolCallBackgroundMode = "on" | "border" | "off";
 type AnyTool = ToolDefinition<any, any, any>;
 
-export type SpindleToolShellDecorator = <TTool extends AnyTool>(
+export type CodeModeToolShellDecorator = <TTool extends AnyTool>(
 	tool: TTool,
 	options?: {
 		mode?: ToolCallBackgroundMode;
@@ -255,7 +255,7 @@ const shouldRenderResultSeparately = (state: BorderState, isPartial: boolean): b
 	state.codePreviewBorderLastCallPartial === undefined ||
 	(state.codePreviewBorderLastCallPartial !== isPartial && state.codePreviewBorderLastCallExecutionStarted === true);
 
-export const withCodePreviewShell: SpindleToolShellDecorator = (tool, options = {}) => {
+export const withCodePreviewShell: CodeModeToolShellDecorator = (tool, options = {}) => {
 	const mode = options.mode ?? "on";
 	const timingEnabled = options.toolCallTiming ?? true;
 	if ((options.preserveSelfShell ?? true) && tool.renderShell === "self") return tool;

@@ -12,7 +12,7 @@
  *    behavior for free.
  * 2. The failure tier owns the didactic error: an ambiguous or unmatched name
  *    fails with the closest declared candidates named, keeping the original
- *    "Unknown Spindle action" prefix.
+ *    "Unknown Code Mode action" prefix.
  *
  * Only genuinely semantic verb synonyms need explicit vocabulary, and a spilled
  * name repairs only when exactly one declared member fits: ambiguity (or
@@ -159,10 +159,10 @@ export const repairActionName = (declared: readonly string[], actionName: string
 
 /**
  * The didactic unknown-action failure message. The original
- * "Unknown Spindle action: <ref>" prefix is preserved verbatim; declared
+ * "Unknown Code Mode action: <ref>" prefix is preserved verbatim; declared
  * candidates are appended only when repair found close misses.
  */
 export const formatUnknownActionMessage = (ref: string, suggestions: readonly string[]): string =>
 	suggestions.length > 0
-		? `Unknown Spindle action: ${ref} (did you mean: ${suggestions.slice(0, 3).join(", ")}?)`
-		: `Unknown Spindle action: ${ref}`;
+		? `Unknown Code Mode action: ${ref} (did you mean: ${suggestions.slice(0, 3).join(", ")}?)`
+		: `Unknown Code Mode action: ${ref}`;

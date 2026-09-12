@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { spindleProcessSnapshot } from "./env-snapshot.ts";
+import { codeModeProcessSnapshot } from "./env-snapshot.ts";
 
 test("allowlists exact keys and prefix families, skips everything else", () => {
-	const snapshot = spindleProcessSnapshot("/session/cwd", {
+	const snapshot = codeModeProcessSnapshot("/session/cwd", {
 		HOME: "/home/user",
 		USER: "user",
 		LOGNAME: "user",
@@ -36,14 +36,14 @@ test("allowlists exact keys and prefix families, skips everything else", () => {
 });
 
 test("exposes host platform facts and the session cwd", () => {
-	const snapshot = spindleProcessSnapshot("/session");
+	const snapshot = codeModeProcessSnapshot("/session");
 	assert.equal(snapshot.platform, process.platform);
 	assert.equal(snapshot.arch, process.arch);
 	assert.equal(snapshot.cwd, "/session");
 });
 
 test("undefined and empty values are dropped", () => {
-	const snapshot = spindleProcessSnapshot("/c", {
+	const snapshot = codeModeProcessSnapshot("/c", {
 		HOME: "/h",
 		USER: undefined,
 		LC_CTYPE: "",

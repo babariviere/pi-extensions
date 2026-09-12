@@ -13,7 +13,7 @@ const fixturePolicy: SandboxPolicy = {
 };
 
 const profileTempDirs = (): Set<string> =>
-	new Set(readdirSync(tmpdir()).filter((name) => name.startsWith("pi-spindle-sbx-")));
+	new Set(readdirSync(tmpdir()).filter((name) => name.startsWith("pi-code-mode-sbx-")));
 
 test("a failure writing the profile file does not leak the temp directory", async () => {
 	// This only exercises the pre-write registration order (finding 6): on a

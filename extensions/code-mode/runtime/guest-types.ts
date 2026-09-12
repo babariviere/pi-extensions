@@ -13,7 +13,7 @@
  * (see `TYPE_CORRECTNESS_CODES`), so the rejection itself comes from the
  * providers at call time.
  */
-import type { SpindleDynamicGuestDeclarations } from "../protocol.ts";
+import type { CodeModeDynamicGuestDeclarations } from "../protocol.ts";
 
 export const GUEST_TYPE_DECLARATIONS = `
 // Engine features past the declared \`lib\` tier (see runtime/type-checker.ts).
@@ -25,7 +25,7 @@ interface ErrorConstructor {
 }
 type JsonPrimitive = string | number | boolean | null;
 type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
-interface SpindleAction {
+interface CodeModeAction {
   ref: string;
   provider: string;
   name: string;
@@ -34,7 +34,7 @@ interface SpindleAction {
   outputSchema?: Record<string, unknown>;
   namespace?: string;
 }
-interface SpindleCapabilityActionHead {
+interface CodeModeCapabilityActionHead {
   key: string;
   parentKey: string;
   ref: string;
@@ -43,19 +43,19 @@ interface SpindleCapabilityActionHead {
   descriptorHash: string;
   namespace?: string;
 }
-interface SpindleCapabilityProviderHead {
+interface CodeModeCapabilityProviderHead {
   key: string;
   parentKey: string;
   name: string;
   description: string;
   descriptorHash: string;
-  actions: SpindleCapabilityActionHead[];
+  actions: CodeModeCapabilityActionHead[];
 }
-interface SpindleCapabilityCatalog {
-  kind: "pi-spindle.capability-catalog";
+interface CodeModeCapabilityCatalog {
+  kind: "pi-code-mode.capability-catalog";
   version: 1;
-  root: { key: "capability:spindle"; name: "Spindle capabilities"; description: string; descriptorHash: string };
-  providers: SpindleCapabilityProviderHead[];
+  root: { key: "capability:code-mode"; name: "Code Mode capabilities"; description: string; descriptorHash: string };
+  providers: CodeModeCapabilityProviderHead[];
   totalActions: number;
   indexedActions: number;
   complete: boolean;
@@ -64,12 +64,12 @@ interface SpindleCapabilityCatalog {
 // tools is discovery + generic dispatch across every registered provider
 // (pi, web, mcp, agents). It owns no tools: use it to enumerate, describe, or
 // call a ref computed at runtime. Direct named calls stay on their namespace.
-interface SpindleToolsApi {
+interface CodeModeToolsApi {
   providers(): Promise<Array<{ name: string; description: string }>>;
-  catalog(args?: { provider?: string; limit?: number }): Promise<SpindleCapabilityCatalog>;
-  list(args?: { provider?: string; namespace?: string; query?: string; limit?: number }): Promise<SpindleAction[]>;
-  search(args: { query: string; limit?: number }): Promise<SpindleAction[]>;
-  describe(args: { ref: string }): Promise<SpindleAction>;
+  catalog(args?: { provider?: string; limit?: number }): Promise<CodeModeCapabilityCatalog>;
+  list(args?: { provider?: string; namespace?: string; query?: string; limit?: number }): Promise<CodeModeAction[]>;
+  search(args: { query: string; limit?: number }): Promise<CodeModeAction[]>;
+  describe(args: { ref: string }): Promise<CodeModeAction>;
   call(args: { ref: string; args?: Record<string, unknown> }): Promise<unknown>;
 }
 // NOTE: these declarations are compiler input, not prompt text. They are read
@@ -93,7 +93,7 @@ interface SpindleToolsApi {
 // workingDir / workingDirectory are normalized aliases), env (extra variables
 // merged over the shell environment), and stdin (text piped to the command,
 // e.g. pi.bash({ command: 'ssh host bash -s', stdin: π.script })).
-type SpindleCommandOptions = {
+type CodeModeCommandOptions = {
   /** Cancels this command. See AbortController. */
   signal?: AbortSignal;
   timeout?: number;
@@ -113,8 +113,8 @@ interface WebApi {
 declare const web: WebApi;
 interface PiToolsApi {
   read(args: string | { path: string; offset?: number; limit?: number; start?: number; max?: number } | { file: string; offset?: number; limit?: number; start?: number; max?: number }): Promise<string>;
-  bash(args: string | (({ command: string } | { cmd: string } | { shell: string }) & SpindleCommandOptions)): Promise<{ ok: true; output: string; details: unknown } | { ok: false; output: string; details: null; exitCode: number; error: string }>;
-  exec(args: { argv: string[] } & SpindleCommandOptions): Promise<{ ok: true; output: string; details: unknown } | { ok: false; output: string; details: null; exitCode: number; error: string }>;
+  bash(args: string | (({ command: string } | { cmd: string } | { shell: string }) & CodeModeCommandOptions)): Promise<{ ok: true; output: string; details: unknown } | { ok: false; output: string; details: null; exitCode: number; error: string }>;
+  exec(args: { argv: string[] } & CodeModeCommandOptions): Promise<{ ok: true; output: string; details: unknown } | { ok: false; output: string; details: null; exitCode: number; error: string }>;
   edit(args: { path: string; edits: Array<{ oldText: string; newText: string }> } | { file: string; edits: Array<{ oldText: string; newText: string }> } | { path: string; oldText: string; newText: string } | { file: string; oldText: string; newText: string } | { path: string; old: string; new: string } | { path: string; old: string; replacement: string }): Promise<{ ok: true; output: string; details: unknown }>;
   edit(path: string, oldText: string, newText: string): Promise<{ ok: true; output: string; details: unknown }>;
   write(args: { path: string; content: string } | { file: string; content: string } | { path: string; contents: string } | { path: string; body: string } | { path: string; text: string }): Promise<{ ok: true; output: string; details: unknown }>;
@@ -126,12 +126,12 @@ interface PiToolsApi {
   find(pattern: string, path?: string, limit?: number): Promise<string>;
   ls(args?: string | { path?: string; limit?: number; max?: number } | { dir?: string; limit?: number; max?: number } | { file?: string; limit?: number; max?: number }): Promise<string>;
 }
-interface SpindleAgentDefinition {
+interface CodeModeAgentDefinition {
   name: string;
   scope: "project" | "user";
   description?: string;
 }
-interface SpindleAgentModels {
+interface CodeModeAgentModels {
   /** Generic agent default, which may not be permitted as an explicit override. */
   defaultModel: string | null;
   models: Array<{
@@ -145,7 +145,7 @@ interface SpindleAgentModels {
     maxTokens: number;
   }>;
 }
-interface SpindleAgentRequest {
+interface CodeModeAgentRequest {
   /** Name of a discovered agent (see agents.list()). */
   agent: string;
   task: string;
@@ -161,7 +161,7 @@ interface SpindleAgentRequest {
   nightTodoId?: string;
 }
 /** Timing for a blocking launch. Child lifetime comes from host configuration. */
-interface SpindleAgentWaitTiming {
+interface CodeModeAgentWaitTiming {
   /** Cancels the batch. See AbortController. */
   signal?: AbortSignal;
   /**
@@ -171,7 +171,7 @@ interface SpindleAgentWaitTiming {
    */
   waitMs?: number;
 }
-interface SpindleAgentResult {
+interface CodeModeAgentResult {
   agent: string;
   ok: boolean;
   output: string;
@@ -195,19 +195,19 @@ interface SpindleAgentResult {
    */
   failure?: "launch" | "run" | "timeout" | "cancelled";
 }
-interface SpindleAgentHandle {
+interface CodeModeAgentHandle {
   runId: string;
   agents: string[];
   state: "running";
 }
-interface SpindleAgentWait {
+interface CodeModeAgentWait {
   runId: string;
   state: "running" | "settled" | "cancelled";
   elapsedMs: number;
   agents: string[];
-  results: SpindleAgentResult[];
+  results: CodeModeAgentResult[];
 }
-interface SpindleAgentStatus {
+interface CodeModeAgentStatus {
   runId: string;
   agents: string[];
   state: "running" | "settled" | "cancelled";
@@ -215,31 +215,31 @@ interface SpindleAgentStatus {
   elapsedMs: number;
   /** True once no caller is blocked on it and it kept running. */
   detached: boolean;
-  results?: SpindleAgentResult[];
+  results?: CodeModeAgentResult[];
 }
-interface SpindleAgentsApi {
-  list(): Promise<SpindleAgentDefinition[]>;
+interface CodeModeAgentsApi {
+  list(): Promise<CodeModeAgentDefinition[]>;
   /** Discover permitted model overrides without launching a child or checking reachability. */
-  models(): Promise<SpindleAgentModels>;
-  run(args: SpindleAgentRequest & SpindleAgentWaitTiming): Promise<SpindleAgentResult>;
-  runAll(args: { tasks: SpindleAgentRequest[] } & SpindleAgentWaitTiming | SpindleAgentRequest[]): Promise<SpindleAgentResult[]>;
+  models(): Promise<CodeModeAgentModels>;
+  run(args: CodeModeAgentRequest & CodeModeAgentWaitTiming): Promise<CodeModeAgentResult>;
+  runAll(args: { tasks: CodeModeAgentRequest[] } & CodeModeAgentWaitTiming | CodeModeAgentRequest[]): Promise<CodeModeAgentResult[]>;
   /** Launch without blocking; the run is not tied to this turn. */
-  start(args: SpindleAgentRequest | { tasks: SpindleAgentRequest[] } | SpindleAgentRequest[]): Promise<SpindleAgentHandle>;
+  start(args: CodeModeAgentRequest | { tasks: CodeModeAgentRequest[] } | CodeModeAgentRequest[]): Promise<CodeModeAgentHandle>;
   /** Resume waiting on a launched batch. */
-  wait(args: string | { runId: string; waitMs?: number; timeoutMs?: number }): Promise<SpindleAgentWait>;
+  wait(args: string | { runId: string; waitMs?: number; timeoutMs?: number }): Promise<CodeModeAgentWait>;
   /** Live and recently finished batches. */
-  status(): Promise<SpindleAgentStatus[]>;
+  status(): Promise<CodeModeAgentStatus[]>;
   /** Cancel one batch, or every live batch when runId is omitted. */
   cancel(args?: string | { runId?: string }): Promise<{ cancelled: string[] }>;
 }
-interface SpindleMcpResult {
+interface CodeModeMcpResult {
   text: string;
   content: unknown[];
   structuredContent: unknown;
 }
-type SpindleMcpApi = {
-  call(server: string, tool: string, args?: Record<string, unknown>): Promise<SpindleMcpResult | unknown>;
-  call(args: { server?: string; tool: string; args?: Record<string, unknown> }): Promise<SpindleMcpResult | unknown>;
+type CodeModeMcpApi = {
+  call(server: string, tool: string, args?: Record<string, unknown>): Promise<CodeModeMcpResult | unknown>;
+  call(args: { server?: string; tool: string; args?: Record<string, unknown> }): Promise<CodeModeMcpResult | unknown>;
   list(server: string): Promise<unknown>;
   list(args?: { server?: string }): Promise<unknown>;
   connect(server: string): Promise<unknown>;
@@ -247,9 +247,9 @@ type SpindleMcpApi = {
   describe(args: string | { tool: string }): Promise<unknown>;
 };
 declare const pi: PiToolsApi;
-declare const tools: SpindleToolsApi;
-declare const agents: SpindleAgentsApi;
-declare const mcp: SpindleMcpApi;
+declare const tools: CodeModeToolsApi;
+declare const agents: CodeModeAgentsApi;
+declare const mcp: CodeModeMcpApi;
 // Bounded-concurrency fan-out. Promise.all is the right tool for a handful of
 // independent calls; mapLimit is for a wide list, because Promise.all receives
 // promises that have already started and therefore cannot cap how many run at
@@ -258,13 +258,13 @@ declare const mcp: SpindleMcpApi;
 // cancel themselves only if they were handed the same signal.
 declare function mapLimit<T, R>(items: T[], mapper: (item: T, index: number) => Promise<R> | R, concurrency?: number | { concurrency?: number; signal?: AbortSignal }): Promise<R[]>;
 declare function mapLimit<T>(thunks: Array<() => Promise<T> | T>, concurrency?: number | { concurrency?: number; signal?: AbortSignal }): Promise<T[]>;
-interface SpindleConsole {
+interface CodeModeConsole {
   log(...args: unknown[]): void;
   info(...args: unknown[]): void;
   warn(...args: unknown[]): void;
   error(...args: unknown[]): void;
 }
-declare const console: SpindleConsole;
+declare const console: CodeModeConsole;
 declare const π: Readonly<Record<string, string>>;
 // The session scratchpad: JSON values that outlive this program and die with
 // the session. τ = 2π, and the pairing is the point — π is this call's
@@ -275,7 +275,7 @@ declare const π: Readonly<Record<string, string>>;
 // because they can fail: a value must be JSON-serializable (no closures, no
 // handles), keys match [A-Za-z0-9][A-Za-z0-9_.:-]* and over a budget the write
 // throws instead of evicting. The held keys are echoed in every result.
-interface SpindleStateApi {
+interface CodeModeStateApi {
   /** The stored value, or undefined when the key is not held. */
   get<T = unknown>(key: string): Promise<T | undefined>;
   /** Store a JSON-serializable value, replacing any previous entry. */
@@ -285,7 +285,7 @@ interface SpindleStateApi {
   delete(key: string): Promise<{ key: string; deleted: boolean; keys: string[] }>;
   clear(): Promise<{ cleared: number }>;
 }
-declare const τ: SpindleStateApi;
+declare const τ: CodeModeStateApi;
 // Allowlisted host env (HOME, USER, LOGNAME, SHELL, PWD, PATH, LANG, LC_*,
 // TERM, TMPDIR, XDG_*), platform facts, and the session working directory.
 // Sensitive variables are never exposed to the sandbox.
@@ -310,17 +310,17 @@ declare function queueMicrotask(callback: () => void): void;
 // (registered providers, mcp.*, tools.call). The remaining pi.* core tools are local
 // filesystem operations that finish too fast to be worth cancelling and do not
 // declare it.
-interface SpindleAbortEvent {
+interface CodeModeAbortEvent {
   type: "abort";
   target: AbortSignal;
 }
 declare class AbortSignal {
   readonly aborted: boolean;
   readonly reason: unknown;
-  onabort: ((event: SpindleAbortEvent) => void) | null;
+  onabort: ((event: CodeModeAbortEvent) => void) | null;
   throwIfAborted(): void;
-  addEventListener(type: "abort", listener: (event: SpindleAbortEvent) => void, options?: { once?: boolean }): void;
-  removeEventListener(type: "abort", listener: (event: SpindleAbortEvent) => void): void;
+  addEventListener(type: "abort", listener: (event: CodeModeAbortEvent) => void, options?: { once?: boolean }): void;
+  removeEventListener(type: "abort", listener: (event: CodeModeAbortEvent) => void): void;
   static abort(reason?: unknown): AbortSignal;
   static timeout(milliseconds: number): AbortSignal;
   static any(signals: Iterable<AbortSignal>): AbortSignal;
@@ -404,10 +404,10 @@ declare function clearInterval(handle: number): void;
 const FULL_CODE_GLOBAL_DECLARATIONS = [
 	"declare const pi: PiToolsApi;\n",
 	"declare const web: WebApi;\n",
-	"declare const tools: SpindleToolsApi;\n",
+	"declare const tools: CodeModeToolsApi;\n",
 ];
 
-const MCP_LOOSE_DECLARATION = "declare const mcp: SpindleMcpApi;\n";
+const MCP_LOOSE_DECLARATION = "declare const mcp: CodeModeMcpApi;\n";
 
 const terminatedDeclaration = (block: string): string => (block.endsWith("\n") ? block : `${block}\n`);
 
@@ -417,7 +417,7 @@ const terminatedDeclaration = (block: string): string => (block.endsWith("\n") ?
  * it, and a missing section keeps the loose surface (see
  * runtime/dynamic-guest-types.ts).
  */
-const applyDynamicDeclarations = (declarations: string, dynamic: SpindleDynamicGuestDeclarations): string => {
+const applyDynamicDeclarations = (declarations: string, dynamic: CodeModeDynamicGuestDeclarations): string => {
 	let applied = declarations;
 	if (dynamic.mcp && applied.includes(MCP_LOOSE_DECLARATION)) {
 		applied = applied.replace(MCP_LOOSE_DECLARATION, terminatedDeclaration(dynamic.mcp));
@@ -427,16 +427,19 @@ const applyDynamicDeclarations = (declarations: string, dynamic: SpindleDynamicG
 
 export const guestTypeDeclarations = (
 	fullCodeMode: boolean,
-	dynamic?: SpindleDynamicGuestDeclarations,
+	dynamic?: CodeModeDynamicGuestDeclarations,
 	providers: readonly string[] = [],
 ): string => {
 	const addCustomProviderDeclarations = (source: string): string => {
 		for (const provider of providers) {
 			if (
-				!["pi", "web", "mcp", "agents", "tools", "tau", "spindle"].includes(provider) &&
+				!["pi", "web", "mcp", "agents", "tools", "tau", "code-mode"].includes(provider) &&
 				/^[a-z][a-z0-9_-]*$/.test(provider)
 			) {
-				source += `\ndeclare const ${provider}: Record<string, (args?: Record<string, unknown>) => Promise<unknown>>;\n`;
+				const exact = dynamic?.providers?.[provider];
+				source += exact
+					? `\n${terminatedDeclaration(exact)}`
+					: `\ndeclare const ${provider}: Record<string, (args?: Record<string, unknown>) => Promise<unknown>>;\n`;
 			}
 		}
 		return source;

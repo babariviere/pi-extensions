@@ -91,7 +91,7 @@ export interface ChildInvocationOpts {
 	includeTask?: boolean;
 	/**
 	 * Path to the file holding the framed task, delivered by the child's own
-	 * Spindle as its first user message (see `task-delivery.ts`). Used by the
+	 * Code Mode as its first user message (see `task-delivery.ts`). Used by the
 	 * herdr backend, whose `agent start` types its args into a shell and so
 	 * cannot carry a multi-line task.
 	 */
@@ -192,7 +192,7 @@ export function buildChildArgs(agent: DiscoveredAgent, task: string, opts: Child
 	}
 
 	// The task as a path, not as text: a single-line arg `herdr agent start` can
-	// type. No `--extension` needed - Spindle registers this flag itself, so it
+	// type. No `--extension` needed - Code Mode registers this flag itself, so it
 	// works the same for an agent with no `sandbox:`.
 	if (opts.taskFile) {
 		args.push(`--${TASK_FILE_FLAG}`, opts.taskFile);

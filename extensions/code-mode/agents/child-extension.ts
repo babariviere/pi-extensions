@@ -3,7 +3,7 @@
  * loaded only when the agent definition declares a `sandbox:` mode.
  *
  * Its sole job is to register the `--{@link SANDBOX_MODE_FLAG}` CLI flag so the
- * child accepts the arg without failing startup with "Unknown option". Spindle
+ * child accepts the arg without failing startup with "Unknown option". Code Mode
  * (loaded in the child as a package extension) reads the value off argv rather
  * than via `getFlag`, because `getFlag` only resolves flags the reading
  * extension itself registered and pi rejects the same flag name registered
@@ -23,6 +23,6 @@ import { SANDBOX_MODE_FLAG } from "./constants.ts";
 export default function (pi: ExtensionAPI) {
 	pi.registerFlag(SANDBOX_MODE_FLAG, {
 		type: "string",
-		description: "Sandbox mode floor applied inside Spindle for this subagent (set by the parent).",
+		description: "Sandbox mode floor applied inside Code Mode for this subagent (set by the parent).",
 	});
 }

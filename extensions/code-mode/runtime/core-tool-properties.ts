@@ -1,7 +1,7 @@
 /**
  * PORTED (and adapted) from upstream `src/runtime/core-tool-properties.ts`.
  *
- * Spindle declares the core tools as inline signatures on `PiToolsApi` rather
+ * Code Mode declares the core tools as inline signatures on `PiToolsApi` rather
  * than named `Pi<Tool>Argument` aliases, so the property table is derived by
  * scanning each member's argument list plus any option-bag type it references.
  */
@@ -53,7 +53,7 @@ const objectLiteralKeys = (text: string): string[] =>
 	[...text.matchAll(/([A-Za-z_]\w*)\s*\??:/g)].flatMap((match) => (match[1] === undefined ? [] : [match[1]]));
 
 const referencedOptionTypes = (text: string): string[] =>
-	[...text.matchAll(/\b(Spindle[A-Z]\w*)/g)].flatMap((match) => (match[1] === undefined ? [] : [match[1]]));
+	[...text.matchAll(/\b(CodeMode[A-Z]\w*)/g)].flatMap((match) => (match[1] === undefined ? [] : [match[1]]));
 
 /** Member name -> every declared signature of that `pi.*` tool. */
 const piToolSignatures = (declarations: string): Map<string, string[]> => {

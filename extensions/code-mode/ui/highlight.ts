@@ -269,7 +269,7 @@ export async function initHighlighting(theme: string, syntaxEnabled = true): Pro
 	} catch (error) {
 		if (version !== initVersion) return;
 		initializingTheme = undefined;
-		console.warn("[pi-spindle] Shiki failed to initialize; previews will be plain text.", error);
+		console.warn("[pi-code-mode] Shiki failed to initialize; previews will be plain text.", error);
 		highlighter?.dispose();
 		highlighter = undefined;
 		highlighterGeneration++;

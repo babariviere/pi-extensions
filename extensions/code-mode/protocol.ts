@@ -1,52 +1,52 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
-export const SPINDLE_PROVIDER_REGISTER_EVENT = "pi-spindle:provider:register:v1";
-export const SPINDLE_PROVIDER_DISCOVER_EVENT = "pi-spindle:provider:discover:v1";
+export const CODE_MODE_PROVIDER_REGISTER_EVENT = "pi-code-mode:provider:register:v1";
+export const CODE_MODE_PROVIDER_DISCOVER_EVENT = "pi-code-mode:provider:discover:v1";
 
-/** Identifies host-side tool lifecycle events replayed for a nested Spindle call. */
-export const SPINDLE_NESTED_TOOL_CALL_ID_PREFIX = "spindle_";
+/** Identifies host-side tool lifecycle events replayed for a nested Code Mode call. */
+export const CODE_MODE_NESTED_TOOL_CALL_ID_PREFIX = "code_mode_";
 
 /** Discriminant for the transient details envelope on a proxied provider result. */
-export const SPINDLE_TOOL_RESULT_PROXY_KIND = "pi-spindle.tool-result-proxy.v1";
+export const CODE_MODE_TOOL_RESULT_PROXY_KIND = "pi-code-mode.tool-result-proxy.v1";
 
 /**
- * Host-only middleware details for non-Pi Spindle providers. `result` is the
+ * Host-only middleware details for non-Pi Code Mode providers. `result` is the
  * exact value before maxNestedResultChars is enforced and is not persisted as
  * a separate Pi tool-result message.
  */
-export interface SpindleToolResultProxyDetailsV1 {
-	kind: typeof SPINDLE_TOOL_RESULT_PROXY_KIND;
+export interface CodeModeToolResultProxyDetailsV1 {
+	kind: typeof CODE_MODE_TOOL_RESULT_PROXY_KIND;
 	ref: string;
 	result: unknown;
 }
 
-export const readSpindleToolResultProxyDetailsV1 = (value: unknown): SpindleToolResultProxyDetailsV1 | undefined => {
+export const readCodeModeToolResultProxyDetailsV1 = (value: unknown): CodeModeToolResultProxyDetailsV1 | undefined => {
 	if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
 	const record = value as Record<string, unknown>;
 	if (
-		record.kind !== SPINDLE_TOOL_RESULT_PROXY_KIND ||
+		record.kind !== CODE_MODE_TOOL_RESULT_PROXY_KIND ||
 		typeof record.ref !== "string" ||
 		!Object.hasOwn(record, "result")
 	) {
 		return undefined;
 	}
-	return record as unknown as SpindleToolResultProxyDetailsV1;
+	return record as unknown as CodeModeToolResultProxyDetailsV1;
 };
 
-export type SpindleActivityEntityKind = "agent" | "actor" | "tool" | "extension" | "mcp" | "mesh" | "task" | "custom";
+export type CodeModeActivityEntityKind = "agent" | "actor" | "tool" | "extension" | "mcp" | "mesh" | "task" | "custom";
 
-export type SpindleInvocationActivityUpdate =
+export type CodeModeInvocationActivityUpdate =
 	| { type: "progress"; message: string }
-	| { type: "entity"; id: string; kind: SpindleActivityEntityKind; name?: string }
+	| { type: "entity"; id: string; kind: CodeModeActivityEntityKind; name?: string }
 	| { type: "metrics"; tokens?: number; toolCalls?: number; cost?: number };
 
-export interface SpindleMediaBlock {
+export interface CodeModeMediaBlock {
 	type: "image";
 	data: string;
 	mimeType: string;
 }
 
-export interface SpindleActionDescriptor {
+export interface CodeModeActionDescriptor {
 	name: string;
 	description: string;
 	inputSchema: Record<string, unknown>;
@@ -54,7 +54,7 @@ export interface SpindleActionDescriptor {
 	namespace?: string;
 }
 
-export interface SpindleCapabilityActionHead {
+export interface CodeModeCapabilityActionHead {
 	key: string;
 	parentKey: string;
 	ref: string;
@@ -64,25 +64,25 @@ export interface SpindleCapabilityActionHead {
 	namespace?: string;
 }
 
-export interface SpindleCapabilityProviderHead {
+export interface CodeModeCapabilityProviderHead {
 	key: string;
 	parentKey: string;
 	name: string;
 	description: string;
 	descriptorHash: string;
-	actions: SpindleCapabilityActionHead[];
+	actions: CodeModeCapabilityActionHead[];
 }
 
-export interface SpindleCapabilityCatalog {
-	kind: "pi-spindle.capability-catalog";
+export interface CodeModeCapabilityCatalog {
+	kind: "pi-code-mode.capability-catalog";
 	version: 1;
 	root: {
-		key: "capability:spindle";
-		name: "Spindle capabilities";
+		key: "capability:code-mode";
+		name: "Code Mode capabilities";
 		description: string;
 		descriptorHash: string;
 	};
-	providers: SpindleCapabilityProviderHead[];
+	providers: CodeModeCapabilityProviderHead[];
 	totalActions: number;
 	indexedActions: number;
 	complete: boolean;
@@ -90,9 +90,16 @@ export interface SpindleCapabilityCatalog {
 }
 
 /** One named action whose declared input schema can be rendered as a guest type. */
-export interface SpindleNamedActionTypeSource {
+export interface CodeModeNamedActionTypeSource {
 	name: string;
 	inputSchema: Record<string, unknown>;
+	outputSchema?: Record<string, unknown>;
+}
+
+/** One registered provider and the action schemas returned by its live listing. */
+export interface CodeModeProviderTypeSource {
+	name: string;
+	actions: CodeModeNamedActionTypeSource[];
 }
 
 /**
@@ -105,14 +112,15 @@ export interface SpindleNamedActionTypeSource {
  * connect a server or trigger an OAuth prompt. A server whose tools have never
  * been listed contributes nothing and keeps the loose declarations.
  */
-export interface SpindleGuestTypeSources {
-	mcpServers?: SpindleMcpServerTypeSource[];
+export interface CodeModeGuestTypeSources {
+	mcpServers?: CodeModeMcpServerTypeSource[];
+	providers?: CodeModeProviderTypeSource[];
 }
 
 /** One MCP server's cached tool schemas, for the generated `mcp` surface. */
-export interface SpindleMcpServerTypeSource {
+export interface CodeModeMcpServerTypeSource {
 	server: string;
-	tools: SpindleNamedActionTypeSource[];
+	tools: CodeModeNamedActionTypeSource[];
 }
 
 /**
@@ -120,35 +128,36 @@ export interface SpindleMcpServerTypeSource {
  * typed so an MCP provider without schemas to give (an external one registered
  * through the discovery event) needs no change.
  */
-export interface SpindleMcpTypeSourceProvider {
-	mcpGuestTypeSources(context: SpindleInvocationContext): Promise<SpindleMcpServerTypeSource[]>;
+export interface CodeModeMcpTypeSourceProvider {
+	mcpGuestTypeSources(context: CodeModeInvocationContext): Promise<CodeModeMcpServerTypeSource[]>;
 }
 
-export const isMcpTypeSourceProvider = (value: unknown): value is SpindleMcpTypeSourceProvider =>
+export const isMcpTypeSourceProvider = (value: unknown): value is CodeModeMcpTypeSourceProvider =>
 	typeof (value as { mcpGuestTypeSources?: unknown } | null)?.mcpGuestTypeSources === "function";
 
 /**
  * Pre-rendered `declare const` blocks replacing the loose declaration lines.
  * Values are full replacement text (helper interfaces + declare).
  */
-export interface SpindleDynamicGuestDeclarations {
+export interface CodeModeDynamicGuestDeclarations {
 	mcp?: string;
+	providers?: Record<string, string>;
 }
 
-export interface SpindleProviderListRequest {
+export interface CodeModeProviderListRequest {
 	namespace?: string;
 	query?: string;
 	limit?: number;
 }
 
-export interface SpindleInvocationContext {
+export interface CodeModeInvocationContext {
 	cwd: string;
 	signal: AbortSignal | undefined;
 	parentToolCallId: string;
 	nestedToolCallId: string;
 	extensionContext: ExtensionContext;
 	update(message: string): void;
-	activity?(update: SpindleInvocationActivityUpdate): void;
+	activity?(update: CodeModeInvocationActivityUpdate): void;
 	// Out-of-band image content blocks a provider (currently only pi.read of an
 	// image file) wants attached to the call audit, so the single-call render can
 	// re-attach them to the code_mode result content for pi core's kitty image
@@ -157,16 +166,16 @@ export interface SpindleInvocationContext {
 	// captured after any tool_result patch so a handoff that strips pi's
 	// non-vision note has run; used as the single-call body + content text so the
 	// preview shows the clean note instead of the swapped description.
-	attachMedia?(blocks: SpindleMediaBlock[], note?: string): void;
+	attachMedia?(blocks: CodeModeMediaBlock[], note?: string): void;
 	// Providers call this after mutable tool_call middleware has run so live and
 	// durable audit surfaces reflect the arguments actually passed to the tool.
 	updateArguments?(args: Record<string, unknown>): void;
-	// Ephemeral renderer-only metadata. It is exposed to live Spindle previews but
+	// Ephemeral renderer-only metadata. It is exposed to live Code Mode previews but
 	// never projected into the durable execution trace.
 	attachPreview?(preview: unknown): void;
 }
 
-export interface SpindleProvider {
+export interface CodeModeProvider {
 	name: string;
 	description: string;
 	/**
@@ -175,25 +184,25 @@ export interface SpindleProvider {
 	 * explicitly instead of being blocked by a closed provider-name list.
 	 */
 	fullCodeOnly?: boolean;
-	list(request: SpindleProviderListRequest, context: SpindleInvocationContext): Promise<SpindleActionDescriptor[]>;
-	describe(actionName: string, context: SpindleInvocationContext): Promise<SpindleActionDescriptor | undefined>;
+	list(request: CodeModeProviderListRequest, context: CodeModeInvocationContext): Promise<CodeModeActionDescriptor[]>;
+	describe(actionName: string, context: CodeModeInvocationContext): Promise<CodeModeActionDescriptor | undefined>;
 	prepareArguments?(
 		actionName: string,
 		args: Record<string, unknown>,
-		context: SpindleInvocationContext,
+		context: CodeModeInvocationContext,
 	): Record<string, unknown> | Promise<Record<string, unknown>>;
-	invoke(actionName: string, args: Record<string, unknown>, context: SpindleInvocationContext): Promise<unknown>;
+	invoke(actionName: string, args: Record<string, unknown>, context: CodeModeInvocationContext): Promise<unknown>;
 	invocationEnded?(parentToolCallId: string): Promise<void>;
 	close?(): Promise<void>;
 }
 
-export interface SpindleProviderRegistration {
+export interface CodeModeProviderRegistration {
 	version: 1;
-	provider: SpindleProvider;
+	provider: CodeModeProvider;
 	overwrite?: boolean;
 }
 
-export interface SpindleProviderDiscovery {
+export interface CodeModeProviderDiscovery {
 	version: 1;
-	register(provider: SpindleProvider, options?: { overwrite?: boolean }): void;
+	register(provider: CodeModeProvider, options?: { overwrite?: boolean }): void;
 }

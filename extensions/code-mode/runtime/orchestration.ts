@@ -1,4 +1,4 @@
-// Static detection lets Spindle start known orchestration programs with the
+// Static detection lets Code Mode start known orchestration programs with the
 // longer agent deadline. The runtime also re-checks each host call, so a
 // blocking agent ref reached through a computed path cannot fall back to the
 // short executor timeout.

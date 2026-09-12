@@ -6,7 +6,7 @@ import { filterCapturedToolVisibility } from "./interceptor.ts";
 const registered = (name: string, path: string) => ({ definition: { name }, sourceInfo: { path } }) as any;
 
 const tools = [
-	registered("code_mode", "/spindle/index.ts"),
+	registered("code_mode", "/code-mode/index.ts"),
 	registered("web_search", "/web/index.ts"),
 	registered("fetch_content", "/web/index.ts"),
 	registered("read", "/tool-substitute/index.ts"),
@@ -14,29 +14,27 @@ const tools = [
 	registered("ask", "/ask/index.ts"),
 ];
 
-test("capture hides selected capabilities and core overrides, not unrelated siblings", () => {
-	const visible = filterCapturedToolVisibility(
-		tools,
-		"/spindle/index.ts",
-		{ enabled: true, hideFromModel: true, keepVisible: ["code_mode"] },
-		["web_search", "fetch_content", "read"],
-	);
+test("capture hides every tool except code_mode", () => {
+	const visible = filterCapturedToolVisibility(tools, "/code-mode/index.ts", {
+		enabled: true,
+		hideFromModel: true,
+		keepVisible: ["code_mode"],
+	});
 	assert.deepEqual(
 		visible.map((tool) => tool.definition.name),
-		["code_mode", "todo", "ask"],
+		["code_mode"],
 	);
 });
 
 test("keepVisible restores a deliberately retained selected tool", () => {
-	const visible = filterCapturedToolVisibility(
-		tools,
-		"/spindle/index.ts",
-		{ enabled: true, hideFromModel: true, keepVisible: ["code_mode", "todo", "web_search"] },
-		["web_search", "fetch_content", "read"],
-	);
+	const visible = filterCapturedToolVisibility(tools, "/code-mode/index.ts", {
+		enabled: true,
+		hideFromModel: true,
+		keepVisible: ["code_mode", "todo", "web_search"],
+	});
 	assert.deepEqual(
 		visible.map((tool) => tool.definition.name),
-		["code_mode", "web_search", "todo", "ask"],
+		["code_mode", "web_search", "todo"],
 	);
 });
 
@@ -45,6 +43,6 @@ test("disabled or direct-visibility capture leaves every native tool alone", () 
 		{ enabled: false, hideFromModel: true, keepVisible: [] },
 		{ enabled: true, hideFromModel: false, keepVisible: [] },
 	]) {
-		assert.deepEqual(filterCapturedToolVisibility(tools, "/spindle/index.ts", policy, ["web_search"]), tools);
+		assert.deepEqual(filterCapturedToolVisibility(tools, "/code-mode/index.ts", policy), tools);
 	}
 });

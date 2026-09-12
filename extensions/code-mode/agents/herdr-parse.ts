@@ -63,7 +63,7 @@ export function isTimeoutError(error: string | undefined): boolean {
  * startup"},"id":"cli:agent:start"}` when that never happens.
  *
  * This says nothing about the child. A pi subagent receives its task with the
- * process (`--spindle-task-file`) and starts working immediately, so it is busy
+ * process (`--code-mode-task-file`) and starts working immediately, so it is busy
  * rather than sitting at a ready prompt, and herdr's probe never fires however
  * healthy the run is. Callers must therefore check whether a child exists
  * instead of treating this as a launch failure; see `launchRun`.

@@ -7,8 +7,8 @@
  * repurposed for the absorbed subagents runner. `executor.runtime` is narrowed
  * to `"quickjs"` because the Node-process runtime is not vendored.
  *
- * The config file is `spindle.json`, NOT the upstream project's own config
- * file, so spindle never reads or writes upstream's user configuration.
+ * The config file is `code-mode.json`, NOT the upstream project's own config
+ * file, so code-mode never reads or writes upstream's user configuration.
  * See CONTEXT.md for the upstream name.
  */
 
@@ -22,17 +22,17 @@ import {
 	normalizeMcpReadOnlyConfig,
 } from "./mcp/read-only-policy.ts";
 import { isSandboxMode, type SandboxMode } from "./sandbox/policy.ts";
-import { CURRENT_SPINDLE_CONFIG_VERSION, migrateSpindleConfigDocument } from "./config-migrations.ts";
-export type SpindleUiWidgetMode = "auto" | "always" | "hidden";
-export type SpindleResultFormat = "auto" | "yaml" | "json" | "text";
+import { CURRENT_CODE_MODE_CONFIG_VERSION, migrateCodeModeConfigDocument } from "./config-migrations.ts";
+export type CodeModeUiWidgetMode = "auto" | "always" | "hidden";
+export type CodeModeResultFormat = "auto" | "yaml" | "json" | "text";
 /** QuickJS is the only vendored runtime; the Node-process escape hatch is dropped. */
-export type SpindleExecutorRuntime = "quickjs";
+export type CodeModeExecutorRuntime = "quickjs";
 
 /** Thinking levels the absorbed subagents runner accepts (see agents/pi-args.ts). */
 const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
 
-interface SpindleExecutorConfig {
-	runtime: SpindleExecutorRuntime;
+interface CodeModeExecutorConfig {
+	runtime: CodeModeExecutorRuntime;
 	timeoutMs: number;
 	/**
 	 * Policy ceiling for a per-invocation `timeoutMs` request: a single
@@ -56,11 +56,11 @@ interface SpindleExecutorConfig {
 	readMaxBytes: number;
 	maxOutputChars: number;
 	maxNestedResultChars: number;
-	resultFormat: SpindleResultFormat;
+	resultFormat: CodeModeResultFormat;
 }
 
 /** Bounds and defaults for the `agents.*` actions. */
-export interface SpindleAgentConfig {
+export interface CodeModeAgentConfig {
 	maxPerExecution: number;
 	/** Hard cap on a child run's own lifetime; the child is killed past it. */
 	timeoutMs: number;
@@ -83,7 +83,7 @@ export interface SpindleAgentConfig {
  * (notes, sibling repos, agent files), so enforcement is opt-in per project or
  * turned on for the duration of an unattended run.
  */
-export interface SpindleSandboxConfig {
+export interface CodeModeSandboxConfig {
 	mode: SandboxMode;
 	/** Extra writable roots, beyond the cwd and the tool caches. */
 	allowWrite: string[];
@@ -93,33 +93,33 @@ export interface SpindleSandboxConfig {
 	denyRead: string[];
 }
 
-export interface SpindleToolCaptureConfig {
+export interface CodeModeToolCaptureConfig {
 	enabled: boolean;
 	hideFromModel: boolean;
 	keepVisible: string[];
 }
 
-interface SpindleUiConfig {
+interface CodeModeUiConfig {
 	enabled: boolean;
-	widget: SpindleUiWidgetMode;
+	widget: CodeModeUiWidgetMode;
 	maxRows: number;
 	refreshMs: number;
 	showNestedToolCalls: boolean;
 	nestedToolDebounceMs: number;
 }
 
-export interface SpindleConfig {
+export interface CodeModeConfig {
 	fullCodeMode: boolean;
-	executor: SpindleExecutorConfig;
-	agents: SpindleAgentConfig;
-	sandbox: SpindleSandboxConfig;
+	executor: CodeModeExecutorConfig;
+	agents: CodeModeAgentConfig;
+	sandbox: CodeModeSandboxConfig;
 	/**
 	 * Read-only guardrail for MCP tool calls. Unrelated to the upstream `mcp`
 	 * section removed above: this configures a policy, not an MCP client.
 	 */
 	mcp: McpReadOnlyConfig;
-	capture: SpindleToolCaptureConfig;
-	ui: SpindleUiConfig;
+	capture: CodeModeToolCaptureConfig;
+	ui: CodeModeUiConfig;
 }
 
 export const MIN_AGENT_TIMEOUT_MS = 1_000;
@@ -138,7 +138,7 @@ export const MAX_EXECUTOR_MEMORY_LIMIT_BYTES = Math.max(
 export const maxExecutorMemoryLimitBytes = (): number =>
 	Math.min(QUICKJS_MAX_MEMORY_LIMIT_BYTES, MAX_EXECUTOR_MEMORY_LIMIT_BYTES);
 
-export const DEFAULT_SPINDLE_CONFIG: SpindleConfig = {
+export const DEFAULT_CODE_MODE_CONFIG: CodeModeConfig = {
 	fullCodeMode: true,
 	executor: {
 		runtime: "quickjs",
@@ -239,13 +239,13 @@ const stringList = (value: unknown, fallback: string[] = []): string[] =>
 const objectValue = (value: unknown): Record<string, unknown> =>
 	typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 
-const widgetModeValue = (value: unknown, fallback: SpindleUiWidgetMode): SpindleUiWidgetMode =>
+const widgetModeValue = (value: unknown, fallback: CodeModeUiWidgetMode): CodeModeUiWidgetMode =>
 	value === "auto" || value === "always" || value === "hidden" ? value : fallback;
 
-const resultFormatValue = (value: unknown, fallback: SpindleResultFormat): SpindleResultFormat =>
+const resultFormatValue = (value: unknown, fallback: CodeModeResultFormat): CodeModeResultFormat =>
 	value === "auto" || value === "yaml" || value === "json" || value === "text" ? value : fallback;
 
-export const normalizeSpindleConfig = (input: Record<string, unknown>): SpindleConfig => {
+export const normalizeCodeModeConfig = (input: Record<string, unknown>): CodeModeConfig => {
 	const executor = objectValue(input.executor);
 	const agents = objectValue(input.agents);
 	const sandbox = objectValue(input.sandbox);
@@ -256,27 +256,27 @@ export const normalizeSpindleConfig = (input: Record<string, unknown>): SpindleC
 	const configuredVisible = Array.isArray(capture.keepVisible)
 		? capture.keepVisible
 				.filter((name): name is string => typeof name === "string" && Boolean(name.trim()))
-				.map((name) => (name === "spindle_exec" ? "code_mode" : name))
-		: DEFAULT_SPINDLE_CONFIG.capture.keepVisible;
+				.map((name) => name.trim())
+		: DEFAULT_CODE_MODE_CONFIG.capture.keepVisible;
 
 	return {
-		fullCodeMode: booleanValue(input.fullCodeMode, DEFAULT_SPINDLE_CONFIG.fullCodeMode),
+		fullCodeMode: booleanValue(input.fullCodeMode, DEFAULT_CODE_MODE_CONFIG.fullCodeMode),
 		executor: {
 			runtime: "quickjs",
-			timeoutMs: boundedInteger(executor.timeoutMs, DEFAULT_SPINDLE_CONFIG.executor.timeoutMs, 1_000, 900_000),
+			timeoutMs: boundedInteger(executor.timeoutMs, DEFAULT_CODE_MODE_CONFIG.executor.timeoutMs, 1_000, 900_000),
 			maxTimeoutMs: Math.max(
-				boundedInteger(executor.timeoutMs, DEFAULT_SPINDLE_CONFIG.executor.timeoutMs, 1_000, 900_000),
-				boundedInteger(executor.maxTimeoutMs, DEFAULT_SPINDLE_CONFIG.executor.maxTimeoutMs, 1_000, 3_600_000),
+				boundedInteger(executor.timeoutMs, DEFAULT_CODE_MODE_CONFIG.executor.timeoutMs, 1_000, 900_000),
+				boundedInteger(executor.maxTimeoutMs, DEFAULT_CODE_MODE_CONFIG.executor.maxTimeoutMs, 1_000, 3_600_000),
 			),
 			memoryLimitBytes: boundedInteger(
 				executor.memoryLimitBytes,
-				DEFAULT_SPINDLE_CONFIG.executor.memoryLimitBytes,
+				DEFAULT_CODE_MODE_CONFIG.executor.memoryLimitBytes,
 				8 * 1024 * 1024,
 				maxExecutorMemoryLimitBytes(),
 			),
 			readMaxBytes: boundedInteger(
 				executor.readMaxBytes,
-				DEFAULT_SPINDLE_CONFIG.executor.readMaxBytes,
+				DEFAULT_CODE_MODE_CONFIG.executor.readMaxBytes,
 				// Never below pi's own limit (that would make the sandbox worse than the
 				// model's own read), never above what the guest heap can hold.
 				50 * 1024,
@@ -284,34 +284,34 @@ export const normalizeSpindleConfig = (input: Record<string, unknown>): SpindleC
 			),
 			maxOutputChars: boundedInteger(
 				executor.maxOutputChars,
-				DEFAULT_SPINDLE_CONFIG.executor.maxOutputChars,
+				DEFAULT_CODE_MODE_CONFIG.executor.maxOutputChars,
 				1_000,
 				1_000_000,
 			),
 			maxNestedResultChars: boundedInteger(
 				executor.maxNestedResultChars,
-				DEFAULT_SPINDLE_CONFIG.executor.maxNestedResultChars,
+				DEFAULT_CODE_MODE_CONFIG.executor.maxNestedResultChars,
 				10_000,
 				20_000_000,
 			),
-			resultFormat: resultFormatValue(executor.resultFormat, DEFAULT_SPINDLE_CONFIG.executor.resultFormat),
+			resultFormat: resultFormatValue(executor.resultFormat, DEFAULT_CODE_MODE_CONFIG.executor.resultFormat),
 		},
 		agents: {
 			maxPerExecution: boundedInteger(
 				agents.maxPerExecution,
-				DEFAULT_SPINDLE_CONFIG.agents.maxPerExecution,
+				DEFAULT_CODE_MODE_CONFIG.agents.maxPerExecution,
 				1,
 				1_000,
 			),
 			timeoutMs: boundedInteger(
 				agents.timeoutMs,
-				DEFAULT_SPINDLE_CONFIG.agents.timeoutMs,
+				DEFAULT_CODE_MODE_CONFIG.agents.timeoutMs,
 				MIN_AGENT_TIMEOUT_MS,
 				MAX_AGENT_TIMEOUT_MS,
 			),
 			waitMs: boundedInteger(
 				agents.waitMs,
-				DEFAULT_SPINDLE_CONFIG.agents.waitMs,
+				DEFAULT_CODE_MODE_CONFIG.agents.waitMs,
 				MIN_AGENT_TIMEOUT_MS,
 				MAX_AGENT_TIMEOUT_MS,
 			),
@@ -319,26 +319,26 @@ export const normalizeSpindleConfig = (input: Record<string, unknown>): SpindleC
 			...(agentThinking ? { defaultThinking: agentThinking } : {}),
 		},
 		sandbox: {
-			mode: isSandboxMode(sandbox.mode) ? sandbox.mode : DEFAULT_SPINDLE_CONFIG.sandbox.mode,
+			mode: isSandboxMode(sandbox.mode) ? sandbox.mode : DEFAULT_CODE_MODE_CONFIG.sandbox.mode,
 			allowWrite: stringList(sandbox.allowWrite),
 			denyWrite: stringList(sandbox.denyWrite),
 			denyRead: stringList(sandbox.denyRead),
 		},
 		mcp: normalizeMcpReadOnlyConfig(input.mcp),
 		capture: {
-			enabled: booleanValue(capture.enabled, DEFAULT_SPINDLE_CONFIG.capture.enabled),
-			hideFromModel: booleanValue(capture.hideFromModel, DEFAULT_SPINDLE_CONFIG.capture.hideFromModel),
+			enabled: booleanValue(capture.enabled, DEFAULT_CODE_MODE_CONFIG.capture.enabled),
+			hideFromModel: booleanValue(capture.hideFromModel, DEFAULT_CODE_MODE_CONFIG.capture.hideFromModel),
 			keepVisible: [...new Set(configuredVisible)],
 		},
 		ui: {
-			enabled: booleanValue(ui.enabled, DEFAULT_SPINDLE_CONFIG.ui.enabled),
-			widget: widgetModeValue(ui.widget, DEFAULT_SPINDLE_CONFIG.ui.widget),
-			maxRows: boundedInteger(ui.maxRows, DEFAULT_SPINDLE_CONFIG.ui.maxRows, 1, 20),
-			refreshMs: boundedInteger(ui.refreshMs, DEFAULT_SPINDLE_CONFIG.ui.refreshMs, 100, 10_000),
-			showNestedToolCalls: booleanValue(ui.showNestedToolCalls, DEFAULT_SPINDLE_CONFIG.ui.showNestedToolCalls),
+			enabled: booleanValue(ui.enabled, DEFAULT_CODE_MODE_CONFIG.ui.enabled),
+			widget: widgetModeValue(ui.widget, DEFAULT_CODE_MODE_CONFIG.ui.widget),
+			maxRows: boundedInteger(ui.maxRows, DEFAULT_CODE_MODE_CONFIG.ui.maxRows, 1, 20),
+			refreshMs: boundedInteger(ui.refreshMs, DEFAULT_CODE_MODE_CONFIG.ui.refreshMs, 100, 10_000),
+			showNestedToolCalls: booleanValue(ui.showNestedToolCalls, DEFAULT_CODE_MODE_CONFIG.ui.showNestedToolCalls),
 			nestedToolDebounceMs: boundedInteger(
 				ui.nestedToolDebounceMs,
-				DEFAULT_SPINDLE_CONFIG.ui.nestedToolDebounceMs,
+				DEFAULT_CODE_MODE_CONFIG.ui.nestedToolDebounceMs,
 				0,
 				2_000,
 			),
@@ -347,8 +347,8 @@ export const normalizeSpindleConfig = (input: Record<string, unknown>): SpindleC
 };
 
 export const effectiveToolCaptureConfig = (
-	config: Pick<SpindleConfig, "fullCodeMode" | "capture">,
-): SpindleToolCaptureConfig =>
+	config: Pick<CodeModeConfig, "fullCodeMode" | "capture">,
+): CodeModeToolCaptureConfig =>
 	config.fullCodeMode
 		? {
 				...config.capture,
@@ -361,17 +361,17 @@ export const effectiveToolCaptureConfig = (
 				keepVisible: [...config.capture.keepVisible],
 			};
 
-interface SpindleConfigFilePlan {
+interface CodeModeConfigFilePlan {
 	path: string;
 	document: Record<string, unknown>;
 	source: string;
 	changed: boolean;
 }
 
-const planConfigFile = (filePath: string): SpindleConfigFilePlan | undefined => {
+const planConfigFile = (filePath: string): CodeModeConfigFilePlan | undefined => {
 	const input = readJsonObjectFile(filePath);
 	if (!input) return undefined;
-	const migration = migrateSpindleConfigDocument(input.document);
+	const migration = migrateCodeModeConfigDocument(input.document);
 	return {
 		path: filePath,
 		document: migration.document,
@@ -401,10 +401,10 @@ const writeJsonAtomic = (filePath: string, document: Record<string, unknown>, ex
 			try {
 				currentSource = fs.readFileSync(resolvedPath, "utf8");
 			} catch (error) {
-				throw new Error(`Spindle configuration changed while updating ${filePath}`, { cause: error });
+				throw new Error(`Code Mode configuration changed while updating ${filePath}`, { cause: error });
 			}
 			if (currentSource !== expectedSource) {
-				throw new Error(`Spindle configuration changed while updating ${filePath}`);
+				throw new Error(`Code Mode configuration changed while updating ${filePath}`);
 			}
 		}
 		fs.renameSync(temporaryPath, resolvedPath);
@@ -426,44 +426,44 @@ const writeJsonAtomic = (filePath: string, document: Record<string, unknown>, ex
 	}
 };
 
-/** Spindle's own config file name; deliberately not the upstream config file. */
-const SPINDLE_CONFIG_FILENAME = "spindle.json";
+/** Code Mode's own config file name; deliberately not the upstream config file. */
+const CODE_MODE_CONFIG_FILENAME = "code-mode.json";
 
-export const loadSpindleConfig = (options: {
+export const loadCodeModeConfig = (options: {
 	cwd: string;
 	agentDir: string;
 	projectTrusted: boolean;
-}): SpindleConfig => {
-	let merged = structuredClone(DEFAULT_SPINDLE_CONFIG) as unknown as Record<string, unknown>;
+}): CodeModeConfig => {
+	let merged = structuredClone(DEFAULT_CODE_MODE_CONFIG) as unknown as Record<string, unknown>;
 	const plans = [
-		planConfigFile(path.join(options.agentDir, SPINDLE_CONFIG_FILENAME)),
-		...(options.projectTrusted ? [planConfigFile(path.join(options.cwd, ".pi", SPINDLE_CONFIG_FILENAME))] : []),
-	].filter((plan): plan is SpindleConfigFilePlan => plan !== undefined);
+		planConfigFile(path.join(options.agentDir, CODE_MODE_CONFIG_FILENAME)),
+		...(options.projectTrusted ? [planConfigFile(path.join(options.cwd, ".pi", CODE_MODE_CONFIG_FILENAME))] : []),
+	].filter((plan): plan is CodeModeConfigFilePlan => plan !== undefined);
 	for (const plan of plans) {
 		if (plan.changed) writeJsonAtomic(plan.path, plan.document, plan.source);
 		merged = mergeObjects(merged, plan.document);
 	}
-	const inheritedFullCodeMode = process.env.PI_SPINDLE_FULL_CODE_MODE;
+	const inheritedFullCodeMode = process.env.PI_CODE_MODE_FULL_CODE_MODE;
 	if (inheritedFullCodeMode === "true" || inheritedFullCodeMode === "false") {
 		merged.fullCodeMode = inheritedFullCodeMode === "true";
 	}
-	return normalizeSpindleConfig(merged);
+	return normalizeCodeModeConfig(merged);
 };
 
-export const saveSpindleConfig = (
+export const saveCodeModeConfig = (
 	options: { cwd: string; agentDir: string; projectTrusted: boolean },
 	partial: Record<string, unknown>,
 ): { scope: "global" | "project"; path: string } => {
 	const targetPath = options.projectTrusted
-		? path.join(options.cwd, ".pi", SPINDLE_CONFIG_FILENAME)
-		: path.join(options.agentDir, SPINDLE_CONFIG_FILENAME);
+		? path.join(options.cwd, ".pi", CODE_MODE_CONFIG_FILENAME)
+		: path.join(options.agentDir, CODE_MODE_CONFIG_FILENAME);
 	if (Object.hasOwn(partial, "configVersion")) {
-		throw new Error("Spindle configuration updates must use the current schema");
+		throw new Error("Code Mode configuration updates must use the current schema");
 	}
 	const input = readJsonObjectFile(targetPath);
-	const existing = migrateSpindleConfigDocument(input?.document ?? {}).document;
+	const existing = migrateCodeModeConfigDocument(input?.document ?? {}).document;
 	const merged = mergeObjects(existing, partial) as Record<string, unknown>;
-	merged.configVersion = CURRENT_SPINDLE_CONFIG_VERSION;
+	merged.configVersion = CURRENT_CODE_MODE_CONFIG_VERSION;
 	writeJsonAtomic(targetPath, merged, input?.source);
 	return { scope: options.projectTrusted ? "project" : "global", path: targetPath };
 };

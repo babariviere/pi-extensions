@@ -6,7 +6,7 @@
  * model from repeating mutations it has already applied.
  */
 
-import type { SpindleExecutionTraceV1 } from "./audit/trace.ts";
+import type { CodeModeExecutionTraceV1 } from "./audit/trace.ts";
 
 const MAX_COMPLETED_CALLS = 8;
 const MAX_PATH_CHARS = 100;
@@ -17,7 +17,7 @@ const compactPath = (value: string): string => {
 	return `\u2026${singleLine.slice(-(MAX_PATH_CHARS - 1))}`;
 };
 
-export const formatFailureProgress = (trace: SpindleExecutionTraceV1): string | undefined => {
+export const formatFailureProgress = (trace: CodeModeExecutionTraceV1): string | undefined => {
 	if (trace.outcome === "succeeded") return undefined;
 	const completed = trace.operations.filter((operation) => operation.outcome === "succeeded");
 	if (completed.length === 0) return undefined;

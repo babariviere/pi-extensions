@@ -1,6 +1,6 @@
-# spindle — vendored fork of pi-fabric
+# code-mode — vendored fork of pi-fabric
 
-`spindle` is a trimmed, vendored fork of **pi-fabric**. It exposes exactly one
+`code-mode` is a trimmed, vendored fork of **pi-fabric**. It exposes exactly one
 tool, `code_mode` (a code-mode QuickJS sandbox), and exactly one UI surface,
 a widget mounted with `placement: "aboveEditor"`.
 
@@ -28,7 +28,7 @@ plus its wiring, and none pulls in a dropped subsystem.
 |---|---|---|
 | `runtime/quickjs-runtime.ts` (`setMaxStackSize`) | same call upstream | runaway guest recursion raises a guest error instead of walking the host stack |
 | `code-mode-arguments.ts`, `run-display.ts`, `runtime/guest-code-repair.ts` | `src/fabric-exec-arguments.ts`, `src/run-display.ts`, `src/runtime/guest-code-repair.ts` | `prepareArguments` repairs code arrays, unquoted path heads, JSON-encoded payload maps, nullish optionals and a bare `display` string before Pi validates the call |
-| `type-error-guidance.ts`, `runtime/core-tool-properties.ts` | same names upstream (property table adapted to spindle's inline `PiToolsApi`) | one actionable recovery hint next to type-check diagnostics |
+| `type-error-guidance.ts`, `runtime/core-tool-properties.ts` | same names upstream (property table adapted to code-mode's inline `PiToolsApi`) | one actionable recovery hint next to type-check diagnostics |
 | `failure-progress.ts` | `src/failure-progress.ts` | a failed program names the calls that already succeeded |
 | `output-budget.ts` | `src/output-budget.ts` | oversized output spills to a temp artifact instead of losing its middle |
 | `config.ts` (`executor.maxTimeoutMs`), `execution-service.ts` (`requestedTimeoutMs`) | same fields upstream | a per-invocation `timeoutMs` raises (never lowers) the program deadline |
@@ -89,7 +89,7 @@ to render unchanged, and the existing aggregate details cap remains authoritativ
 
 The nested `pi.applyPatch` tool is the safe extension-level fallback. Native OpenAI Responses `apply_patch_call` support is intentionally not injected by this extension. Pi 0.85.1 can rewrite the outgoing provider payload through `before_provider_request`, but its OpenAI Responses parser does not decode `apply_patch_call`, and `after_provider_response` cannot replace or consume the response body. Advertising the native tool from middleware would therefore let the provider silently discard the model's edits.
 
-`NATIVE_APPLY_PATCH.md` records the upstream provider changes, round-trip requirements, compatibility checks, and Spindle integration needed before the native path can be enabled. Until that contract exists in `@earendil-works/pi-ai`, model profiles use the V4A-compatible nested tool and preserve the normal sandbox, lifecycle, audit, and metrics paths.
+`NATIVE_APPLY_PATCH.md` records the upstream provider changes, round-trip requirements, compatibility checks, and Code Mode integration needed before the native path can be enabled. Until that contract exists in `@earendil-works/pi-ai`, model profiles use the V4A-compatible nested tool and preserve the normal sandbox, lifecycle, audit, and metrics paths.
 
 ## Upstream drift audit
 
@@ -120,7 +120,7 @@ likely to contain further backport candidates; individual commits were not read.
 Where this fork is **ahead** of upstream: the whole `sandbox/` subsystem.
 Upstream has no filesystem guardrail at all, `pi.bash` there runs with full
 process rights, and its `node-process` / `bun-process` runtimes are documented
-as carrying no security boundary. `SpindleExecutorRuntime` is narrowed to the
+as carrying no security boundary. `CodeModeExecutorRuntime` is narrowed to the
 literal `"quickjs"` in `config.ts`, so there is no untyped or unsandboxed escape
 hatch to re-enable.
 
@@ -141,9 +141,9 @@ decisions.
 Globals inside `code_mode`:
 
 - `pi.*` — Pi core tools (full code mode only), via `providers/pi-tools-provider.ts`
-- `web.*` — explicitly registered captured web aliases, via `capture/` + `providers/captured-tools-provider.ts`; unrelated captured siblings remain on Pi's native direct path
+- `web.*` — explicitly registered captured web aliases, via `capture/` + `providers/captured-tools-provider.ts`; other captured tools have no generic provider and stay hidden unless `capture.keepVisible` retains their native path
 - `tools.*` — cross-provider discovery and generic dispatch (full code mode only): `providers` / `catalog` / `list` / `search` / `describe` / `call` over every registered provider
-- `mcp.*` — MCP tools from `~/.pi/agent/mcp.json`, served by spindle's own MCP client (`mcp/client-hub.ts` behind `providers/mcp-client-provider.ts`)
+- `mcp.*` — MCP tools from `~/.pi/agent/mcp.json`, served by code-mode's own MCP client (`mcp/client-hub.ts` behind `providers/mcp-client-provider.ts`)
 - `agents.*` — custom markdown subagents, via `providers/agents-provider.ts` + `agents/`
 - Host APIs, via `runtime/guest-polyfills.ts`: `TextEncoder`/`TextDecoder`,
   `URL`/`URLSearchParams`, `atob`/`btoa`, `structuredClone`, `crypto`
@@ -164,7 +164,7 @@ Globals inside `code_mode`:
   A signal passed to a host call is not just a local promise race: the runtime
   tags the call with a guest-generated id, gives it its own host-side
   `AbortController` chained to the program-wide one, and an abort sends
-  `spindle.$cancel` back through the bridge, so the in-flight work is really
+  `code-mode.$cancel` back through the bridge, so the in-flight work is really
   cancelled and its siblings are not. `mapLimit` takes a signal too and stops
   launching further items.
 
@@ -193,7 +193,7 @@ Globals inside `code_mode`:
 - `process` — minimal shim built from `env-snapshot.ts`: allowlisted `process.env` (HOME, USER, LOGNAME, SHELL, PWD, PATH, LANG, LC_*, TERM, TMPDIR, XDG_*), `process.platform` / `process.arch`, `process.cwd()`. No secret ever enters the guest.
 - `print`, `console`, `π` (named payloads from the `payloads` argument), `setTimeout` / `setInterval` / `clearTimeout` / `clearInterval`
 - `τ` — the session-scoped scratchpad (`session-store.ts`), reached through five
-  host calls (`spindle.$stateGet` / `$stateSet` / `$stateKeys` / `$stateDelete` /
+  host calls (`code-mode.$stateGet` / `$stateSet` / `$stateKeys` / `$stateDelete` /
   `$stateClear`). `τ = 2π` is the mnemonic and the semantics are deliberately
   *not* symmetric: `π` is per-call, read-only and infallible, `τ` is
   cross-program, mutable and failable. That asymmetry is why it is a method API
@@ -208,23 +208,23 @@ Globals inside `code_mode`:
   **throws and names the held keys** instead of evicting: silently dropping the
   entry a later program depends on turns a limit into a nondeterministic bug.
 
-  The store is owned by `SpindleState`, for the same reason as the agent run
+  The store is owned by `CodeModeState`, for the same reason as the agent run
   book: it has to outlive one `code_mode` program. It is reset on session
   start and teardown and never persisted.
 
   Discoverability is half the feature and does not live in the store: the model
   cannot see state it did not write this turn, so a program that **touched** τ
-  gets `SpindleExecutionResult.stateKeys` and a `τ keys: name (size)` line on its
+  gets `CodeModeExecutionResult.stateKeys` and a `τ keys: name (size)` line on its
   result. A program that never mentions the scratchpad is told nothing about it.
 
   Each operation reports itself for the TUI, and that report is split across two
   channels on purpose. The **durable trace** keeps the key (an identifier the
   program chose) and the shape of what happened — bytes, `replaced` / `found` /
-  `deleted` / `cleared` — through explicit `spindle.state.*` cases in
+  `deleted` / `cleared` — through explicit `code-mode.state.*` cases in
   `audit/projection.ts`. The **value** never enters it: that allowlist is the
   trace's confidentiality boundary, and a τ value can be anything the program
   read. So the preview rides the live partial-update channel instead
-  (`SpindleStateNote` → `readSpindleStateNotes` → `applySpindleStateNotes`), the
+  (`CodeModeStateNote` → `readCodeModeStateNotes` → `applyCodeModeStateNotes`), the
   same route the write previews take. A reloaded transcript therefore keeps the
   row, the key and the size, and loses only the content. Without that echo the
   namespace is a set of names the model has to remember, which is how a hidden
@@ -234,7 +234,7 @@ Globals inside `code_mode`:
 Deliberately absent: `memory`, `state`, `schema`, `compact`, `mesh`,
 `council`, `rlm`, `agent()`, `budget`, `workflow.agent`, `workflow.budget`.
 (`state` there is upstream's mesh state layer, which stays dropped; the local
-`τ` scratchpad above is spindle's own and unrelated to it.)
+`τ` scratchpad above is code-mode's own and unrelated to it.)
 
 ## Vendored file manifest
 
@@ -244,7 +244,7 @@ rename mapping below; it must be applied to every upstream patch.
 
 ### Top level
 `async-settlement.ts`, `config.ts`, `config-migrations.ts`, `execution-service.ts`,
-`code-mode-tool.ts`, `spindle-state.ts`, `host-compatibility.ts`, `index.ts`,
+`code-mode-tool.ts`, `code-mode-state.ts`, `host-compatibility.ts`, `index.ts`,
 `protocol.ts`, `util.ts`
 
 ### `runtime/`
@@ -262,7 +262,7 @@ rename mapping below; it must be applied to every upstream patch.
 `pi-tools-provider.ts`, `captured-tools-provider.ts`, `write-preview.ts`
 
 ### `ui/`
-`spindle-render.ts`, `core-tool-render.ts`, `spindle-code-parser.ts`, `highlight.ts`,
+`code-mode-render.ts`, `core-tool-render.ts`, `code-mode-code-parser.ts`, `highlight.ts`,
 `format.ts`, `preview-lines.ts`, `diff-background.ts`, `row-balance.ts`,
 `spinner.ts`, `structured.ts`, `code-preview.ts`, `code-preview-shell.ts`,
 `word-diff/` (whole directory), `widget.ts`, `types.ts`, `snapshot.ts`,
@@ -279,26 +279,26 @@ this table before it applies.
 | Upstream | Local |
 |---|---|
 | `src/fabric-exec-tool.ts` | `extensions/code-mode/code-mode-tool.ts` |
-| `src/fabric-state.ts` | `extensions/code-mode/spindle-state.ts` |
-| `src/ui/fabric-render.ts` | `extensions/code-mode/ui/spindle-render.ts` |
-| `src/ui/fabric-code-parser.ts` | `extensions/code-mode/ui/spindle-code-parser.ts` |
+| `src/fabric-state.ts` | `extensions/code-mode/code-mode-state.ts` |
+| `src/ui/fabric-render.ts` | `extensions/code-mode/ui/code-mode-render.ts` |
+| `src/ui/fabric-code-parser.ts` | `extensions/code-mode/ui/code-mode-code-parser.ts` |
 | anything else | `src/X` → `extensions/code-mode/X` |
 
 ### Identifiers and strings
 
 | Upstream | Local |
 |---|---|
-| `Fabric*` (types, classes, interfaces) | `Spindle*` |
-| `FABRIC_*` (constants, env vars) | `SPINDLE_*` |
-| `fabric*` (variables, functions, fields, comments) | `spindle*` |
-| `fabric.$*` (host-call names) | `spindle.$*` |
-| `__fabric*` / `__pi_fabric_*` (guest globals) | `__spindle*` / `__pi_spindle_*` |
+| `Fabric*` (types, classes, interfaces) | `Code Mode*` |
+| `FABRIC_*` (constants, env vars) | `CODE_MODE_*` |
+| `fabric*` (variables, functions, fields, comments) | `code-mode*` |
+| `fabric.$*` (host-call names) | `code-mode.$*` |
+| `__fabric*` / `__pi_fabric_*` (guest globals) | `__code-mode*` / `__pi_code_mode_*` |
 | `fabric_exec` (tool name) | `code_mode` |
-| `"pi-fabric…"` event / symbol / kind literals | `"pi-spindle…"` |
-| `"pi-fabric"` widget id | `"spindle"` |
-| `fabric.json` config file | `spindle.json` |
+| `"pi-fabric…"` event / symbol / kind literals | `"pi-code-mode…"` |
+| `"pi-fabric"` widget id | `"code-mode"` |
+| `fabric.json` config file | `code-mode.json` |
 
-The `fabric.$*` → `spindle.$*` row spans a host/guest seam that no
+The `fabric.$*` → `code-mode.$*` row spans a host/guest seam that no
 type-checker covers: the guest half lives inside the `GUEST_SETUP`
 string literal in `runtime/quickjs-runtime.ts`, the host half in the host-call
 table in `host-calls.ts` (dispatched by `execution-service.ts`). They must be renamed together; a mismatch
@@ -306,8 +306,8 @@ fails only at runtime, silently. Two guards exist: after any port,
 `rg 'fabric\.\$' extensions/code-mode` must be empty, and
 `runtime/guest-host-refs.test.ts` executes every guest API against a recording
 host bridge and asserts each emitted ref is handled (a `host-calls.ts` table
-entry, a runtime-internal handler such as `spindle.$timer`, or a registry
-provider namespace) and that every static `spindle.$*` table entry is reachable.
+entry, a runtime-internal handler such as `code-mode.$timer`, or a registry
+provider namespace) and that every static `code-mode.$*` table entry is reachable.
 
 ## Render parity set
 
@@ -315,7 +315,7 @@ These files carry **no hand edits**. They differ from upstream `v0.28.2` by
 exactly three mechanical passes, and nothing else:
 
 1. the `.js` → `.ts` relative-import-specifier rewrite described below,
-2. the `fabric` → `spindle` rename from the mapping table above (which also
+2. the `fabric` → `code-mode` rename from the mapping table above (which also
    renamed two of the files themselves), and
 3. the repo-wide biome format (`npm run fmt`, upstream pi's settings: tabs,
    `indentWidth` 3, `lineWidth` 120).
@@ -324,9 +324,9 @@ So they are **not byte-identical to upstream** — do not assume a clean `diff`.
 Still, do not edit them by hand: port upstream changes verbatim, re-apply the
 first two passes, then run `npm run fmt`.
 
-`ui/spindle-render.ts`, `ui/core-tool-render.ts`, `ui/code-preview.ts`,
+`ui/code-mode-render.ts`, `ui/core-tool-render.ts`, `ui/code-preview.ts`,
 `ui/code-preview-shell.ts`, `ui/highlight.ts`, `ui/format.ts`,
-`ui/preview-lines.ts`, `ui/spindle-code-parser.ts`, `ui/diff-background.ts`,
+`ui/preview-lines.ts`, `ui/code-mode-code-parser.ts`, `ui/diff-background.ts`,
 `ui/row-balance.ts`, `ui/spinner.ts`, `ui/structured.ts`, `ui/word-diff/*`,
 `ui/widget.ts`, `ui/transcript-sanitization.ts`
 
@@ -342,15 +342,15 @@ finished fan-out can close its phase without waiting for the next phase or the
 end of the run.
 
 `runtime/type-checker.ts` **does carry hand edits**: `sourceMap: true` on the
-emit (consumed by `runtime/source-map.ts`), `transpileSpindleCode` returning
+emit (consumed by `runtime/source-map.ts`), `transpileCodeModeCode` returning
 `{ javascript, sourceMap }` instead of a bare string, and delegation of both
 entry points through the `runtime/checker-backend.ts` seam (the stock
 `typescript` backend registers itself as the default).
 
 Because `ui/widget.ts` is in the parity set, the rewritten `ui/types.ts` must stay
 a strict structural superset of what it reads. That is why
-`SpindleDashboardSnapshot` still carries `widgetDismissedAt` and an `actors`
-field with a minimal local `SpindleUiActor`: spindle has no actor subsystem and
+`CodeModeDashboardSnapshot` still carries `widgetDismissedAt` and an `actors`
+field with a minimal local `CodeModeUiActor`: code-mode has no actor subsystem and
 always populates `actors: []`, but the field must exist so the parity renderer
 compiles untouched.
 
@@ -382,7 +382,7 @@ fd -e ts . extensions/code-mode -x perl -pi -e 's{(from\s+")(\.\.?/[^"]*)\.js(")
 | `src/providers/{agents,memory,mesh,state,schema,compact}-provider.ts` | Providers for dropped subsystems |
 | `src/runtime/node-process-runtime.ts`, `src/runtime/node-process-child-source.ts` | Unsafe trusted-code escape hatch; imports `src/agents/transports/` and needs `cross-spawn`. `executor.runtime` is therefore fixed at `"quickjs"`. |
 | `src/core/compact-controller.ts` | Imports `src/compaction/instructions.ts` |
-| `src/ui/dashboard.ts`, `dashboard-model.ts`, `dashboard-presentation.ts`, `dashboard-fabric-graph.ts`, `topology.ts`, `model-picker.ts`, `settings.ts`, `fabric-actor-delivery-selector.ts`, `fabric-actor-tool-selector.ts`, `fabric-host-event-selector.ts`, `fabric-model-selector.ts`, `fabric-thinking-selector.ts` | Dashboard and selector dialogs; spindle has exactly one widget and no overlays |
+| `src/ui/dashboard.ts`, `dashboard-model.ts`, `dashboard-presentation.ts`, `dashboard-fabric-graph.ts`, `topology.ts`, `model-picker.ts`, `settings.ts`, `fabric-actor-delivery-selector.ts`, `fabric-actor-tool-selector.ts`, `fabric-host-event-selector.ts`, `fabric-model-selector.ts`, `fabric-thinking-selector.ts` | Dashboard and selector dialogs; code-mode has exactly one widget and no overlays |
 | `src/ui/transcript-reader.ts` | Only reachable from the deleted dashboard, and its sole remaining import was the non-vendored `src/log-tail.ts`. Dropped instead of vendoring dead code; the `AgentTranscriptReader` re-export was removed from `ui/transcript.ts`. |
 | `src/thinking.ts` | Became unused after the config trim, and its thinking-level union (`…\|"max"`) disagrees with the thinking levels the absorbed subagents runner accepts. `config.ts` validates `agents.defaultThinking` against `agents/pi-args.ts`'s `THINKING_LEVELS` instead. |
 | upstream `skills/fabric-advisor`, `fabric-ambient`, `fabric-council`, `fabric-fusion`, `fabric-guide`, `fabric-rlm`, `fabric-schema`, `fabric-supervisor`, `fabric-swarm`, `fabric-workflow` | Skills for dropped features. Only `skills/fabric-exec` was vendored, as `<repo>/skills/code-mode`. |
@@ -393,45 +393,45 @@ fd -e ts . extensions/code-mode -x perl -pi -e 's{(from\s+")(\.\.?/[^"]*)\.js(")
 |---|---|
 | *(whole tree)* | Relative import specifiers rewritten `.js` → `.ts` |
 | `index.ts` | **Rewritten.** Dropped the actor host-event observers, upstream's slash command, prewalk handoff `message_end` boundary, compaction hook, ESC halt-the-world gate, `resources_discover` bundled-skills contribution, and all `publishHostLifecycle` / `dispatchHostEvent` / `noteMainActivity` wiring. Kept code-preview settings, the capture install, tool ownership/lifecycle, the `tool_result` + `context` skill-dir expansion, the `before_agent_start` guidance (rewritten for the surviving namespaces), and `session_start` / `session_shutdown`. Added the throttled `cleanupOldRuns()` sweep inherited from the deleted `extensions/subagents/index.ts`. |
-| `spindle-state.ts` | **Rewritten.** Now holds only config, `ActionRegistry`, the four providers, `SpindleExecutionService`, `SpindleActivityStore`, the subagent run registry, and the parent `SessionRef`. |
-| `execution-service.ts` | Trimmed: no Node-process runtime, no schema-enforce branches, no `agents.handoff` deferral, no `authorizer` plumbing. Upstream's `$models` case dropped. **All `spindle.$*` host-call cases live in the `host-calls.ts` table**, not here: the service builds one `HostCallContext` per execution and dispatches through `hostCallTable`. The six discovery entries (`spindle.$providers` / `$catalog` / `$list` / `$search` / `$describe` / `$call`) are spindle-local, not upstream, and back the guest `tools` namespace (see `runtime/guest-host-refs.test.ts` for the contract). `spindle.$timer` is satisfied inside `runtime/quickjs-runtime.ts` and never reaches this switch. `spindle.$progress` currently has no guest producer (host-side `context.update` drives progress instead) but is kept callable. `guardAgentCall` guards the launching refs only (`isAgentBudgetRef`: `agents.run` / `agents.runAll` / `agents.start`; waiting, listing and cancelling are free). The orchestration deadline is `max(executor.timeoutMs, agents.timeoutMs) + BLOCKING_HOST_CALL_SLACK_MS`, and a blocking agent ref extends it by the same slack, so an agent call always reports its own outcome instead of the sandbox killing the program that waits for it. The type-check failure path reports the first errors verbatim (activity + trace message), and the emitted source map is forwarded to the runtime so guest stack positions map back to the program. Added a local `UsageWithReasoning` type because the installed `@earendil-works/pi-ai` `Usage` has no `reasoning` field. |
-| `code-mode-tool.ts` | Tool renamed to `code_mode`; `label` is `Spindle`. `description`, `promptSnippet` and the `code` parameter description rewritten for the surviving namespaces. `tokenBudget` parameter and the prewalk handoff block removed; `agentBudget` kept (maps to `maxAgentCalls`). `renderCall` gained the `π` payload block and `renderResult` was split (its body moved to a local `renderResultBody`, so the `τ` block can be appended to whichever of its five branches ran without threading a wrapper through every `return`); both delegate to `ui/inspect-preview.ts`. The bodies are otherwise unchanged, except type-check failures: `details.typeErrors` (persisted via `audit/details.ts`) renders as one red `Line L:C: message` row per error with an expand hint, so the TUI shows why the program never ran instead of a bare failure. Exported factory is `createSpindleExecTool`. |
-| `config.ts` | Trimmed: removed `mesh`, `memory`, `schema`, `compaction`, `retention`, `mcp` (upstream's own MCP client block) and `prewalk`. `executor.runtime` narrowed to the literal `"quickjs"`. `agents` repurposed to `{ maxPerExecution, timeoutMs, waitMs, defaultModel?, defaultThinking? }` (`timeoutMs` caps a child's lifetime, `waitMs` caps how long a caller blocks before the run detaches). `capture.keepVisible` default is `["code_mode"]`. **Config file renamed to `spindle.json`** (`<agentDir>/spindle.json`, `<cwd>/.pi/spindle.json`) so spindle never reads or writes pi-fabric's user config; the env override is `PI_SPINDLE_FULL_CODE_MODE`. Upstream's compaction-engine env side effect is gone. |
-| `config-migrations.ts` | Untouched. Its legacy `subagents` → `agents` migration is inert for a fresh `spindle.json`; it still provides the `configVersion` guard. |
-| `runtime/quickjs-runtime.ts` | `GUEST_SETUP` trimmed: removed `globalThis.{mesh,memory,state,schema,compact,council,rlm,agent,budget}`, `__createActor`, `__handoff`, `__handoffFacts`/`__successfulCalls`, `__workflowAgent`, `__budgetedRun`, `__recordAgentUsage`, `__workflowBudgetTotal`/`__workflowSpentTokens`, `workflow.agent`, `workflow.budget`. **A local `tools` global was added back** (discovery + generic dispatch, upstream's `__toolsBase` shape is gone; core-tool names raise an actionable error pointing at `pi.<name>`). `globalThis.agents` is `{ list, run, runAll, start, wait, status, cancel }` (string sugar: `agents.wait('runId')`, `agents.cancel('runId')`). `globalThis.mcp` is a frozen `{ call, list, search, describe, connect }` over the unprefixed `mcp.*` refs. The nested `mcp.<server>.<tool>` Proxy sugar was removed (483 recorded `mcp.call` uses vs 6 for the sugar); the qualified form survives only as a ref for `tools.call`. Dropping the sugar is what freed the sigil: the `$` existed only so management actions could not collide with a server name in the ref space. `SpindleSandboxOptions.tokenBudget` and the token-budget guest global removed. Setup eval filename is `spindle-setup.js`. Local additions beyond the trim: the frozen `process` shim (injected via `options.process`), `pi.bash` extras (`cwd` / `env` / `stdin`, alias-normalized in `__piArgAliases`), `spindle.$timer` host-call short-circuit, and source-mapped error reporting: the transpiled program carries a source map (`options.sourceMap` or the self-transpiled one) and guest stack positions are rewritten to `program.ts:line:column` via `runtime/source-map.ts`; dumped guest errors render as `Name: message` + frames instead of a JSON blob. |
-| `runtime/guest-types.ts` | Trimmed to match `GUEST_SETUP` exactly. Removed every interface for dropped subsystems. Upstream's agents API interface replaced with spindle's run-book contract (`list` / `run` / `runAll` / `start` / `wait` / `status` / `cancel`) plus `SpindleAgentDefinition` / `SpindleAgentRequest` / `SpindleAgentResult` / `SpindleAgentHandle` / `SpindleAgentWait` / `SpindleAgentStatus`. Upstream's MCP API interface replaced with the bridge surface plus the Proxy sugar index signature. `FULL_CODE_GLOBAL_DECLARATIONS` gating for `pi` / `extensions` kept verbatim. Local additions beyond the trim: the `tools` (`SpindleToolsApi`) declaration, the `process` shim declaration, `SpindleBashOptions` (`cwd` / `env` / `stdin` + `workdir` aliases) on `pi.bash`, and `type-checker.ts` importing these declarations in its own tests. |
+| `code-mode-state.ts` | **Rewritten.** Now holds only config, `ActionRegistry`, the four providers, `CodeModeExecutionService`, `CodeModeActivityStore`, the subagent run registry, and the parent `SessionRef`. |
+| `execution-service.ts` | Trimmed: no Node-process runtime, no schema-enforce branches, no `agents.handoff` deferral, no `authorizer` plumbing. Upstream's `$models` case dropped. **All `code-mode.$*` host-call cases live in the `host-calls.ts` table**, not here: the service builds one `HostCallContext` per execution and dispatches through `hostCallTable`. The six discovery entries (`code-mode.$providers` / `$catalog` / `$list` / `$search` / `$describe` / `$call`) are code-mode-local, not upstream, and back the guest `tools` namespace (see `runtime/guest-host-refs.test.ts` for the contract). `code-mode.$timer` is satisfied inside `runtime/quickjs-runtime.ts` and never reaches this switch. `code-mode.$progress` currently has no guest producer (host-side `context.update` drives progress instead) but is kept callable. `guardAgentCall` guards the launching refs only (`isAgentBudgetRef`: `agents.run` / `agents.runAll` / `agents.start`; waiting, listing and cancelling are free). The orchestration deadline is `max(executor.timeoutMs, agents.timeoutMs) + BLOCKING_HOST_CALL_SLACK_MS`, and a blocking agent ref extends it by the same slack, so an agent call always reports its own outcome instead of the sandbox killing the program that waits for it. The type-check failure path reports the first errors verbatim (activity + trace message), and the emitted source map is forwarded to the runtime so guest stack positions map back to the program. Added a local `UsageWithReasoning` type because the installed `@earendil-works/pi-ai` `Usage` has no `reasoning` field. |
+| `code-mode-tool.ts` | Tool renamed to `code_mode`; `label` is `Code Mode`. `description`, `promptSnippet` and the `code` parameter description rewritten for the surviving namespaces. `tokenBudget` parameter and the prewalk handoff block removed; `agentBudget` kept (maps to `maxAgentCalls`). `renderCall` gained the `π` payload block and `renderResult` was split (its body moved to a local `renderResultBody`, so the `τ` block can be appended to whichever of its five branches ran without threading a wrapper through every `return`); both delegate to `ui/inspect-preview.ts`. The bodies are otherwise unchanged, except type-check failures: `details.typeErrors` (persisted via `audit/details.ts`) renders as one red `Line L:C: message` row per error with an expand hint, so the TUI shows why the program never ran instead of a bare failure. Exported factory is `createCodeModeExecTool`. |
+| `config.ts` | Trimmed: removed `mesh`, `memory`, `schema`, `compaction`, `retention`, `mcp` (upstream's own MCP client block) and `prewalk`. `executor.runtime` narrowed to the literal `"quickjs"`. `agents` repurposed to `{ maxPerExecution, timeoutMs, waitMs, defaultModel?, defaultThinking? }` (`timeoutMs` caps a child's lifetime, `waitMs` caps how long a caller blocks before the run detaches). `capture.keepVisible` default is `["code_mode"]`. **Config file renamed to `code-mode.json`** (`<agentDir>/code-mode.json`, `<cwd>/.pi/code-mode.json`) so code-mode never reads or writes pi-fabric's user config; the env override is `PI_CODE_MODE_FULL_CODE_MODE`. Upstream's compaction-engine env side effect is gone. |
+| `config-migrations.ts` | Untouched. Its legacy `subagents` → `agents` migration is inert for a fresh `code-mode.json`; it still provides the `configVersion` guard. |
+| `runtime/quickjs-runtime.ts` | `GUEST_SETUP` trimmed: removed `globalThis.{mesh,memory,state,schema,compact,council,rlm,agent,budget}`, `__createActor`, `__handoff`, `__handoffFacts`/`__successfulCalls`, `__workflowAgent`, `__budgetedRun`, `__recordAgentUsage`, `__workflowBudgetTotal`/`__workflowSpentTokens`, `workflow.agent`, `workflow.budget`. **A local `tools` global was added back** (discovery + generic dispatch, upstream's `__toolsBase` shape is gone; core-tool names raise an actionable error pointing at `pi.<name>`). `globalThis.agents` is `{ list, run, runAll, start, wait, status, cancel }` (string sugar: `agents.wait('runId')`, `agents.cancel('runId')`). `globalThis.mcp` is a frozen `{ call, list, search, describe, connect }` over the unprefixed `mcp.*` refs. The nested `mcp.<server>.<tool>` Proxy sugar was removed (483 recorded `mcp.call` uses vs 6 for the sugar); the qualified form survives only as a ref for `tools.call`. Dropping the sugar is what freed the sigil: the `$` existed only so management actions could not collide with a server name in the ref space. `CodeModeSandboxOptions.tokenBudget` and the token-budget guest global removed. Setup eval filename is `code-mode-setup.js`. Local additions beyond the trim: the frozen `process` shim (injected via `options.process`), `pi.bash` extras (`cwd` / `env` / `stdin`, alias-normalized in `__piArgAliases`), `code-mode.$timer` host-call short-circuit, and source-mapped error reporting: the transpiled program carries a source map (`options.sourceMap` or the self-transpiled one) and guest stack positions are rewritten to `program.ts:line:column` via `runtime/source-map.ts`; dumped guest errors render as `Name: message` + frames instead of a JSON blob. |
+| `runtime/guest-types.ts` | Trimmed to match `GUEST_SETUP` exactly. Removed every interface for dropped subsystems. Upstream's agents API interface replaced with code-mode's run-book contract (`list` / `run` / `runAll` / `start` / `wait` / `status` / `cancel`) plus `CodeModeAgentDefinition` / `CodeModeAgentRequest` / `CodeModeAgentResult` / `CodeModeAgentHandle` / `CodeModeAgentWait` / `CodeModeAgentStatus`. Upstream's MCP API interface replaced with the bridge surface plus the Proxy sugar index signature. `FULL_CODE_GLOBAL_DECLARATIONS` gating for `pi` / `extensions` kept verbatim. Local additions beyond the trim: the `tools` (`CodeModeToolsApi`) declaration, the `process` shim declaration, `CodeModeBashOptions` (`cwd` / `env` / `stdin` + `workdir` aliases) on `pi.bash`, and `type-checker.ts` importing these declarations in its own tests. |
 | `runtime/orchestration.ts` | `BLOCKING_ORCHESTRATION_REFS` and the static-detection regex cover `agents.run` / `agents.runAll` / `agents.wait`; `AGENT_BUDGET_REFS` (`isAgentBudgetRef`) is the separate set that consumes the per-execution agent budget. `requestedBlockingTimeoutMs` reads the caller's wait window for those refs. |
-| `core/tool-ownership.ts` | `SPINDLE_TOOL_NAME` is `"code_mode"`. Removed upstream's top-level tool authorizer and `#authorizeTopLevel` (schema-enforce-only), so `SpindleToolLifecycle` takes just `ownsSpindleTool` and `toolCall` is synchronous. |
+| `core/tool-ownership.ts` | `CODE_MODE_TOOL_NAME` is `"code_mode"`. Removed upstream's top-level tool authorizer and `#authorizeTopLevel` (schema-enforce-only), so `CodeModeToolLifecycle` takes just `ownsCodeModeTool` and `toolCall` is synchronous. |
 | `core/action-registry.ts`, `core/skill-prompt.ts`, `core/skill-references.ts`, `audit/details.ts`, `providers/pi-tools-provider.ts`, `ui/transcript-parser.ts` | Tool name is `code_mode` in comments and strings. In `ui/transcript-parser.ts` this is functional: it matches the running outer tool call by name. |
-| `protocol.ts` | Removed `SpindleInvocationContext.deferHandoff` (handoff is gone). |
+| `protocol.ts` | Removed `CodeModeInvocationContext.deferHandoff` (handoff is gone). |
 | `ui/types.ts` | **Rewritten** as a minimal local type module. See the parity note above. |
 | `ui/snapshot.ts` | **Rewritten** to build the reduced snapshot from `state.activity.runs()` plus the subagent run registry. |
-| `ui/controller.ts` | **Rewritten.** Kept `start` / `stop` / `#schedulePoll` / `#scheduleRefresh` / `#refresh` / `#renderWidget` and the single `ctx.ui.setWidget(..., { placement: "aboveEditor" })` call. Deleted `openDashboard`, `#pollMesh`, the mesh event buffer, the transcript sources and the dashboard TUI. `WIDGET_ID` is `"spindle"`. |
+| `ui/controller.ts` | **Rewritten.** Kept `start` / `stop` / `#schedulePoll` / `#scheduleRefresh` / `#refresh` / `#renderWidget` and the single `ctx.ui.setWidget(..., { placement: "aboveEditor" })` call. Deleted `openDashboard`, `#pollMesh`, the mesh event buffer, the transcript sources and the dashboard TUI. `WIDGET_ID` is `"code-mode"`. |
 | `ui/transcript.ts` | Removed the `AgentTranscriptReader` import and re-export (see the trim manifest). |
-| `ui/transcript-parser.ts` | `SpindleLogLine` now comes from the new local `ui/transcript-types.ts` instead of `../agents/types.ts`. |
+| `ui/transcript-parser.ts` | `CodeModeLogLine` now comes from the new local `ui/transcript-types.ts` instead of `../agents/types.ts`. |
 
 ## Removed: approvals & risk subsystem
 
 The upstream approval gate and its LLM auto-approval classifier were removed
 wholesale (all risk classes defaulted to `allow` here, so the gate never gated
 anything). Deleted `core/approval-controller.ts` and
-`core/auto-approval-classifier.ts`. Dropped the `SpindleRisk` type and the
-`risk` field from `SpindleActionDescriptor` / `SpindleCapabilityActionHead`
+`core/auto-approval-classifier.ts`. Dropped the `CodeModeRisk` type and the
+`risk` field from `CodeModeActionDescriptor` / `CodeModeCapabilityActionHead`
 (`protocol.ts`); the `approvals` config block plus `capture.defaultRisk` /
 `capture.risks` and their parsing (`config.ts`); `approve` from
-`SpindleRegistryInvocationContext`, the `"approve"` invoke stage, and `risk`
+`CodeModeRegistryInvocationContext`, the `"approve"` invoke stage, and `risk`
 from the capability catalog (`core/action-registry.ts`); the
 `ApprovalController` wiring, the auto-decision usage aggregation, and the
 classifier constructor param (`execution-service.ts`, plus the now-dead
-`undefined` arg in `spindle-state.ts`); the per-descriptor `risk` on every
+`undefined` arg in `code-mode-state.ts`); the per-descriptor `risk` on every
 provider (`pi` / `mcp` / `agents` / captured) and on `CapturedToolEntry`
 (`capture/catalog.ts`, `capture/interceptor.ts`); and the
-`spindle.approval.auto` projection cases (`audit/projection.ts`).
+`code-mode.approval.auto` projection cases (`audit/projection.ts`).
 
 The subagent sandbox floor (`sandbox/agent-floor.ts`) is a separate system and
 is untouched. The `"approve"` member was also removed
-from `audit/trace.ts`'s `SpindleExecutionFailureStageV1` union and its `stages`
-validator Set. Additionally, `SpindleExecutionTraceRecorder.seal()` now honors
+from `audit/trace.ts`'s `CodeModeExecutionFailureStageV1` union and its `stages`
+validator Set. Additionally, `CodeModeExecutionTraceRecorder.seal()` now honors
 its `error` argument: the caller's concrete failure text (runtime error,
 type-check summary) becomes `trace.error` instead of the generic
 "Execution failed" label, which is what the transcript renders. This is a
@@ -439,7 +439,7 @@ deliberate divergence from upstream pi-fabric: porting
 future upstream changes to any of the files above now requires dropping the
 risk/approval hunks by hand.
 
-## New spindle files
+## New code-mode files
 
 Subagent model selection is restricted to the live caller's provider, including nested launches, runtime defaults, and per-run overrides. Bare model names are qualified with that provider before spawning; explicitly cross-provider models are rejected. Price checks use the qualified model's pricing.
 
@@ -448,23 +448,23 @@ Subagent model selection is restricted to the live caller's provider, including 
 | `providers/mcp-client-provider.ts` | `mcp.*` → `mcp/client-hub.ts`. **Upstream has a file with the same provider name (`mcp`) that is deliberately not vendored; this one is written here.** |
 | `providers/agents-provider.ts` | `agents.*` → the absorbed subagents code. `#launch` is the pipeline (`#resolveRequests` → start monitor → own `AbortController` → invoke the run launcher → register in the run book); every action then either waits on the book or queries it. **Upstream also ships `src/providers/agents-provider.ts`, fronting its own RLM/handoff agent runtime; that file is NOT vendored, and this file is unrelated to it.** |
 | `providers/agent-run-book.ts` | New. The live book of batches: bounded waits, detachment, the completion sink, and cancellation (see "Run lifetime and cancellation"). |
-| `providers/agent-run-monitor.ts` | The widget-facing projection: `SpindleAgentRunRegistry` (the widget's data source) and `RunProgressMonitor`, which turns backend status updates into registry rows + the one-line ticker behind a `start`/`onStatus`/`stop` interface. |
-| `ui/transcript-types.ts` | `SpindleLogLine`, copied from upstream `src/agents/types.ts`, so the transcript parser does not import a dropped subsystem. |
+| `providers/agent-run-monitor.ts` | The widget-facing projection: `CodeModeAgentRunRegistry` (the widget's data source) and `RunProgressMonitor`, which turns backend status updates into registry rows + the one-line ticker behind a `start`/`onStatus`/`stop` interface. |
+| `ui/transcript-types.ts` | `CodeModeLogLine`, copied from upstream `src/agents/types.ts`, so the transcript parser does not import a dropped subsystem. |
 | `agents/` | The absorbed `extensions/subagents` code (see below). |
-| `providers/spindle-bash-tool.ts` | Spindle's `pi.bash` definition: wraps pi's bash tool with per-call `cwd` / `env` / `stdin` extras (validated, then applied via per-call `BashOperations`); extras-free calls delegate to the base tool unchanged. The `stdin` path delegates to the shared supervised spawn (`sandbox/supervised-spawn.ts`) and routes through the OS-sandbox wrap. |
+| `providers/code-mode-bash-tool.ts` | Code Mode's `pi.bash` definition: wraps pi's bash tool with per-call `cwd` / `env` / `stdin` extras (validated, then applied via per-call `BashOperations`); extras-free calls delegate to the base tool unchanged. The `stdin` path delegates to the shared supervised spawn (`sandbox/supervised-spawn.ts`) and routes through the OS-sandbox wrap. |
 | `providers/apply-patch.ts` | Local `pi.applyPatch` implementation for Codex/OpenAI V4A envelopes, ported from the pinned Codex engine and parser. It parses Add/Update/Delete File sections, optional Move to, context hunks, anchors, and End of File; delegates path policy to the sandbox allowlist; parses the complete patch and preflights all paths before mutation, then rechecks each operation's guard immediately before it runs. The default newline behavior is Codex's legacy `NormalizeToLf`; an opt-in environment variable preserves line endings per line. See `providers/apply-patch.README.md`, `apply-patch.NOTICE`, and `apply-patch.LICENSE`. |
 | `edit-profile.ts`, `audit/edit-metrics.ts` | Pure active-model edit-profile classification and bounded aggregate edit metrics derived from the durable trace. The metrics never inspect guest code or raw edit payloads. |
 | `audit/details.test.ts` | Determinism, confidentiality, old-detail compatibility, and aggregate details-size coverage for persisted edit metrics. |
 | `env-snapshot.ts` | The allowlisted environment snapshot injected as the guest's `process` global; secrets never enter the sandbox. |
-| `session-store.ts` | The session-scoped JSON scratchpad behind the guest's `τ` namespace: key validation, per-value/total byte budgets, the held-key listing the result envelope echoes, and the `describe()` summary a limit error names. Owned by `SpindleState`, so it outlives one program; throws rather than evicting. |
-| `ui/inspect-preview.ts` | Two things the rendered call was hiding. The `π` block: `payloads` is where a program is told to put every awkward value, and the code preview then shows `π.body` with no way to see what `body` is (the sole exception being a payload bound to a `pi.write`, which the write preview renders while composing, and which the block therefore skips). Collapsed it is one dim summary line; expanded, a bold `π.key` header per payload with bounded content. And the τ helpers: `readSpindleStateNotes` / `applySpindleStateNotes` put each operation's value into its own trace row. A local module because `ui/spindle-render.ts` is in the render parity set. |
+| `session-store.ts` | The session-scoped JSON scratchpad behind the guest's `τ` namespace: key validation, per-value/total byte budgets, the held-key listing the result envelope echoes, and the `describe()` summary a limit error names. Owned by `CodeModeState`, so it outlives one program; throws rather than evicting. |
+| `ui/inspect-preview.ts` | Two things the rendered call was hiding. The `π` block: `payloads` is where a program is told to put every awkward value, and the code preview then shows `π.body` with no way to see what `body` is (the sole exception being a payload bound to a `pi.write`, which the write preview renders while composing, and which the block therefore skips). Collapsed it is one dim summary line; expanded, a bold `π.key` header per payload with bounded content. And the τ helpers: `readCodeModeStateNotes` / `applyCodeModeStateNotes` put each operation's value into its own trace row. A local module because `ui/code-mode-render.ts` is in the render parity set. |
 | `ui/inspect-preview.test.ts` | Line-level tests over a pass-through theme: collapsed summaries, expanded bounds and elision counts, header separation, write-preview de-duplication, τ note parsing and in-order application, and that a reloaded transcript (no notes) leaves its rows untouched. |
 | `session-store.test.ts` | Round-tripping, snapshot semantics (a stored value is not a live reference), miss vs stored `null`, refused values (undefined, functions, cycles), key validation, and that each limit throws and names what is held. |
 | `core/arg-redaction.ts` | Redacts `pi.bash` `env` values and `stdin` from recorded surfaces (audits, previews, traces); the live call keeps raw values. |
-| `runtime/source-map.ts` | Minimal source-map consumer: decodes the transpile map and rewrites `pi-spindle-guest.js:L:C` stack positions to `program.ts:L:C` in the program the model wrote. |
+| `runtime/source-map.ts` | Minimal source-map consumer: decodes the transpile map and rewrites `pi-code-mode-guest.js:L:C` stack positions to `program.ts:L:C` in the program the model wrote. |
 | `runtime/checker-backend.ts` | The type-checker backend seam: `check` / `transpile` behind one interface, with the stock `typescript` backend as default and runtime-installable alternatives (e.g. a native-compiler process) without touching the checker core. |
-| `host-calls.ts` | The host half of the guest/host call contract: one `HOST_CALLS` table entry per `spindle.$*` ref (discovery, workflow, spans, `τ` state), each owning its handler over a per-execution `HostCallContext`. The execution service dispatches through `hostCallTable` and holds no host-call cases of its own; `runtime/guest-host-refs.test.ts` drives the table from the guest side. |
-| `runtime/guest-host-refs.test.ts` | The guest/host ref contract: runs a probe program through a real sandbox with a recording bridge, asserts every emitted ref is handled and every static `spindle.$*` table entry is reachable, and that no `fabric.$` names survive a port. |
+| `host-calls.ts` | The host half of the guest/host call contract: one `HOST_CALLS` table entry per `code-mode.$*` ref (discovery, workflow, spans, `τ` state), each owning its handler over a per-execution `HostCallContext`. The execution service dispatches through `hostCallTable` and holds no host-call cases of its own; `runtime/guest-host-refs.test.ts` drives the table from the guest side. |
+| `runtime/guest-host-refs.test.ts` | The guest/host ref contract: runs a probe program through a real sandbox with a recording bridge, asserts every emitted ref is handled and every static `code-mode.$*` table entry is reachable, and that no `fabric.$` names survive a port. |
 | `execution-service.test.ts` | Headless execution-service tests over a stub-provider registry: type errors, extension calls, discovery dispatch, phases, agent budget, and source-mapped runtime errors. |
 | `runtime/quickjs-runtime.test.ts` | Runtime integration tests: host-call marshalling and rejection, concurrency, logs and truncation, deadline, abort (pre-start and mid-host-call), memory limit, timers, `π` payloads, `process` shim, and error-position mapping. |
 | `runtime/guest-polyfills.ts` | The host APIs the engine does not ship, as guest source: `TextEncoder`/`TextDecoder`, `URL`/`URLSearchParams`, `atob`/`btoa`, `structuredClone`, `crypto`, `queueMicrotask`, `performance`, `AbortController`, and the loud-failure guard for the absent `Intl`/`Atomics`. Each polyfill declares the identifiers that imply it and is injected only when the program text mentions one, because `newContext()` runs per `execute()` call and every byte would otherwise be re-parsed on every invocation. Deliberately no `fetch`, `crypto.subtle` or `WebAssembly`: those are capabilities, and the audited host-call table has to stay the only route out. Must be kept in step with the declarations in `runtime/guest-types.ts`, since these globals are not in `lib.es2025` and TS2304 is not filtered. |
@@ -480,19 +480,19 @@ Subagent model selection is restricted to the live caller's provider, including 
 | `sandbox/seatbelt-glob.ts` | Glob → Seatbelt regex translation, ported from Codex's `seatbelt_regex_for_glob`, adapted to this repo's basename-vs-path `matchesPattern` semantics. |
 | `sandbox/seatbelt/` | Vendored Apache-2.0 SBPL fragments from `openai/codex` plus a derived, write-stripped process-defaults fragment; see `NOTICE` for provenance. |
 | `sandbox/shell.ts` | `resolveShellPath()` / `shellQuote()`: the shell the Seatbelt backend execs into, read from pi's settings, and its shell-quoting for embedding a wrapped command. |
-| `sandbox/supervised-spawn.ts` | The one supervised process-tree spawn: detached process group, kill-tree on timeout/abort, stdin piping, and the `timeout:<seconds>` / `aborted` error contract, behind one small interface. Two adapters ride on it: the OS-sandbox wrap (`sandbox/manager.ts`) and the `pi.bash` stdin extras (`providers/spindle-bash-tool.ts`), which previously carried two private copies of these mechanics. |
+| `sandbox/supervised-spawn.ts` | The one supervised process-tree spawn: detached process group, kill-tree on timeout/abort, stdin piping, and the `timeout:<seconds>` / `aborted` error contract, behind one small interface. Two adapters ride on it: the OS-sandbox wrap (`sandbox/manager.ts`) and the `pi.bash` stdin extras (`providers/code-mode-bash-tool.ts`), which previously carried two private copies of these mechanics. |
 | `sandbox/controller.ts` | The session's live sandbox state. Hands out stable operations whose closures read the *current* policy, so the mode can change mid-session. `readGuard()` hands out the same shape of stable closure for the denyRead roots. |
-| `sandbox/protocol.ts` | Bus contract for changing the mode at runtime (`spindle:sandbox-request` / `spindle:sandbox-state`). |
+| `sandbox/protocol.ts` | Bus contract for changing the mode at runtime (`code-mode:sandbox-request` / `code-mode:sandbox-state`). |
 | `sandbox/night-bridge.ts` | Reads the night-mode handshake, so a subagent process inherits the run's policy without any IPC. Gated on participation, so a bystander session does not. |
 | `sandbox/resolve.ts` | Precedence: config, request, and the floor an active night run imposes. Pure. |
 | `mcp/read-only-policy.ts` | Read-only MCP guardrail: the declarative `mcp` config block, the built-in per-server profiles (slack, linear, datadog, metabase), the name-shape classifier, and `McpReadOnlyGate`, which owns the allow/deny decision for both dispatch points. Pure. |
-| `mcp/server-config.ts` | `mcp.json` loader for spindle's own client. Field-compatible with pi-mcp-adapter (same `mcpServers` schema, same `includeTools`/`excludeTools` glob rules, same `mcp_<server>_<tool>` prefix), layered agent → `.pi/mcp.json` → `.mcp.json`, credentials URL-bound on merge. Pure. |
+| `mcp/server-config.ts` | `mcp.json` loader for code-mode's own client. Field-compatible with pi-mcp-adapter (same `mcpServers` schema, same `includeTools`/`excludeTools` glob rules, same `mcp_<server>_<tool>` prefix), layered agent → `.pi/mcp.json` → `.mcp.json`, credentials URL-bound on merge. Pure. |
 | `mcp/token-store.ts` | OAuth credential storage. Same credential-store service and `sha256-<sha256(serverName)>` account as pi-mcp-adapter, so switching clients needs no re-auth, but a record is always **one** item: reading one of the adapter's chunked records compacts it, which is what ends the per-item macOS keychain prompt storm (the adapter chunks at 1000 chars for the Windows blob cap, turning one server into six keychain items with six ACLs). |
 | `mcp/oauth-provider.ts` | `OAuthClientProvider` over `token-store.ts`. Headless refresh works; anything needing a browser throws `McpAuthorizationRequiredError` unless a `redirect` handler is supplied, so a tool call never tries to open one. |
-| `mcp/tool-cache.ts` | Tool schemas persisted to `<agentDir>/spindle-mcp-tools.json`, keyed by endpoint + config fingerprint. This is what lets `mcp.list` / `search` / `describe` answer without connecting, so `describe` returns a real input schema instead of the bridge's permissive stub, and discovery cannot trigger an OAuth prompt. |
+| `mcp/tool-cache.ts` | Tool schemas persisted to `<agentDir>/code-mode-mcp-tools.json`, keyed by endpoint + config fingerprint. This is what lets `mcp.list` / `search` / `describe` answer without connecting, so `describe` returns a real input schema instead of the bridge's permissive stub, and discovery cannot trigger an OAuth prompt. |
 | `mcp/client-hub.ts` | The MCP client itself: lazy per-server connect over streamable HTTP (stdio supported, unix socket reported as unsupported), tool filtering, name resolution for `server.tool` / `mcp_server_tool` / bare names, and `callTool`. |
 | `mcp/auth-flow.ts` | The `/mcp-auth` browser leg: loopback callback server on a fixed port, the two `auth()` legs, state validation, and dropping a client registered against another redirect URI. **The only module that may open a consent screen**, and it is reachable only from the slash command. |
-| `mcp/status-report.ts` | Text for `/mcp status`, `/mcp tools` and the footer indicator (`mcpFooterSummary` / `formatMcpFooterStatus`, rendered as `mcp <connected>/<connectable>` under the `spindle-mcp` status key and refreshed from the hub's `onStatusChange`). Pure, so the formatting is tested without a session. |
+| `mcp/status-report.ts` | Text for `/mcp status`, `/mcp tools` and the footer indicator (`mcpFooterSummary` / `formatMcpFooterStatus`, rendered as `mcp <connected>/<connectable>` under the `code-mode-mcp` status key and refreshed from the hub's `onStatusChange`). Pure, so the formatting is tested without a session. |
 | `providers/mcp-client-provider.ts` | `mcp.*` on the hub. Same five management actions, same `mcp.<server>.<tool>` refs, same `{ text, content, structuredContent }` shape and same `McpReadOnlyGate` as the bridge, so a program cannot tell which one it is talking to. |
 | `mcp/night-bridge.ts` | Reads `mcp.readOnly` from the night-mode handshake, so a subagent process inherits the guardrail with no IPC. Participation-gated, like `sandbox/night-bridge.ts`. |
 
@@ -519,7 +519,7 @@ startup, makes `bash` refuse to run with an actionable error instead of
 silently running unsandboxed or falling back to path guards only. `off` and
 `full` are unaffected and still work everywhere, including Linux.
 
-Config lives under `sandbox` in `spindle.json`. It defaults to `mode: "off"`,
+Config lives under `sandbox` in `code-mode.json`. It defaults to `mode: "off"`,
 because an interactive session legitimately writes outside its cwd (notes,
 sibling repos, agent files); enforcement is opt-in per project, or turned on for
 the duration of a night run.
@@ -570,7 +570,7 @@ Two delivery paths, one policy source:
 
 | Process | How it learns the policy |
 |---|---|
-| The session that ran `/night start` | `spindle:sandbox-request` on pi's event bus; `policy: null` reverts to `spindle.json` |
+| The session that ran `/night start` | `code-mode:sandbox-request` on pi's event bus; `policy: null` reverts to `code-mode.json` |
 | Subagent `pi` processes | `sandbox` in `~/.pi/agent/night/active.json`, read at startup by `sandbox/night-bridge.ts` |
 
 Subagents are separate processes, so the parent's bus never reaches them; they
@@ -579,7 +579,7 @@ means the policy survives a `/reload`.
 
 The handshake file is global, so reading it is gated on **participation**
 (`isNightRunParticipant`, night-mode). A session the user opens at 2am while a run
-is in flight is a bystander and keeps whatever `spindle.json` configures. Three
+is in flight is a bystander and keeps whatever `code-mode.json` configures. Three
 ways to qualify:
 
 | Signal | Covers |
@@ -598,14 +598,14 @@ still validated (`parseSandboxRequestEvent`) rather than trusted.
 
 #### `/sandbox`
 
-The only slash command Spindle registers.
+The only slash command Code Mode registers.
 
 | Invocation | Effect |
 |---|---|
 | `/sandbox` or `/sandbox status` | Mode, source, whether a night run holds it, and whether `bash` is OS-enforced or refused |
 | `/sandbox read-only` | Restrict now |
 | `/sandbox workspace-write [path…]` | Restrict now, granting extra writable roots |
-| `/sandbox off` | Revert to what `spindle.json` says |
+| `/sandbox off` | Revert to what `code-mode.json` says |
 
 `off` is a *revert*, not a forced "no enforcement", so it can never loosen the
 configured baseline. While enforcing, the footer shows `🔒 workspace-write`, or
@@ -696,27 +696,27 @@ block is no longer emitted as raw tool text. Instead `RunProgressMonitor`
 (`providers/agent-run-monitor.ts`), which `agents-provider.ts` drives via
 `start`/`onStatus`/`stop`:
 
-- mirrors each `AgentProgress` row into `SpindleAgentRunRegistry` as a
-  `SpindleUiAgent`-shaped record (`id`, `name`, `status`, `startedAt`,
+- mirrors each `AgentProgress` row into `CodeModeAgentRunRegistry` as a
+  `CodeModeUiAgent`-shaped record (`id`, `name`, `status`, `startedAt`,
   `updatedAt`, `currentTool`, `error`, `runId`), which `ui/snapshot.ts` feeds to
   `ui/widget.ts`'s existing `agentLines()`;
 - calls `renderProgress(...)` once per tick, flattened to a single line (prefixed
   by an optional `note`, e.g. the run launcher's fallback reason when a drifted
   herdr CLI degraded the batch to headless), as the
-  `context.update(...)` body, so `ui/spindle-render.ts`'s
+  `context.update(...)` body, so `ui/code-mode-render.ts`'s
   `singleCallProgressLine` / `renderNestedAgentToolLines` /
-  `renderSpindleMulticallPartial` render the in-flight ticker;
-- (the provider) returns a structured `SpindleAgentResult` so `ui/structured.ts`'s
-  `formatSpindleValue` formats it, instead of the old hand-rolled markdown.
+  `renderCodeModeMulticallPartial` render the in-flight ticker;
+- (the provider) returns a structured `CodeModeAgentResult` so `ui/structured.ts`'s
+  `formatCodeModeValue` formats it, instead of the old hand-rolled markdown.
 
-`SpindleAgentRun.runId` is set to `context.parentToolCallId`, which is also the
-`SpindleActivityRun.id`, so the widget can associate rows with the running program.
+`CodeModeAgentRun.runId` is set to `context.parentToolCallId`, which is also the
+`CodeModeActivityRun.id`, so the widget can associate rows with the running program.
 
 ### Subagent sandboxing
 
 A subagent used to be bounded by its `tools:` frontmatter: the parent filtered
-pi's `--tools`, forwarded the declared list on `--spindle-allowed-tools`, and a
-`SpindleToolGate` in the child removed the rest from the `pi.*` / `extensions.*`
+pi's `--tools`, forwarded the declared list on `--code-mode-allowed-tools`, and a
+`CodeModeToolGate` in the child removed the rest from the `pi.*` / `extensions.*`
 schema. That took the capability away without taking the danger away. A
 librarian denied `bash` found out by failing mid-task (`Tool pi.bash is not in
 this agent's tool allowlist`), then rerouted through weaker tools and burned
@@ -732,13 +732,13 @@ sandbox instead:
   `agents/frontmatter.ts` drops an unrecognised value rather than failing the
   launch);
 - `agents/pi-args.ts` forwards it on `--${SANDBOX_MODE_FLAG}`
-  (`--spindle-sandbox`, declared in `agents/constants.ts`) and loads
+  (`--code-mode-sandbox`, declared in `agents/constants.ts`) and loads
   `agents/child-extension.ts` via `--extension` only to register that flag, for
   the same reason the allowlist needed one: pi rejects a flag registered twice,
   and `getFlag` only resolves flags the reading extension registered, so
-  Spindle reads raw argv (`core/argv-flag.ts`);
+  Code Mode reads raw argv (`core/argv-flag.ts`);
 - `sandbox/agent-floor.ts` turns the flag into a `SandboxRequest`, and
-  `spindle-state.ts` passes it to `effectiveSandbox` as a **floor** alongside
+  `code-mode-state.ts` passes it to `effectiveSandbox` as a **floor** alongside
   the night floor: a `/sandbox` request inside the child can tighten it, never
   loosen it, and the tightest of the two floors wins (`sandbox/resolve.ts`).
 
@@ -774,15 +774,15 @@ requested wait window), so the inner call always reports first.
 
 **Unclaimed results are announced.** A batch that settles with nobody attached
 (after `ANNOUNCE_DELAY_MS`, so a waiter mid-race still claims it) goes to the
-completion sink. `spindle-state.ts` binds that sink to
-`pi.sendMessage({ customType: "spindle.agent_result" }, { deliverAs: "followUp",
+completion sink. `code-mode-state.ts` binds that sink to
+`pi.sendMessage({ customType: "code-mode.agent_result" }, { deliverAs: "followUp",
 triggerTurn: true })`, so a background run wakes the parent with its result
 instead of requiring a poll. A cancelled batch is never announced.
 
 **Cancellation reaches the children.** Each batch owns an `AbortController`. An
 attached launch links the invocation signal into it (cancelling the turn kills
 the children); the link is dropped on detach so the end of a turn does not kill a
-background run. `SpindleState.shutdown()` resets the book, cancelling everything
+background run. `CodeModeState.shutdown()` resets the book, cancelling everything
 still live. The abort then has to actually land:
 
 - headless (`agents/headless.ts` + `agents/process-tree.ts`): children are
@@ -850,7 +850,7 @@ management actions and the `mcp.<server>.<tool>` ref form; `mcp/client-hub.ts`
 owns the `@modelcontextprotocol/client` connections, one per configured server,
 opened on first use.
 
-| Spindle action | Sandbox call | Hub call |
+| Code Mode action | Sandbox call | Hub call |
 |---|---|---|
 | `mcp.call` | `mcp.call(server, tool, args)` / `mcp.call({ server?, tool, args? })` | `callTool(tool, args, ctx, server?)` |
 | `mcp.list` | `mcp.list(server)` / `mcp.list({ server? })` | `status(server?)`, config + cache only |
@@ -891,7 +891,7 @@ of returning quietly.
 
 Both commands came from pi-mcp-adapter before; with the in-tree client they are
 registered in `index.ts` and share the session's hub through
-`SpindleState.mcpClient(cwd)`, so a status read shows the connections this
+`CodeModeState.mcpClient(cwd)`, so a status read shows the connections this
 session really holds and an authorization is visible to `mcp.*` with no reload.
 
 | Command | Effect |
@@ -903,7 +903,7 @@ session really holds and an authorization is visible to `mcp.*` with no reload.
 | `/mcp-auth <server>` | Authorize in a browser, then connect to prove the token works and warm the cache |
 
 `/mcp-auth` uses a FIXED loopback port (33418 by default, `oauth.redirectPort`
-per server, or `SPINDLE_MCP_REDIRECT_PORT`) rather than an ephemeral one: a
+per server, or `PI_CODE_MODE_MCP_REDIRECT_PORT`) rather than an ephemeral one: a
 dynamically registered OAuth client is bound to the exact `redirect_uri` it
 registered with, so an ephemeral port would force a fresh client registration on
 every authorization. A stored client registered against a different redirect URI
@@ -966,14 +966,14 @@ vendoring was done. No wasmfile fallback substitution was needed.
    ```sh
    jj diff --from v0.28.2 --to <newer-tag> -- src/<upstream path>
    # then, on the ported local file:
-   perl -pi -e 's/FABRIC/SPINDLE/g; s/Fabric/Spindle/g; s/fabric/spindle/g' \
+   perl -pi -e 's/FABRIC/CODE_MODE/g; s/Fabric/Code Mode/g; s/fabric/code-mode/g' \
      extensions/code-mode/<local path>
    perl -pi -e 's{(from\s+")(\.\.?/[^"]*)\.js(")}{$1$2.ts$3}g' \
      extensions/code-mode/<local path>
    npm run fmt -- extensions/code-mode/<local path>
    ```
 
-   The blanket `fabric` → `spindle` substitution is only safe inside
+   The blanket `fabric` → `code-mode` substitution is only safe inside
    `extensions/code-mode/**`; never run it over `CONTEXT.md`, whose provenance
    references (upstream project name, repo URL, tag, SHA, upstream paths and
    upstream identifier names) must stay literally correct.
@@ -985,7 +985,7 @@ vendoring was done. No wasmfile fallback substitution was needed.
    jj diff --from v0.28.2 --to <newer-tag> --stat -- src/
    ```
 
-4. For the rewritten/trimmed files — local `index.ts`, `spindle-state.ts`,
+4. For the rewritten/trimmed files — local `index.ts`, `code-mode-state.ts`,
    `execution-service.ts`, `code-mode-tool.ts`, `config.ts`,
    `runtime/quickjs-runtime.ts`, `runtime/guest-types.ts`,
    `runtime/orchestration.ts`, `core/tool-ownership.ts`, `protocol.ts`,

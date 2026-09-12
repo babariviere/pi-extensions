@@ -5,8 +5,8 @@ import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 
 import { HOST_CALLS } from "../host-calls.ts";
-import { SpindleAgentRunRegistry } from "../providers/agent-run-monitor.ts";
-import { SpindleAgentsProvider } from "../providers/agents-provider.ts";
+import { CodeModeAgentRunRegistry } from "../providers/agent-run-monitor.ts";
+import { CodeModeAgentsProvider } from "../providers/agents-provider.ts";
 import { GUEST_SETUP, QuickJsRuntime } from "./quickjs-runtime.ts";
 
 const runtimeSource = GUEST_SETUP;
@@ -19,8 +19,8 @@ const serviceCaseRefs = new Set(HOST_CALLS.map((call) => call.ref));
 
 /** Host calls the runtime itself satisfies before the bridge is reached. */
 const runtimeInternalRefs = new Set([...runtimeSource.matchAll(/reference === "([^"]+)"/g)].map((match) => match[1]!));
-runtimeInternalRefs.add("spindle.$cancel");
-runtimeInternalRefs.add("spindle.$timer");
+runtimeInternalRefs.add("code-mode.$cancel");
+runtimeInternalRefs.add("code-mode.$timer");
 
 /**
  * Every literal ref GUEST_SETUP can emit through `__call`. The trailing
@@ -30,7 +30,7 @@ runtimeInternalRefs.add("spindle.$timer");
 const guestStaticRefs = new Set([...runtimeSource.matchAll(/__call\("([^"]+)",/g)].map((match) => match[1]!));
 
 /** Host-call cases with no guest producer today (kept for API completeness). */
-const HOST_ONLY_REFS = new Set(["spindle.$progress"]);
+const HOST_ONLY_REFS = new Set(["code-mode.$progress"]);
 
 /** Provider namespaces the registry can resolve a default-dispatch ref to. */
 const REGISTRY_PROVIDERS = new Set(["pi", "web", "mcp", "agents"]);
@@ -60,9 +60,9 @@ test("the host-call table has exactly one entry per ref", () => {
 });
 
 test("the guest agents namespace matches the provider's descriptors", async () => {
-	const provider = new SpindleAgentsProvider(
+	const provider = new CodeModeAgentsProvider(
 		() => ({ sessionId: undefined, sessionFile: undefined, cwd: process.cwd() }),
-		new SpindleAgentRunRegistry(),
+		new CodeModeAgentRunRegistry(),
 		() => ({ timeoutMs: 1_000, waitMs: 1_000 }),
 	);
 	const descriptors = await provider.list({}, {} as never);
@@ -82,7 +82,7 @@ test("every static ref GUEST_SETUP can emit is exercised by the probe", async ()
 		{ timeoutMs: 10_000, memoryLimitBytes: 64 * 1024 * 1024 },
 	);
 	assert.equal(result.terminationReason, "completed");
-	// spindle.$timer never reaches the bridge: the runtime satisfies it itself.
+	// code-mode.$timer never reaches the bridge: the runtime satisfies it itself.
 	for (const ref of guestStaticRefs) {
 		assert.ok(recorded.has(ref) || runtimeInternalRefs.has(ref), `probe must exercise guest ref ${ref}`);
 	}

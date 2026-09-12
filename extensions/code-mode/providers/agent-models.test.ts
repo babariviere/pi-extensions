@@ -4,8 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import type { Model } from "@earendil-works/pi-ai";
-import { SpindleAgentRunRegistry } from "./agent-run-monitor.ts";
-import { SpindleAgentsProvider, type SpindleAgentRuntimeConfig } from "./agents-provider.ts";
+import { CodeModeAgentRunRegistry } from "./agent-run-monitor.ts";
+import { CodeModeAgentsProvider, type CodeModeAgentRuntimeConfig } from "./agents-provider.ts";
 
 const model = (id: string, price: number, provider = "parent"): Model<any> =>
 	({
@@ -23,7 +23,7 @@ const model = (id: string, price: number, provider = "parent"): Model<any> =>
 	}) as Model<any>;
 
 test("models filters live runtime metadata by launch policy without exposing connection details", async () => {
-	const cwd = mkdtempSync(join(tmpdir(), "spindle-models-"));
+	const cwd = mkdtempSync(join(tmpdir(), "code-mode-models-"));
 	try {
 		mkdirSync(join(cwd, ".pi"));
 		const settings = join(cwd, ".pi", "settings.json");
@@ -36,16 +36,16 @@ test("models filters live runtime metadata by launch policy without exposing con
 			model("foreign", 1, "other"),
 			{ ...model("unpriced", 1), cost: undefined } as unknown as Model<any>,
 		];
-		let runtime: SpindleAgentRuntimeConfig = {
+		let runtime: CodeModeAgentRuntimeConfig = {
 			timeoutMs: 1000,
 			waitMs: 0,
 			parentProvider: "parent",
 			defaultModel: "cheap",
 			models: catalog,
 		};
-		const provider = new SpindleAgentsProvider(
+		const provider = new CodeModeAgentsProvider(
 			() => ({ cwd, sessionId: undefined, sessionFile: undefined }),
-			new SpindleAgentRunRegistry(),
+			new CodeModeAgentRunRegistry(),
 			() => runtime,
 		);
 		const list = async () =>

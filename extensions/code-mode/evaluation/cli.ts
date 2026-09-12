@@ -2,7 +2,7 @@
 
 import { readFileSync } from "node:fs";
 
-import { evaluateSpindleJsonl } from "./index.ts";
+import { evaluateCodeModeJsonl } from "./index.ts";
 
 const usage = "Usage: npm run code-mode:evaluate -- <records.jsonl|-> [--baseline <variant>]";
 
@@ -30,7 +30,7 @@ const parseArguments = (argv: readonly string[]): { path: string; baseline?: str
 try {
 	const { path, baseline } = parseArguments(process.argv.slice(2));
 	const input = readFileSync(path === "-" ? 0 : path, "utf8");
-	const summary = evaluateSpindleJsonl(input, { ...(baseline === undefined ? {} : { baseline }) });
+	const summary = evaluateCodeModeJsonl(input, { ...(baseline === undefined ? {} : { baseline }) });
 	process.stdout.write(`${JSON.stringify(summary, null, 2)}\n`);
 } catch (error) {
 	process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);

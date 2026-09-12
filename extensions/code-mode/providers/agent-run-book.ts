@@ -20,7 +20,7 @@
 import type { RunFailure } from "../agents/run.ts";
 
 /** Structured value returned to the sandbox for a single run. */
-export interface SpindleAgentResult {
+export interface CodeModeAgentResult {
 	agent: string;
 	ok: boolean;
 	output: string;
@@ -55,14 +55,14 @@ export interface AgentBatchSnapshot {
 	/** True once no caller is blocked on it and it kept running. */
 	detached: boolean;
 	/** Only carried by a wait outcome; `list()` omits it (see `snapshotOf`). */
-	results?: SpindleAgentResult[];
+	results?: CodeModeAgentResult[];
 }
 
 export interface AgentBatchRegistration {
 	runId: string;
 	agents: string[];
 	/** Resolves when every run in the batch has settled. */
-	promise: Promise<SpindleAgentResult[]>;
+	promise: Promise<CodeModeAgentResult[]>;
 	/** Tear the batch down (kills the children). */
 	cancel(): void;
 	/** Called once when the batch stops being awaited and keeps running. */
@@ -72,18 +72,18 @@ export interface AgentBatchRegistration {
 export interface AgentCompletionEvent {
 	runId: string;
 	agents: string[];
-	results: SpindleAgentResult[];
+	results: CodeModeAgentResult[];
 	elapsedMs: number;
 }
 
-/** Where an unclaimed completion goes (see `spindle-state.ts`). */
+/** Where an unclaimed completion goes (see `code-mode-state.ts`). */
 export type AgentCompletionSink = (event: AgentCompletionEvent) => void;
 
 export interface AgentWaitOutcome {
 	state: AgentBatchState;
 	snapshot: AgentBatchSnapshot;
 	/** Present only for a settled (or cancelled) batch. */
-	results?: SpindleAgentResult[];
+	results?: CodeModeAgentResult[];
 }
 
 /**
@@ -100,13 +100,13 @@ interface Batch {
 	runId: string;
 	agents: string[];
 	startedAt: number;
-	promise: Promise<SpindleAgentResult[]>;
+	promise: Promise<CodeModeAgentResult[]>;
 	cancel(): void;
 	onDetach?(): void;
 	settled: Promise<void>;
 	markSettled(): void;
 	state: AgentBatchState;
-	results?: SpindleAgentResult[];
+	results?: CodeModeAgentResult[];
 	/** Some caller took the terminal results, so nothing gets announced. */
 	claimed: boolean;
 	/** Callers currently blocked on this batch. */
@@ -169,7 +169,7 @@ export class AgentRunBook {
 	 *
 	 * `waitMs` is this method's only notion of timing; the public `agents.wait`
 	 * schema additionally accepts `timeoutMs` as a caller-facing alias for it
-	 * (resolved by `SpindleAgentsProvider` before it ever reaches here), because
+	 * (resolved by `CodeModeAgentsProvider` before it ever reaches here), because
 	 * `run`/`start`/`runAll` use `timeoutMs` for the child's own lifetime cap and
 	 * the two are easy to reach for interchangeably.
 	 */
@@ -294,7 +294,7 @@ export class AgentRunBook {
 		}
 	}
 
-	#settle(batch: Batch, results: SpindleAgentResult[]): void {
+	#settle(batch: Batch, results: CodeModeAgentResult[]): void {
 		if (batch.results) return;
 		batch.results = results;
 		if (!batch.cancelled) batch.state = "settled";
@@ -345,7 +345,7 @@ const snapshotOf = (batch: Batch, includeResults: boolean): AgentBatchSnapshot =
 });
 
 /** A batch whose backend rejected outright still has to settle as a result. */
-const failureResult = (batch: Batch, error: unknown): SpindleAgentResult => ({
+const failureResult = (batch: Batch, error: unknown): CodeModeAgentResult => ({
 	agent: batch.agents[0] ?? "agent",
 	ok: false,
 	output: "",

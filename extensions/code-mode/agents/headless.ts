@@ -67,7 +67,7 @@ function runHeadless(req: RunRequest, ctx: RunContext, defaultProvider: string |
 		let stderr = "";
 		let settled = false;
 
-		// The night marker travels in the environment: the child's own spindle reads
+		// The night marker travels in the environment: the child's own code-mode reads
 		// it to decide whether to inherit the run's sandbox (`sandbox/night-bridge.ts`).
 		//
 		// So does the ledger store. The child runs in its own jj workspace, so a todo

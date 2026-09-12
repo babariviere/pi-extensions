@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { guestTypeDeclarations } from "./guest-types.ts";
-import { typeCheckSpindleCode } from "./type-checker.ts";
+import { typeCheckCodeModeCode } from "./type-checker.ts";
 
 /**
  * Guards the type-checker `lib` tier against the engine baseline pinned by
@@ -18,7 +18,7 @@ import { typeCheckSpindleCode } from "./type-checker.ts";
 
 const declarations = guestTypeDeclarations(true);
 
-const check = (code: string) => typeCheckSpindleCode(code, declarations);
+const check = (code: string) => typeCheckCodeModeCode(code, declarations);
 
 const messages = (code: string): string =>
 	check(code)

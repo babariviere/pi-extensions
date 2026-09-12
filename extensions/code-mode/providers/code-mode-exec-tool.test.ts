@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createSpindleExecToolDefinition } from "./code-mode-tool.ts";
+import { createCodeModeExecToolDefinition } from "./code-mode-tool.ts";
 
 const text = (result: { content: Array<{ type: string; text?: string }> }): string =>
 	result.content
@@ -10,7 +10,7 @@ const text = (result: { content: Array<{ type: string; text?: string }> }): stri
 
 test("exec passes each argv entry literally without shell parsing", async () => {
 	const value = `spaces ' quotes " and $dollar; semicolon`;
-	const tool = createSpindleExecToolDefinition(process.cwd());
+	const tool = createCodeModeExecToolDefinition(process.cwd());
 	const result = await tool.execute(
 		"exec-1",
 		{ argv: [process.execPath, "-e", "process.stdout.write(process.argv[1])", value] },
@@ -22,7 +22,7 @@ test("exec passes each argv entry literally without shell parsing", async () => 
 });
 
 test("exec pipes stdin without requiring a shell", async () => {
-	const tool = createSpindleExecToolDefinition(process.cwd());
+	const tool = createCodeModeExecToolDefinition(process.cwd());
 	const result = await tool.execute(
 		"exec-2",
 		{ argv: [process.execPath, "-e", "process.stdin.pipe(process.stdout)"], stdin: "hello\nstdin" },

@@ -153,7 +153,7 @@ const readSettings = async (path: string): Promise<Record<string, unknown> | und
 		return extractSettings(JSON.parse(await readFile(path, "utf8")));
 	} catch (error) {
 		if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-			console.warn(`[pi-spindle] Failed to load code preview settings from ${path}.`, error);
+			console.warn(`[pi-code-mode] Failed to load code preview settings from ${path}.`, error);
 		}
 		return undefined;
 	}

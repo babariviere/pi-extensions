@@ -32,7 +32,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { TASK_FILE_FLAG } from "./constants.ts";
 
 /**
- * Register the task-file flag. Called unconditionally by Spindle's entry point,
+ * Register the task-file flag. Called unconditionally by Code Mode's entry point,
  * so every child accepts the flag without an injected `--extension`, and pi
  * never sees it registered twice (the child extension registers only the
  * sandbox flag).
@@ -103,7 +103,7 @@ export function createTaskDeliverer(deps: TaskDeliveryDeps): (reason: string | u
 		defer(() => {
 			const task = (deps.read ?? readTaskFile)(path);
 			if (task === undefined) {
-				deps.onError?.(`[spindle] task file is missing or empty, the subagent has no task: ${path}`);
+				deps.onError?.(`[code-mode] task file is missing or empty, the subagent has no task: ${path}`);
 				return;
 			}
 			deps.send(task);

@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { projectSpindleAuditArgs, projectSpindleAuditResult } from "./projection.ts";
+import { projectCodeModeAuditArgs, projectCodeModeAuditResult } from "./projection.ts";
 
 test("applyPatch audit projection keeps paths but drops patch contents", () => {
 	assert.deepEqual(
-		projectSpindleAuditArgs("pi.applyPatch", {
+		projectCodeModeAuditArgs("pi.applyPatch", {
 			patch: "*** Begin Patch\n*** Update File: src/a.ts\n@@\n-secret source text\n+replacement\n*** End Patch",
 		}),
 		{ value: { paths: ["src/a.ts"] }, droppedValues: 0 },
@@ -13,7 +13,7 @@ test("applyPatch audit projection keeps paths but drops patch contents", () => {
 });
 
 test("applyPatch result projection keeps only bounded local path and kind metadata", () => {
-	const projection = projectSpindleAuditResult("pi.applyPatch", {
+	const projection = projectCodeModeAuditResult("pi.applyPatch", {
 		content: [{ type: "text", text: "secret source text" }],
 		details: {
 			changes: [

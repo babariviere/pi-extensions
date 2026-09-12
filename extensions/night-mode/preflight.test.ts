@@ -219,9 +219,12 @@ test("the report states the answer and what it rules out", async () => {
 	});
 	assert.match(report, /\| HTTPS egress \(api\.github\.com\) \| yes \|/);
 	assert.match(report, /\| SSH to github\.com \| NO \|/);
-	assert.match(report, /\| loopback TCP \(spindle sandbox\) \| NO \|/);
+	assert.match(report, /\| loopback TCP \(Code Mode sandbox\) \| NO \|/);
 	assert.match(report, /\| loopback TCP \(host shell\) \| yes \|/);
-	assert.match(report, /\*\*loopback TCP \(spindle sandbox\)\*\*: unavailable - no loopback means no local database/);
+	assert.match(
+		report,
+		/\*\*loopback TCP \(Code Mode sandbox\)\*\*: unavailable - no loopback means no local database/,
+	);
 	assert.match(report, /Working copy: `\/night\/clone`/);
 });
 

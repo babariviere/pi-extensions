@@ -1,5 +1,5 @@
 /**
- * Sandbox policy for Spindle's pi core tools.
+ * Sandbox policy for Code Mode's pi core tools.
  *
  * The threat model is accidents, not adversaries: an unattended agent must not
  * be able to `rm -rf ~` at 3am. So this is a guardrail with two enforcement

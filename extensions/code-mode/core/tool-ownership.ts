@@ -1,43 +1,43 @@
 import path from "node:path";
 import type { ToolCallEvent, ToolCallEventResult, ToolResultEvent } from "@earendil-works/pi-coding-agent";
-import { readSpindleExecutionTraceV1 } from "../audit/index.ts";
+import { readCodeModeExecutionTraceV1 } from "../audit/index.ts";
 import { NESTED_TOOL_CALL_ID_PREFIX } from "./action-registry.ts";
 import { PI_CORE_TOOL_NAME_SET } from "./pi-tools.ts";
 
-export interface SpindleToolOwnershipHost {
+export interface CodeModeToolOwnershipHost {
 	getActiveTools(): string[];
 	setActiveTools(names: string[]): void;
 }
 
-const SPINDLE_TOOL_NAME = "code_mode";
+const CODE_MODE_TOOL_NAME = "code_mode";
 
-export const ownsSpindleToolSource = (
+export const ownsCodeModeToolSource = (
 	tools: Array<{ name: string; sourceInfo: { path: string } }>,
 	extensionEntryPath: string,
 ): boolean =>
 	tools.some(
 		(tool) =>
-			tool.name === SPINDLE_TOOL_NAME && path.resolve(tool.sourceInfo.path) === path.resolve(extensionEntryPath),
+			tool.name === CODE_MODE_TOOL_NAME && path.resolve(tool.sourceInfo.path) === path.resolve(extensionEntryPath),
 	);
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
 	typeof value === "object" && value !== null && !Array.isArray(value);
 
-const finalSpindleDetailsFailed = (details: unknown): boolean => {
+const finalCodeModeDetailsFailed = (details: unknown): boolean => {
 	if (!isRecord(details)) return false;
 	if (details.success === false) return true;
-	const trace = readSpindleExecutionTraceV1(details.trace);
+	const trace = readCodeModeExecutionTraceV1(details.trace);
 	return trace !== undefined && trace.outcome !== "succeeded";
 };
 
-export class SpindleToolLifecycle {
+export class CodeModeToolLifecycle {
 	readonly #outerCalls = new Set<string>();
 
-	constructor(readonly ownsSpindleTool: () => boolean) {}
+	constructor(readonly ownsCodeModeTool: () => boolean) {}
 
 	toolCall(event: ToolCallEvent): ToolCallEventResult | undefined {
 		if (event.toolCallId.startsWith(NESTED_TOOL_CALL_ID_PREFIX)) return undefined;
-		if (event.toolName === SPINDLE_TOOL_NAME && this.ownsSpindleTool()) {
+		if (event.toolName === CODE_MODE_TOOL_NAME && this.ownsCodeModeTool()) {
 			this.#outerCalls.add(event.toolCallId);
 		}
 		return undefined;
@@ -45,13 +45,13 @@ export class SpindleToolLifecycle {
 
 	toolResult(event: ToolResultEvent): { isError: true } | undefined {
 		if (
-			event.toolName !== SPINDLE_TOOL_NAME ||
+			event.toolName !== CODE_MODE_TOOL_NAME ||
 			event.toolCallId.startsWith(NESTED_TOOL_CALL_ID_PREFIX) ||
 			!this.#outerCalls.delete(event.toolCallId)
 		) {
 			return undefined;
 		}
-		return !event.isError && finalSpindleDetailsFailed(event.details) ? { isError: true } : undefined;
+		return !event.isError && finalCodeModeDetailsFailed(event.details) ? { isError: true } : undefined;
 	}
 
 	clear(): void {
@@ -62,10 +62,10 @@ export class SpindleToolLifecycle {
 const sameTools = (left: string[], right: string[]): boolean =>
 	left.length === right.length && left.every((name, index) => name === right[index]);
 
-export class SpindleToolOwnership {
+export class CodeModeToolOwnership {
 	#savedNativeCoreTools: Array<{ name: string; index: number }> | undefined;
 
-	constructor(readonly host: SpindleToolOwnershipHost) {}
+	constructor(readonly host: CodeModeToolOwnershipHost) {}
 
 	apply(fullCodeMode: boolean): boolean {
 		const active = this.host.getActiveTools();
@@ -75,7 +75,7 @@ export class SpindleToolOwnership {
 			PI_CORE_TOOL_NAME_SET.has(name) ? [{ name, index }] : [],
 		);
 		const next = active.filter((name) => !PI_CORE_TOOL_NAME_SET.has(name));
-		if (!next.includes(SPINDLE_TOOL_NAME)) next.push(SPINDLE_TOOL_NAME);
+		if (!next.includes(CODE_MODE_TOOL_NAME)) next.push(CODE_MODE_TOOL_NAME);
 		return this.#setIfChanged(active, next);
 	}
 

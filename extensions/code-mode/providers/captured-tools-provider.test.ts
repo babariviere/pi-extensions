@@ -81,6 +81,6 @@ test("registry generic dispatch rejects raw and unmapped captured names", async 
 		maxResultChars: 10_000,
 	};
 	for (const ref of ["web.web_search", "web.todo", "web.toString", "web.__proto__"]) {
-		await assert.rejects(() => registry.invoke(ref, {}, registryContext), /Unknown Spindle action/);
+		await assert.rejects(() => registry.invoke(ref, {}, registryContext), /Unknown Code Mode action/);
 	}
 });

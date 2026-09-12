@@ -12,8 +12,8 @@ import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative } from "node:path";
 
 /**
- * Filesystem sandbox a night run asks Spindle for. Deliberately a plain shape
- * rather than an import from spindle: night-mode must not depend on it.
+ * Filesystem sandbox a night run asks Code Mode for. Deliberately a plain shape
+ * rather than an import from code-mode: night-mode must not depend on it.
  */
 export interface NightSandboxRequest {
 	mode: "off" | "read-only" | "workspace-write" | "full";
@@ -34,7 +34,7 @@ export interface NightSandboxRequest {
 
 /**
  * MCP guardrail a night run asks for. Plain shape rather than an import from
- * spindle: night-mode must not depend on it.
+ * code-mode: night-mode must not depend on it.
  */
 export interface NightMcpRequest {
 	/** Refuse write-shaped MCP tool calls for every participant of the run. */
@@ -91,16 +91,16 @@ export interface ActiveNightRun {
 	 */
 	capabilityPath?: string;
 	/**
-	 * Filesystem sandbox the run asks for. Spindle reads this to sandbox the
+	 * Filesystem sandbox the run asks for. Code Mode reads this to sandbox the
 	 * coordinator and every subagent process for the duration of the night; see
-	 * `spindle/sandbox/night-bridge.ts`. Structural on purpose: night-mode does
-	 * not import spindle.
+	 * `code-mode/sandbox/night-bridge.ts`. Structural on purpose: night-mode does
+	 * not import code-mode.
 	 */
 	sandbox?: NightSandboxRequest;
 	/**
-	 * MCP guardrail the run asks for. Spindle reads this to refuse write-shaped
+	 * MCP guardrail the run asks for. Code Mode reads this to refuse write-shaped
 	 * MCP calls for the coordinator and every subagent; see
-	 * `spindle/mcp/night-bridge.ts`. Structural on purpose, like `sandbox`.
+	 * `code-mode/mcp/night-bridge.ts`. Structural on purpose, like `sandbox`.
 	 */
 	mcp?: NightMcpRequest;
 }
@@ -225,7 +225,7 @@ function isInside(root: string, candidate: string): boolean {
  *    spawn path could not hand an environment to (herdr panes).
  *
  * Anything else (a normal session in the user's own checkout) is not a
- * participant and keeps whatever `spindle.json` configures.
+ * participant and keeps whatever `code-mode.json` configures.
  */
 export function isNightRunParticipant(run: ActiveNightRun, ref: { sessionId?: string; cwd?: string }): boolean {
 	if (process.env[NIGHT_RUN_ENV] === "1") return true;

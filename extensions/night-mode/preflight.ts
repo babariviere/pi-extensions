@@ -125,7 +125,7 @@ export function nightPreflightProbes(input: { workspacePath?: string } = {}): Pr
 		},
 		{
 			id: "loopback-tcp",
-			label: "loopback TCP (spindle sandbox)",
+			label: "loopback TCP (Code Mode sandbox)",
 			meaning:
 				"no loopback means no local database, no test container, no DB-backed test suite; this is the boundary " +
 				"a subagent's own `pi.bash` actually runs under, and the one `sandboxAllowLoopback` configures",
@@ -135,7 +135,7 @@ export function nightPreflightProbes(input: { workspacePath?: string } = {}): Pr
 			id: "loopback-tcp-host",
 			label: "loopback TCP (host shell)",
 			meaning:
-				"the boundary underneath the spindle sandbox wrap, i.e. what the coordinator process's own shell allows " +
+				"the boundary underneath the Code Mode sandbox wrap, i.e. what the coordinator process's own shell allows " +
 				"before any `srt` policy is applied; compare against the row above to tell a sandbox denial from a " +
 				"host-level one",
 			command: LOOPBACK_PROBE,

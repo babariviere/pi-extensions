@@ -1,24 +1,24 @@
 import { runAbortable } from "../async-settlement.ts";
 import type { AgentToolResult, ExtensionRunner } from "@earendil-works/pi-coding-agent";
 import {
-	SPINDLE_TOOL_RESULT_PROXY_KIND,
-	readSpindleToolResultProxyDetailsV1,
-	type SpindleToolResultProxyDetailsV1,
+	CODE_MODE_TOOL_RESULT_PROXY_KIND,
+	readCodeModeToolResultProxyDetailsV1,
+	type CodeModeToolResultProxyDetailsV1,
 } from "../protocol.ts";
-import type { ResolvedSpindleAction } from "./action-registry.ts";
+import type { ResolvedCodeModeAction } from "./action-registry.ts";
 
 type ToolContent = AgentToolResult<unknown>["content"];
 
-export interface SpindleToolResultProxyRequest {
-	action: ResolvedSpindleAction;
+export interface CodeModeToolResultProxyRequest {
+	action: ResolvedCodeModeAction;
 	args: Record<string, unknown>;
 	toolCallId: string;
 	value: unknown;
 	signal?: AbortSignal;
 }
 
-export interface SpindleNestedToolResultProxy {
-	proxy(request: SpindleToolResultProxyRequest): Promise<unknown>;
+export interface CodeModeNestedToolResultProxy {
+	proxy(request: CodeModeToolResultProxyRequest): Promise<unknown>;
 }
 
 const nativeLifecycleProviders = new Set(["pi", "web", "extensions"]);
@@ -41,7 +41,7 @@ const textForValue = (value: unknown): string => {
 /**
  * Rebuild the sandbox value from patched content.
  *
- * The synthetic content Spindle emits is `JSON.stringify(value)`, so a middleware
+ * The synthetic content Code Mode emits is `JSON.stringify(value)`, so a middleware
  * that rewrites text (secret scrubbing, redaction) hands back that same JSON.
  * Parse it back when the original value was structured, or the sandbox would
  * receive a JSON *string* where `agents.run` and friends document an object.
@@ -57,17 +57,17 @@ const valueFromContent = (content: ToolContent, original: unknown): unknown => {
 	}
 };
 
-export class SpindleToolResultProxy implements SpindleNestedToolResultProxy {
+export class CodeModeToolResultProxy implements CodeModeNestedToolResultProxy {
 	constructor(readonly runner: () => ExtensionRunner | undefined) {}
 
-	async proxy(request: SpindleToolResultProxyRequest): Promise<unknown> {
+	async proxy(request: CodeModeToolResultProxyRequest): Promise<unknown> {
 		if (nativeLifecycleProviders.has(request.action.provider)) return request.value;
 		const runner = this.runner();
 		if (!runner) return request.value;
 
 		const content: ToolContent = [{ type: "text", text: textForValue(request.value) }];
-		const details: SpindleToolResultProxyDetailsV1 = {
-			kind: SPINDLE_TOOL_RESULT_PROXY_KIND,
+		const details: CodeModeToolResultProxyDetailsV1 = {
+			kind: CODE_MODE_TOOL_RESULT_PROXY_KIND,
 			ref: request.action.ref,
 			result: request.value,
 		};
@@ -88,11 +88,11 @@ export class SpindleToolResultProxy implements SpindleNestedToolResultProxy {
 		if (patch.isError === true) {
 			throw new Error(
 				textFromContent(patchedContent).trim() ||
-					`Spindle result middleware marked ${request.action.ref} as failed.`,
+					`Code Mode result middleware marked ${request.action.ref} as failed.`,
 			);
 		}
 
-		const patchedDetails = readSpindleToolResultProxyDetailsV1(patch.details);
+		const patchedDetails = readCodeModeToolResultProxyDetailsV1(patch.details);
 		if (patchedDetails?.ref === request.action.ref && !Object.is(patchedDetails.result, request.value)) {
 			return patchedDetails.result;
 		}

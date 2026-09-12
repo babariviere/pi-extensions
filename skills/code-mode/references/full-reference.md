@@ -137,9 +137,9 @@ Only `web.search(args)` and `web.fetch(args)` are registered by this extension. 
 `tools` owns no tools; it is a top-level global that enumerates and invokes actions across every registered provider (pi, web, mcp, agents and trusted custom providers). Use it to discover names and schemas at runtime, then call them on their own namespace. Search accepts natural-language terms for snake_case names, so `tools.search({ query: "web search" })` finds `web.search`. No sibling-tool compatibility alias exists.
 
 - `tools.providers()` → `[{name, description}]` for every registered provider.
-- `tools.list({provider?, namespace?, query?, limit?})` → `SpindleAction[]` (`ref, provider, name, description, inputSchema, namespace?`). No args lists the currently registered providers.
+- `tools.list({provider?, namespace?, query?, limit?})` → `CodeModeAction[]` (`ref, provider, name, description, inputSchema, namespace?`). No args lists the currently registered providers.
 - `tools.catalog({provider?, limit?})` → provider/action head tree (navigation metadata).
-- `tools.search({query, limit?})` → ranked `SpindleAction[]`.
+- `tools.search({query, limit?})` → ranked `CodeModeAction[]`.
 - `tools.describe({ref})` → one action's full descriptor; read `inputSchema` before calling.
 - `tools.call({ref, args?})` → invoke a ref computed at runtime (same path as `web.*`, `pi.*`, or `mcp.*`). Prefer direct property calls for statically known tools.
 
@@ -147,7 +147,7 @@ Refs are namespaced (`web.search`, `web.fetch`, `pi.grep`, `mcp.<server>.<tool>`
 
 ## `mcp` tools
 
-Spindle's in-process MCP client connects configured servers lazily. `mcp.list`, `mcp.search`, and `mcp.describe` use config and cached schemas; `mcp.connect` refreshes a server's tools. See [MCP](mcp.md) for discovery, calls, and authorization.
+Code Mode's in-process MCP client connects configured servers lazily. `mcp.list`, `mcp.search`, and `mcp.describe` use config and cached schemas; `mcp.connect` refreshes a server's tools. See [MCP](mcp.md) for discovery, calls, and authorization.
 
 ## `agents` — custom markdown subagents
 

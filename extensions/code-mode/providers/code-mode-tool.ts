@@ -12,13 +12,13 @@ const schema = Type.Object({
 	stdin: Type.Optional(Type.String({ description: "Text piped to stdin" })),
 });
 
-export interface SpindleExecSandbox {
+export interface CodeModeExecSandbox {
 	wrapArgv?: (argv: readonly string[]) => Promise<readonly string[]>;
 }
 
-export const createSpindleExecToolDefinition = (
+export const createCodeModeExecToolDefinition = (
 	cwd: string,
-	sandbox: SpindleExecSandbox = {},
+	sandbox: CodeModeExecSandbox = {},
 ): ToolDefinition<any, any, any> => ({
 	name: "exec",
 	label: "exec",

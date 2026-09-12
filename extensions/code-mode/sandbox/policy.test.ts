@@ -112,7 +112,7 @@ test("ambient policies grant the platform temporary directory", () => {
 	const ambient = policyEnvironment("/work/repo");
 	assert.equal(ambient.tmp, tmpdir());
 	const policy = resolveSandboxPolicy({ mode: "read-only" }, ambient);
-	assert.equal(isWriteAllowed(policy, join(tmpdir(), "spindle-test")), true);
+	assert.equal(isWriteAllowed(policy, join(tmpdir(), "code-mode-test")), true);
 });
 
 test("off and full enforce nothing", () => {
@@ -173,7 +173,7 @@ test("assertWriteAllowed reports the mode and the writable roots", () => {
 });
 
 test("direct path guards resolve symlinks before checking their policy roots", () => {
-	const root = mkdtempSync(join(tmpdir(), "spindle-policy-"));
+	const root = mkdtempSync(join(tmpdir(), "code-mode-policy-"));
 	try {
 		const workspace = join(root, "workspace");
 		const secret = join(root, "secret");
@@ -196,7 +196,7 @@ test("direct path guards resolve symlinks before checking their policy roots", (
 });
 
 test("direct path guards refuse dangling symlinks rather than following them after the check", () => {
-	const root = mkdtempSync(join(tmpdir(), "spindle-policy-"));
+	const root = mkdtempSync(join(tmpdir(), "code-mode-policy-"));
 	try {
 		const workspace = join(root, "workspace");
 		mkdirSync(workspace);

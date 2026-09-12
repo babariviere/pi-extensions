@@ -7,7 +7,7 @@
  * only way a run gets one is here, host side, from the active night run. The
  * same is true of `artifactsDir`.
  *
- * The dependency direction matches `sandbox/night-bridge.ts`: spindle reads
+ * The dependency direction matches `sandbox/night-bridge.ts`: code-mode reads
  * night-mode, never the reverse.
  */
 

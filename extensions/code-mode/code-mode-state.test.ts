@@ -8,7 +8,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { CapturedToolCatalog } from "./capture/catalog.ts";
 import { SandboxController } from "./sandbox/controller.ts";
 import { SANDBOX_REQUEST_EVENT, SANDBOX_STATE_EVENT, type SandboxStateEvent } from "./sandbox/protocol.ts";
-import { SpindleState } from "./spindle-state.ts";
+import { CodeModeState } from "./code-mode-state.ts";
 
 const originalApply = SandboxController.prototype.apply;
 const temporaryDirectories: string[] = [];
@@ -48,7 +48,7 @@ const deferred = <T>() => {
 };
 
 const createState = async () => {
-	const cwd = await mkdtemp(path.join(tmpdir(), "spindle-state-test-"));
+	const cwd = await mkdtemp(path.join(tmpdir(), "code-mode-state-test-"));
 	temporaryDirectories.push(cwd);
 	const events = new TestEvents();
 	const notifications: Array<{ message: string; level: string }> = [];
@@ -67,7 +67,7 @@ const createState = async () => {
 			notify: (message: string, level: string) => notifications.push({ message, level }),
 		},
 	} as unknown as ExtensionContext;
-	const state = new SpindleState(pi, new CapturedToolCatalog());
+	const state = new CodeModeState(pi, new CapturedToolCatalog());
 	await state.initialize(context);
 	return { state, context, events, notifications };
 };

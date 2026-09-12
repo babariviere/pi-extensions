@@ -16,7 +16,7 @@ import { assertWriteAllowed, type SandboxPolicy } from "../sandbox/policy.ts";
 import { applyPatch, type ApplyPatchFileUpdateMode } from "./apply-patch.ts";
 
 const workspace = (t: TestContext): string => {
-	const path = mkdtempSync(join(tmpdir(), "spindle-patch-"));
+	const path = mkdtempSync(join(tmpdir(), "code-mode-patch-"));
 	t.after(() => rmSync(path, { recursive: true, force: true }));
 	return path;
 };

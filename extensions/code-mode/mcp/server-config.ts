@@ -1,10 +1,10 @@
 /**
- * `mcp.json` loader for Spindle's own MCP client.
+ * `mcp.json` loader for Code Mode's own MCP client.
  *
  * Field-compatible with pi-mcp-adapter's config on purpose: the same
  * `~/.pi/agent/mcp.json` drives either client, so switching between them needs
- * no config edit and no re-auth. Only the subset Spindle can actually honor is
- * read; an entry Spindle cannot run is kept and marked `unsupported` so
+ * no config edit and no re-auth. Only the subset Code Mode can actually honor is
+ * read; an entry Code Mode cannot run is kept and marked `unsupported` so
  * `mcp.list()` reports it instead of silently dropping a configured server.
  *
  * Layers, lowest precedence first:
@@ -49,7 +49,7 @@ export interface McpServerDefinition {
 	serverCwd?: string;
 	includeTools?: string[];
 	excludeTools?: string[];
-	/** Read for reporting only: Spindle reaches every tool through `mcp.*`. */
+	/** Read for reporting only: Code Mode reaches every tool through `mcp.*`. */
 	directTools?: boolean | string[];
 	requestTimeoutMs?: number;
 	disabled: boolean;
@@ -184,9 +184,9 @@ const readEntry = (raw: unknown): PartialDefinition | undefined => {
 	if (record.disabled === true) entry.disabled = true;
 	if (record.disabled === false) entry.disabled = false;
 	if (asString(record.socket))
-		entry.unsupported = "rmcp-mux unix socket transport is not implemented by the Spindle MCP client";
+		entry.unsupported = "rmcp-mux unix socket transport is not implemented by the Code Mode MCP client";
 	if (asRecord(record.requestHeadersCommand)) {
-		entry.unsupported = "requestHeadersCommand is not implemented by the Spindle MCP client";
+		entry.unsupported = "requestHeadersCommand is not implemented by the Code Mode MCP client";
 	}
 	return entry;
 };
@@ -325,7 +325,7 @@ export const mcpRedirectPort = (definition: McpServerDefinition): number => {
 	const oauth = definition.oauth === false || definition.oauth === undefined ? undefined : definition.oauth;
 	const configured = oauth?.redirectPort;
 	if (configured) return configured;
-	const fromEnv = Number(process.env.SPINDLE_MCP_REDIRECT_PORT);
+	const fromEnv = Number(process.env.PI_CODE_MODE_MCP_REDIRECT_PORT);
 	return Number.isInteger(fromEnv) && fromEnv > 0 ? fromEnv : DEFAULT_MCP_REDIRECT_PORT;
 };
 

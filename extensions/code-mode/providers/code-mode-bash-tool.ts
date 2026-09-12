@@ -1,5 +1,5 @@
 /**
- * Spindle's `pi.bash` tool definition.
+ * Code Mode's `pi.bash` tool definition.
  *
  * Wraps pi's bash tool with three per-call extras the sandboxed guest can
  * pass alongside `command`:
@@ -15,7 +15,7 @@
  * concurrent `Promise.all` bash calls cannot race on shared state. The
  * extras-free path delegates to the shared base tool unchanged.
  *
- * `stdin` needs a spindle-owned spawn: both exec paths pi provides use
+ * `stdin` needs a code-mode-owned spawn: both exec paths pi provides use
  * `stdio: ["ignore", ...]`. The stdin path delegates to the shared supervised
  * spawn (`sandbox/supervised-spawn.ts`, also the OS-sandbox wrap's backend),
  * so pi's tool-level error formatting still applies, and it routes the command
@@ -35,14 +35,14 @@ import { Type } from "typebox";
 
 export const MAX_STDIN_CHARS = 8 * 1024 * 1024;
 
-export interface SpindleBashSandbox {
+export interface CodeModeBashSandbox {
 	/** Late-bound (policy-aware) operations, normally the sandbox controller's. */
 	operations?: BashOperations;
 	/** Wrap a command for the OS sandbox when one is active; identity otherwise. */
 	wrapCommand?: (command: string) => Promise<string>;
 }
 
-const spindleBashSchema = Type.Object({
+const codeModeBashSchema = Type.Object({
 	command: Type.String({ description: "Bash command to execute" }),
 	timeout: Type.Optional(Type.Number({ description: "Timeout in seconds (optional, no default timeout)" })),
 	cwd: Type.Optional(Type.String({ description: "Absolute working directory for this command" })),
@@ -56,9 +56,9 @@ const spindleBashSchema = Type.Object({
 
 const SKIPPED_ENV_KEYS = new Set(["__proto__", "constructor", "prototype"]);
 
-export const createSpindleBashToolDefinition = (
+export const createCodeModeBashToolDefinition = (
 	cwd: string,
-	sandbox: SpindleBashSandbox = {},
+	sandbox: CodeModeBashSandbox = {},
 ): ToolDefinition<any, any, any> => {
 	const base = createBashToolDefinition(cwd, sandbox.operations ? { operations: sandbox.operations } : undefined);
 	const inner = sandbox.operations ?? createLocalBashOperations();
@@ -73,7 +73,7 @@ export const createSpindleBashToolDefinition = (
 			"command, e.g. pi.bash({ command: 'ssh host bash -s', stdin: script })).",
 		promptSnippet: base.promptSnippet,
 		promptGuidelines: base.promptGuidelines,
-		parameters: spindleBashSchema,
+		parameters: codeModeBashSchema,
 		async execute(toolCallId, args, signal, onUpdate, ctx) {
 			const callArgs = args as {
 				command: string;

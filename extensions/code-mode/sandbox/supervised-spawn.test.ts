@@ -36,10 +36,10 @@ test("tolerates a command that never reads stdin", async () => {
 test("passes an explicit environment", async () => {
 	const out = chunksOf();
 	const res = await supervisedSpawn({
-		command: 'printf %s "$SPINDLE_SPAWN_PROBE"',
+		command: 'printf %s "$PI_CODE_MODE_SPAWN_PROBE"',
 		cwd,
 		onData: out.onData,
-		env: { ...process.env, SPINDLE_SPAWN_PROBE: "carried" },
+		env: { ...process.env, PI_CODE_MODE_SPAWN_PROBE: "carried" },
 	});
 	assert.equal(res.exitCode, 0);
 	assert.equal(out.text(), "carried");

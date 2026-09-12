@@ -1,43 +1,47 @@
-import type { SpindleEditProfile } from "../edit-profile.ts";
-import type { SpindleExecutionOutcomeV1, SpindleExecutionTraceOperationV1, SpindleExecutionTraceV1 } from "./trace.ts";
+import type { CodeModeEditProfile } from "../edit-profile.ts";
+import type {
+	CodeModeExecutionOutcomeV1,
+	CodeModeExecutionTraceOperationV1,
+	CodeModeExecutionTraceV1,
+} from "./trace.ts";
 
-export const SPINDLE_EDIT_METRICS_VERSION = 1 as const;
+export const CODE_MODE_EDIT_METRICS_VERSION = 1 as const;
 
 const MAX_KNOWN_FILES = 128;
 const MAX_REPEATED_ATTEMPTS = 128;
 const MAX_PATH_BYTES = 512;
 const APPLY_PATCH_CHANGE_KINDS = new Set(["add", "update", "delete", "move"]);
 
-export type SpindleEditRouteV1 = "edit" | "write" | "applyPatch" | "scripted";
+export type CodeModeEditRouteV1 = "edit" | "write" | "applyPatch" | "scripted";
 
-export interface SpindleEditRouteMetricsV1 {
+export interface CodeModeEditRouteMetricsV1 {
 	attempts: number;
 	successes: number;
 	failures: number;
 }
 
-export interface SpindleRepeatedEditAttemptV1 {
+export interface CodeModeRepeatedEditAttemptV1 {
 	path: string;
 	attempts: number;
 }
 
 /** Bounded aggregate edit telemetry persisted with one code_mode result. */
-export interface SpindleEditMetricsV1 {
-	version: typeof SPINDLE_EDIT_METRICS_VERSION;
-	profile: SpindleEditProfile;
-	routes: Record<SpindleEditRouteV1, SpindleEditRouteMetricsV1>;
+export interface CodeModeEditMetricsV1 {
+	version: typeof CODE_MODE_EDIT_METRICS_VERSION;
+	profile: CodeModeEditProfile;
+	routes: Record<CodeModeEditRouteV1, CodeModeEditRouteMetricsV1>;
 	knownFiles: string[];
-	repeatedAttempts: SpindleRepeatedEditAttemptV1[];
+	repeatedAttempts: CodeModeRepeatedEditAttemptV1[];
 	guardRefusals: number;
 	durationMs: number;
-	outcome: SpindleExecutionOutcomeV1;
+	outcome: CodeModeExecutionOutcomeV1;
 	droppedKnownFiles?: number;
 	droppedRepeatedAttempts?: number;
 }
 
-const emptyRouteMetrics = (): SpindleEditRouteMetricsV1 => ({ attempts: 0, successes: 0, failures: 0 });
+const emptyRouteMetrics = (): CodeModeEditRouteMetricsV1 => ({ attempts: 0, successes: 0, failures: 0 });
 
-const operationRoute = (operation: SpindleExecutionTraceOperationV1): SpindleEditRouteV1 | undefined => {
+const operationRoute = (operation: CodeModeExecutionTraceOperationV1): CodeModeEditRouteV1 | undefined => {
 	const action = operation.provider === "pi" ? operation.action : undefined;
 	if (operation.ref === "pi.edit" || action === "edit") return "edit";
 	if (operation.ref === "pi.write" || action === "write") return "write";
@@ -55,7 +59,7 @@ const boundedPath = (value: unknown): string | undefined => {
 	return value;
 };
 
-const projectedPatchPaths = (operation: SpindleExecutionTraceOperationV1): string[] => {
+const projectedPatchPaths = (operation: CodeModeExecutionTraceOperationV1): string[] => {
 	const paths = new Set<string>();
 	if (Array.isArray(operation.args.paths)) {
 		for (const candidate of operation.args.paths) {
@@ -89,12 +93,12 @@ const boundedDuration = (elapsedMs: number): number => {
  * not inspect guest code, payloads, patch text, command bodies, errors, or live
  * audit previews.
  */
-export const createSpindleEditMetrics = (input: {
-	trace: SpindleExecutionTraceV1;
+export const createCodeModeEditMetrics = (input: {
+	trace: CodeModeExecutionTraceV1;
 	elapsedMs: number;
-	profile: SpindleEditProfile;
-}): SpindleEditMetricsV1 => {
-	const routes: Record<SpindleEditRouteV1, SpindleEditRouteMetricsV1> = {
+	profile: CodeModeEditProfile;
+}): CodeModeEditMetricsV1 => {
+	const routes: Record<CodeModeEditRouteV1, CodeModeEditRouteMetricsV1> = {
 		edit: emptyRouteMetrics(),
 		write: emptyRouteMetrics(),
 		applyPatch: emptyRouteMetrics(),
@@ -135,7 +139,7 @@ export const createSpindleEditMetrics = (input: {
 	const repeatedAttempts = allRepeatedAttempts.slice(0, MAX_REPEATED_ATTEMPTS);
 
 	return {
-		version: SPINDLE_EDIT_METRICS_VERSION,
+		version: CODE_MODE_EDIT_METRICS_VERSION,
 		profile: input.profile,
 		routes,
 		knownFiles,

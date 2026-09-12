@@ -1,20 +1,20 @@
-# Spindle editing profile evaluation
+# Code Mode editing profile evaluation
 
-This directory provides a dependency-free JSONL evaluator for controlled A/B runs of Spindle editing profiles. It reads one record per assigned task run, validates the complete version 1 shape, and writes a deterministic JSON summary. The checked-in `corpus.jsonl` is representative test data, not a benchmark result.
+This directory provides a dependency-free JSONL evaluator for controlled A/B runs of Code Mode editing profiles. It reads one record per assigned task run, validates the complete version 1 shape, and writes a deterministic JSON summary. The checked-in `corpus.jsonl` is representative test data, not a benchmark result.
 
 ## Freeze the experiment before collection
 
 Write an experiment manifest before collecting any run. Keep it beside the collected JSONL or in the system that produces it. Pin all of the following:
 
 1. **Model identity:** provider, API, exact model ID or immutable revision, inference settings, and any provider feature flags.
-2. **Prompt:** exact system, developer, and task prompt text for each variant. Prefer content hashes plus checked-in source paths. Record which Spindle edit profile each variant selects.
+2. **Prompt:** exact system, developer, and task prompt text for each variant. Prefer content hashes plus checked-in source paths. Record which Code Mode edit profile each variant selects.
 3. **Repository fixture:** repository revision, clean working-copy state, runtime and package-manager versions, installed dependency lockfile, and the reset command used before every run.
 4. **Assignment:** the complete task-to-variant assignment, run order, retry policy, and random seed if assignment or ordering is randomized. A `variant` plus `task` pair must be unique in one input file, so repeated trials need distinct task IDs.
 5. **Scoring:** evaluator implementation and revision, acceptance tests or rubric, tie and partial-credit rules, timeout, and the procedure for resolving ambiguous outcomes.
 
 Do not change any pinned item after collection starts. If one changes, start a new experiment.
 
-`passed` is supplied by the pinned evaluator. It is never inferred from Spindle's overall outcome or from whether individual tools succeeded. For example, the sandbox-denial records in the representative corpus pass because the evaluator expects the unsafe operation to be denied, while their Spindle outcome and scripted route are failures.
+`passed` is supplied by the pinned evaluator. It is never inferred from Code Mode's overall outcome or from whether individual tools succeeded. For example, the sandbox-denial records in the representative corpus pass because the evaluator expects the unsafe operation to be denied, while their Code Mode outcome and scripted route are failures.
 
 ## JSONL record format
 
@@ -30,7 +30,7 @@ Fields:
 - `variant` is the pinned A/B assignment label.
 - `task` is the stable task-run identifier.
 - `passed` is the external evaluator's Boolean decision.
-- `metrics` is the version 1 `SpindleEditMetricsV1` value from `code_mode` result details.
+- `metrics` is the version 1 `CodeModeEditMetricsV1` value from `code_mode` result details.
 - `toolCalls` is an optional non-negative integer for all tool calls in the run.
 - `tokens` is an optional pair of non-negative integer `input` and `output` token counts.
 

@@ -1,7 +1,7 @@
 /**
  * PORTED (and trimmed) from upstream `src/providers/arg-normalization.ts`.
  *
- * Argument-shape normalization for Spindle providers, mirroring the pi core tool
+ * Argument-shape normalization for Code Mode providers, mirroring the pi core tool
  * architecture:
  *
  * 1. prepareArguments canonicalizes near-miss argument spellings at the registry
@@ -18,7 +18,7 @@
  * declared property types, and enum-value repairs from the declared members.
  */
 
-import type { SpindleActionDescriptor } from "../protocol.ts";
+import type { CodeModeActionDescriptor } from "../protocol.ts";
 
 interface JsonSchemaObject {
 	type?: unknown;
@@ -241,7 +241,7 @@ const applyDerived = (args: Record<string, unknown>, derived: DerivedAction): Re
  * optional table holds only action-local semantics the schema cannot express.
  */
 export const actionArgNormalizer = (
-	describeActions: () => ReadonlyArray<Pick<SpindleActionDescriptor, "name" | "inputSchema">>,
+	describeActions: () => ReadonlyArray<Pick<CodeModeActionDescriptor, "name" | "inputSchema">>,
 	table: Record<string, ArgNormalizationSpec> = {},
 ): ActionArgNormalizer => {
 	const derived = new Map<string, DerivedAction>();

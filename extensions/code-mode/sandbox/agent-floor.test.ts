@@ -3,8 +3,8 @@ import { test } from "node:test";
 import { agentSandboxFloor } from "./agent-floor.ts";
 
 test("agentSandboxFloor reads the parent's mode off argv", () => {
-	assert.deepEqual(agentSandboxFloor(["pi", "--spindle-sandbox", "read-only"]), { mode: "read-only" });
-	assert.deepEqual(agentSandboxFloor(["pi", "--spindle-sandbox=workspace-write"]), { mode: "workspace-write" });
+	assert.deepEqual(agentSandboxFloor(["pi", "--code-mode-sandbox", "read-only"]), { mode: "read-only" });
+	assert.deepEqual(agentSandboxFloor(["pi", "--code-mode-sandbox=workspace-write"]), { mode: "workspace-write" });
 });
 
 test("agentSandboxFloor is undefined for a normal session", () => {
@@ -12,6 +12,6 @@ test("agentSandboxFloor is undefined for a normal session", () => {
 });
 
 test("agentSandboxFloor ignores an unrecognised mode instead of failing the child", () => {
-	assert.equal(agentSandboxFloor(["pi", "--spindle-sandbox", "readonly"]), undefined);
-	assert.equal(agentSandboxFloor(["pi", "--spindle-sandbox", ""]), undefined);
+	assert.equal(agentSandboxFloor(["pi", "--code-mode-sandbox", "readonly"]), undefined);
+	assert.equal(agentSandboxFloor(["pi", "--code-mode-sandbox", ""]), undefined);
 });

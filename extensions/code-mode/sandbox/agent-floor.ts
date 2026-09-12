@@ -1,7 +1,7 @@
 /**
  * The sandbox floor the parent imposed on this subagent process.
  *
- * A subagent is its own `pi` process, so it resolves its own `spindle.json` and
+ * A subagent is its own `pi` process, so it resolves its own `code-mode.json` and
  * would otherwise run under whatever the ambient config says. The agent's
  * `sandbox:` frontmatter travels on the `--{@link SANDBOX_MODE_FLAG}` CLI flag
  * (a flag, not an env var, because `herdr agent start` passes native args after

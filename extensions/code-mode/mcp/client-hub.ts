@@ -1,9 +1,9 @@
 /**
- * Spindle's own MCP client.
+ * Code Mode's own MCP client.
  *
  * Replaces the pi-mcp-adapter gateway hop: `mcp.*` used to be a tool call into
  * the adapter, which re-resolved the server and tool by name, called it, and
- * handed back `{content}` that Spindle re-parsed. Here a call is a method call
+ * handed back `{content}` that Code Mode re-parsed. Here a call is a method call
  * on a `Client` this process owns.
  *
  * Design rules, inherited from the bridge because they were right:
@@ -29,7 +29,7 @@ import {
 import { defaultMcpKeyring, McpTokenStore } from "./token-store.ts";
 import { type CachedMcpTool, McpToolCache } from "./tool-cache.ts";
 
-const CLIENT_INFO = { name: "pi-spindle", version: "1.0.0" };
+const CLIENT_INFO = { name: "pi-code-mode", version: "1.0.0" };
 
 export type McpServerState = "connected" | "idle" | "needs-auth" | "failed" | "disabled" | "unsupported";
 
@@ -64,7 +64,7 @@ export interface McpCallContext {
 	signal?: AbortSignal | undefined;
 }
 
-/** The surface the Spindle provider needs; a test supplies a fake instead of a network. */
+/** The surface the Code Mode provider needs; a test supplies a fake instead of a network. */
 export interface McpToolHub {
 	status(server?: string): McpServerStatus[];
 	listTools(server?: string): Promise<McpToolSummary[]>;

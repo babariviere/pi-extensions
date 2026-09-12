@@ -4,7 +4,7 @@ import { test } from "node:test";
 import type { CallToolResult } from "@modelcontextprotocol/client";
 import type { McpServerStatus, McpToolDescription, McpToolHub, McpToolSummary } from "../mcp/client-hub.ts";
 import { McpReadOnlyGate } from "../mcp/read-only-policy.ts";
-import type { SpindleInvocationContext } from "../protocol.ts";
+import type { CodeModeInvocationContext } from "../protocol.ts";
 import { McpClientProvider } from "./mcp-client-provider.ts";
 
 const context = {
@@ -12,9 +12,9 @@ const context = {
 	signal: undefined,
 	parentToolCallId: "parent",
 	nestedToolCallId: "nested",
-	extensionContext: {} as SpindleInvocationContext["extensionContext"],
+	extensionContext: {} as CodeModeInvocationContext["extensionContext"],
 	update: () => {},
-} satisfies SpindleInvocationContext;
+} satisfies CodeModeInvocationContext;
 
 const tool = (server: string, name: string): McpToolDescription => ({
 	server,

@@ -234,7 +234,7 @@ export type TaskDelivery = "inline" | "file";
  * The only per-backend knob is `taskDelivery`. The headless adapter inlines the
  * task as an argv entry, where any characters are safe. The Herdr adapter uses
  * a shell-backed `pane run` command, so it cannot safely carry
- * multi-line args, so the task is written to a file and the child's own Spindle
+ * multi-line args, so the task is written to a file and the child's own Code Mode
  * delivers it as the first user message (`task-delivery.ts`). Both paths frame
  * the task identically, through `formatTaskMessage`.
  */

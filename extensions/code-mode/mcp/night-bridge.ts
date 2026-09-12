@@ -1,7 +1,7 @@
 /**
  * Cross-extension bridge: does the active night run demand read-only MCP?
  *
- * Same shape and same one-way dependency as `sandbox/night-bridge.ts`: spindle
+ * Same shape and same one-way dependency as `sandbox/night-bridge.ts`: code-mode
  * reads the night-mode handshake file, never the reverse. A file rather than the
  * event bus because subagents are separate `pi` processes, so an in-memory
  * channel would never reach them, and the guard has to cover subagents most of
@@ -19,7 +19,7 @@ export interface NightMcpSessionRef {
 /**
  * True when this process belongs to a night run that asked for read-only MCP.
  * A session the user opens while a run is in flight is a bystander and keeps
- * whatever `spindle.json` configures.
+ * whatever `code-mode.json` configures.
  */
 export function activeNightMcpReadOnly(ref: NightMcpSessionRef = {}): boolean {
 	const run = readActiveNightRun();

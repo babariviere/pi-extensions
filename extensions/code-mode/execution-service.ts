@@ -1,28 +1,28 @@
-import {
-	type SpindleSandboxResult,
-	type SpindleSandboxTerminationReason,
-	type SpindleTypeError,
-	typeCheckSpindleCode,
-} from "@babariviere/code-mode";
-import { PiQuickJsRuntime as QuickJsRuntime } from "@babariviere/code-mode/host-pi";
 import type { Usage } from "@earendil-works/pi-ai";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { SpindleActivityStore } from "./activity/store.ts";
-import type { SpindleRunDisplay } from "./activity/types.ts";
+import type { CodeModeActivityStore } from "./activity/store.ts";
+import type { CodeModeRunDisplay } from "./activity/types.ts";
 import {
 	executionOutcomeFromError,
-	type SpindleExecutionFailureStageV1,
-	SpindleExecutionTraceRecorder,
-	type SpindleExecutionTraceV1,
+	type CodeModeExecutionFailureStageV1,
+	CodeModeExecutionTraceRecorder,
+	type CodeModeExecutionTraceV1,
 } from "./audit/trace.ts";
-import { MAX_AGENT_TIMEOUT_MS, MIN_AGENT_TIMEOUT_MS, type SpindleConfig } from "./config.ts";
-import type { ActionRegistry, SpindleCallAudit, SpindleRegistryActivityEvent } from "./core/action-registry.ts";
+import { MAX_AGENT_TIMEOUT_MS, MIN_AGENT_TIMEOUT_MS, type CodeModeConfig } from "./config.ts";
+import type { ActionRegistry, CodeModeCallAudit, CodeModeRegistryActivityEvent } from "./core/action-registry.ts";
 import { redactRecordedArgs } from "./core/arg-redaction.ts";
 import { piBashExitMetadata } from "./core/pi-bash-error.ts";
-import { spindleProcessSnapshot } from "./env-snapshot.ts";
-import { fullCodeProvider, type HostCallContext, hostCallTable, type SpindleStateNote } from "./host-calls.ts";
+import { codeModeProcessSnapshot } from "./env-snapshot.ts";
+import { fullCodeProvider, type HostCallContext, hostCallTable, type CodeModeStateNote } from "./host-calls.ts";
+import type { CodeModeGuestTypeSources } from "./protocol.ts";
 import { buildDynamicGuestDeclarations } from "./runtime/dynamic-guest-types.ts";
 import { guestTypeDeclarations } from "./runtime/guest-types.ts";
+import {
+	QuickJsRuntime,
+	type CodeModeSandboxResult,
+	type CodeModeSandboxTerminationReason,
+} from "./runtime/quickjs-runtime.ts";
+import { type CodeModeTypeError, typeCheckCodeModeCode } from "./runtime/type-checker.ts";
 import {
 	codeUsesOrchestration,
 	isAgentBudgetRef,
@@ -30,14 +30,14 @@ import {
 	isBlockingOrchestrationRef,
 	requestedBlockingTimeoutMs,
 } from "./runtime/orchestration.ts";
-import { SpindleSessionStore, type SpindleSessionStoreKey } from "./session-store.ts";
+import { CodeModeSessionStore, type CodeModeSessionStoreKey } from "./session-store.ts";
 
 // Slack added on top of a blocking host call's own timeout so the call fails
 // with its own error before the sandbox deadline expires.
 const BLOCKING_HOST_CALL_SLACK_MS = 5_000;
 
 const executionOutcomeFromTermination = (
-	reason: SpindleSandboxTerminationReason,
+	reason: CodeModeSandboxTerminationReason,
 ): "succeeded" | "failed" | "aborted" | "timed_out" => {
 	switch (reason) {
 		case "completed":
@@ -53,15 +53,15 @@ const executionOutcomeFromTermination = (
 	}
 };
 
-export interface SpindleExecutionResult {
+export interface CodeModeExecutionResult {
 	success: boolean;
 	value: unknown;
 	logs: string[];
-	audits: SpindleCallAudit[];
+	audits: CodeModeCallAudit[];
 	phases: string[];
-	trace: SpindleExecutionTraceV1;
+	trace: CodeModeExecutionTraceV1;
 	elapsedMs: number;
-	typeErrors?: SpindleTypeError[];
+	typeErrors?: CodeModeTypeError[];
 	error?: string;
 	usage?: Usage;
 	/**
@@ -69,20 +69,20 @@ export interface SpindleExecutionResult {
 	 * touched τ. A program that never mentions the scratchpad should not be told
 	 * about it; one that does needs to know what it left behind.
 	 */
-	stateKeys?: SpindleSessionStoreKey[];
+	stateKeys?: CodeModeSessionStoreKey[];
 	/** Live-only τ operation notes for the TUI rows (never persisted). */
-	stateNotes?: SpindleStateNote[];
+	stateNotes?: CodeModeStateNote[];
 }
 
-interface SpindleExecutionPartial {
-	audits: SpindleCallAudit[];
+interface CodeModeExecutionPartial {
+	audits: CodeModeCallAudit[];
 	phases: string[];
 	progress?: string | undefined;
 	/** τ operations so far, in order, for the live rows. */
-	stateNotes: SpindleStateNote[];
+	stateNotes: CodeModeStateNote[];
 }
 
-export interface SpindleExecutionOptions {
+export interface CodeModeExecutionOptions {
 	code: string;
 	payloads?: Record<string, string>;
 	signal: AbortSignal | undefined;
@@ -94,49 +94,47 @@ export interface SpindleExecutionOptions {
 	 * lowers) `executor.timeoutMs` and is capped by `executor.maxTimeoutMs`.
 	 */
 	requestedTimeoutMs?: number;
-	display?: SpindleRunDisplay;
-	onPartial(snapshot: SpindleExecutionPartial): void;
+	display?: CodeModeRunDisplay;
+	onPartial(snapshot: CodeModeExecutionPartial): void;
 }
 
-export class SpindleExecutionService {
+export class CodeModeExecutionService {
 	#runtime: QuickJsRuntime | undefined;
 
 	constructor(
 		readonly registry: ActionRegistry,
-		readonly config: SpindleConfig,
-		readonly activity?: SpindleActivityStore,
+		readonly config: CodeModeConfig,
+		readonly activity?: CodeModeActivityStore,
 		/**
 		 * The session-scoped scratchpad behind the guest's `τ` namespace. Owned by
-		 * `SpindleState` in a real session, so it outlives one program; a private
+		 * `CodeModeState` in a real session, so it outlives one program; a private
 		 * one keeps a standalone service (tests) self-contained.
 		 */
-		readonly store: SpindleSessionStore = new SpindleSessionStore(),
+		readonly store: CodeModeSessionStore = new CodeModeSessionStore(),
 	) {}
 
-	async execute(options: SpindleExecutionOptions): Promise<SpindleExecutionResult> {
+	async execute(options: CodeModeExecutionOptions): Promise<CodeModeExecutionResult> {
 		/* istanbul ignore next: retained as the compatibility reference during migration. */
 		const startedAt = performance.now();
-		const traceRecorder = new SpindleExecutionTraceRecorder();
+		const traceRecorder = new CodeModeExecutionTraceRecorder();
 		this.activity?.start(options.parentToolCallId, options.display);
 		const effectiveFullCodeMode = this.config.fullCodeMode;
-		// Schema-typed MCP declarations for this execution. Best effort:
-		// a provider that cannot describe itself leaves the loose declarations.
-		let guestTypeSources = {};
-		if (effectiveFullCodeMode) {
-			try {
-				guestTypeSources = await this.registry.guestTypeSources({
-					cwd: options.context.cwd,
-					signal: options.signal,
-					parentToolCallId: options.parentToolCallId,
-					nestedToolCallId: `${options.parentToolCallId}_types`,
-					extensionContext: options.context,
-					update: () => {},
-				});
-			} catch {
-				guestTypeSources = {};
-			}
+		// Schema-typed declarations for this execution. Best effort: a provider
+		// that cannot list itself leaves its loose declaration in place.
+		let guestTypeSources: CodeModeGuestTypeSources = {};
+		try {
+			guestTypeSources = await this.registry.guestTypeSources({
+				cwd: options.context.cwd,
+				signal: options.signal,
+				parentToolCallId: options.parentToolCallId,
+				nestedToolCallId: `${options.parentToolCallId}_types`,
+				extensionContext: options.context,
+				update: () => {},
+			});
+		} catch {
+			guestTypeSources = {};
 		}
-		const checked = typeCheckSpindleCode(
+		const checked = typeCheckCodeModeCode(
 			options.code,
 			guestTypeDeclarations(
 				effectiveFullCodeMode,
@@ -169,7 +167,7 @@ export class SpindleExecutionService {
 			};
 		}
 
-		const audits: SpindleCallAudit[] = [];
+		const audits: CodeModeCallAudit[] = [];
 		const phases: string[] = [];
 		let agentCalls = 0;
 		const maxAgentCalls = Math.max(
@@ -180,7 +178,7 @@ export class SpindleExecutionService {
 			if (!isAgentBudgetRef(ref)) return;
 			agentCalls++;
 			if (agentCalls > maxAgentCalls) {
-				throw new Error(`Spindle agent budget exhausted (${maxAgentCalls} per execution)`);
+				throw new Error(`Code Mode agent budget exhausted (${maxAgentCalls} per execution)`);
 			}
 		};
 		const guardFullCodeRef = (ref: string): void => {
@@ -188,10 +186,10 @@ export class SpindleExecutionService {
 			const provider = fullCodeProvider(ref, (name) => this.registry.isFullCodeProvider(name));
 			if (!provider) return;
 			throw new Error(
-				`Spindle full code mode is disabled; call ${provider === "pi" ? "Pi core" : "registered extension"} tools directly outside code_mode`,
+				`Code Mode full code mode is disabled; call ${provider === "pi" ? "Pi core" : "registered extension"} tools directly outside code_mode`,
 			);
 		};
-		const stateNotes: SpindleStateNote[] = [];
+		const stateNotes: CodeModeStateNote[] = [];
 		let currentProgress: string | undefined;
 		let emitPending = false;
 		let emitTimer: NodeJS.Timeout | undefined;
@@ -210,7 +208,7 @@ export class SpindleExecutionService {
 			if (emitPending) emitNow();
 		};
 		// One execution-wide timer coalesces updates from every parallel nested
-		// call. Keeping this global to the Spindle program prevents each call from
+		// call. Keeping this global to the Code Mode program prevents each call from
 		// independently churning rows while preserving a trailing final snapshot.
 		const emit = (): void => {
 			emitPending = true;
@@ -233,7 +231,7 @@ export class SpindleExecutionService {
 			currentProgress = message;
 			emit();
 		};
-		const observeInvocation = (event: SpindleRegistryActivityEvent): void => {
+		const observeInvocation = (event: CodeModeRegistryActivityEvent): void => {
 			if (this.activity) {
 				if (event.type === "call_start") {
 					this.activity.beginCall(options.parentToolCallId, event);
@@ -297,10 +295,10 @@ export class SpindleExecutionService {
 			ref: string,
 			args: Record<string, unknown>,
 			signal: AbortSignal,
-			run: (setStage: (stage: SpindleExecutionFailureStageV1) => void) => T | Promise<T>,
+			run: (setStage: (stage: CodeModeExecutionFailureStageV1) => void) => T | Promise<T>,
 		): Promise<T> => {
 			const operation = traceRecorder.issueCall(ref, args);
-			let stage: SpindleExecutionFailureStageV1 = "invoke";
+			let stage: CodeModeExecutionFailureStageV1 = "invoke";
 			try {
 				const value = await run((nextStage) => {
 					stage = nextStage;
@@ -354,7 +352,7 @@ export class SpindleExecutionService {
 			traceAttempt,
 			invokeAction: (ref, args, signal) => invokeAction(ref, args, { ...baseContext, signal }),
 		};
-		let sandboxResult: SpindleSandboxResult;
+		let sandboxResult: CodeModeSandboxResult;
 		try {
 			const runtime = (this.#runtime ??= new QuickJsRuntime());
 			sandboxResult = await runtime.execute(
@@ -375,7 +373,7 @@ export class SpindleExecutionService {
 					...(checked.javascript && checked.sourceMap ? { sourceMap: checked.sourceMap } : {}),
 					...(options.payloads ? { payloads: options.payloads } : {}),
 					// Allowlisted env snapshot injected as the guest's `process` global.
-					process: spindleProcessSnapshot(options.context.cwd),
+					process: codeModeProcessSnapshot(options.context.cwd),
 					providers: this.registry
 						.providers()
 						.filter((provider) => effectiveFullCodeMode || !this.registry.isFullCodeProvider(provider.name))

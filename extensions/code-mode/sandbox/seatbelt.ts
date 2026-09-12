@@ -79,7 +79,7 @@ export class SeatbeltSandbox {
 		if (this.#platform !== "darwin") {
 			throw new Error(
 				`sandbox: OS enforcement requires macOS (this is darwin-only); platform is ${this.#platform}. ` +
-					'Set spindle.json sandbox.mode to "off" to run unsandboxed.',
+					'Set code-mode.json sandbox.mode to "off" to run unsandboxed.',
 			);
 		}
 		if (!existsSync(SEATBELT_EXECUTABLE)) {
@@ -92,7 +92,7 @@ export class SeatbeltSandbox {
 		this.warnings = built.warnings;
 		this.#params = built.params;
 
-		const dir = mkdtempSync(join(tmpdir(), "pi-spindle-sbx-"));
+		const dir = mkdtempSync(join(tmpdir(), "pi-code-mode-sbx-"));
 		// Registered for cleanup immediately, before anything is written into it:
 		// a writeFileSync failure below must not leak this directory.
 		activeProfileDirs.add(dir);

@@ -1,18 +1,18 @@
 import { randomUUID } from "node:crypto";
 import { headlineArg } from "../core/call-preview.ts";
-import type { SpindleInvocationActivityUpdate } from "../protocol.ts";
+import type { CodeModeInvocationActivityUpdate } from "../protocol.ts";
 import type {
-	SpindleActivityCall,
-	SpindleActivityEventInput,
-	SpindleActivityItem,
-	SpindleActivityItemInput,
-	SpindleActivityKind,
-	SpindleActivityMetrics,
-	SpindleActivityPhase,
-	SpindleActivityRun,
-	SpindleActivityStatus,
-	SpindlePhaseInput,
-	SpindleRunDisplay,
+	CodeModeActivityCall,
+	CodeModeActivityEventInput,
+	CodeModeActivityItem,
+	CodeModeActivityItemInput,
+	CodeModeActivityKind,
+	CodeModeActivityMetrics,
+	CodeModeActivityPhase,
+	CodeModeActivityRun,
+	CodeModeActivityStatus,
+	CodeModePhaseInput,
+	CodeModeRunDisplay,
 } from "./types.ts";
 
 const MAX_RUNS = 24;
@@ -26,7 +26,7 @@ const MAX_DATA_CHARS = 8_000;
 const MAX_CALL_PAYLOAD_CHARS = 64_000;
 const MAX_CALL_SUMMARY_CHARS = 120;
 
-const terminalStatuses = new Set<SpindleActivityStatus>(["completed", "failed", "stopped"]);
+const terminalStatuses = new Set<CodeModeActivityStatus>(["completed", "failed", "stopped"]);
 
 const cleanText = (value: unknown, maxChars: number): string | undefined => {
 	if (typeof value !== "string") return undefined;
@@ -51,7 +51,7 @@ const boundedData = (value: unknown, maxChars = MAX_DATA_CHARS): unknown => {
 		if (serialized === undefined) return undefined;
 		if (serialized.length <= maxChars) return JSON.parse(serialized) as unknown;
 		return {
-			spindleTruncated: true,
+			codeModeTruncated: true,
 			originalChars: serialized.length,
 			preview: serialized.slice(0, Math.max(1, maxChars - 100)),
 		};
@@ -60,7 +60,7 @@ const boundedData = (value: unknown, maxChars = MAX_DATA_CHARS): unknown => {
 	}
 };
 
-const kindForRef = (ref: string): SpindleActivityKind => {
+const kindForRef = (ref: string): CodeModeActivityKind => {
 	if (ref.startsWith("agents.")) {
 		return ["agents.create", "agents.ask", "agents.tell", "agents.actorStatus"].includes(ref) ? "actor" : "agent";
 	}
@@ -94,7 +94,7 @@ const labelForCall = (ref: string, args: Record<string, unknown>): string => {
 	return target ? `${ref} · ${target}` : ref;
 };
 
-const metricsFrom = (value: unknown): SpindleActivityMetrics | undefined => {
+const metricsFrom = (value: unknown): CodeModeActivityMetrics | undefined => {
 	if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
 	const record = value as Record<string, unknown>;
 	const usage =
@@ -120,9 +120,9 @@ const isFailedResult = (value: unknown): boolean => {
 	return status === "failed" || status === "stopped" || status === "timed_out";
 };
 
-export class SpindleActivityStore {
-	readonly #runs = new Map<string, SpindleActivityRun>();
-	readonly #callIndex = new Map<string, Map<string, SpindleActivityCall>>();
+export class CodeModeActivityStore {
+	readonly #runs = new Map<string, CodeModeActivityRun>();
+	readonly #callIndex = new Map<string, Map<string, CodeModeActivityCall>>();
 	readonly #listeners = new Set<() => void>();
 	#revision = 0;
 
@@ -142,11 +142,11 @@ export class SpindleActivityStore {
 		this.#emit();
 	}
 
-	start(id: string, display: SpindleRunDisplay = {}): SpindleActivityRun {
+	start(id: string, display: CodeModeRunDisplay = {}): CodeModeActivityRun {
 		const now = Date.now();
-		const name = cleanText(display.name, MAX_NAME_CHARS) ?? "Code mode program";
+		const name = cleanText(display.name, MAX_NAME_CHARS) ?? "Code Mode program";
 		const description = cleanText(display.description, MAX_DESCRIPTION_CHARS);
-		const run: SpindleActivityRun = {
+		const run: CodeModeActivityRun = {
 			id,
 			name,
 			status: "running",
@@ -166,7 +166,7 @@ export class SpindleActivityStore {
 		return structuredClone(run);
 	}
 
-	configure(runId: string, display: SpindleRunDisplay): SpindleActivityRun {
+	configure(runId: string, display: CodeModeRunDisplay): CodeModeActivityRun {
 		const run = this.#require(runId);
 		const name = cleanText(display.name, MAX_NAME_CHARS);
 		const description = cleanText(display.description, MAX_DESCRIPTION_CHARS);
@@ -177,7 +177,7 @@ export class SpindleActivityStore {
 		return structuredClone(run);
 	}
 
-	phase(runId: string, input: SpindlePhaseInput): SpindleActivityPhase {
+	phase(runId: string, input: CodeModePhaseInput): CodeModeActivityPhase {
 		const run = this.#require(runId);
 		const name = cleanText(input.name, MAX_NAME_CHARS);
 		if (!name) throw new Error("Workflow phase name must not be empty");
@@ -229,7 +229,7 @@ export class SpindleActivityStore {
 
 		run.currentPhaseId = phase.id;
 		run.updatedAt = now;
-		if (run.name === "Code mode program" && run.phases.length === 1) run.name = name;
+		if (run.name === "Code Mode program" && run.phases.length === 1) run.name = name;
 		this.#emit();
 		return structuredClone(phase);
 	}
@@ -253,7 +253,7 @@ export class SpindleActivityStore {
 		this.#emit();
 	}
 
-	upsertItem(runId: string, input: SpindleActivityItemInput): SpindleActivityItem {
+	upsertItem(runId: string, input: CodeModeActivityItemInput): CodeModeActivityItem {
 		const run = this.#require(runId);
 		const id = cleanId(input.id, `item-${run.items.length + 1}`);
 		const label = cleanText(input.label, MAX_NAME_CHARS);
@@ -313,7 +313,7 @@ export class SpindleActivityStore {
 		return structuredClone(item);
 	}
 
-	event(runId: string, input: SpindleActivityEventInput): void {
+	event(runId: string, input: CodeModeActivityEventInput): void {
 		const run = this.#require(runId);
 		const message = cleanText(input.message, MAX_DETAIL_CHARS);
 		if (!message) throw new Error("Workflow activity event message must not be empty");
@@ -333,13 +333,13 @@ export class SpindleActivityStore {
 	beginCall(runId: string, input: { callId: string; ref: string; args: Record<string, unknown> }): void {
 		const run = this.#require(runId);
 		const now = Date.now();
-		const index = this.#callIndex.get(runId) ?? new Map<string, SpindleActivityCall>();
+		const index = this.#callIndex.get(runId) ?? new Map<string, CodeModeActivityCall>();
 		this.#callIndex.set(runId, index);
 		if (run.calls.length >= MAX_CALLS) {
 			const removed = run.calls.splice(0, run.calls.length - MAX_CALLS + 1);
 			for (const call of removed) index.delete(call.id);
 		}
-		const call: SpindleActivityCall = {
+		const call: CodeModeActivityCall = {
 			id: input.callId,
 			ref: input.ref,
 			label: labelForCall(input.ref, input.args),
@@ -367,7 +367,7 @@ export class SpindleActivityStore {
 		this.#emit();
 	}
 
-	updateCall(runId: string, callId: string, update: SpindleInvocationActivityUpdate): void {
+	updateCall(runId: string, callId: string, update: CodeModeInvocationActivityUpdate): void {
 		const run = this.#require(runId);
 		const call = this.#callIndex.get(runId)?.get(callId);
 		if (!call) return;
@@ -466,7 +466,7 @@ export class SpindleActivityStore {
 		this.#emit();
 	}
 
-	runs(): SpindleActivityRun[] {
+	runs(): CodeModeActivityRun[] {
 		return [...this.#runs.values()]
 			.sort((left, right) => {
 				if (left.status === "running" && right.status !== "running") return -1;
@@ -476,19 +476,19 @@ export class SpindleActivityStore {
 			.map((run) => structuredClone(run));
 	}
 
-	get(id: string): SpindleActivityRun | undefined {
+	get(id: string): CodeModeActivityRun | undefined {
 		const run = this.#runs.get(id);
 		return run ? structuredClone(run) : undefined;
 	}
 
-	#resolvePhaseId(run: SpindleActivityRun, phase: string | undefined): string | undefined {
+	#resolvePhaseId(run: CodeModeActivityRun, phase: string | undefined): string | undefined {
 		if (!phase) return run.currentPhaseId;
 		return run.phases.find((candidate) => candidate.id === phase || candidate.name === phase)?.id;
 	}
 
-	#require(id: string): SpindleActivityRun {
+	#require(id: string): CodeModeActivityRun {
 		const run = this.#runs.get(id);
-		if (!run) throw new Error(`Unknown Spindle activity run: ${id}`);
+		if (!run) throw new Error(`Unknown Code Mode activity run: ${id}`);
 		return run;
 	}
 

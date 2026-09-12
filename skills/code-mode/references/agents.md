@@ -1,6 +1,6 @@
 # `agents` reference
 
-Spindle's `agents.*` namespace runs **custom agent definitions discovered on disk**, each as a child `pi` session. Discover definitions with `agents.list()`, and use `agents.models()` when selecting a model override. A `running` result is pending work, not a failure.
+Code Mode's `agents.*` namespace runs **custom agent definitions discovered on disk**, each as a child `pi` session. Discover definitions with `agents.list()`, and use `agents.models()` when selecting a model override. A `running` result is pending work, not a failure.
 
 Agent definitions are markdown files with YAML frontmatter, discovered from:
 
@@ -59,7 +59,7 @@ Two independent deadlines:
 | `reads` | no | Files the agent should read first for context. Injected as a read-first instruction; the agent still needs a `read` tool. |
 | `waitMs` | no | How long to block before handing back a `running` handle. `0` returns as soon as the run is launched. Batch-level: on `runAll` it goes next to `tasks`, not inside an item. |
 
-Resolves to `SpindleAgentResult`:
+Resolves to `CodeModeAgentResult`:
 
 ```ts
 {
@@ -94,7 +94,7 @@ Runs several agents in parallel and waits for all of them, for at most `waitMs`.
 await agents.runAll({ tasks: [{ agent: "reviewer", task: "..." }], waitMs: 60_000 });
 ```
 
-Resolves to `SpindleAgentResult[]` in input order.
+Resolves to `CodeModeAgentResult[]` in input order.
 
 ```ts
 return await agents.runAll({
@@ -135,7 +135,7 @@ Resumes waiting on a launched batch. Resolves to:
   state: "running" | "settled" | "cancelled";
   elapsedMs: number;
   agents: string[];
-  results: SpindleAgentResult[];  // placeholders while state is "running"
+  results: CodeModeAgentResult[];  // placeholders while state is "running"
 }
 ```
 
@@ -151,7 +151,7 @@ Cancels one batch, or every live batch when `runId` is omitted. Resolves to `{ c
 
 ## Unclaimed results arrive as a message
 
-When a batch settles and nobody is waiting on it (its window expired, or it was launched with `agents.start`), the result is injected into the parent session as a follow-up message (`customType: "spindle.agent_result"`) that triggers a turn. You do not have to poll to avoid losing a background run's output; polling is for when you want it *now*.
+When a batch settles and nobody is waiting on it (its window expired, or it was launched with `agents.start`), the result is injected into the parent session as a follow-up message (`customType: "code-mode.agent_result"`) that triggers a turn. You do not have to poll to avoid losing a background run's output; polling is for when you want it *now*.
 
 ## Cancellation
 
@@ -181,7 +181,7 @@ return await agents.run({
 
 ## Execution backend and progress
 
-The backend is chosen by environment, not by the caller: live panes in a dedicated `subagents` tab when running inside herdr, otherwise headless `pi` child processes. Either way each run surfaces as a spinner row in the Spindle widget above the prompt, and as a nested call line in the `code_mode` tool result for a run that settles inside the program that launched it. Do not build a busy-wait loop around `agents.status()`: use `agents.wait`, which blocks properly.
+The backend is chosen by environment, not by the caller: live panes in a dedicated `subagents` tab when running inside herdr, otherwise headless `pi` child processes. Either way each run surfaces as a spinner row in the Code Mode widget above the prompt, and as a nested call line in the `code_mode` tool result for a run that settles inside the program that launched it. Do not build a busy-wait loop around `agents.status()`: use `agents.wait`, which blocks properly.
 
 ## Budget
 

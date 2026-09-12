@@ -2,14 +2,14 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
-	SPINDLE_EXECUTION_DETAILS_MAX_BYTES,
-	createSpindlePersistedExecutionDetails,
-	readSpindleExecutionRenderDetails,
+	CODE_MODE_EXECUTION_DETAILS_MAX_BYTES,
+	createCodeModePersistedExecutionDetails,
+	readCodeModeExecutionRenderDetails,
 } from "./details.ts";
-import { SpindleExecutionTraceRecorder } from "./trace.ts";
+import { CodeModeExecutionTraceRecorder } from "./trace.ts";
 
 const metricTrace = () => {
-	const recorder = new SpindleExecutionTraceRecorder();
+	const recorder = new CodeModeExecutionTraceRecorder();
 	const firstEdit = recorder.issueCall("pi.edit", {
 		path: "src/a.ts",
 		edits: [{ oldText: "private source", newText: "replacement source" }],
@@ -43,8 +43,8 @@ const metricTrace = () => {
 test("persisted edit metrics are deterministic aggregates of the projected trace", () => {
 	const trace = metricTrace();
 	const input = { success: false, trace, elapsedMs: 123.6, editProfile: "openai" as const };
-	const first = createSpindlePersistedExecutionDetails(input);
-	const second = createSpindlePersistedExecutionDetails(input);
+	const first = createCodeModePersistedExecutionDetails(input);
+	const second = createCodeModePersistedExecutionDetails(input);
 
 	assert.deepEqual(first.editMetrics, second.editMetrics);
 	assert.deepEqual(first.editMetrics, {
@@ -68,7 +68,7 @@ test("persisted edit metrics are deterministic aggregates of the projected trace
 });
 
 test("persisted edit metrics retain no edit bodies, prompts, credentials, or raw errors", () => {
-	const details = createSpindlePersistedExecutionDetails({
+	const details = createCodeModePersistedExecutionDetails({
 		success: false,
 		trace: metricTrace(),
 		elapsedMs: 1,
@@ -98,12 +98,12 @@ test("persisted edit metrics retain no edit bodies, prompts, credentials, or raw
 });
 
 test("rendering remains compatible with details created before edit metrics", () => {
-	const trace = new SpindleExecutionTraceRecorder().seal("succeeded", ["done"]);
-	const current = readSpindleExecutionRenderDetails({ success: true, trace });
+	const trace = new CodeModeExecutionTraceRecorder().seal("succeeded", ["done"]);
+	const current = readCodeModeExecutionRenderDetails({ success: true, trace });
 	assert.deepEqual(current.phases, ["done"]);
 	assert.deepEqual(current.audits, []);
 
-	const legacy = readSpindleExecutionRenderDetails({
+	const legacy = readCodeModeExecutionRenderDetails({
 		success: true,
 		phases: ["legacy"],
 		audits: [{ ref: "pi.write", success: true, args: { path: "old.ts" } }],
@@ -113,20 +113,20 @@ test("rendering remains compatible with details created before edit metrics", ()
 });
 
 test("edit metrics and final details stay bounded at the details size cap", () => {
-	const recorder = new SpindleExecutionTraceRecorder();
+	const recorder = new CodeModeExecutionTraceRecorder();
 	for (let index = 0; index < 2_048; index++) {
 		const suffix = String(index).padStart(4, "0");
 		const operation = recorder.issueCall("pi.write", { path: `src/${suffix}-${"x".repeat(450)}.ts` });
 		operation.succeed({ created: true });
 	}
-	const details = createSpindlePersistedExecutionDetails({
+	const details = createCodeModePersistedExecutionDetails({
 		success: true,
 		trace: recorder.seal("succeeded", []),
 		elapsedMs: Number.POSITIVE_INFINITY,
 		editProfile: "neutral",
 	});
 
-	assert.ok(Buffer.byteLength(JSON.stringify(details), "utf8") <= SPINDLE_EXECUTION_DETAILS_MAX_BYTES);
+	assert.ok(Buffer.byteLength(JSON.stringify(details), "utf8") <= CODE_MODE_EXECUTION_DETAILS_MAX_BYTES);
 	assert.equal(details.editMetrics?.knownFiles.length, 128);
 	assert.ok((details.editMetrics?.droppedKnownFiles ?? 0) > 0);
 	assert.equal(details.editMetrics?.durationMs, 0);

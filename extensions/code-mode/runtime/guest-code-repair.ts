@@ -306,7 +306,7 @@ const collectTemplateRepairs = (code: string, index: number, end: number, repair
 	return end;
 };
 
-export const repairSpindleGuestCode = (code: string): string => {
+export const repairCodeModeGuestCode = (code: string): string => {
 	const repairs = collectRepairs(code, 0, code.length);
 	if (repairs.length === 0) return code;
 	let result = code;

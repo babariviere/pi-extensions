@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
-import { SpindleEvaluationInputError, evaluateSpindleJsonl, parseSpindleEvaluationJsonl } from "./index.ts";
+import { CodeModeEvaluationInputError, evaluateCodeModeJsonl, parseCodeModeEvaluationJsonl } from "./index.ts";
 
 const metrics = (overrides: Record<string, unknown> = {}) => ({
 	version: 1,
@@ -52,8 +52,8 @@ test("evaluation summaries are deterministic and compare every collected metric"
 		toolCalls: 6,
 		tokens: { input: 130, output: 40 },
 	});
-	const forward = evaluateSpindleJsonl(jsonl([control, candidate]), { baseline: "control" });
-	const reversed = evaluateSpindleJsonl(jsonl([candidate, control]), { baseline: "control" });
+	const forward = evaluateCodeModeJsonl(jsonl([control, candidate]), { baseline: "control" });
+	const reversed = evaluateCodeModeJsonl(jsonl([candidate, control]), { baseline: "control" });
 
 	assert.deepEqual(forward, reversed);
 	assert.equal(forward.variants[0].variant, "control");
@@ -87,7 +87,7 @@ test("evaluation summaries are deterministic and compare every collected metric"
 });
 
 test("optional usage counters report measurement coverage", () => {
-	const summary = evaluateSpindleJsonl(
+	const summary = evaluateCodeModeJsonl(
 		jsonl([
 			record("a", "one", { toolCalls: 2 }),
 			record("a", "two"),
@@ -120,25 +120,27 @@ test("JSONL validation rejects malformed metrics and duplicate assignments with 
 		}),
 	});
 	assert.throws(
-		() => parseSpindleEvaluationJsonl(jsonl([invalid])),
+		() => parseCodeModeEvaluationJsonl(jsonl([invalid])),
 		(error: unknown) =>
-			error instanceof SpindleEvaluationInputError &&
+			error instanceof CodeModeEvaluationInputError &&
 			/line 1\.metrics\.routes\.edit: successes plus failures must equal attempts/.test(error.message),
 	);
 	assert.throws(
-		() => parseSpindleEvaluationJsonl(jsonl([record("a", "one"), record("a", "one")])),
+		() => parseCodeModeEvaluationJsonl(jsonl([record("a", "one"), record("a", "one")])),
 		/line 2: duplicate variant and task assignment/,
 	);
 	assert.throws(
 		() =>
-			parseSpindleEvaluationJsonl(jsonl([record("a", "one", { metrics: metrics({ droppedRepeatedAttempts: 1 }) })])),
+			parseCodeModeEvaluationJsonl(
+				jsonl([record("a", "one", { metrics: metrics({ droppedRepeatedAttempts: 1 }) })]),
+			),
 		/cannot evaluate truncated repeated-edit metrics/,
 	);
 });
 
 test("representative corpus covers editing and recovery tasks for both variants", () => {
 	const corpus = readFileSync(new URL("./corpus.jsonl", import.meta.url), "utf8");
-	const records = parseSpindleEvaluationJsonl(corpus);
+	const records = parseCodeModeEvaluationJsonl(corpus);
 	const expectedTasks = [
 		"context-conflict-recovery",
 		"coordinated-multi-file-change",
@@ -162,5 +164,5 @@ test("representative corpus covers editing and recovery tasks for both variants"
 	}
 	const sandboxRecords = records.filter((entry) => entry.task === "sandbox-denial");
 	assert.ok(sandboxRecords.every((entry) => entry.passed && entry.metrics.outcome === "failed"));
-	assert.equal(evaluateSpindleJsonl(corpus, { baseline: "edit-first" }).records, 14);
+	assert.equal(evaluateCodeModeJsonl(corpus, { baseline: "edit-first" }).records, 14);
 });

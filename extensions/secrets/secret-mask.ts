@@ -691,7 +691,7 @@ function scrubDeepInternal(
  * Scrub a tool_result content array, returning undefined when nothing changed.
  *
  * Returning a patch for an untouched result is not free: downstream consumers
- * treat any patch as a rewrite. Spindle's nested-call proxy, for one, rebuilds
+ * treat any patch as a rewrite. Code Mode's nested-call proxy, for one, rebuilds
  * its value from the content text, which turns a structured `agents.run` result
  * into a JSON string. Mapping over the parts always yields a fresh array, so
  * identity cannot be the change signal; compare the text instead.

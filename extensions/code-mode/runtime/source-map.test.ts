@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { GUEST_PROGRAM_FILE, mapGuestErrorText, MAPPED_PROGRAM_FILE, parseGuestSourceMap } from "./source-map.ts";
-import { transpileSpindleCode } from "./type-checker.ts";
+import { transpileCodeModeCode } from "./type-checker.ts";
 
 test("decodes a handcrafted map", () => {
 	const map = parseGuestSourceMap(
@@ -33,7 +33,7 @@ test("a real transpile maps emitted positions back to the program", () => {
 		"};",
 		"return g();",
 	].join("\n");
-	const transpiled = transpileSpindleCode(code);
+	const transpiled = transpileCodeModeCode(code);
 	assert.ok(transpiled.sourceMap !== undefined, "transpile must emit a source map");
 	const map = parseGuestSourceMap(transpiled.sourceMap);
 	assert.notEqual(map, undefined);
@@ -52,7 +52,7 @@ test("a real transpile maps emitted positions back to the program", () => {
 
 test("mapGuestErrorText rewrites mapped frames and leaves unmapped ones", () => {
 	const code = "const g = (): void => {\n  throw new Error('marker');\n};\nreturn g();";
-	const transpiled = transpileSpindleCode(code);
+	const transpiled = transpileCodeModeCode(code);
 	const map = parseGuestSourceMap(transpiled.sourceMap);
 	const emittedLines = transpiled.javascript.split("\n");
 	const emittedIndex = emittedLines.findIndex((line) => line.includes("throw new Error"));
@@ -65,7 +65,7 @@ test("mapGuestErrorText rewrites mapped frames and leaves unmapped ones", () => 
 	const mapped = mapGuestErrorText(text, map);
 	assert.match(mapped, /program\.ts:2:\d+/);
 	// A frame beyond the map stays untouched rather than guessing.
-	assert.match(mapped, /pi-spindle-guest\.js:99:30/);
+	assert.match(mapped, /pi-code-mode-guest\.js:99:30/);
 });
 
 test("absent or malformed maps degrade to passthrough", () => {

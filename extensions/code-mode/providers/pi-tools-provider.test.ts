@@ -46,7 +46,7 @@ test("invoke reports an unknown tool as unknown", async () => {
 });
 
 test("applyPatch is described with its patch schema and invokes through the provider", async () => {
-	const dir = mkdtempSync(join(tmpdir(), "spindle-provider-patch-"));
+	const dir = mkdtempSync(join(tmpdir(), "code-mode-provider-patch-"));
 	const patchProvider = new PiToolsProvider(dir, undefined, undefined);
 	const descriptor = await patchProvider.describe("applyPatch", context);
 	const schema = descriptor?.inputSchema as { properties?: { patch?: { type?: string } }; required?: string[] };
@@ -65,7 +65,7 @@ test("applyPatch is described with its patch schema and invokes through the prov
 });
 
 test("applyPatch enforces the sandbox write guard before changing any file", async () => {
-	const dir = mkdtempSync(join(tmpdir(), "spindle-provider-patch-"));
+	const dir = mkdtempSync(join(tmpdir(), "code-mode-provider-patch-"));
 	const seen: string[] = [];
 	const patchProvider = new PiToolsProvider(dir, undefined, undefined, {
 		writeGuard: (path) => {
@@ -124,7 +124,7 @@ test("the read guard sees resolved absolute paths", async () => {
 });
 
 test("a read the guard allows still executes", async () => {
-	const dir = mkdtempSync(join(tmpdir(), "spindle-read-"));
+	const dir = mkdtempSync(join(tmpdir(), "code-mode-read-"));
 	const file = join(dir, "a.txt");
 	writeFileSync(file, "content\n");
 	const provider = guardedProvider(() => {});
@@ -142,7 +142,7 @@ const cappedProvider = (readMaxBytes: number) =>
 	new PiToolsProvider(process.cwd(), undefined, undefined, undefined, { readMaxBytes });
 
 test("a file past pi's read limit is returned whole, not as a head", async () => {
-	const dir = mkdtempSync(join(tmpdir(), "spindle-read-limit-"));
+	const dir = mkdtempSync(join(tmpdir(), "code-mode-read-limit-"));
 	const file = join(dir, "big.md");
 	// 60 KB of short lines: past pi's 50 KB byte ceiling, under its 2000-line one.
 	const content = `${"x".repeat(200)}\n`.repeat(300);
@@ -153,7 +153,7 @@ test("a file past pi's read limit is returned whole, not as a head", async () =>
 });
 
 test("a file past the sandbox ceiling is refused, with its size and the way out", async () => {
-	const dir = mkdtempSync(join(tmpdir(), "spindle-read-ceiling-"));
+	const dir = mkdtempSync(join(tmpdir(), "code-mode-read-ceiling-"));
 	const file = join(dir, "huge.md");
 	writeFileSync(file, `${"x".repeat(200)}\n`.repeat(600)); // ~120 KB
 	await assert.rejects(
@@ -168,7 +168,7 @@ test("a file past the sandbox ceiling is refused, with its size and the way out"
 });
 
 test("offset and limit still slice a widened read", async () => {
-	const dir = mkdtempSync(join(tmpdir(), "spindle-read-slice-"));
+	const dir = mkdtempSync(join(tmpdir(), "code-mode-read-slice-"));
 	const file = join(dir, "big.md");
 	const lines = Array.from({ length: 500 }, (_, index) => `${index + 1}:${"x".repeat(200)}`);
 	writeFileSync(file, lines.join("\n"));
@@ -179,7 +179,7 @@ test("offset and limit still slice a widened read", async () => {
 });
 
 test("a single line too long for pi is returned whole too", async () => {
-	const dir = mkdtempSync(join(tmpdir(), "spindle-read-line-"));
+	const dir = mkdtempSync(join(tmpdir(), "code-mode-read-line-"));
 	const file = join(dir, "one-line.json");
 	const content = "y".repeat(60 * 1024);
 	writeFileSync(file, content);
@@ -193,7 +193,7 @@ test("a single line too long for pi is returned whole too", async () => {
 });
 
 test("a file inside the limit is returned whole, with no truncation notice", async () => {
-	const dir = mkdtempSync(join(tmpdir(), "spindle-read-small-"));
+	const dir = mkdtempSync(join(tmpdir(), "code-mode-read-small-"));
 	const file = join(dir, "small.md");
 	const content = `${"z".repeat(100)}\n`.repeat(50);
 	writeFileSync(file, content);
@@ -203,7 +203,7 @@ test("a file inside the limit is returned whole, with no truncation notice", asy
 });
 
 test("paging with an explicit limit is not mistaken for truncation", async () => {
-	const dir = mkdtempSync(join(tmpdir(), "spindle-read-page-"));
+	const dir = mkdtempSync(join(tmpdir(), "code-mode-read-page-"));
 	const file = join(dir, "paged.md");
 	writeFileSync(file, `${"w".repeat(80)}\n`.repeat(400));
 	const result = await provider().invoke("read", { path: file, offset: 1, limit: 10 }, context);

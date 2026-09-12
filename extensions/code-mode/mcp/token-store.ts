@@ -1,5 +1,5 @@
 /**
- * OAuth credential storage for the Spindle MCP client.
+ * OAuth credential storage for the Code Mode MCP client.
  *
  * Deliberately interoperable with pi-mcp-adapter: same OS credential-store
  * service, same `sha256-<sha256(serverName)>` account, same camelCase entry
@@ -62,7 +62,7 @@ export class McpTokenStoreUnavailableError extends Error {
 		cause: unknown,
 	) {
 		super(
-			`The OS credential store is unavailable (${operation}). Unlock the keychain, or set SPINDLE_MCP_TOKEN_STORE=memory to run without persisted MCP credentials.`,
+			`The OS credential store is unavailable (${operation}). Unlock the keychain, or set PI_CODE_MODE_MCP_TOKEN_STORE=memory to run without persisted MCP credentials.`,
 			{ cause },
 		);
 		this.name = "McpTokenStoreUnavailableError";
@@ -218,7 +218,7 @@ export class McpTokenStore {
 	}
 }
 
-/** Process-local store, used when SPINDLE_MCP_TOKEN_STORE=memory. */
+/** Process-local store, used when PI_CODE_MODE_MCP_TOKEN_STORE=memory. */
 export const memoryKeyring = (entries = new Map<string, string>()): McpKeyring => ({
 	read: (account) => entries.get(account),
 	write: (account, payload) => {
@@ -247,9 +247,9 @@ const loadEntryClass = (): KeyringEntryConstructor => {
 	return entryClass;
 };
 
-/** The OS credential store, or an in-memory one when SPINDLE_MCP_TOKEN_STORE=memory. */
+/** The OS credential store, or an in-memory one when PI_CODE_MODE_MCP_TOKEN_STORE=memory. */
 export const defaultMcpKeyring = (): McpKeyring => {
-	if (process.env.SPINDLE_MCP_TOKEN_STORE === "memory") return memoryKeyring();
+	if (process.env.PI_CODE_MODE_MCP_TOKEN_STORE === "memory") return memoryKeyring();
 	return {
 		read(account) {
 			return new (loadEntryClass())(MCP_AUTH_SERVICE, account).getPassword() ?? undefined;

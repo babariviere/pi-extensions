@@ -5,7 +5,7 @@
  *
  * Two adapters ride on it: the OS-sandbox wrap (`sandbox/manager.ts`, which
  * routes the command through `srt`) and the stdin-fed `pi.bash` extras path
- * (`providers/spindle-bash-tool.ts`). Both used to carry private copies of
+ * (`providers/code-mode-bash-tool.ts`). Both used to carry private copies of
  * the same supervision mechanics (detached process group, kill-tree on
  * timeout/abort, `timeout:<seconds>` / `aborted` error strings), so a fix to
  * one silently missed the other.

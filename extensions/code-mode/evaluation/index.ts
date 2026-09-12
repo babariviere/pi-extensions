@@ -1,18 +1,18 @@
-import type { SpindleEditMetricsV1, SpindleEditRouteMetricsV1, SpindleEditRouteV1 } from "../audit/edit-metrics.ts";
+import type { CodeModeEditMetricsV1, CodeModeEditRouteMetricsV1, CodeModeEditRouteV1 } from "../audit/edit-metrics.ts";
 
-export const SPINDLE_EVALUATION_RECORD_VERSION = 1 as const;
-export const SPINDLE_EVALUATION_SUMMARY_VERSION = 1 as const;
+export const CODE_MODE_EVALUATION_RECORD_VERSION = 1 as const;
+export const CODE_MODE_EVALUATION_SUMMARY_VERSION = 1 as const;
 
-const ROUTES: readonly SpindleEditRouteV1[] = ["edit", "write", "applyPatch", "scripted"];
+const ROUTES: readonly CodeModeEditRouteV1[] = ["edit", "write", "applyPatch", "scripted"];
 const PROFILES = new Set(["anthropic", "openai", "neutral"]);
 const OUTCOMES = new Set(["succeeded", "failed", "aborted", "timed_out"]);
 
-export interface SpindleEvaluationRecordV1 {
-	version: typeof SPINDLE_EVALUATION_RECORD_VERSION;
+export interface CodeModeEvaluationRecordV1 {
+	version: typeof CODE_MODE_EVALUATION_RECORD_VERSION;
 	variant: string;
 	task: string;
 	passed: boolean;
-	metrics: SpindleEditMetricsV1;
+	metrics: CodeModeEditMetricsV1;
 	toolCalls?: number;
 	tokens?: {
 		input: number;
@@ -20,16 +20,16 @@ export interface SpindleEvaluationRecordV1 {
 	};
 }
 
-export interface SpindleEvaluationCountSummary {
+export interface CodeModeEvaluationCountSummary {
 	total: number;
 	meanPerRun: number;
 }
 
-export interface SpindleEvaluationOptionalCountSummary extends SpindleEvaluationCountSummary {
+export interface CodeModeEvaluationOptionalCountSummary extends CodeModeEvaluationCountSummary {
 	measuredRuns: number;
 }
 
-export interface SpindleEvaluationVariantSummaryV1 {
+export interface CodeModeEvaluationVariantSummaryV1 {
 	variant: string;
 	tasks: {
 		passed: number;
@@ -37,7 +37,7 @@ export interface SpindleEvaluationVariantSummaryV1 {
 		passRate: number;
 	};
 	routes: Record<
-		SpindleEditRouteV1,
+		CodeModeEditRouteV1,
 		{
 			attempts: number;
 			failures: number;
@@ -45,34 +45,34 @@ export interface SpindleEvaluationVariantSummaryV1 {
 			failuresPerRun: number;
 		}
 	>;
-	guardRefusals: SpindleEvaluationCountSummary;
+	guardRefusals: CodeModeEvaluationCountSummary;
 	repeatedEdits: {
 		files: number;
 		attempts: number;
 		excessAttempts: number;
 		meanExcessAttemptsPerRun: number;
 	};
-	knownFiles: SpindleEvaluationCountSummary;
-	durationMs: SpindleEvaluationCountSummary;
-	toolCalls?: SpindleEvaluationOptionalCountSummary;
+	knownFiles: CodeModeEvaluationCountSummary;
+	durationMs: CodeModeEvaluationCountSummary;
+	toolCalls?: CodeModeEvaluationOptionalCountSummary;
 	tokens?: {
 		measuredRuns: number;
-		input: SpindleEvaluationCountSummary;
-		output: SpindleEvaluationCountSummary;
-		total: SpindleEvaluationCountSummary;
+		input: CodeModeEvaluationCountSummary;
+		output: CodeModeEvaluationCountSummary;
+		total: CodeModeEvaluationCountSummary;
 	};
 }
 
-export interface SpindleEvaluationSummaryV1 {
-	version: typeof SPINDLE_EVALUATION_SUMMARY_VERSION;
+export interface CodeModeEvaluationSummaryV1 {
+	version: typeof CODE_MODE_EVALUATION_SUMMARY_VERSION;
 	records: number;
-	variants: [SpindleEvaluationVariantSummaryV1, SpindleEvaluationVariantSummaryV1];
+	variants: [CodeModeEvaluationVariantSummaryV1, CodeModeEvaluationVariantSummaryV1];
 	comparison: {
 		baseline: string;
 		candidate: string;
 		candidateMinusBaseline: {
 			taskPassRate: number;
-			routes: Record<SpindleEditRouteV1, { attemptsPerRun: number; failuresPerRun: number }>;
+			routes: Record<CodeModeEditRouteV1, { attemptsPerRun: number; failuresPerRun: number }>;
 			guardRefusalsPerRun: number;
 			repeatedEditExcessAttemptsPerRun: number;
 			knownFilesPerRun: number;
@@ -87,15 +87,15 @@ export interface SpindleEvaluationSummaryV1 {
 	};
 }
 
-export class SpindleEvaluationInputError extends Error {
+export class CodeModeEvaluationInputError extends Error {
 	constructor(message: string) {
 		super(message);
-		this.name = "SpindleEvaluationInputError";
+		this.name = "CodeModeEvaluationInputError";
 	}
 }
 
 const fail = (location: string, message: string): never => {
-	throw new SpindleEvaluationInputError(`${location}: ${message}`);
+	throw new CodeModeEvaluationInputError(`${location}: ${message}`);
 };
 
 const objectAt = (value: unknown, location: string): Record<string, unknown> => {
@@ -122,7 +122,7 @@ const nonNegativeInteger = (value: unknown, location: string): number => {
 	return value as number;
 };
 
-const routeMetricsAt = (value: unknown, location: string): SpindleEditRouteMetricsV1 => {
+const routeMetricsAt = (value: unknown, location: string): CodeModeEditRouteMetricsV1 => {
 	const object = objectAt(value, location);
 	exactKeys(object, ["attempts", "successes", "failures"], location);
 	const attempts = nonNegativeInteger(object.attempts, `${location}.attempts`);
@@ -142,7 +142,7 @@ const sortedUniqueStrings = (value: unknown, location: string): string[] => {
 	return result;
 };
 
-const metricsAt = (value: unknown, location: string): SpindleEditMetricsV1 => {
+const metricsAt = (value: unknown, location: string): CodeModeEditMetricsV1 => {
 	const object = objectAt(value, location);
 	exactKeys(
 		object,
@@ -168,7 +168,7 @@ const metricsAt = (value: unknown, location: string): SpindleEditMetricsV1 => {
 	exactKeys(routesObject, ROUTES, `${location}.routes`);
 	const routes = Object.fromEntries(
 		ROUTES.map((route) => [route, routeMetricsAt(routesObject[route], `${location}.routes.${route}`)]),
-	) as Record<SpindleEditRouteV1, SpindleEditRouteMetricsV1>;
+	) as Record<CodeModeEditRouteV1, CodeModeEditRouteMetricsV1>;
 	const knownFiles = sortedUniqueStrings(object.knownFiles, `${location}.knownFiles`);
 	if (!Array.isArray(object.repeatedAttempts)) fail(`${location}.repeatedAttempts`, "expected an array");
 	const repeatedEntries = object.repeatedAttempts as unknown[];
@@ -205,19 +205,19 @@ const metricsAt = (value: unknown, location: string): SpindleEditMetricsV1 => {
 	}
 	return {
 		version: 1,
-		profile: object.profile as SpindleEditMetricsV1["profile"],
+		profile: object.profile as CodeModeEditMetricsV1["profile"],
 		routes,
 		knownFiles,
 		repeatedAttempts,
 		guardRefusals,
 		durationMs,
-		outcome: object.outcome as SpindleEditMetricsV1["outcome"],
+		outcome: object.outcome as CodeModeEditMetricsV1["outcome"],
 		...(droppedKnownFiles === undefined ? {} : { droppedKnownFiles }),
 		...(droppedRepeatedAttempts === undefined ? {} : { droppedRepeatedAttempts }),
 	};
 };
 
-const recordAt = (value: unknown, line: number): SpindleEvaluationRecordV1 => {
+const recordAt = (value: unknown, line: number): CodeModeEvaluationRecordV1 => {
 	const location = `line ${line}`;
 	const object = objectAt(value, location);
 	exactKeys(object, ["version", "variant", "task", "passed", "metrics", "toolCalls", "tokens"], location);
@@ -225,7 +225,7 @@ const recordAt = (value: unknown, line: number): SpindleEvaluationRecordV1 => {
 	if (typeof object.passed !== "boolean") fail(`${location}.passed`, "expected a boolean");
 	const toolCalls =
 		object.toolCalls === undefined ? undefined : nonNegativeInteger(object.toolCalls, `${location}.toolCalls`);
-	let tokens: SpindleEvaluationRecordV1["tokens"];
+	let tokens: CodeModeEvaluationRecordV1["tokens"];
 	if (object.tokens !== undefined) {
 		const tokenObject = objectAt(object.tokens, `${location}.tokens`);
 		exactKeys(tokenObject, ["input", "output"], `${location}.tokens`);
@@ -245,8 +245,8 @@ const recordAt = (value: unknown, line: number): SpindleEvaluationRecordV1 => {
 	};
 };
 
-export const parseSpindleEvaluationJsonl = (input: string): SpindleEvaluationRecordV1[] => {
-	const records: SpindleEvaluationRecordV1[] = [];
+export const parseCodeModeEvaluationJsonl = (input: string): CodeModeEvaluationRecordV1[] => {
+	const records: CodeModeEvaluationRecordV1[] = [];
 	const assignments = new Set<string>();
 	for (const [index, rawLine] of input.split(/\r?\n/).entries()) {
 		const line = rawLine.trim();
@@ -272,8 +272,8 @@ const mean = (total: number, count: number): number => round(total / count);
 
 const summarizeVariant = (
 	variant: string,
-	records: readonly SpindleEvaluationRecordV1[],
-): SpindleEvaluationVariantSummaryV1 => {
+	records: readonly CodeModeEvaluationRecordV1[],
+): CodeModeEvaluationVariantSummaryV1 => {
 	const runs = records.length;
 	const passed = records.reduce((total, record) => total + Number(record.passed), 0);
 	const routes = Object.fromEntries(
@@ -285,7 +285,7 @@ const summarizeVariant = (
 				{ attempts, failures, attemptsPerRun: mean(attempts, runs), failuresPerRun: mean(failures, runs) },
 			];
 		}),
-	) as SpindleEvaluationVariantSummaryV1["routes"];
+	) as CodeModeEvaluationVariantSummaryV1["routes"];
 	const guardRefusals = records.reduce((total, record) => total + record.metrics.guardRefusals, 0);
 	const repeatedFiles = records.reduce((total, record) => total + record.metrics.repeatedAttempts.length, 0);
 	const repeatedAttempts = records.reduce(
@@ -299,10 +299,10 @@ const summarizeVariant = (
 	);
 	const durationMs = records.reduce((total, record) => total + record.metrics.durationMs, 0);
 	const measuredToolCalls = records.filter(
-		(record): record is SpindleEvaluationRecordV1 & { toolCalls: number } => record.toolCalls !== undefined,
+		(record): record is CodeModeEvaluationRecordV1 & { toolCalls: number } => record.toolCalls !== undefined,
 	);
 	const measuredTokens = records.filter(
-		(record): record is SpindleEvaluationRecordV1 & { tokens: { input: number; output: number } } =>
+		(record): record is CodeModeEvaluationRecordV1 & { tokens: { input: number; output: number } } =>
 			record.tokens !== undefined,
 	);
 	const toolCalls = measuredToolCalls.reduce((total, record) => total + record.toolCalls, 0);
@@ -346,11 +346,11 @@ const summarizeVariant = (
 	};
 };
 
-export const summarizeSpindleEvaluation = (
-	records: readonly SpindleEvaluationRecordV1[],
+export const summarizeCodeModeEvaluation = (
+	records: readonly CodeModeEvaluationRecordV1[],
 	options: { baseline?: string } = {},
-): SpindleEvaluationSummaryV1 => {
-	const grouped = new Map<string, SpindleEvaluationRecordV1[]>();
+): CodeModeEvaluationSummaryV1 => {
+	const grouped = new Map<string, CodeModeEvaluationRecordV1[]>();
 	for (const record of records) {
 		const variantRecords = grouped.get(record.variant) ?? [];
 		variantRecords.push(record);
@@ -372,8 +372,8 @@ export const summarizeSpindleEvaluation = (
 				failuresPerRun: delta(candidate.routes[route].failuresPerRun, baseline.routes[route].failuresPerRun),
 			},
 		]),
-	) as SpindleEvaluationSummaryV1["comparison"]["candidateMinusBaseline"]["routes"];
-	const variants = [baseline, candidate] as [SpindleEvaluationVariantSummaryV1, SpindleEvaluationVariantSummaryV1];
+	) as CodeModeEvaluationSummaryV1["comparison"]["candidateMinusBaseline"]["routes"];
+	const variants = [baseline, candidate] as [CodeModeEvaluationVariantSummaryV1, CodeModeEvaluationVariantSummaryV1];
 	return {
 		version: 1,
 		records: records.length,
@@ -408,5 +408,7 @@ export const summarizeSpindleEvaluation = (
 	};
 };
 
-export const evaluateSpindleJsonl = (input: string, options: { baseline?: string } = {}): SpindleEvaluationSummaryV1 =>
-	summarizeSpindleEvaluation(parseSpindleEvaluationJsonl(input), options);
+export const evaluateCodeModeJsonl = (
+	input: string,
+	options: { baseline?: string } = {},
+): CodeModeEvaluationSummaryV1 => summarizeCodeModeEvaluation(parseCodeModeEvaluationJsonl(input), options);

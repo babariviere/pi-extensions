@@ -79,7 +79,17 @@ import {
 	windowStartingAt,
 } from "./night-mode.ts";
 import { clearActiveNightRun, readActiveNightRun, type NightSandboxRequest, writeActiveNightRun } from "./night-run.ts";
+import { answerNightModePlanningQuery, NIGHT_MODE_PLANNING_QUERY_EVENT } from "./protocol.ts";
 import { SANDBOX_REQUEST_EVENT, type SandboxRequestEvent } from "../code-mode/sandbox/protocol.ts";
+import {
+	CODE_MODE_PROVIDER_DISCOVER_EVENT,
+	CODE_MODE_PROVIDER_REGISTER_EVENT,
+	type CodeModeActionDescriptor,
+	type CodeModeInvocationContext,
+	type CodeModeProvider,
+	type CodeModeProviderDiscovery,
+	type CodeModeProviderRegistration,
+} from "../code-mode/protocol.ts";
 import { agentWorkspacesRoot } from "./agent-workspace.ts";
 import {
 	createRunSandbox,
@@ -112,6 +122,7 @@ import {
 	planProblems,
 	reviewNightPlan,
 	seedApprovedLedger,
+	type NightCoverage,
 	type NightPlanHandoff,
 	type NightPlanTask,
 } from "./plan.ts";
@@ -364,7 +375,7 @@ export default function (pi: ExtensionAPI): void {
 		else process.env.PI_TODO_PATH = previousTodoPath;
 		previousTodoPath = undefined;
 		clearActiveNightRun();
-		// Release the sandbox: the session goes back to whatever spindle.json says,
+		// Release the sandbox: the session goes back to whatever code-mode.json says,
 		// so an interactive morning is not stuck inside the night's policy.
 		requestSandbox(null, "night run ended");
 		run = undefined;
@@ -575,7 +586,7 @@ export default function (pi: ExtensionAPI): void {
 		process.env.PI_TODO_PATH = ledgerPath;
 
 		// Path only: the probe itself runs in the sandboxed shell once the policy is
-		// in force (see `spindle/sandbox/preflight-bridge.ts`), but the prompt and the
+		// in force (see `code-mode/sandbox/preflight-bridge.ts`), but the prompt and the
 		// child contract are composed now and have to be able to point at it.
 		const preflightPath = preflightPathFor({ reportPath, ...(workspace ? { workspacePath: workspace } : {}) });
 		// Same placement rule, and also path-only: nothing is written until something
@@ -663,7 +674,7 @@ export default function (pi: ExtensionAPI): void {
 	}
 
 	/**
-	 * Ask Spindle to sandbox the filesystem for the duration of the run.
+	 * Ask Code Mode to sandbox the filesystem for the duration of the run.
 	 *
 	 * The writable set is derived from the run itself rather than configured: the
 	 * working copy the agent was told to use and the report it has to append to.
@@ -702,7 +713,7 @@ export default function (pi: ExtensionAPI): void {
 		};
 	}
 
-	/** Publish a sandbox request on the bus. No listener means no spindle: harmless. */
+	/** Publish a sandbox request on the bus. No listener means no Code Mode integration: harmless. */
 	function requestSandbox(policy: NightSandboxRequest | null, reason: string): void {
 		const event: SandboxRequestEvent = { policy, reason };
 		pi.events.emit(SANDBOX_REQUEST_EVENT, event);
@@ -1119,56 +1130,74 @@ export default function (pi: ExtensionAPI): void {
 		evaluate();
 	});
 
-	pi.registerTool({
-		name: "night_plan",
-		label: "Night plan",
+	const nightPlanDescriptor: CodeModeActionDescriptor = {
+		name: "plan",
 		description:
-			"Submit the complete proposed night plan for interactive user review. Planning only: this tool never executes tasks.",
-		parameters: Type.Object({
+			"Submit the complete proposed night plan for interactive user review. Planning only: this action never executes tasks.",
+		inputSchema: Type.Object({
 			tasks: Type.Array(NightPlanTaskSchema, { minItems: 1 }),
 			omissions: Type.Optional(Type.Array(NightCoverageSchema)),
-		}),
-		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+		}) as unknown as Record<string, unknown>,
+		outputSchema: Type.Object({
+			status: Type.Union([Type.Literal("approved"), Type.Literal("dismissed")]),
+			message: Type.String(),
+			approved: Type.Optional(Type.Array(NightPlanTaskSchema)),
+		}) as unknown as Record<string, unknown>,
+	};
+	const nightProvider: CodeModeProvider = {
+		name: "night",
+		description: "Interactive approval for a proposed unattended night run",
+		async list(request) {
+			const query = request.query?.trim().toLowerCase();
+			if (query && !`${nightPlanDescriptor.name} ${nightPlanDescriptor.description}`.toLowerCase().includes(query))
+				return [];
+			return [nightPlanDescriptor];
+		},
+		async describe(actionName) {
+			return actionName === nightPlanDescriptor.name ? nightPlanDescriptor : undefined;
+		},
+		async invoke(actionName, args, context: CodeModeInvocationContext) {
+			if (actionName !== nightPlanDescriptor.name) throw new Error(`Unknown night action: ${actionName}`);
 			if (!planning) {
-				return {
-					content: [{ type: "text", text: "Error: no night planning phase is active" }],
-					details: { error: "no planning phase" },
-				};
+				throw new Error("No night planning phase is active");
 			}
+			const params = args as { tasks: NightPlanTask[]; omissions?: NightCoverage[] };
 			const problems = planProblems(params.tasks, params.omissions ?? [], planning.config.mcpReadOnly);
 			if (problems.length)
-				return {
-					content: [
-						{ type: "text", text: `Plan incomplete. Revise and resubmit night_plan:\n${problems.join("\n")}` },
-					],
-					details: { problems },
-					isError: true,
-				};
-			const approved = await reviewNightPlan(ctx, params.tasks, params.omissions ?? [], planning.config.mcpReadOnly);
+				throw new Error(`Plan incomplete. Revise and resubmit night.plan:\n${problems.join("\n")}`);
+			const approved = await reviewNightPlan(
+				context.extensionContext,
+				params.tasks,
+				params.omissions ?? [],
+				planning.config.mcpReadOnly,
+			);
 			planning.reviewDismissed = !approved;
 			if (!approved) {
 				return {
-					content: [
-						{
-							type: "text",
-							text: "The user dismissed the plan review without approving it. Night planning remains active. Wait for user feedback before revising and resubmitting with night_plan. Do not execute any work.",
-						},
-					],
-					details: { cancelled: true },
+					status: "dismissed",
+					message:
+						"The user dismissed the plan review without approving it. Night planning remains active. Wait for user feedback before revising and resubmitting with night.plan. Do not execute any work.",
 				};
 			}
 			planning.approved = approved;
 			return {
-				content: [
-					{
-						type: "text",
-						text: `${approved.length} task(s) approved and refined. Stop now. A fresh orchestrator session will execute them.`,
-					},
-				],
-				details: { approved },
+				status: "approved",
+				message: `${approved.length} task(s) approved and refined. Stop now. A fresh orchestrator session will execute them.`,
+				approved,
 			};
 		},
+	};
+	const registration: CodeModeProviderRegistration = { version: 1, provider: nightProvider, overwrite: true };
+	const unsubscribeProviderDiscovery = pi.events.on(CODE_MODE_PROVIDER_DISCOVER_EVENT, (value: unknown) => {
+		const discovery = value as Partial<CodeModeProviderDiscovery>;
+		if (discovery.version === 1 && typeof discovery.register === "function") {
+			discovery.register(nightProvider, { overwrite: true });
+		}
 	});
+	const unsubscribePlanningQuery = pi.events.on(NIGHT_MODE_PLANNING_QUERY_EVENT, (value: unknown) => {
+		answerNightModePlanningQuery(value, planning !== undefined);
+	});
+	pi.events.emit(CODE_MODE_PROVIDER_REGISTER_EVENT, registration);
 
 	function clearPendingStart(): void {
 		if (startTimer) clearTimeout(startTimer);
@@ -1247,7 +1276,7 @@ export default function (pi: ExtensionAPI): void {
 			if (!planning.reminded) {
 				planning.reminded = true;
 				deliver(
-					"[night-mode] Planning is not complete. Submit the proposed tasks with the `night_plan` tool, then stop.",
+					"[night-mode] Planning is not complete. Submit the proposed tasks with `night.plan`, then stop.",
 					ctx,
 				);
 				return;
@@ -1267,17 +1296,8 @@ export default function (pi: ExtensionAPI): void {
 		maybeContinue();
 	});
 
-	pi.on("tool_call", (event, ctx) => {
+	pi.on("tool_call", (_event, ctx) => {
 		ctxRef = ctx;
-		if (planning && event.toolName === "todo") {
-			const action = String((event.input as { action?: unknown }).action ?? "");
-			if (!["list", "list-all", "get"].includes(action)) {
-				return {
-					block: true,
-					reason: "night-mode planning is read-only; todo mutations begin only after approval",
-				};
-			}
-		}
 		if (!enabled || !inWindow || !paused) return;
 		if (pausedReason === "pacing" && pacingEnforced) {
 			return {
@@ -1323,6 +1343,8 @@ export default function (pi: ExtensionAPI): void {
 		unsubscribeUsage = undefined;
 		unsubscribePacing?.();
 		unsubscribePacing = undefined;
+		unsubscribeProviderDiscovery();
+		unsubscribePlanningQuery();
 	});
 
 	pi.registerCommand("night", {

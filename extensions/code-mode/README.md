@@ -1,19 +1,18 @@
-# Code mode
+# Code Mode
 
 `code_mode` executes type-checked TypeScript in QuickJS. Read the bundled [skill](../../skills/code-mode/SKILL.md) for tool signatures, payloads, batching, state, and error recovery.
 
-## Migration from Spindle
+## Configuration and identifiers
 
-- Load `extensions/code-mode/index.ts` instead of `extensions/spindle/index.ts` if using an explicit extension path. Package discovery picks up the renamed directory automatically.
-- Use `code_mode`, not `spindle_exec`. There is no model-facing compatibility alias. The skill is now `code-mode`.
-- Use `web.search` and `web.fetch` instead of `extensions.web_search` and `extensions.fetch_content`. No generic `extensions.*` namespace or raw-name fallback remains.
-- Existing `~/.pi/agent/spindle.json` and trusted project `.pi/spindle.json` configuration paths remain canonical for compatibility. Legacy `spindle_exec` entries in `capture.keepVisible` normalize to `code_mode`.
-- Existing transcript, event, child-process flag, and sandbox protocol identifiers retain their historical names. Internal `Spindle` types are not additional model tools.
-- Reload Pi after updating. Update any manually configured extension or skill paths outside this package.
+- Explicit extension paths use `extensions/code-mode/index.ts`; the model-facing tool and bundled skill are `code_mode` and `code-mode`.
+- Configuration is loaded from `~/.pi/agent/code-mode.json` and, for trusted projects, `.pi/code-mode.json`.
+- Code Mode environment overrides use the `PI_CODE_MODE_*` prefix.
+- Events and persisted protocol values use `pi-code-mode` or `code-mode` prefixes. Child-process flags use `--code-mode-*`.
+- No aliases are retained for names from before the rename. Reload Pi after updating manually configured paths or settings.
 
 ## Tool exposure and permissions
 
-In full code mode, Pi core tools are called through `pi.*`. The host explicitly maps the web extension's `web_search` and `fetch_content` callbacks to `web.search` and `web.fetch`. Unrelated sibling tools keep their native tool paths rather than being hidden or implicitly exposed through a catch-all namespace.
+In full code mode, `code_mode` is the only model-facing tool by default. Pi core tools are called through `pi.*`. The host maps the web extension's `web_search` and `fetch_content` callbacks to `web.search` and `web.fetch`. MCP, subagent, and trusted capability providers are exposed through their explicitly registered typed namespaces. The `tools` global discovers and dispatches registered providers; captured extension tools do not receive a generic provider.
 
 `capture.enabled`, `capture.hideFromModel`, and `capture.keepVisible` control capture and native visibility. Disabling capture removes the web mappings but does not prevent ordinary code execution. Pi core overrides retain their original argument preparation and tool lifecycle hooks. Captured capabilities honor subagent native-tool allowlists and MCP read-only guards.
 

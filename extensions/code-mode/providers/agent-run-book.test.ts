@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { AgentRunBook, type AgentCompletionEvent, SETTLED_HISTORY, type SpindleAgentResult } from "./agent-run-book.ts";
+import {
+	AgentRunBook,
+	type AgentCompletionEvent,
+	SETTLED_HISTORY,
+	type CodeModeAgentResult,
+} from "./agent-run-book.ts";
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -13,7 +18,7 @@ const bookWithSink = (announced: AgentCompletionEvent[]): AgentRunBook => {
 	return book;
 };
 
-const result = (agent: string, runId: string, ok = true): SpindleAgentResult => ({
+const result = (agent: string, runId: string, ok = true): CodeModeAgentResult => ({
 	agent,
 	ok,
 	output: `${agent} output`,
@@ -26,9 +31,9 @@ const stateOf = (book: AgentRunBook, runId: string): string | undefined =>
 
 /** A batch whose settling the test controls. */
 const deferred = () => {
-	let settle: (results: SpindleAgentResult[]) => void = () => {};
+	let settle: (results: CodeModeAgentResult[]) => void = () => {};
 	let reject: (error: unknown) => void = () => {};
-	const promise = new Promise<SpindleAgentResult[]>((resolve, rejectPromise) => {
+	const promise = new Promise<CodeModeAgentResult[]>((resolve, rejectPromise) => {
 		settle = resolve;
 		reject = rejectPromise;
 	});

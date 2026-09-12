@@ -1,5 +1,5 @@
 // Copyright 2025 OpenAI. Licensed under Apache-2.0 (see apply-patch.LICENSE).
-// Modified: TypeScript/Node filesystem adapter retaining Spindle's tool contract
+// Modified: TypeScript/Node filesystem adapter retaining Code Mode's tool contract
 // and sandbox guards. Upstream revision and attribution: apply-patch.NOTICE.
 
 import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";

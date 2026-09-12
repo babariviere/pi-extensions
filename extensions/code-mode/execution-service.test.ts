@@ -1,16 +1,16 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { DEFAULT_SPINDLE_CONFIG, type SpindleConfig } from "./config.ts";
+import { DEFAULT_CODE_MODE_CONFIG, type CodeModeConfig } from "./config.ts";
 import { ActionRegistry } from "./core/action-registry.ts";
-import { SpindleExecutionService } from "./execution-service.ts";
-import type { SpindleProvider } from "./protocol.ts";
+import { CodeModeExecutionService } from "./execution-service.ts";
+import type { CodeModeProvider } from "./protocol.ts";
 
 /** A provider whose actions are plain functions over their arguments. */
 const makeProvider = (
 	name: string,
 	actions: Record<string, (args: Record<string, unknown>) => unknown>,
-): SpindleProvider => ({
+): CodeModeProvider => ({
 	name,
 	description: `${name} test provider`,
 	list: async () =>
@@ -30,29 +30,32 @@ const makeProvider = (
 	invoke: async (actionName, args) => actions[actionName]?.(args),
 });
 
-const configWith = (overrides: Partial<SpindleConfig> = {}): SpindleConfig =>
+const configWith = (overrides: Partial<CodeModeConfig> = {}): CodeModeConfig =>
 	structuredClone({
-		...DEFAULT_SPINDLE_CONFIG,
+		...DEFAULT_CODE_MODE_CONFIG,
 		executor: {
-			...DEFAULT_SPINDLE_CONFIG.executor,
+			...DEFAULT_CODE_MODE_CONFIG.executor,
 			timeoutMs: 15_000,
 			resultFormat: "json" as const,
 		},
 		agents: {
-			...DEFAULT_SPINDLE_CONFIG.agents,
+			...DEFAULT_CODE_MODE_CONFIG.agents,
 			maxPerExecution: 1,
 			timeoutMs: 5_000,
 		},
 		...overrides,
 	});
 
-const serviceWith = (providers: SpindleProvider[], overrides: Partial<SpindleConfig> = {}): SpindleExecutionService => {
+const serviceWith = (
+	providers: CodeModeProvider[],
+	overrides: Partial<CodeModeConfig> = {},
+): CodeModeExecutionService => {
 	const registry = new ActionRegistry();
 	for (const provider of providers) registry.register(provider);
-	return new SpindleExecutionService(registry, configWith(overrides));
+	return new CodeModeExecutionService(registry, configWith(overrides));
 };
 
-const execute = (service: SpindleExecutionService, code: string, parentToolCallId = "test-call") =>
+const execute = (service: CodeModeExecutionService, code: string, parentToolCallId = "test-call") =>
 	service.execute({
 		code,
 		signal: undefined,
@@ -123,7 +126,7 @@ test("generic dispatch cannot reach an unmapped captured sibling", async () => {
 	for (const ref of ["web.web_search", "web.todo", "web.toString", "web.__proto__"]) {
 		const result = await execute(service, `return await tools.call({ ref: ${JSON.stringify(ref)}, args: {} });`);
 		assert.equal(result.success, false, ref);
-		assert.match(result.error ?? "", /Unknown Spindle action/);
+		assert.match(result.error ?? "", /Unknown Code Mode action/);
 	}
 });
 
@@ -143,6 +146,18 @@ test("trusted custom provider namespaces remain available", async () => {
 	assert.equal(result.success, true, result.error ?? "");
 	assert.deepEqual(result.value, { echoed: { x: 1 } });
 	assert.equal(result.audits[0]?.ref, "custom.echo");
+});
+
+test("a custom provider keeps loose guest types when its listing fails", async () => {
+	const service = serviceWith([
+		{
+			...makeProvider("custom", { echo: (args) => ({ echoed: args }) }),
+			list: async () => Promise.reject(new Error("listing failed")),
+		},
+	]);
+	const result = await execute(service, "return await custom.echo({ x: 1 });");
+	assert.equal(result.success, true, result.error ?? "");
+	assert.deepEqual(result.value, { echoed: { x: 1 } });
 });
 
 test("orchestration-only keeps trusted custom providers but hides full-code providers", async () => {
@@ -287,7 +302,7 @@ test("τ state survives between programs and is echoed on the result", async () 
 	// Each operation is reported for its own row, with the value it moved.
 	assert.deepEqual(
 		(first.stateNotes ?? []).map((note) => note.ref),
-		["spindle.state.set", "spindle.state.keys"],
+		["code-mode.state.set", "code-mode.state.keys"],
 	);
 	assert.equal(first.stateNotes?.[0]?.key, "index");
 	assert.match(first.stateNotes?.[0]?.preview ?? "", /"files":\["a\.ts"\]/);
@@ -304,7 +319,7 @@ test("τ state survives between programs and is echoed on the result", async () 
 	assert.equal(third.stateKeys, undefined);
 	assert.deepEqual(
 		(third.stateNotes ?? []).map((note) => `${note.ref}:${note.detail ?? note.preview ?? ""}`),
-		["spindle.state.delete:deleted", "spindle.state.get:not held"],
+		["code-mode.state.delete:deleted", "code-mode.state.get:not held"],
 	);
 });
 

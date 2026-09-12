@@ -3,10 +3,10 @@ export {
 	checkerBackendName,
 	installCheckerBackend,
 	setDefaultCheckerBackend,
-} from "@babariviere/code-mode";
+} from "./type-checker.ts";
 export type {
-	SpindleTypeError,
-	SpindleTranspileResult,
-	SpindleTypeCheckOutcome,
-	SpindleCheckerBackend,
-} from "@babariviere/code-mode";
+	CodeModeTypeError,
+	CodeModeTranspileResult,
+	CodeModeTypeCheckOutcome,
+	CodeModeCheckerBackend,
+} from "./type-checker.ts";

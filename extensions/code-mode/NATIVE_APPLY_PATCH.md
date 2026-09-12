@@ -2,7 +2,7 @@
 
 ## Status
 
-Spindle cannot safely enable the native OpenAI Responses `apply_patch` tool through pi 0.85.1 extension middleware.
+Code Mode cannot safely enable the native OpenAI Responses `apply_patch` tool through pi 0.85.1 extension middleware.
 
 The nested `pi.applyPatch({ patch })` implementation is the supported fallback. It accepts the model-familiar V4A format while retaining pi's normal tool lifecycle, filesystem sandbox, audit projection, and edit metrics.
 
@@ -20,7 +20,7 @@ A complete native round trip must also:
 
 Pi 0.85.1's OpenAI Responses adapter recognizes ordinary `function_call` and `custom_tool_call` items, but not `apply_patch_call`. Its replay path emits `function_call_output` or `custom_tool_call_output`, not `apply_patch_call_output`. The `after_provider_response` extension event exposes status and headers only, so an extension cannot repair stream parsing there.
 
-Injecting the request tool without provider support would allow the model to emit a patch that pi silently drops. Spindle must not advertise native support until the complete response and replay protocol is available.
+Injecting the request tool without provider support would allow the model to emit a patch that pi silently drops. Code Mode must not advertise native support until the complete response and replay protocol is available.
 
 ## Required upstream changes
 
@@ -35,7 +35,7 @@ The provider-neutral contract needs to distinguish a native patch call from an o
 - Preserve native calls and outputs when reconstructing conversation history.
 - Fall back to an ordinary function or nested V4A tool on unsupported transports.
 
-A complete custom provider registered by an extension could technically own this entire transport, parser, and replay loop. Spindle does not do that because it would duplicate authentication, retries, SSE and WebSocket handling, usage accounting, reasoning replay, compatibility behavior, and future protocol maintenance.
+A complete custom provider registered by an extension could technically own this entire transport, parser, and replay loop. Code Mode does not do that because it would duplicate authentication, retries, SSE and WebSocket handling, usage accounting, reasoning replay, compatibility behavior, and future protocol maintenance.
 
 ## Required upstream tests
 
@@ -49,9 +49,9 @@ Provider tests must cover:
 - OpenAI Responses, Azure OpenAI Responses, Codex SSE, and Codex WebSocket transports.
 - Unknown or inactive patch executors failing explicitly rather than being dropped.
 
-## Spindle activation criteria
+## Code Mode activation criteria
 
-Spindle may add a native profile only after the host SDK exposes a stable provider-neutral capability that passes the tests above. Integration must then prove that native and nested patches have equivalent:
+Code Mode may add a native profile only after the host SDK exposes a stable provider-neutral capability that passes the tests above. Integration must then prove that native and nested patches have equivalent:
 
 - Workspace results.
 - Sandbox and path validation.

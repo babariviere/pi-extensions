@@ -21,9 +21,9 @@ directory, and `themes/*.json` files. The current inventory is:
 | `pr` | `/review-comments` hands selected unresolved review comments to the agent; `/autofix` watches PR CI and `/autofix-stop` stops it. |
 | `preview-system-prompt` | `/system-prompt` displays the assembled system prompt. |
 | `secrets` | `/secret-list`; injects `fnox` secrets into shell commands and replaces secret values in tool results with reversible references. |
-| `code-mode` | `code_mode` runs bounded TypeScript programs through the shared code-mode runtime. Full code mode exposes Pi core tools and only the explicitly registered `web.search` and `web.fetch` aliases, plus MCP and agents; orchestration-only mode keeps MCP, agents, and trusted custom providers while hiding full-code-only capabilities. It also provides `/sandbox`, `/mcp`, and `/mcp-auth` controls. Existing `spindle.json` configuration remains supported, and `spindle_exec` visibility entries migrate to `code_mode`. |
+| `code-mode` | `code_mode` is the sole model-facing tool by default and runs bounded TypeScript programs through the shared code-mode runtime. Full Code Mode exposes Pi core tools, the explicitly registered `web.search` and `web.fetch` aliases, MCP, agents, and the typed `todo.*` and `night.plan` providers. Orchestration-only mode keeps MCP, agents, and trusted custom providers while hiding full-code-only capabilities. It also provides `/sandbox`, `/mcp`, and `/mcp-auth` controls. |
 | `taptap` | Requires two `Esc` presses within 600ms to cancel a running agent turn, while preserving pi's idle and completion behaviors. |
-| `todos` | `todo` manages file-backed todos and `/todos` provides the interactive manager. |
+| `todos` | The typed `todo.*` Code Mode provider manages file-backed todos, and `/todos` provides the interactive manager. |
 | `tool-substitute` | Adds pi search-tool guidance and blocks Git writes inside jj repositories, converting simple safe Git operations where possible. |
 | `usage` | `/usage` polls Claude and Codex/ChatGPT OAuth subscription windows and publishes usage and Codex pacing state. |
 | `web` | `web_search` searches Kagi, `fetch_content` fetches pages or summarizes Git repositories, and `/kagi-status` validates the Kagi token. |
@@ -98,8 +98,8 @@ extension README.
 | --- | --- |
 | `~/.pi/agent/settings.json` | Pi settings, `workspaces`, the user `nightMode` configuration, shell path, and manually loaded extensions. |
 | `<cwd>/.pi/settings.json` | Project `nightMode` settings, which take precedence over user night settings when the project is trusted; project MCP configuration may also live here. |
-| `~/.pi/agent/spindle.json` and trusted `<cwd>/.pi/spindle.json` | Code-mode configuration (legacy filename retained). Project values are merged over user values. Full code mode and sandbox settings are separate from pi's own config. |
-| `~/.pi/agent/mcp.json` | Spindle's MCP server configuration. Spindle has no separate MCP credential store; OAuth/keyring behavior follows its MCP implementation. |
+| `~/.pi/agent/code-mode.json` and trusted `<cwd>/.pi/code-mode.json` | Code Mode configuration. Project values are merged over user values. Full Code Mode and sandbox settings are separate from pi's own config. |
+| `~/.pi/agent/mcp.json` | Code Mode's MCP server configuration. Code Mode has no separate MCP credential store; OAuth/keyring behavior follows its MCP implementation. |
 | `~/.pi/agent/secrets.json` | Per-machine `KAGI_SESSION_TOKEN` and `LINEAR_API_KEY` values read directly by those extensions. This file is not the source for the `secrets` extension. |
 | Nearest `fnox.toml` | `secrets` discovers this file upward from the working directory and calls `fnox export --format json`. |
 | `~/.pi/agent/background-agents.json` | Background-agent controller configuration, or the path in `BACKGROUND_AGENTS_CONFIG`. |
@@ -165,7 +165,7 @@ boundary:
 
 - `guardrail` catches known destructive command shapes. Its own documentation
   lists bypasses such as indirect mutations and destructive scripts.
-- Code mode's filesystem sandbox is configured through `spindle.json` and is off
+- Code Mode's filesystem sandbox is configured through `code-mode.json` and is off
   by default for ordinary sessions. `read-only` and `workspace-write` enforce
   direct read/write paths; night mode enables its own workspace-oriented policy
   and read-only MCP policy by default. Treat shell/network access as capable of

@@ -178,7 +178,7 @@ test("a refusal names the tool, the server and the way out", () => {
 			const message = error instanceof Error ? error.message : String(error);
 			assert.match(message, /MCP call slack\.slack_send_message is refused/);
 			assert.match(message, /read-only MCP mode is on and it is on the deny list for server 'slack'/);
-			assert.match(message, /mcp\.servers\.slack\.allow in spindle\.json/);
+			assert.match(message, /mcp\.servers\.slack\.allow in code-mode\.json/);
 			return true;
 		},
 	);

@@ -2,9 +2,9 @@
  * Cross-extension bridge: record a capability finding in the active night run's
  * journal (see `night-mode/capability-journal.ts`).
  *
- * Spindle is where the runner's own faults are observed, and night-mode is where
+ * Code Mode is where the runner's own faults are observed, and night-mode is where
  * the run's memory lives, so the finding has to cross. The dependency direction
- * is the same as `night-workspace.ts`: spindle reads night-mode, never the
+ * is the same as `night-workspace.ts`: code-mode reads night-mode, never the
  * reverse, and everything is a no-op outside a night run.
  */
 

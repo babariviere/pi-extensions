@@ -2,19 +2,19 @@ import { formatSkillsForPrompt, type Skill } from "@earendil-works/pi-coding-age
 
 const SKILL_SECTION_HEADING = "The following skills provide specialized instructions for specific tasks.";
 const PI_SKILL_LOAD_INSTRUCTION = "Use the read tool to load a skill's file when the task matches its description.";
-const SPINDLE_SKILL_LOAD_INSTRUCTION =
+const CODE_MODE_SKILL_LOAD_INSTRUCTION =
 	"Use `pi.read` inside `code_mode` to load a skill's file when the task matches its description.";
 const CWD_MARKER = "\nCurrent working directory:";
 
 export const restoreSkillsForFullCodePrompt = (systemPrompt: string, skills: readonly Skill[]): string => {
 	const section = formatSkillsForPrompt([...skills]).replace(
 		PI_SKILL_LOAD_INSTRUCTION,
-		SPINDLE_SKILL_LOAD_INSTRUCTION,
+		CODE_MODE_SKILL_LOAD_INSTRUCTION,
 	);
 	if (!section) return systemPrompt;
 
 	if (systemPrompt.includes(SKILL_SECTION_HEADING)) {
-		return systemPrompt.replace(PI_SKILL_LOAD_INSTRUCTION, SPINDLE_SKILL_LOAD_INSTRUCTION);
+		return systemPrompt.replace(PI_SKILL_LOAD_INSTRUCTION, CODE_MODE_SKILL_LOAD_INSTRUCTION);
 	}
 
 	const cwdIndex = systemPrompt.lastIndexOf(CWD_MARKER);

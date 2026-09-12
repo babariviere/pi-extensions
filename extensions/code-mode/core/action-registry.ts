@@ -3,31 +3,31 @@ import { Value } from "typebox/value";
 import { runAbortable, settleWithin } from "../async-settlement.ts";
 import {
 	executionOutcomeFromError,
-	type SpindleExecutionTraceOperationHandle,
-	type SpindleExecutionTraceRecorder,
+	type CodeModeExecutionTraceOperationHandle,
+	type CodeModeExecutionTraceRecorder,
 } from "../audit/trace.ts";
 import {
 	isMcpTypeSourceProvider,
-	SPINDLE_NESTED_TOOL_CALL_ID_PREFIX,
-	type SpindleActionDescriptor,
-	type SpindleCapabilityCatalog,
-	type SpindleGuestTypeSources,
-	type SpindleInvocationActivityUpdate,
-	type SpindleInvocationContext,
-	type SpindleMediaBlock,
-	type SpindleProvider,
-	type SpindleProviderListRequest,
+	CODE_MODE_NESTED_TOOL_CALL_ID_PREFIX,
+	type CodeModeActionDescriptor,
+	type CodeModeCapabilityCatalog,
+	type CodeModeGuestTypeSources,
+	type CodeModeInvocationActivityUpdate,
+	type CodeModeInvocationContext,
+	type CodeModeMediaBlock,
+	type CodeModeProvider,
+	type CodeModeProviderListRequest,
 } from "../protocol.ts";
 import { formatUnknownActionMessage, repairActionName } from "./action-repair.ts";
 import { redactRecordedArgs } from "./arg-redaction.ts";
-import type { SpindleNestedToolResultProxy } from "./tool-result-proxy.ts";
+import type { CodeModeNestedToolResultProxy } from "./tool-result-proxy.ts";
 
-export interface ResolvedSpindleAction extends SpindleActionDescriptor {
+export interface ResolvedCodeModeAction extends CodeModeActionDescriptor {
 	ref: string;
 	provider: string;
 }
 
-export interface SpindleCallAudit {
+export interface CodeModeCallAudit {
 	ref: string;
 	nestedToolCallId: string;
 	startedAt: number;
@@ -40,12 +40,12 @@ export interface SpindleCallAudit {
 	provider?: string;
 	args?: Record<string, unknown>;
 	result?: unknown;
-	media?: SpindleMediaBlock[];
+	media?: CodeModeMediaBlock[];
 	mediaNote?: string;
 	preview?: unknown;
 }
 
-export type SpindleRegistryActivityEvent =
+export type CodeModeRegistryActivityEvent =
 	| {
 			type: "call_start";
 			callId: string;
@@ -55,7 +55,7 @@ export type SpindleRegistryActivityEvent =
 	| {
 			type: "call_update";
 			callId: string;
-			update: SpindleInvocationActivityUpdate;
+			update: CodeModeInvocationActivityUpdate;
 	  }
 	| {
 			type: "call_args";
@@ -71,27 +71,28 @@ export type SpindleRegistryActivityEvent =
 			error?: string;
 	  };
 
-export interface SpindleRegistryInvocationContext extends SpindleInvocationContext {
-	authorize?(action: ResolvedSpindleAction): Promise<void>;
-	audits: SpindleCallAudit[];
+export interface CodeModeRegistryInvocationContext extends CodeModeInvocationContext {
+	authorize?(action: ResolvedCodeModeAction): Promise<void>;
+	audits: CodeModeCallAudit[];
 	maxResultChars: number;
-	trace?: SpindleExecutionTraceRecorder;
-	traceOperation?: SpindleExecutionTraceOperationHandle;
-	observeInvocation?(event: SpindleRegistryActivityEvent): void;
+	trace?: CodeModeExecutionTraceRecorder;
+	traceOperation?: CodeModeExecutionTraceOperationHandle;
+	observeInvocation?(event: CodeModeRegistryActivityEvent): void;
 }
 
 /**
- * Prefix pi-spindle prepends to every nested tool-call id it generates inside a
+ * Prefix pi-code-mode prepends to every nested tool-call id it generates inside a
  * code_mode run (one per pi., mcp., or agents. invocation). Extensions can
- * detect that a tool_call/tool_result event came from a nested spindle call —
+ * detect that a tool_call/tool_result event came from a nested code-mode call —
  * rather than a top-level call the LLM made directly — by checking
  * `event.toolCallId.startsWith(NESTED_TOOL_CALL_ID_PREFIX)`. The LLM's own
  * tool-call ids (e.g. openai "call_…", anthropic "toolu_…") never use this
  * prefix, so the signal is unambiguous.
  */
-export const NESTED_TOOL_CALL_ID_PREFIX = SPINDLE_NESTED_TOOL_CALL_ID_PREFIX;
+export const NESTED_TOOL_CALL_ID_PREFIX = CODE_MODE_NESTED_TOOL_CALL_ID_PREFIX;
 
-const providerNamePattern = /^[a-z][a-z0-9_-]*$/;
+const providerNamePattern = /^[a-z][a-zA-Z0-9_]*$/;
+const STATIC_GUEST_PROVIDERS = new Set(["pi", "web", "mcp", "agents", "tools", "tau", "code-mode"]);
 
 const PREVIEW_ARG_CHARS = 2_000;
 const WRITE_PREVIEW_CONTENT_CHARS = 16_000;
@@ -110,7 +111,7 @@ const boundedPreviewValue = (value: unknown, maxChars: number): unknown => {
 		const serialized = JSON.stringify(value);
 		if (serialized.length <= maxChars) return JSON.parse(serialized) as unknown;
 		return {
-			spindleTruncated: true,
+			codeModeTruncated: true,
 			originalChars: serialized.length,
 			preview: serialized.slice(0, Math.max(1, maxChars - 100)),
 		};
@@ -157,7 +158,7 @@ const failedResultError = (value: unknown): string | undefined => {
 	const status = record.status;
 	if (status !== "failed" && status !== "stopped" && status !== "timed_out") return undefined;
 	const error = typeof record.error === "string" ? record.error.trim() : "";
-	return error ? truncateString(error, PREVIEW_RESULT_CHARS) : `Spindle action returned ${status}`;
+	return error ? truncateString(error, PREVIEW_RESULT_CHARS) : `Code Mode action returned ${status}`;
 };
 
 const failedResultOutcome = (value: unknown): "failed" | "aborted" | "timed_out" => {
@@ -176,7 +177,7 @@ const boundedResult = (value: unknown, maxChars: number): { value: unknown; char
 		serialized = encoded ?? "null";
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
-		throw new Error(`Spindle action returned a non-JSON-serializable value: ${message}`);
+		throw new Error(`Code Mode action returned a non-JSON-serializable value: ${message}`);
 	}
 	if (serialized.length <= maxChars) {
 		return { value, chars: serialized.length, truncated: false };
@@ -184,7 +185,7 @@ const boundedResult = (value: unknown, maxChars: number): { value: unknown; char
 	const previewChars = Math.max(1, maxChars - 200);
 	return {
 		value: {
-			spindleTruncated: true,
+			codeModeTruncated: true,
 			originalChars: serialized.length,
 			preview: serialized.slice(0, previewChars),
 		},
@@ -193,7 +194,10 @@ const boundedResult = (value: unknown, maxChars: number): { value: unknown; char
 	};
 };
 
-const resolveDescriptor = (provider: SpindleProvider, descriptor: SpindleActionDescriptor): ResolvedSpindleAction => ({
+const resolveDescriptor = (
+	provider: CodeModeProvider,
+	descriptor: CodeModeActionDescriptor,
+): ResolvedCodeModeAction => ({
 	...descriptor,
 	provider: provider.name,
 	ref: `${provider.name}.${descriptor.name}`,
@@ -233,19 +237,19 @@ const validationMessage = (schema: Record<string, unknown>, value: Record<string
 };
 
 export class ActionRegistry {
-	readonly #providers = new Map<string, SpindleProvider>();
+	readonly #providers = new Map<string, CodeModeProvider>();
 
-	constructor(readonly toolResultProxy?: SpindleNestedToolResultProxy) {}
+	constructor(readonly toolResultProxy?: CodeModeNestedToolResultProxy) {}
 
-	register(provider: SpindleProvider, options: { overwrite?: boolean } = {}): void {
+	register(provider: CodeModeProvider, options: { overwrite?: boolean } = {}): void {
 		if (
 			!providerNamePattern.test(provider.name) ||
 			["extensions", "tools", "process", "console", "print"].includes(provider.name)
 		) {
-			throw new Error(`Invalid Spindle provider name: ${provider.name}`);
+			throw new Error(`Invalid Code Mode provider name: ${provider.name}`);
 		}
 		if (this.#providers.has(provider.name) && !options.overwrite) {
-			throw new Error(`Spindle provider already registered: ${provider.name}`);
+			throw new Error(`Code Mode provider already registered: ${provider.name}`);
 		}
 		this.#providers.set(provider.name, provider);
 	}
@@ -259,7 +263,7 @@ export class ActionRegistry {
 		return name === "pi" || name === "web" || this.#providers.get(name)?.fullCodeOnly === true;
 	}
 
-	unregister(name: string): SpindleProvider | undefined {
+	unregister(name: string): CodeModeProvider | undefined {
 		const provider = this.#providers.get(name);
 		this.#providers.delete(name);
 		return provider;
@@ -272,9 +276,9 @@ export class ActionRegistry {
 	}
 
 	async list(
-		request: SpindleProviderListRequest & { provider?: string },
-		context: SpindleInvocationContext,
-	): Promise<ResolvedSpindleAction[]> {
+		request: CodeModeProviderListRequest & { provider?: string },
+		context: CodeModeInvocationContext,
+	): Promise<ResolvedCodeModeAction[]> {
 		const providers = request.provider ? [this.#requireProvider(request.provider)] : [...this.#providers.values()];
 		const lists = await Promise.all(
 			providers.map(async (provider) => {
@@ -287,13 +291,13 @@ export class ActionRegistry {
 	}
 
 	async catalog(
-		context: SpindleInvocationContext,
+		context: CodeModeInvocationContext,
 		options: {
 			provider?: string;
 			limit?: number;
 			includeProvider?: (provider: string) => boolean;
 		} = {},
-	): Promise<SpindleCapabilityCatalog> {
+	): Promise<CodeModeCapabilityCatalog> {
 		const providers = (options.provider ? [this.#requireProvider(options.provider)] : [...this.#providers.values()])
 			.filter((provider) => options.includeProvider?.(provider.name) ?? true)
 			.sort((left, right) => left.name.localeCompare(right.name));
@@ -329,7 +333,7 @@ export class ActionRegistry {
 				}));
 			return {
 				key: `provider:${provider.name}`,
-				parentKey: "capability:spindle",
+				parentKey: "capability:code-mode",
 				name: provider.name,
 				description: provider.description,
 				descriptorHash: descriptorHash({
@@ -343,11 +347,11 @@ export class ActionRegistry {
 		const indexedActions = providerHeads.reduce((total, provider) => total + provider.actions.length, 0);
 		const rootHash = descriptorHash(providerHeads.map((provider) => provider.descriptorHash));
 		return {
-			kind: "pi-spindle.capability-catalog",
+			kind: "pi-code-mode.capability-catalog",
 			version: 1,
 			root: {
-				key: "capability:spindle",
-				name: "Spindle capabilities",
+				key: "capability:code-mode",
+				name: "Code Mode capabilities",
 				description:
 					"Current registered provider and action metadata for navigation; not historical session evidence.",
 				descriptorHash: rootHash,
@@ -362,13 +366,34 @@ export class ActionRegistry {
 
 	/**
 	 * Live descriptors for the dynamic guest surfaces, so the type gate can
-	 * reject argument-shape mistakes before the sandbox runs. Side-effect-free by
-	 * construction: only the captured extension catalog is read, and a provider
-	 * that cannot supply data contributes no section, leaving the loose
-	 * declarations in place for that execution.
+	 * reject argument-shape mistakes before the sandbox runs. Each custom
+	 * provider is listed independently, and one that cannot supply data
+	 * contributes no section, leaving its loose declaration in place for that
+	 * execution. MCP remains cache-only and never connects while types are built.
 	 */
-	async guestTypeSources(context: SpindleInvocationContext): Promise<SpindleGuestTypeSources> {
-		const sources: SpindleGuestTypeSources = {};
+	async guestTypeSources(context: CodeModeInvocationContext): Promise<CodeModeGuestTypeSources> {
+		const sources: CodeModeGuestTypeSources = {};
+		const providerSources = await Promise.all(
+			[...this.#providers.values()]
+				.filter((provider) => !STATIC_GUEST_PROVIDERS.has(provider.name))
+				.map(async (provider) => {
+					try {
+						const actions = await provider.list({}, context);
+						return {
+							name: provider.name,
+							actions: actions.map((action) => ({
+								name: action.name,
+								inputSchema: action.inputSchema,
+								...(action.outputSchema === undefined ? {} : { outputSchema: action.outputSchema }),
+							})),
+						};
+					} catch {
+						return undefined;
+					}
+				}),
+		);
+		const listedProviders = providerSources.filter((source) => source !== undefined);
+		if (listedProviders.length > 0) sources.providers = listedProviders;
 		// The MCP section is optional and independent: an MCP provider that cannot
 		// supply schemas, or a cache miss, must leave the loose declarations rather
 		// than fail the execution or provoke a connect.
@@ -384,7 +409,7 @@ export class ActionRegistry {
 		return sources;
 	}
 
-	async search(query: string, context: SpindleInvocationContext, limit = 30): Promise<ResolvedSpindleAction[]> {
+	async search(query: string, context: CodeModeInvocationContext, limit = 30): Promise<ResolvedCodeModeAction[]> {
 		const normalizedQuery = query.normalize("NFKC").trim().toLowerCase();
 		if (!normalizedQuery) return [];
 		const queryTerms = [...new Set(discoveryTerms(normalizedQuery))];
@@ -438,7 +463,7 @@ export class ActionRegistry {
 			.map((entry) => entry.action);
 	}
 
-	async describe(ref: string, context: SpindleInvocationContext): Promise<ResolvedSpindleAction> {
+	async describe(ref: string, context: CodeModeInvocationContext): Promise<ResolvedCodeModeAction> {
 		const { provider, actionName } = this.#parseRef(ref);
 		const resolved = await this.#resolveDescriptorWithRepair(provider, actionName, ref, context);
 		return resolveDescriptor(provider, resolved.descriptor);
@@ -447,14 +472,14 @@ export class ActionRegistry {
 	/**
 	 * Resolve one action, canonicalizing a near-miss spelling first (see
 	 * core/action-repair.ts). An unmatched name fails with the closest declared
-	 * candidates named instead of a bare "Unknown Spindle action".
+	 * candidates named instead of a bare "Unknown Code Mode action".
 	 */
 	async #resolveDescriptorWithRepair(
-		provider: SpindleProvider,
+		provider: CodeModeProvider,
 		actionName: string,
 		ref: string,
-		context: SpindleInvocationContext,
-	): Promise<{ descriptor: SpindleActionDescriptor; actionName: string }> {
+		context: CodeModeInvocationContext,
+	): Promise<{ descriptor: CodeModeActionDescriptor; actionName: string }> {
 		const descriptor = await provider.describe(actionName, context);
 		if (descriptor) return { descriptor, actionName };
 		let declared: string[] = [];
@@ -479,11 +504,11 @@ export class ActionRegistry {
 	async invoke(
 		ref: string,
 		args: Record<string, unknown>,
-		context: SpindleRegistryInvocationContext,
+		context: CodeModeRegistryInvocationContext,
 	): Promise<unknown> {
 		const traceOperation = context.traceOperation ?? context.trace?.issueCall(ref, args);
 		let failureStage: "resolve" | "guard" | "prepare" | "validate" | "invoke" = "resolve";
-		let audit: SpindleCallAudit | undefined;
+		let audit: CodeModeCallAudit | undefined;
 		let invocationActive = false;
 		try {
 			const { provider, actionName: requestedName } = this.#parseRef(ref);
@@ -515,7 +540,7 @@ export class ActionRegistry {
 			failureStage = "invoke";
 			const nestedToolCallId = `${NESTED_TOOL_CALL_ID_PREFIX}${randomUUID()}`;
 			const argsPreview = previewArgs(ref, preparedArgs);
-			const activeAudit: SpindleCallAudit = {
+			const activeAudit: CodeModeCallAudit = {
 				ref,
 				nestedToolCallId,
 				startedAt: Date.now(),
@@ -652,10 +677,10 @@ export class ActionRegistry {
 		this.#providers.clear();
 	}
 
-	#parseRef(ref: string): { provider: SpindleProvider; actionName: string } {
+	#parseRef(ref: string): { provider: CodeModeProvider; actionName: string } {
 		const separator = ref.indexOf(".");
 		if (separator <= 0 || separator === ref.length - 1) {
-			throw new Error(`Spindle action references must use provider.action: ${ref}`);
+			throw new Error(`Code Mode action references must use provider.action: ${ref}`);
 		}
 		const providerName = ref.slice(0, separator);
 		return {
@@ -664,9 +689,9 @@ export class ActionRegistry {
 		};
 	}
 
-	#requireProvider(name: string): SpindleProvider {
+	#requireProvider(name: string): CodeModeProvider {
 		const provider = this.#providers.get(name);
-		if (!provider) throw new Error(`Unknown Spindle provider: ${name}`);
+		if (!provider) throw new Error(`Unknown Code Mode provider: ${name}`);
 		return provider;
 	}
 }

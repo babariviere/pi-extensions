@@ -1,5 +1,5 @@
 import { stringify } from "yaml";
-import type { SpindleResultFormat } from "../config.ts";
+import type { CodeModeResultFormat } from "../config.ts";
 import { countNewlines } from "../util.ts";
 
 const normalizeJsonValue = (value: unknown): unknown | undefined => {
@@ -17,7 +17,7 @@ export const formatJsonAsYaml = (value: unknown): string | undefined => {
 	return stringify(normalized, { indent: 2, lineWidth: 0 }).trimEnd();
 };
 
-export interface FormattedSpindleValue {
+export interface FormattedCodeModeValue {
 	text: string;
 	language?: "yaml" | "json";
 	highlightedLineCount?: number;
@@ -68,7 +68,7 @@ const hoistMultilineStrings = (
 	return value;
 };
 
-export const formatSpindleValue = (value: unknown, format: SpindleResultFormat): FormattedSpindleValue => {
+export const formatCodeModeValue = (value: unknown, format: CodeModeResultFormat): FormattedCodeModeValue => {
 	if (value === undefined) return { text: "" };
 	if (format === "text" && typeof value === "object" && value !== null && "text" in value) {
 		const text = (value as { text?: unknown }).text;

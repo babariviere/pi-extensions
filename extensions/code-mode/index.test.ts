@@ -1,11 +1,11 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { FULL_CODE_GUIDANCE, resolveSpindleEditGuidance, type SpindleModelIdentity } from "./index.ts";
+import { FULL_CODE_GUIDANCE, resolveCodeModeEditGuidance, type CodeModeModelIdentity } from "./index.ts";
 
 const editGuidanceCases: {
 	name: string;
-	model: SpindleModelIdentity | undefined;
+	model: CodeModeModelIdentity | undefined;
 	expected: RegExp;
 }[] = [
 	{
@@ -52,20 +52,20 @@ const editGuidanceCases: {
 
 for (const { name, model, expected } of editGuidanceCases) {
 	test(`edit guidance resolves the ${name} profile`, () => {
-		const guidance = resolveSpindleEditGuidance(model);
+		const guidance = resolveCodeModeEditGuidance(model);
 		assert.match(guidance, expected);
 		assert.ok(guidance.length < 100);
 	});
 }
 
 test("full-code guidance bootstraps the skill without duplicating its workflow", () => {
-	assert.match(FULL_CODE_GUIDANCE, /Pi core tools and registered capabilities/);
-	assert.match(FULL_CODE_GUIDANCE, /Other extensions keep their native tools/);
+	assert.match(FULL_CODE_GUIDANCE, /Pi core tools and explicitly registered capabilities/);
+	assert.match(FULL_CODE_GUIDANCE, /`pi\.\*`.*`web\.\*`.*`mcp\.\*`.*`agents\.\*`/);
 	assert.match(FULL_CODE_GUIDANCE, /do not use Python as a fallback/);
 	assert.match(FULL_CODE_GUIDANCE, /If the `code-mode` skill is available/);
 	assert.match(FULL_CODE_GUIDANCE, /SKILL\.md through `pi\.read` inside `code_mode`/);
 	assert.match(FULL_CODE_GUIDANCE, /before other tool work, unless already loaded/);
-	assert.ok(FULL_CODE_GUIDANCE.includes(resolveSpindleEditGuidance(undefined)));
+	assert.ok(FULL_CODE_GUIDANCE.includes(resolveCodeModeEditGuidance(undefined)));
 	assert.doesNotMatch(FULL_CODE_GUIDANCE, /Search with|Read targeted|File changes use|payloads|reread and retry/);
 	assert.ok(Buffer.byteLength(FULL_CODE_GUIDANCE, "utf8") <= 500);
 });

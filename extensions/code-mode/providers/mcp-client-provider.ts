@@ -1,5 +1,5 @@
 /**
- * `mcp.*` on top of Spindle's own MCP client (`mcp/client-hub.ts`).
+ * `mcp.*` on top of Code Mode's own MCP client (`mcp/client-hub.ts`).
  *
  * Five management actions (`call`, `list`, `search`, `describe`, `connect`) plus
  * the `mcp.<server>.<tool>` ref form, all gated by `McpReadOnlyGate`.
@@ -17,15 +17,15 @@ import type { CallToolResult } from "@modelcontextprotocol/client";
 import { type McpToolHub, McpToolNotFoundError } from "../mcp/client-hub.ts";
 import { McpReadOnlyGate } from "../mcp/read-only-policy.ts";
 import type {
-	SpindleActionDescriptor,
-	SpindleInvocationContext,
-	SpindleMcpServerTypeSource,
-	SpindleMcpTypeSourceProvider,
-	SpindleProvider,
-	SpindleProviderListRequest,
+	CodeModeActionDescriptor,
+	CodeModeInvocationContext,
+	CodeModeMcpServerTypeSource,
+	CodeModeMcpTypeSourceProvider,
+	CodeModeProvider,
+	CodeModeProviderListRequest,
 } from "../protocol.ts";
 
-const descriptors: SpindleActionDescriptor[] = [
+const descriptors: CodeModeActionDescriptor[] = [
 	{
 		name: "call",
 		description: "Call an MCP tool by explicit server and tool name",
@@ -128,9 +128,9 @@ const objectArgs = (value: unknown): Record<string, unknown> =>
 const optionalString = (value: unknown): string | undefined =>
 	typeof value === "string" && value.length > 0 ? value : undefined;
 
-export class McpClientProvider implements SpindleProvider, SpindleMcpTypeSourceProvider {
+export class McpClientProvider implements CodeModeProvider, CodeModeMcpTypeSourceProvider {
 	readonly name = "mcp";
-	readonly description = "External MCP tools from mcp.json, called through Spindle's own MCP client (lazy connect)";
+	readonly description = "External MCP tools from mcp.json, called through Code Mode's own MCP client (lazy connect)";
 
 	constructor(
 		readonly hub: () => McpToolHub,
@@ -142,9 +142,9 @@ export class McpClientProvider implements SpindleProvider, SpindleMcpTypeSourceP
 	) {}
 
 	async list(
-		_request: SpindleProviderListRequest,
-		_context: SpindleInvocationContext,
-	): Promise<SpindleActionDescriptor[]> {
+		_request: CodeModeProviderListRequest,
+		_context: CodeModeInvocationContext,
+	): Promise<CodeModeActionDescriptor[]> {
 		// Static only: listing tools here would connect every server (see the
 		// no-pre-fetch rule in mcp/client-hub.ts).
 		return descriptors;
@@ -152,8 +152,8 @@ export class McpClientProvider implements SpindleProvider, SpindleMcpTypeSourceP
 
 	async describe(
 		actionName: string,
-		_context: SpindleInvocationContext,
-	): Promise<SpindleActionDescriptor | undefined> {
+		_context: CodeModeInvocationContext,
+	): Promise<CodeModeActionDescriptor | undefined> {
 		const descriptor = descriptors.find((candidate) => candidate.name === actionName);
 		if (descriptor) return descriptor;
 		const qualified = parseQualifiedAction(actionName);
@@ -172,7 +172,7 @@ export class McpClientProvider implements SpindleProvider, SpindleMcpTypeSourceP
 	async invoke(
 		actionName: string,
 		args: Record<string, unknown>,
-		context: SpindleInvocationContext,
+		context: CodeModeInvocationContext,
 	): Promise<unknown> {
 		switch (actionName) {
 			case "call": {
@@ -232,8 +232,8 @@ export class McpClientProvider implements SpindleProvider, SpindleMcpTypeSourceP
 	 * server. Cache-only by construction (see `McpToolHub.cachedTools`), so
 	 * type generation cannot connect a server or provoke an OAuth prompt.
 	 */
-	async mcpGuestTypeSources(_context: SpindleInvocationContext): Promise<SpindleMcpServerTypeSource[]> {
-		const grouped = new Map<string, SpindleMcpServerTypeSource>();
+	async mcpGuestTypeSources(_context: CodeModeInvocationContext): Promise<CodeModeMcpServerTypeSource[]> {
+		const grouped = new Map<string, CodeModeMcpServerTypeSource>();
 		for (const tool of await this.hub().cachedTools()) {
 			const entry = grouped.get(tool.server) ?? { server: tool.server, tools: [] };
 			entry.tools.push({ name: tool.name, inputSchema: tool.inputSchema });

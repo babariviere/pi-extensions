@@ -1,82 +1,82 @@
-type SpindleRunStatus = "running" | "completed" | "failed" | "cancelled";
-export type SpindleActivityStatus = "pending" | "running" | "completed" | "failed" | "blocked" | "stopped";
+type CodeModeRunStatus = "running" | "completed" | "failed" | "cancelled";
+export type CodeModeActivityStatus = "pending" | "running" | "completed" | "failed" | "blocked" | "stopped";
 
-export type SpindleActivityKind = "agent" | "actor" | "tool" | "extension" | "mcp" | "mesh" | "task" | "custom";
+export type CodeModeActivityKind = "agent" | "actor" | "tool" | "extension" | "mcp" | "mesh" | "task" | "custom";
 
-export interface SpindleRunDisplay {
+export interface CodeModeRunDisplay {
 	name?: string;
 	description?: string;
 }
 
-export interface SpindlePhaseInput {
+export interface CodeModePhaseInput {
 	name: string;
 	id?: string;
 	description?: string;
 	total?: number;
 }
 
-export interface SpindleActivityItemInput {
+export interface CodeModeActivityItemInput {
 	id: string;
 	label: string;
-	status?: SpindleActivityStatus;
+	status?: CodeModeActivityStatus;
 	phase?: string;
 	detail?: string;
-	kind?: SpindleActivityKind;
+	kind?: CodeModeActivityKind;
 	current?: string;
 	total?: number;
 	completed?: number;
 	data?: unknown;
 }
 
-export interface SpindleActivityEventInput {
+export interface CodeModeActivityEventInput {
 	message: string;
 	level?: "info" | "success" | "warning" | "error";
 	data?: unknown;
 }
 
-export interface SpindleActivityPhase {
+export interface CodeModeActivityPhase {
 	id: string;
 	name: string;
 	description?: string;
-	status: SpindleActivityStatus;
+	status: CodeModeActivityStatus;
 	total?: number;
 	startedAt: number;
 	updatedAt: number;
 	finishedAt?: number;
 }
 
-export interface SpindleActivityMetrics {
+export interface CodeModeActivityMetrics {
 	tokens?: number;
 	toolCalls?: number;
 	cost?: number;
 }
 
-export interface SpindleActivityCall {
+export interface CodeModeActivityCall {
 	id: string;
 	ref: string;
 	label: string;
-	kind: SpindleActivityKind;
-	status: SpindleActivityStatus;
+	kind: CodeModeActivityKind;
+	status: CodeModeActivityStatus;
 	phaseId?: string;
 	entityId?: string;
-	entityKind?: SpindleActivityKind;
+	entityKind?: CodeModeActivityKind;
 	args?: Record<string, unknown>;
 	result?: unknown;
 	preview?: unknown;
 	progress?: string;
 	error?: string;
 	detail?: string;
-	metrics?: SpindleActivityMetrics;
+	metrics?: CodeModeActivityMetrics;
 	startedAt: number;
 	updatedAt: number;
 	finishedAt?: number;
 }
 
-export interface SpindleActivityItem {
+export interface CodeModeActivityItem {
 	id: string;
 	label: string;
-	status: SpindleActivityStatus;
-	kind: SpindleActivityKind;
+	status: CodeModeActivityStatus;
+	kind: CodeModeActivityKind;
 	phaseId?: string;
 	detail?: string;
 	current?: string;
@@ -88,7 +88,7 @@ export interface SpindleActivityItem {
 	finishedAt?: number;
 }
 
-interface SpindleActivityEvent {
+interface CodeModeActivityEvent {
 	id: string;
 	message: string;
 	level: "info" | "success" | "warning" | "error";
@@ -96,15 +96,15 @@ interface SpindleActivityEvent {
 	createdAt: number;
 }
 
-export interface SpindleActivityRun {
+export interface CodeModeActivityRun {
 	id: string;
 	name: string;
 	description?: string;
-	status: SpindleRunStatus;
-	phases: SpindleActivityPhase[];
-	calls: SpindleActivityCall[];
-	items: SpindleActivityItem[];
-	events: SpindleActivityEvent[];
+	status: CodeModeRunStatus;
+	phases: CodeModeActivityPhase[];
+	calls: CodeModeActivityCall[];
+	items: CodeModeActivityItem[];
+	events: CodeModeActivityEvent[];
 	currentPhaseId?: string;
 	startedAt: number;
 	updatedAt: number;
