@@ -64,7 +64,7 @@ describe("background-agent workflows", () => {
 			database.get<{ role: string }>("SELECT role FROM jobs WHERE case_id = ?", autonomous)?.role,
 			"worker",
 		);
-		assert.equal(admitted.decision, "approved");
+		assert.equal(admitted.decision, "observed");
 
 		const supervised = classified(database, "supervised");
 		database.run("UPDATE cases SET repository = ?, rollout_mode = 'supervised' WHERE id = ?", "repo", supervised);
@@ -290,6 +290,57 @@ describe("background-agent workflows", () => {
 			() => workflow.approveWorkItem(caseId, specification.orderedWorkItems[1]!, specification.version, "operator"),
 			/already running|approved/,
 		);
+		database.close();
+	});
+
+	test("all durable approval boundaries reject automation actor prefixes", () => {
+		const database = new BackgroundAgentsDatabase(databasePath());
+		const caseId = classified(database, "approval actors");
+		database.run("UPDATE cases SET rollout_mode = 'supervised' WHERE id = ?", caseId);
+		const workflow = new SpecificationWorkflow(database);
+		workflow.start(caseId);
+		const specification = workflow.recordPlannerResult(caseId, {
+			specification: { goal: "actor" },
+			decisions: [],
+			unresolvedQuestions: [],
+			permissions: [],
+			plannerSummary: "actor",
+			decomposition: [{ order: 1, title: "item", scope: "item", acceptanceCriteria: ["passes"] }],
+		});
+		assert.throws(
+			() =>
+				workflow.approve(caseId, specification.version, [], "controller:restart", specification.orderedWorkItems),
+			/human actor/,
+		);
+		workflow.approve(caseId, specification.version, [], "operator", specification.orderedWorkItems);
+		assert.throws(
+			() =>
+				workflow.approveWorkItem(
+					caseId,
+					specification.orderedWorkItems[0]!,
+					specification.version,
+					"policy:planner",
+				),
+			/human actor/,
+		);
+
+		const quickFixCase = classified(database, "quick-fix approval actors");
+		database.run("UPDATE cases SET repository = ?, rollout_mode = 'supervised' WHERE id = ?", "repo", quickFixCase);
+		const proposal = new QuickFixWorkflow(database).admit(
+			quickFixCase,
+			{
+				autonomy: "quick-fix-candidate",
+				findings: "finding",
+				scope: "scope",
+				risks: ["risk"],
+				verificationPlan: ["test"],
+				confidence: 90,
+				uncertainties: [],
+			},
+			"supervised",
+		);
+		assert.throws(() => new QuickFixWorkflow(database).approve(quickFixCase, "agent:reviewer"), /human actor/);
+		assert.equal(proposal.decision, "pending");
 		database.close();
 	});
 });

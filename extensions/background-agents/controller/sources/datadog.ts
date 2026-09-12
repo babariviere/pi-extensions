@@ -39,7 +39,9 @@ interface Watermark {
 }
 
 function unwrap(value: DatadogRecord[] | { results?: DatadogRecord[] }): DatadogRecord[] {
-	return Array.isArray(value) ? value : (value.results ?? []);
+	if (Array.isArray(value)) return value;
+	if (!value || !Array.isArray(value.results)) throw new Error("Datadog response is missing a results array");
+	return value.results;
 }
 
 function recordTime(record: DatadogRecord, fallback: Date): Date {

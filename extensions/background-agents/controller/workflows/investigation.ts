@@ -156,7 +156,7 @@ export class QuickFixWorkflow {
 		const decision = !repository
 			? "needs-human"
 			: rollout === "autonomous-pr"
-				? "approved"
+				? "observed"
 				: rollout === "supervised"
 					? "pending"
 					: "observed";
@@ -171,7 +171,6 @@ export class QuickFixWorkflow {
 			decisionReason: !repository
 				? "repository mapping is required before code work"
 				: `${rollout} quick-fix policy`,
-			decidedBy: "controller",
 		});
 		if (!repository) {
 			const state = this.database.get<{ state: CaseState }>("SELECT state FROM cases WHERE id = ?", caseId)?.state;

@@ -902,6 +902,10 @@ export class BackgroundAgentsController {
 				this.database.markEmergencyStopAttempt(attempt.id, { tabConfirmed: true });
 			}
 			try {
+				// Emergency stop has already terminated the runtime, so revoke its lease before
+				// recovery terminalizes the attempt. Ordinary recovery never bypasses leases.
+				if (systemdConfirmed && runtimeConfirmed)
+					this.database.run("DELETE FROM attempt_leases WHERE attempt_id = ?", attempt.id);
 				const result = await this.recovery.reconcileAttempt(attempt.id);
 				if (result.action === "running") throw new Error("attempt remains active");
 				if (systemdConfirmed && runtimeConfirmed)
@@ -930,6 +934,7 @@ export class BackgroundAgentsController {
 				/* retry on next pass */
 			}
 		}
+		await this.reconcileRuntimeCleanupIntents();
 	}
 	private async ciTick(): Promise<void> {
 		if (this.options.ciReconcile) await this.options.ciReconcile();

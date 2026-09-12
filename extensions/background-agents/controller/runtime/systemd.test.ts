@@ -20,9 +20,17 @@ test("builds strict transient-service argv with only approved write paths", () =
 	});
 	assert.ok(args.includes("--property=ProtectSystem=strict"));
 	assert.ok(args.includes("--property=PrivateUsers=yes"));
-	assert.ok(args.includes("--property=ProtectHome=read-only"));
+	assert.ok(args.includes("--property=ProtectHome=tmpfs"));
+	assert.ok(args.includes("--property=BindPaths=/tmp/attempt"));
+	assert.ok(args.includes("--property=BindPaths=/tmp/worktree"));
+	assert.ok(args.includes("--property=BindReadOnlyPaths=/tmp/primary"));
+	assert.ok(args.some((arg) => arg.startsWith("--property=UnsetEnvironment=") && arg.includes("GH_TOKEN")));
+	assert.equal(
+		args.some((arg) => arg === "--property=ReadOnlyPaths=/tmp/primary"),
+		false,
+	);
 	assert.ok(args.includes("--property=NoNewPrivileges=yes"));
-	assert.ok(args.includes("--property=ReadWritePaths=/tmp/primary/.git"));
+	assert.ok(args.includes("--property=BindPaths=/tmp/primary/.git"));
 	assert.ok(args.includes("--setenv=TMPDIR=/tmp/attempt"));
 	assert.ok(args.includes("--setenv=PI_BACKGROUND_AGENT_ATTEMPT=1"));
 	assert.equal(
@@ -71,6 +79,28 @@ test("verifier mode fails closed for home, network, credentials, and shared Git 
 		false,
 	);
 	assert.ok(args.includes("--property=InaccessiblePaths=/home/operator/.pi/agent/auth.json"));
+});
+
+test("exposes only the staged prompt as an additional read-only path", () => {
+	const args = buildSystemdRunArgs({
+		unit: "background-agent",
+		workingDirectory: "/srv/worktree",
+		attemptDirectory: "/srv/attempt",
+		worktreeDirectory: "/srv/worktree",
+		primaryCheckout: "/srv/repo",
+		gitDirectory: "/srv/repo/.git",
+		profileDirectory: "/srv/attempt/pi-profile",
+		sessionDirectory: "/srv/attempt/sessions",
+		piArgs: [],
+		limits: { maxRuntimeMs: 1000, memoryLimitBytes: 1024, cpuQuotaPercent: 50, processLimit: 10 },
+		readOnlyPaths: ["/opt/pi/roles/worker.md"],
+	});
+	assert.ok(args.includes("--property=BindReadOnlyPaths=/opt/pi/roles/worker.md"));
+	assert.equal(args.filter((arg) => arg.startsWith("--property=BindPaths=")).length, 3);
+	assert.equal(
+		args.some((arg) => arg.includes("ProtectHome=read-only")),
+		false,
+	);
 });
 
 test("fails closed on portable non-Linux hosts and checks injected Linux dependencies", async () => {

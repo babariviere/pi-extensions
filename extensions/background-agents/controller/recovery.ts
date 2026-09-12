@@ -95,15 +95,20 @@ function attemptRow(
 			id: string;
 			job_id: string;
 			systemd_unit: string | null;
+			tab_id: string | null;
 			worktree: string | null;
 			state: string;
 	  }
 	| undefined {
-	return database.get("SELECT id, job_id, systemd_unit, worktree, state FROM attempts WHERE id = ?", attemptId) as
+	return database.get(
+		"SELECT id, job_id, systemd_unit, tab_id, worktree, state FROM attempts WHERE id = ?",
+		attemptId,
+	) as
 		| {
 				id: string;
 				job_id: string;
 				systemd_unit: string | null;
+				tab_id: string | null;
 				worktree: string | null;
 				state: string;
 		  }
@@ -135,6 +140,21 @@ export class RecoveryCoordinator {
 			};
 		}
 		const recoveryTime = nowValue(this.options.now ?? (() => new Date()));
+		if (this.database.attemptLeaseActive(attemptId, recoveryTime)) {
+			this.database.recordRecoveryDecision({
+				attemptId,
+				decision: "keep-running",
+				reason: "attempt has an unexpired controller lease",
+				systemdState: "unknown",
+				createdAt: recoveryTime,
+			});
+			return {
+				attemptId,
+				action: "running",
+				systemdState: "unknown",
+				reason: "attempt has an unexpired controller lease",
+			};
+		}
 
 		let systemdState: SystemdUnitState = "unknown";
 		let systemdError: unknown;
@@ -198,6 +218,13 @@ export class RecoveryCoordinator {
 				}
 			}
 		}
+		this.database.createRuntimeCleanupIntents({
+			attemptId,
+			...(attempt.systemd_unit ? { unit: attempt.systemd_unit } : {}),
+			...(attempt.tab_id ? { tabId: attempt.tab_id } : {}),
+			reason: "crash recovery cleanup before terminalization",
+			now: recoveryTime,
+		});
 
 		if (systemdState === "unknown" || worktreeState === "unknown")
 			return this.needsHuman(
@@ -220,7 +247,24 @@ export class RecoveryCoordinator {
 			);
 
 		const replacement = this.database.queueReplacementAttempt(attemptId, checkpoint.id, recoveryTime);
-		if (!replacement)
+		if (!replacement) {
+			if (this.database.attemptLeaseActive(attemptId, recoveryTime)) {
+				this.database.recordRecoveryDecision({
+					attemptId,
+					decision: "keep-running",
+					reason: "attempt acquired a live lease during recovery",
+					systemdState,
+					worktreeState,
+					createdAt: recoveryTime,
+				});
+				return {
+					attemptId,
+					action: "running",
+					systemdState,
+					worktreeState,
+					reason: "attempt acquired a live lease during recovery",
+				};
+			}
 			return this.needsHuman(
 				attemptId,
 				systemdState,
@@ -229,6 +273,7 @@ export class RecoveryCoordinator {
 				undefined,
 				recoveryTime,
 			);
+		}
 		this.database.recordRecoveryDecision({
 			attemptId,
 			decision: "replace-from-trusted-checkpoint",
@@ -270,7 +315,25 @@ export class RecoveryCoordinator {
 		createdAt = nowValue(this.options.now ?? (() => new Date())),
 	): RecoveryResult {
 		const detail = error instanceof Error ? `${reason}: ${error.message}` : reason;
-		this.database.markAttemptNeedsHuman(attemptId, detail, createdAt);
+		if (!this.database.markAttemptNeedsHuman(attemptId, detail, createdAt)) {
+			if (this.database.attemptLeaseActive(attemptId, createdAt)) {
+				this.database.recordRecoveryDecision({
+					attemptId,
+					decision: "keep-running",
+					reason: "attempt acquired a live lease before recovery terminalization",
+					systemdState,
+					worktreeState,
+					createdAt,
+				});
+				return {
+					attemptId,
+					action: "running",
+					systemdState,
+					worktreeState,
+					reason: "attempt acquired a live lease",
+				};
+			}
+		}
 		this.database.recordRecoveryDecision({
 			attemptId,
 			decision: "needs-human",

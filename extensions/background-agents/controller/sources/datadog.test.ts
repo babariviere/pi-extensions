@@ -36,3 +36,32 @@ test("Datadog uses overlap, stable fingerprints, and a durable watermark", async
 	assert.equal(events.length, 1);
 	assert.equal(cursor.watermark, "2026-01-01T00:01:00.000Z");
 });
+
+test("Datadog rejects a successful response without a results array and retains its watermark", async () => {
+	let cursor = JSON.stringify({ watermark: "2026-01-01T00:00:00.000Z" });
+	const adapter = new DatadogSourceAdapter({
+		store: {
+			recordSourceEvent() {
+				return { eventId: "event", caseId: "case", inserted: true };
+			},
+			getSourceCursor() {
+				return { cursor };
+			},
+			setSourceCursor(_source, value) {
+				cursor = value!;
+			},
+		} satisfies SourceStore,
+		client: {
+			async queryMonitors() {
+				return { status: "ok" } as never;
+			},
+			async queryErrors() {
+				return [];
+			},
+		},
+		monitorQueries: [{ id: "monitor", query: "status:Alert" }],
+		now: () => new Date("2026-01-01T00:01:00.000Z"),
+	});
+	await assert.rejects(adapter.poll(), /results array/);
+	assert.equal(cursor, JSON.stringify({ watermark: "2026-01-01T00:00:00.000Z" }));
+});

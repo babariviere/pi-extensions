@@ -152,11 +152,24 @@ export class JobScheduler {
 	reconcileExpiredLeases(now = new Date()): number {
 		const timestamp = now.toISOString();
 		return this.database.withTransaction(() => {
-			const expired = this.database.all<{ attempt_id: string; job_id: string; profile_id?: string }>(
-				"SELECT l.attempt_id, a.job_id, a.profile_id FROM attempt_leases l JOIN attempts a ON a.id = l.attempt_id WHERE l.expires_at <= ?",
+			const expired = this.database.all<{
+				attempt_id: string;
+				job_id: string;
+				profile_id?: string;
+				systemd_unit: string | null;
+				tab_id: string | null;
+			}>(
+				"SELECT l.attempt_id, a.job_id, a.profile_id, a.systemd_unit, a.tab_id FROM attempt_leases l JOIN attempts a ON a.id = l.attempt_id WHERE l.expires_at <= ?",
 				timestamp,
 			);
 			for (const lease of expired) {
+				this.database.createRuntimeCleanupIntents({
+					attemptId: lease.attempt_id,
+					unit: lease.systemd_unit ?? undefined,
+					tabId: lease.tab_id ?? undefined,
+					reason: "expired lease cleanup before reconciliation",
+					now,
+				});
 				this.database.run(
 					"UPDATE attempts SET state = 'failed', failure = ?, finished_at = ? WHERE id = ? AND state = 'running'",
 					"lease expired",

@@ -21,6 +21,39 @@ afterEach(() => {
 });
 
 describe("durable external effects", () => {
+	test("does not persist a draft PR success when an exact base SHA is omitted", async () => {
+		const database = new BackgroundAgentsDatabase(databasePath());
+		const client: GitHubEffectClient = {
+			pushBranch: async () => undefined,
+			getBranchHead: async () => null,
+			findPullRequest: async () => null,
+			createDraftPullRequest: async () => ({
+				number: 1,
+				url: "https://github.test/pr/1",
+				branch: "feature",
+				base: "main",
+				isDraft: true,
+			}),
+			updatePullRequest: async () => undefined,
+			getPullRequest: async () => null,
+			linkStack: async () => undefined,
+			isStackLinked: async () => false,
+			markReady: async () => undefined,
+		};
+		await assert.rejects(
+			new GitHubEffects(database, client, { owner: "github-base-sha" }).createDraftPullRequest({
+				worktree: "/tmp/worktree",
+				branch: "feature",
+				base: "main",
+				baseSha: "expected",
+				title: "title",
+				body: "body",
+			}),
+			/missing requested base SHA/,
+		);
+		assert.equal(database.getEffect("github:pr:create:feature:main:expected")?.reconciliationState, "unknown");
+		database.close();
+	});
 	test("writes intent before the call, deduplicates success, and reconciles an unknown call", async () => {
 		const database = new BackgroundAgentsDatabase(databasePath());
 		let calls = 0;

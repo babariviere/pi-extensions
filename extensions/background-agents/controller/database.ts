@@ -40,6 +40,20 @@ const CASE_STATES: CaseState[] = [
 	"cancelled",
 ];
 
+/** Actor names used at durable human-approval boundaries must not identify automation. */
+export function isExplicitHumanActor(value: unknown): value is string {
+	return (
+		typeof value === "string" &&
+		value.trim() !== "" &&
+		!/^(?:agent|controller|policy|system|model|classifier)(?::|$)/i.test(value.trim())
+	);
+}
+
+export function requireExplicitHumanActor(value: unknown): string {
+	if (!isExplicitHumanActor(value)) throw new Error("Only an explicit human actor may approve this action");
+	return value.trim();
+}
+
 const CASE_TRANSITIONS: Record<CaseState, readonly CaseState[]> = {
 	intake: ["classified", "cancelled"],
 	classified: ["investigating", "question-analysis", "specification", "blocked", "paused", "cancelled"],
@@ -544,6 +558,17 @@ export class BackgroundAgentsDatabase {
 				);
 			}
 		});
+	}
+
+	/** True only while an unexpired controller lease protects an attempt. */
+	attemptLeaseActive(attemptId: string, now = new Date()): boolean {
+		return Boolean(
+			this.get(
+				"SELECT attempt_id FROM attempt_leases WHERE attempt_id = ? AND expires_at > ?",
+				attemptId,
+				utcTimestamp(now, "now"),
+			),
+		);
 	}
 
 	createRuntimeCleanupIntent(input: Parameters<BackgroundAgentsDatabase["createRuntimeCleanupIntents"]>[0]): void {
@@ -1454,11 +1479,18 @@ export class BackgroundAgentsDatabase {
 			if (rowString(job, "state") === "running") {
 				const current = this.database
 					.prepare(
-						"SELECT a.id, l.expires_at FROM attempts a LEFT JOIN attempt_leases l ON l.attempt_id = a.id WHERE a.job_id = ? ORDER BY a.generation DESC LIMIT 1",
+						"SELECT a.id, a.systemd_unit, a.tab_id, l.expires_at FROM attempts a LEFT JOIN attempt_leases l ON l.attempt_id = a.id WHERE a.job_id = ? ORDER BY a.generation DESC LIMIT 1",
 					)
 					.get(jobId) as Row | undefined;
 				if (current?.expires_at && rowString(current, "expires_at") > claimedAt) return null;
 				if (current) {
+					this.createRuntimeCleanupIntents({
+						attemptId: rowString(current, "id"),
+						unit: current.systemd_unit == null ? undefined : rowString(current, "systemd_unit"),
+						tabId: current.tab_id == null ? undefined : rowString(current, "tab_id"),
+						reason: "expired lease cleanup before replacement claim",
+						now,
+					});
 					this.database
 						.prepare(
 							"UPDATE attempts SET state = 'failed', failure = ?, finished_at = ? WHERE id = ? AND state = 'running'",
@@ -1774,9 +1806,7 @@ export class BackgroundAgentsDatabase {
 	createWorkItemApproval(input: WorkItemApprovalInput): { approvalId: string; jobId: string } {
 		const caseId = requiredString(input.caseId, "caseId");
 		const workItemId = requiredString(input.workItemId, "workItemId");
-		const actor = requiredString(input.actor, "actor");
-		if (/^(agent|system|model|classifier)(:|$)/i.test(actor))
-			throw new Error("Work-item approval requires an explicit human actor");
+		const actor = requireExplicitHumanActor(input.actor);
 		if (!Number.isSafeInteger(input.specVersion) || input.specVersion <= 0)
 			throw new Error("specVersion must be a positive integer");
 		const approvalId = randomUUID();
@@ -2137,9 +2167,7 @@ export class BackgroundAgentsDatabase {
 
 	activatePolicy(policyId: string, actor: string, now = new Date()): void {
 		const activatedAt = utcTimestamp(now, "now");
-		const humanActor = requiredString(actor, "actor");
-		if (/^(agent|system|model|classifier)(:|$)/i.test(humanActor))
-			throw new Error("Only an explicit human action may activate a classifier policy");
+		const humanActor = requireExplicitHumanActor(actor);
 		this.withTransaction(() => {
 			const policy = this.database
 				.prepare("SELECT scope, status FROM classifier_policies WHERE id = ?")
@@ -2185,9 +2213,7 @@ export class BackgroundAgentsDatabase {
 
 	recordFeedback(input: FeedbackInput): string {
 		const id = input.id ?? randomUUID();
-		const actor = requiredString(input.actor, "actor");
-		if (/^(agent|system|model|classifier)(:|$)/i.test(actor))
-			throw new Error("Only explicit human action may create classifier feedback");
+		const actor = requireExplicitHumanActor(input.actor);
 		this.withTransaction(() => {
 			this.database
 				.prepare("INSERT INTO feedback (id, case_id, classification_id, correction, actor) VALUES (?, ?, ?, ?, ?)")
@@ -2230,9 +2256,7 @@ export class BackgroundAgentsDatabase {
 	}
 
 	approveMemoryEntry(memoryId: string, actor: string, status: "approved" | "rejected" = "approved"): void {
-		const humanActor = requiredString(actor, "actor");
-		if (/^(agent|system|model|classifier)(:|$)/i.test(humanActor))
-			throw new Error("Only explicit human action may approve classifier memory");
+		const humanActor = requireExplicitHumanActor(actor);
 		this.withTransaction(() => {
 			const result = this.database
 				.prepare("UPDATE memory_entries SET approval_status = ?, updated_at = ? WHERE id = ?")
@@ -2305,6 +2329,12 @@ export class BackgroundAgentsDatabase {
 		};
 		const risks = list(input.risks, "risks");
 		const verificationPlan = list(input.verificationPlan, "verificationPlan");
+		const decidedBy =
+			input.decision === "approved"
+				? requireExplicitHumanActor(input.decidedBy)
+				: input.decidedBy === undefined
+					? undefined
+					: requireExplicitHumanActor(input.decidedBy);
 		const existing = this.getQuickFixProposal(caseId);
 		if (existing) return existing;
 		const proposalId = randomUUID();
@@ -2349,7 +2379,7 @@ export class BackgroundAgentsDatabase {
 					input.decision,
 					input.rolloutMode,
 					requiredString(input.decisionReason, "decisionReason"),
-					input.decidedBy ?? null,
+					decidedBy ?? null,
 					createdAt,
 					createdAt,
 				);
@@ -2364,7 +2394,7 @@ export class BackgroundAgentsDatabase {
 					input.rolloutMode,
 					policyDecision,
 					input.decisionReason,
-					input.decidedBy ?? "controller",
+					decidedBy ?? "policy",
 				);
 		});
 		return this.getQuickFixProposal(caseId)!;
@@ -2372,6 +2402,7 @@ export class BackgroundAgentsDatabase {
 
 	approveQuickFixProposal(proposalId: string, actor: string): StoredQuickFixProposal {
 		const id = requiredString(proposalId, "proposalId");
+		const humanActor = requireExplicitHumanActor(actor);
 		const proposal = this.get<Row>("SELECT * FROM quick_fix_proposals WHERE id = ?", id);
 		if (!proposal) throw new Error(`Unknown quick-fix proposal: ${id}`);
 		const now = new Date().toISOString();
@@ -2380,12 +2411,12 @@ export class BackgroundAgentsDatabase {
 				.prepare(
 					"UPDATE quick_fix_proposals SET decision = 'approved', decision_reason = ?, decided_by = ?, updated_at = ? WHERE id = ? AND decision = 'pending'",
 				)
-				.run("explicit human approval", requiredString(actor, "actor"), now, id);
+				.run("explicit human approval", humanActor, now, id);
 			this.database
 				.prepare(
 					"UPDATE quick_fix_policy_decisions SET decision = 'admitted', reason = ?, actor = ? WHERE proposal_id = ?",
 				)
-				.run("explicit human approval", actor, id);
+				.run("explicit human approval", humanActor, id);
 		});
 		return this.getQuickFixProposal(rowString(proposal, "case_id"))!;
 	}
@@ -2561,7 +2592,7 @@ export class BackgroundAgentsDatabase {
 
 	recordSpecificationApproval(input: SpecificationApprovalInput): string {
 		const caseId = requiredString(input.caseId, "caseId");
-		const actor = requiredString(input.actor, "actor");
+		const actor = requireExplicitHumanActor(input.actor);
 		if (!Number.isSafeInteger(input.specVersion) || input.specVersion <= 0)
 			throw new Error("specVersion must be a positive integer");
 		if (!input.permissions.every((permission) => typeof permission === "string" && permission.trim() !== ""))
@@ -2633,9 +2664,7 @@ export class BackgroundAgentsDatabase {
 		attemptId: string;
 	} {
 		const caseId = requiredString(input.caseId, "caseId");
-		const actor = requiredString(input.actor, "actor");
-		if (/^(agent|system|model|classifier)(:|$)/i.test(actor))
-			throw new Error("Specification feedback requires an explicit human actor");
+		const actor = requireExplicitHumanActor(input.actor);
 		if (!Number.isSafeInteger(input.specVersion) || input.specVersion <= 0)
 			throw new Error("specVersion must be a positive integer");
 		const feedbackId = randomUUID();
@@ -2754,12 +2783,23 @@ export class BackgroundAgentsDatabase {
 		const timestamp = utcTimestamp(now, "now");
 		return this.withTransaction(() => {
 			const attempt = this.database
-				.prepare("SELECT job_id, case_id, role, state FROM attempts WHERE id = ?")
+				.prepare("SELECT job_id, case_id, role, systemd_unit, tab_id, state FROM attempts WHERE id = ?")
 				.get(attemptId) as Row | undefined;
 			if (!attempt) throw new Error(`Unknown attempt: ${attemptId}`);
 			if (rowString(attempt, "state") !== "running") return null;
+			const lease = this.database
+				.prepare("SELECT id FROM attempt_leases WHERE attempt_id = ? AND expires_at > ?")
+				.get(attemptId, timestamp);
+			if (lease) return null;
 			if (!this.database.prepare("SELECT id FROM recovery_checkpoints WHERE id = ?").get(checkpointId))
 				throw new Error(`Unknown checkpoint: ${checkpointId}`);
+			this.createRuntimeCleanupIntents({
+				attemptId,
+				unit: attempt.systemd_unit == null ? undefined : rowString(attempt, "systemd_unit"),
+				tabId: attempt.tab_id == null ? undefined : rowString(attempt, "tab_id"),
+				reason: "recovery cleanup before replacement",
+				now,
+			});
 			this.database
 				.prepare(
 					"UPDATE attempts SET state = 'failed', failure = ?, finished_at = ? WHERE id = ? AND state = 'running'",
@@ -2795,11 +2835,19 @@ export class BackgroundAgentsDatabase {
 	markAttemptNeedsHuman(attemptId: string, reason: string, now = new Date()): boolean {
 		const timestamp = utcTimestamp(now, "now");
 		return this.withTransaction(() => {
-			const attempt = this.get<{ job_id: string }>(
-				"SELECT job_id FROM attempts WHERE id = ? AND state = 'running'",
+			const attempt = this.get<{ job_id: string; systemd_unit: string | null; tab_id: string | null }>(
+				"SELECT a.job_id, a.systemd_unit, a.tab_id FROM attempts a LEFT JOIN attempt_leases l ON l.attempt_id = a.id AND l.expires_at > ? WHERE a.id = ? AND a.state = 'running' AND l.id IS NULL",
+				timestamp,
 				attemptId,
 			);
 			if (!attempt) return false;
+			this.createRuntimeCleanupIntents({
+				attemptId,
+				unit: attempt.systemd_unit ?? undefined,
+				tabId: attempt.tab_id ?? undefined,
+				reason: "recovery cleanup before needs-human terminalization",
+				now,
+			});
 			this.run(
 				"UPDATE attempts SET state = 'needs-human', failure = ?, finished_at = ? WHERE id = ? AND state = 'running'",
 				reason,

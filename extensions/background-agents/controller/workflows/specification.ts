@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { BackgroundAgentsDatabase, StoredSpecificationVersion } from "../database.ts";
 import { BackgroundAgentsStateMachine, type ApprovalResult } from "../state-machine.ts";
+import { requireExplicitHumanActor } from "../database.ts";
 import type { SpecificationWorkItem } from "../../types.ts";
 
 export interface SpecificationDraft {
@@ -167,12 +168,10 @@ export class SpecificationWorkflow {
 		if (!latest || latest.version !== specVersion)
 			throw new Error(`Specification version ${specVersion} is not current`);
 		if (!feedback.trim()) throw new Error("feedback must be non-empty");
-		if (!actor.trim()) throw new Error("actor must be non-empty");
-		if (/^(agent|system|model|classifier)(:|$)/i.test(actor.trim()))
-			throw new Error("Specification feedback requires an explicit human actor");
+		const humanActor = requireExplicitHumanActor(actor);
 		if (state === "awaiting-approval")
-			this.database.transitionCase(caseId, "specification", actor, "human specification feedback received");
-		const result = this.database.recordSpecificationFeedback({ caseId, specVersion, feedback, actor });
+			this.database.transitionCase(caseId, "specification", humanActor, "human specification feedback received");
+		const result = this.database.recordSpecificationFeedback({ caseId, specVersion, feedback, actor: humanActor });
 		return { ...result, context: plannerContext(this.database, caseId) };
 	}
 

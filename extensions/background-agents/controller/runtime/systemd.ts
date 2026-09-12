@@ -110,6 +110,7 @@ export interface SystemdLaunchOptions {
 	limits: BackgroundAgentsConfig["systemd"];
 	security?: "agent" | "verifier";
 	inaccessiblePaths?: readonly string[];
+	readOnlyPaths?: readonly string[];
 	command?: string;
 }
 
@@ -170,13 +171,9 @@ export function buildSystemdRunArgs(options: SystemdLaunchOptions): string[] {
 		`--property=TasksMax=${limits.processLimit}`,
 		"--property=PrivateUsers=yes",
 		"--property=ProtectSystem=strict",
-		`--property=ProtectHome=${security === "verifier" ? "tmpfs" : "read-only"}`,
+		"--property=ProtectHome=tmpfs",
 		...(security === "verifier" ? ["--property=PrivateNetwork=yes"] : []),
-		...(security === "verifier"
-			? [
-					"--property=UnsetEnvironment=GH_TOKEN GITHUB_TOKEN GH_ENTERPRISE_TOKEN ANTHROPIC_API_KEY OPENAI_API_KEY AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN GOOGLE_APPLICATION_CREDENTIALS NPM_TOKEN NODE_AUTH_TOKEN",
-				]
-			: []),
+		"--property=UnsetEnvironment=GH_TOKEN GITHUB_TOKEN GH_ENTERPRISE_TOKEN ANTHROPIC_API_KEY OPENAI_API_KEY AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN GOOGLE_APPLICATION_CREDENTIALS NPM_TOKEN NODE_AUTH_TOKEN SLACK_TOKEN LINEAR_API_KEY DATADOG_API_KEY DATABASE_URL",
 		"--property=NoNewPrivileges=yes",
 		"--property=CapabilityBoundingSet=",
 		"--property=AmbientCapabilities=",
@@ -197,9 +194,12 @@ export function buildSystemdRunArgs(options: SystemdLaunchOptions): string[] {
 		"--property=UMask=0077",
 		`--property=ReadWritePaths=${attempt}`,
 		`--property=ReadWritePaths=${worktree}`,
-		`--property=ReadOnlyPaths=${primary}`,
+		`--property=BindPaths=${attempt}`,
+		`--property=BindPaths=${worktree}`,
+		`--property=BindReadOnlyPaths=${primary}`,
+		...(security === "agent" ? [`--property=BindPaths=${git}`] : []),
 		...(security === "verifier" ? [`--property=ReadOnlyPaths=${git}`] : []),
-		...(security === "agent" ? [`--property=ReadWritePaths=${git}`] : []),
+		...(options.readOnlyPaths ?? []).map((path) => `--property=BindReadOnlyPaths=${absolute(path, "readOnlyPath")}`),
 		...(options.inaccessiblePaths ?? []).map(
 			(path) => `--property=InaccessiblePaths=${absolute(path, "inaccessiblePath")}`,
 		),

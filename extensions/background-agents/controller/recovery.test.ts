@@ -26,8 +26,9 @@ function runningAttempt(
 	const jobId = database.createJob({ caseId, role: "worker" });
 	const claim = database.claimJob(jobId, "original", 60_000, new Date("2026-01-01T00:00:00Z"))!;
 	database.run(
-		"UPDATE attempts SET systemd_unit = ?, worktree = ? WHERE id = ?",
+		"UPDATE attempts SET systemd_unit = ?, tab_id = ?, worktree = ? WHERE id = ?",
 		"background-test.service",
+		"tab-recovery",
 		worktree,
 		claim.attemptId,
 	);
@@ -80,6 +81,16 @@ describe("background-agents recovery", () => {
 			"failed",
 		);
 		assert.equal(result.replacement?.generation, 2);
+		assert.deepEqual(
+			database
+				.listPendingRuntimeCleanupIntents()
+				.map((intent) => [intent.kind, intent.resourceId])
+				.sort((a, b) => a[0].localeCompare(b[0])),
+			[
+				["tab", "tab-recovery"],
+				["unit", "background-test.service"],
+			],
+		);
 		assert.equal(database.get<{ state: string }>("SELECT state FROM jobs WHERE id = ?", jobId)?.state, "queued");
 		assert.equal(
 			database.get<{ state: string; profile_id: string | null; model: string | null }>(
@@ -103,6 +114,31 @@ describe("background-agents recovery", () => {
 		assert.deepEqual(
 			decisions.map((item) => item.decision),
 			["observed", "quarantine", "replace-from-trusted-checkpoint"],
+		);
+		database.close();
+	});
+
+	test("does not reconcile an attempt protected by a live lease", async () => {
+		const database = new BackgroundAgentsDatabase(databasePath());
+		const { attemptId } = runningAttempt(database);
+		let inspected = false;
+		const recovery = new RecoveryCoordinator(database, {
+			owner: "another-controller",
+			now: () => new Date("2026-01-01T00:00:30Z"),
+			systemd: {
+				inspect: async () => {
+					inspected = true;
+					return "failed";
+				},
+			},
+			worktrees: { inspect: async () => ({ state: "dirty" }), quarantine: async () => "/tmp/quarantine" },
+		});
+		const result = await recovery.reconcileAttempt(attemptId);
+		assert.equal(result.action, "running");
+		assert.equal(inspected, false);
+		assert.equal(
+			database.get<{ state: string }>("SELECT state FROM attempts WHERE id = ?", attemptId)?.state,
+			"running",
 		);
 		database.close();
 	});

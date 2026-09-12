@@ -149,8 +149,11 @@ export function githubDraftOperationKey(branch: string, base: string, baseSha?: 
 
 function validateDraftPullRequest(input: DraftPullRequestInput, pullRequest: GitHubEffectPullRequest): void {
 	if (pullRequest.base !== input.base) throw new Error("GitHub pull request base does not match requested base");
-	if (input.baseSha && pullRequest.baseSha && pullRequest.baseSha.toLowerCase() !== input.baseSha.toLowerCase())
-		throw new Error("GitHub pull request base SHA does not match requested base");
+	if (input.baseSha) {
+		if (!pullRequest.baseSha) throw new Error("GitHub pull request response is missing requested base SHA");
+		if (pullRequest.baseSha.toLowerCase() !== input.baseSha.toLowerCase())
+			throw new Error("GitHub pull request base SHA does not match requested base");
+	}
 }
 
 export function githubEditOperationKey(reference: number | string, title: string, body: string): string {

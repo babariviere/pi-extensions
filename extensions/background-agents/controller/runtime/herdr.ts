@@ -180,7 +180,8 @@ export async function launchAttemptThroughHerdr(
 			piArgs: [...(options.commandArgsPrefix ?? []), ...childArgs],
 			limits: options.limits,
 			...(options.security ? { security: options.security } : {}),
-			...(options.inaccessiblePaths ? { inaccessiblePaths: options.inaccessiblePaths } : {}),
+			inaccessiblePaths: [...new Set([...(options.inaccessiblePaths ?? []), ...runtime.profile.authFiles])],
+			readOnlyPaths: [options.rolePromptPath],
 			...(options.command ? { command: options.command } : {}),
 		}),
 	];

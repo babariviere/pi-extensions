@@ -64,7 +64,7 @@ export function combinedRequiredChecks(globalChecks: readonly string[], reposito
 	return [...new Set([...globalChecks, ...repositoryChecks])];
 }
 
-/** Every controller-owned secret and control-plane path is denied to verifier services. */
+/** Every controller-owned secret and control-plane path is denied to production attempt services. */
 export function verifierInaccessiblePaths(config: BackgroundAgentsConfig): string[] {
 	const paths = [
 		config.databasePath,
@@ -607,11 +607,7 @@ export class ProductionAttemptRunner {
 								}
 							: this.options.config.systemd,
 						security: role === "verifier" ? "verifier" : "agent",
-						...(role === "verifier"
-							? {
-									inaccessiblePaths: verifierInaccessiblePaths(this.options.config),
-								}
-							: {}),
+						inaccessiblePaths: verifierInaccessiblePaths(this.options.config),
 						model: claim.model,
 						prompt,
 						...(repository ? {} : { preflight: { platform: "linux", paths: [] } }),
