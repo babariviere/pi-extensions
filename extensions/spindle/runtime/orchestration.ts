@@ -26,16 +26,15 @@ const finiteNumber = (value: unknown): number | undefined =>
  * Explicit timeout requested by a blocking host call, in milliseconds. Returns
  * 0 when the call carries no usable timeout. `pi.bash` takes `timeout` in
  * seconds (the guest proxy converts `timeoutMs` before the host sees the args);
- * the blocking `agents.*` refs take `timeoutMs` (the child's hard cap) and
- * `waitMs` (how long the parent blocks before the run continues detached).
+ * the blocking `agents.*` refs take `waitMs` (how long the parent blocks before
+ * the run continues detached). `agents.wait` also accepts `timeoutMs` as an
+ * alias for its wait window.
  */
 export const requestedBlockingTimeoutMs = (ref: string, args: Record<string, unknown>): number => {
 	if (isBlockingOrchestrationRef(ref)) {
-		// `waitMs` bounds how long the *parent* blocks, `timeoutMs` how long the
-		// child may live. The sandbox deadline has to cover whichever is longer.
-		const waitMs = finiteNumber(args.waitMs) ?? 0;
-		const timeoutMs = finiteNumber(args.timeoutMs) ?? 0;
-		return Math.max(waitMs, timeoutMs);
+		const waitMs = finiteNumber(args.waitMs);
+		if (waitMs !== undefined) return waitMs;
+		return ref === "agents.wait" ? (finiteNumber(args.timeoutMs) ?? 0) : 0;
 	}
 	if (ref === "pi.bash" || ref === "pi.exec") {
 		const milliseconds = finiteNumber(args.timeoutMs);

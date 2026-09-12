@@ -171,9 +171,9 @@ test("a detached batch survives its launching program", async () => {
 	book.cancel(result.runId);
 });
 
-test("a batch's timeout is clamped to the configured cap", async () => {
+test("a batch's timeout always comes from host configuration", async () => {
 	const { provider, contextOf } = harness();
-	await provider.invoke("run", { task: "do a thing", timeoutMs: 99_999_999 }, invocationContext());
+	await provider.invoke("run", { task: "do a thing", timeoutMs: 1 }, invocationContext());
 	assert.equal(contextOf()?.timeoutMs, 60_000);
 });
 
@@ -219,10 +219,10 @@ test("every descriptor schema accepts the payloads the guest can emit", async ()
 	};
 
 	await accepts("run", { agent: "reviewer", task: "t" });
-	await accepts("run", { task: "t", waitMs: 1_000, timeoutMs: 2_000 });
+	await accepts("run", { task: "t", waitMs: 1_000 });
 	await accepts("run", { task: "t", reads: ["a.md"], night: true, model: "m", thinking: "high", output: "o.md" });
-	await accepts("runAll", { tasks: [{ task: "t" }], waitMs: 1_000, timeoutMs: 2_000 });
-	await accepts("start", { task: "t", timeoutMs: 2_000 });
+	await accepts("runAll", { tasks: [{ task: "t" }], waitMs: 1_000 });
+	await accepts("start", { task: "t" });
 	await accepts("start", { tasks: [{ task: "t" }] });
 	await accepts("start", {});
 	await accepts("wait", { runId: "r" });
@@ -234,6 +234,9 @@ test("every descriptor schema accepts the payloads the guest can emit", async ()
 
 	// Timing is batch-level: a per-task window would be silently ignored.
 	await rejects("runAll", { tasks: [{ task: "t", waitMs: 1 }] });
+	await rejects("run", { task: "t", timeoutMs: 2_000 });
+	await rejects("runAll", { tasks: [{ task: "t" }], timeoutMs: 2_000 });
+	await rejects("start", { task: "t", timeoutMs: 2_000 });
 	await rejects("run", { task: "t", unknown: 1 });
 	await rejects("wait", {});
 });

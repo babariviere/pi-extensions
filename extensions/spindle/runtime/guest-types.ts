@@ -171,11 +171,8 @@ interface SpindleAgentRequest {
   /** Approved ledger id. Required for every launch during an active night run. */
   nightTodoId?: string;
 }
-/**
- * Timing is per batch, not per task: waitMs bounds how long the caller blocks,
- * timeoutMs how long the children may live (clamped to the configured cap).
- */
-interface SpindleAgentBatchTiming {
+/** Timing for a blocking launch. Child lifetime comes from host configuration. */
+interface SpindleAgentWaitTiming {
   /** Cancels the batch. See AbortController. */
   signal?: AbortSignal;
   /**
@@ -184,10 +181,6 @@ interface SpindleAgentBatchTiming {
    * expired wait is not a failure: the run continues in the background.
    */
   waitMs?: number;
-  /** Hard cap on the children's own lifetime; past it they are killed. */
-  timeoutMs?: number;
-  /** Same as timeoutMs, but in seconds. Converted to timeoutMs by multiplying by 1000; timeoutMs takes precedence if both are set. */
-  timeoutSec?: number;
 }
 interface SpindleAgentResult {
   agent: string;
@@ -239,12 +232,12 @@ interface SpindleAgentsApi {
   list(): Promise<SpindleAgentDefinition[]>;
   /** Discover permitted model overrides without launching a child or checking reachability. */
   models(): Promise<SpindleAgentModels>;
-  run(args: SpindleAgentRequest & SpindleAgentBatchTiming): Promise<SpindleAgentResult>;
-  runAll(args: { tasks: SpindleAgentRequest[] } & SpindleAgentBatchTiming | SpindleAgentRequest[]): Promise<SpindleAgentResult[]>;
+  run(args: SpindleAgentRequest & SpindleAgentWaitTiming): Promise<SpindleAgentResult>;
+  runAll(args: { tasks: SpindleAgentRequest[] } & SpindleAgentWaitTiming | SpindleAgentRequest[]): Promise<SpindleAgentResult[]>;
   /** Launch without blocking; the run is not tied to this turn. */
-  start(args: (SpindleAgentRequest & { timeoutMs?: number }) | ({ tasks: SpindleAgentRequest[] } & { timeoutMs?: number }) | SpindleAgentRequest[]): Promise<SpindleAgentHandle>;
+  start(args: SpindleAgentRequest | { tasks: SpindleAgentRequest[] } | SpindleAgentRequest[]): Promise<SpindleAgentHandle>;
   /** Resume waiting on a launched batch. */
-  wait(args: string | { runId: string; waitMs?: number }): Promise<SpindleAgentWait>;
+  wait(args: string | { runId: string; waitMs?: number; timeoutMs?: number }): Promise<SpindleAgentWait>;
   /** Live and recently finished batches. */
   status(): Promise<SpindleAgentStatus[]>;
   /** Cancel one batch, or every live batch when runId is omitted. */

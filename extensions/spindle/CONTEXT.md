@@ -393,7 +393,7 @@ fd -e ts . extensions/spindle -x perl -pi -e 's{(from\s+")(\.\.?/[^"]*)\.js(")}{
 | `config-migrations.ts` | Untouched. Its legacy `subagents` → `agents` migration is inert for a fresh `spindle.json`; it still provides the `configVersion` guard. |
 | `runtime/quickjs-runtime.ts` | `GUEST_SETUP` trimmed: removed `globalThis.{mesh,memory,state,schema,compact,council,rlm,agent,budget}`, `__createActor`, `__handoff`, `__handoffFacts`/`__successfulCalls`, `__workflowAgent`, `__budgetedRun`, `__recordAgentUsage`, `__workflowBudgetTotal`/`__workflowSpentTokens`, `workflow.agent`, `workflow.budget`. **A local `tools` global was added back** (discovery + generic dispatch, upstream's `__toolsBase` shape is gone; core-tool names raise an actionable error pointing at `pi.<name>`). `globalThis.agents` is `{ list, run, runAll, start, wait, status, cancel }` (string sugar: `agents.wait('runId')`, `agents.cancel('runId')`). `globalThis.mcp` is a frozen `{ call, list, search, describe, connect }` over the unprefixed `mcp.*` refs. The nested `mcp.<server>.<tool>` Proxy sugar was removed (483 recorded `mcp.call` uses vs 6 for the sugar); the qualified form survives only as a ref for `tools.call`. Dropping the sugar is what freed the sigil: the `$` existed only so management actions could not collide with a server name in the ref space. `SpindleSandboxOptions.tokenBudget` and the token-budget guest global removed. Setup eval filename is `spindle-setup.js`. Local additions beyond the trim: the frozen `process` shim (injected via `options.process`), `pi.bash` extras (`cwd` / `env` / `stdin`, alias-normalized in `__piArgAliases`), `spindle.$timer` host-call short-circuit, and source-mapped error reporting: the transpiled program carries a source map (`options.sourceMap` or the self-transpiled one) and guest stack positions are rewritten to `program.ts:line:column` via `runtime/source-map.ts`; dumped guest errors render as `Name: message` + frames instead of a JSON blob. |
 | `runtime/guest-types.ts` | Trimmed to match `GUEST_SETUP` exactly. Removed every interface for dropped subsystems. Upstream's agents API interface replaced with spindle's run-book contract (`list` / `run` / `runAll` / `start` / `wait` / `status` / `cancel`) plus `SpindleAgentDefinition` / `SpindleAgentRequest` / `SpindleAgentResult` / `SpindleAgentHandle` / `SpindleAgentWait` / `SpindleAgentStatus`. Upstream's MCP API interface replaced with the bridge surface plus the Proxy sugar index signature. `FULL_CODE_GLOBAL_DECLARATIONS` gating for `pi` / `extensions` kept verbatim. Local additions beyond the trim: the `tools` (`SpindleToolsApi`) declaration, the `process` shim declaration, `SpindleBashOptions` (`cwd` / `env` / `stdin` + `workdir` aliases) on `pi.bash`, and `type-checker.ts` importing these declarations in its own tests. |
-| `runtime/orchestration.ts` | `BLOCKING_ORCHESTRATION_REFS` and the static-detection regex cover `agents.run` / `agents.runAll` / `agents.wait`; `AGENT_BUDGET_REFS` (`isAgentBudgetRef`) is the separate set that consumes the per-execution agent budget. `requestedBlockingTimeoutMs` reads `max(waitMs, timeoutMs)` for those refs. |
+| `runtime/orchestration.ts` | `BLOCKING_ORCHESTRATION_REFS` and the static-detection regex cover `agents.run` / `agents.runAll` / `agents.wait`; `AGENT_BUDGET_REFS` (`isAgentBudgetRef`) is the separate set that consumes the per-execution agent budget. `requestedBlockingTimeoutMs` reads the caller's wait window for those refs. |
 | `core/tool-ownership.ts` | `SPINDLE_TOOL_NAME` is `"spindle_exec"`. Removed upstream's top-level tool authorizer and `#authorizeTopLevel` (schema-enforce-only), so `SpindleToolLifecycle` takes just `ownsSpindleTool` and `toolCall` is synchronous. |
 | `core/action-registry.ts`, `core/skill-prompt.ts`, `core/skill-references.ts`, `audit/details.ts`, `providers/pi-tools-provider.ts`, `ui/transcript-parser.ts` | Tool name is `spindle_exec` in comments and strings. In `ui/transcript-parser.ts` this is functional: it matches the running outer tool call by name. |
 | `protocol.ts` | Removed `SpindleInvocationContext.deferHandoff` (handoff is gone). |
@@ -759,11 +759,11 @@ and a cancelled parent left its children running. Three pieces fix it.
 `AgentRunBook`, keyed by the batch `runId`. `agents.run` / `agents.runAll` /
 `agents.wait` block for `waitMs` only; an expired window is a normal outcome that
 returns `state: "running"` plus the `runId`, and marks the batch **detached**.
-The deadlines are now independent: `waitMs` bounds the caller, `timeoutMs` bounds
-the child, and `execution-service.ts` keeps the sandbox deadline one
+The deadlines are now independent: per-call `waitMs` bounds the caller, configured
+`agents.timeoutMs` bounds the child, and `execution-service.ts` keeps the sandbox deadline one
 `BLOCKING_HOST_CALL_SLACK_MS` past every agent deadline it can wait on
 (`executor.timeoutMs`, `agents.timeoutMs`, `agents.waitMs`, and any explicitly
-requested `waitMs`/`timeoutMs`), so the inner call always reports first.
+requested wait window), so the inner call always reports first.
 
 **Unclaimed results are announced.** A batch that settles with nobody attached
 (after `ANNOUNCE_DELAY_MS`, so a waiter mid-race still claims it) goes to the
@@ -816,7 +816,7 @@ and docs aligned with these.)
   batch can outlive the program that launched it (see "Run lifetime and
   cancellation").
 - **wait window** (`waitMs`): how long a caller blocks on a batch. Distinct from
-  the batch's `timeoutMs`, which is how long its children may live.
+  configured `agents.timeoutMs`, which is how long its children may live.
 - **detached batch**: a live batch nobody is blocked on. Its result is announced
   through the completion sink instead of being returned to a caller.
 - **output resolution**: the rule that decides a run's final output text and

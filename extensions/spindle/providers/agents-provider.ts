@@ -19,13 +19,9 @@
  *   agents.cancel({ runId? })        → tear a batch (or all of them) down
  *
  * Every launch is registered in the run book (`agent-run-book.ts`), which owns
- * waiting, detachment and cancellation. Timing is per *batch*, not per task:
- * `waitMs` bounds how long the caller blocks, `timeoutMs` how long the children
- * may live (clamped to the configured cap). `agents.wait` also accepts
- * `timeoutMs` as an alias for `waitMs`: the same name means the child's
- * lifetime cap on `run`/`start`/`runAll` but the caller's own wait window on
- * `wait`, which is exactly the mixup that used to be a hard schema-validation
- * error instead of a no-op rename.
+ * waiting, detachment and cancellation. `waitMs` bounds how long the caller
+ * blocks. The configured `agents.timeoutMs` alone bounds how long children may
+ * live. `agents.wait` also accepts `timeoutMs` as an alias for `waitMs`.
  *
  * Progress does NOT go out as `progress.ts`'s ANSI block: each row is mirrored
  * into the spindle widget through the run registry, and `renderProgress` is
@@ -43,7 +39,7 @@ import { newRunId } from "../agents/paths.ts";
 import { buildRunRequests, type NormalizedItem, validateOverrides } from "../agents/request.ts";
 import { allocateNightWorkspaces, relocateWorkspacePaths, releaseNightWorkspaces } from "../agents/night-workspace.ts";
 import type { OnStatus, RunContext, RunRequest, RunResult } from "../agents/run.ts";
-import { DEFAULT_SPINDLE_CONFIG, MAX_AGENT_TIMEOUT_MS, MIN_AGENT_TIMEOUT_MS } from "../config.ts";
+import { DEFAULT_SPINDLE_CONFIG, MAX_AGENT_TIMEOUT_MS } from "../config.ts";
 import type {
 	SpindleActionDescriptor,
 	SpindleInvocationContext,
@@ -109,31 +105,14 @@ const waitMsProperty = {
 		"How long to block before returning a `running` handle. 0 returns immediately. Defaults to the configured wait window.",
 };
 
-const timeoutMsProperty = {
-	type: "number",
-	minimum: 0,
-	description:
-		"Hard cap on the children's own lifetime; past it they are killed. Clamped to (and defaulting to) the configured timeout.",
-};
-
-const timeoutSecProperty = {
-	type: "number",
-	minimum: 0,
-	description: "Same as `timeoutMs`, in seconds. Converted to `timeoutMs` (×1000); `timeoutMs` wins if both are set.",
-};
-
 /**
- * `wait`-only alias: `run`/`start`/`runAll` all take a `timeoutMs` that caps the
- * child's lifetime, so a caller reaches for the same name here out of habit. On
- * `wait` it means the same thing as `waitMs` instead (the caller's own wait
- * window); `waitMs` wins if both are set.
+ * `wait`-only alias. It means the same thing as `waitMs`, and `waitMs` wins if
+ * both are set.
  */
 const waitTimeoutMsAliasProperty = {
 	type: "number",
 	minimum: 0,
-	description:
-		"Alias for `waitMs`. Unlike `timeoutMs` on run/start/runAll (the child's lifetime cap), here it bounds how " +
-		"long this call blocks. `waitMs` wins if both are set.",
+	description: "Alias for `waitMs`. It bounds how long this call blocks; `waitMs` wins if both are set.",
 };
 
 /** The single-run form: one task plus the batch's timing. */
@@ -142,8 +121,6 @@ const runItemSchema = {
 	properties: {
 		...taskItemSchema.properties,
 		waitMs: waitMsProperty,
-		timeoutMs: timeoutMsProperty,
-		timeoutSec: timeoutSecProperty,
 	},
 };
 
@@ -157,8 +134,6 @@ const startSchema = {
 	properties: {
 		...taskItemSchema.properties,
 		tasks: { type: "array", items: taskItemSchema },
-		timeoutMs: timeoutMsProperty,
-		timeoutSec: timeoutSecProperty,
 	},
 	additionalProperties: false,
 };
@@ -184,14 +159,12 @@ const descriptors: SpindleActionDescriptor[] = [
 	{
 		name: "runAll",
 		description:
-			"Run several subagents in parallel and wait for all of them. Each item's `agent` is optional. `waitMs` and `timeoutMs` apply to the whole batch. Same bounded wait as agents.run: results may come back with `state: 'running'` and a shared `runId`.",
+			"Run several subagents in parallel and wait for all of them. Each item's `agent` is optional. `waitMs` applies to the whole batch. Same bounded wait as agents.run: results may come back with `state: 'running'` and a shared `runId`.",
 		inputSchema: {
 			type: "object",
 			properties: {
 				tasks: { type: "array", items: taskItemSchema },
 				waitMs: waitMsProperty,
-				timeoutMs: timeoutMsProperty,
-				timeoutSec: timeoutSecProperty,
 			},
 			required: ["tasks"],
 			additionalProperties: false,
@@ -206,7 +179,7 @@ const descriptors: SpindleActionDescriptor[] = [
 	{
 		name: "wait",
 		description:
-			"Resume waiting on a launched batch for at most `waitMs`. Returns `{ state: 'running' }` when the window expires again (not an error), or the settled results. `timeoutMs` is also accepted here as an alias for `waitMs` (not the child's runtime cap that `run`/`start` use it for).",
+			"Resume waiting on a launched batch for at most `waitMs`. Returns `{ state: 'running' }` when the window expires again (not an error), or the settled results. `timeoutMs` is also accepted here as an alias for `waitMs`.",
 		inputSchema: {
 			type: "object",
 			properties: { runId: { type: "string" }, waitMs: waitMsProperty, timeoutMs: waitTimeoutMsAliasProperty },
@@ -244,18 +217,6 @@ const stringArrayOrUndefined = (value: unknown): string[] | undefined =>
 const boundedMs = (value: unknown, fallback: number, minimum: number, maximum: number): number => {
 	if (typeof value !== "number" || !Number.isFinite(value)) return Math.min(fallback, maximum);
 	return Math.max(minimum, Math.min(Math.floor(value), maximum));
-};
-
-/**
- * Resolve a caller-supplied `timeoutMs`/`timeoutSec` pair to milliseconds.
- * `timeoutMs` wins if both are set; `timeoutSec` is converted (×1000)
- * otherwise. Neither present resolves to `undefined` so `boundedMs` falls
- * back to its default.
- */
-const resolveTimeoutMs = (args: Record<string, unknown>): unknown => {
-	if (typeof args.timeoutMs === "number" && Number.isFinite(args.timeoutMs)) return args.timeoutMs;
-	if (typeof args.timeoutSec === "number" && Number.isFinite(args.timeoutSec)) return args.timeoutSec * 1000;
-	return args.timeoutMs;
 };
 
 const normalizedItem = (value: unknown): NormalizedItem => {
@@ -448,7 +409,7 @@ export class SpindleAgentsProvider implements SpindleProvider {
 					...(agent.config.description ? { description: agent.config.description } : {}),
 				}));
 			case "run": {
-				const batch = await this.#launch(tasksOf(args, "agents.run"), args, context, { attach: true });
+				const batch = await this.#launch(tasksOf(args, "agents.run"), context, { attach: true });
 				const outcome = await this.runs.wait(batch.runId, waitMs());
 				const first = this.#resultsOf(batch, outcome)[0];
 				if (!first) throw new Error("agents.run produced no result");
@@ -458,22 +419,20 @@ export class SpindleAgentsProvider implements SpindleProvider {
 				if (!Array.isArray(args.tasks) || args.tasks.length === 0) {
 					throw new Error("agents.runAll requires a non-empty tasks array");
 				}
-				const batch = await this.#launch(tasksOf(args, "agents.runAll"), args, context, { attach: true });
+				const batch = await this.#launch(tasksOf(args, "agents.runAll"), context, { attach: true });
 				const outcome = await this.runs.wait(batch.runId, waitMs());
 				return this.#resultsOf(batch, outcome);
 			}
 			case "start": {
 				// Detached on purpose: no link to this turn's abort signal, so the run
 				// survives the program that launched it.
-				const batch = await this.#launch(tasksOf(args, "agents.start"), args, context, { attach: false });
+				const batch = await this.#launch(tasksOf(args, "agents.start"), context, { attach: false });
 				return { runId: batch.runId, agents: batch.agents, state: "running" as const };
 			}
 			case "wait": {
 				const runId = stringOrUndefined(args.runId);
 				if (!runId) throw new Error("agents.wait requires a runId");
-				// `timeoutMs` is a wait-window alias here, not the child's lifetime cap
-				// that the same key means on run/start/runAll: `waitMs` wins if both
-				// are set.
+				// `timeoutMs` is a wait-window alias; `waitMs` wins if both are set.
 				const window = boundedMs(args.waitMs ?? args.timeoutMs, runtime.waitMs, 0, MAX_AGENT_TIMEOUT_MS);
 				const outcome = await this.runs.wait(runId, window);
 				return {
@@ -561,7 +520,6 @@ export class SpindleAgentsProvider implements SpindleProvider {
 	 */
 	async #launch(
 		items: NormalizedItem[],
-		args: Record<string, unknown>,
 		context: SpindleInvocationContext,
 		options: { attach: boolean },
 	): Promise<LaunchedBatch> {
@@ -609,8 +567,8 @@ export class SpindleAgentsProvider implements SpindleProvider {
 			// Usage pacing is session state, not a configuration file. Carry its
 			// explicit disabled state into the separately started Pi process.
 			pacingDisabled: runtimeConfig.pacingDisabled === true,
-			// The configured timeout is a cap, not a default a caller can raise.
-			timeoutMs: boundedMs(resolveTimeoutMs(args), configuredTimeoutMs, MIN_AGENT_TIMEOUT_MS, configuredTimeoutMs),
+			// Child lifetime is host policy, not a per-call model choice.
+			timeoutMs: configuredTimeoutMs,
 			signal: controller.signal,
 			onStatus: monitor.onStatus,
 		};

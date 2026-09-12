@@ -47,11 +47,12 @@ test("missing or invalid timeouts request nothing", () => {
 	assert.equal(requestedBlockingTimeoutMs("pi.read", { timeout: 600 }), 0);
 });
 
-test("blocking agent refs report the longer of their wait window and child cap", () => {
-	assert.equal(requestedBlockingTimeoutMs("agents.run", { timeoutMs: 5_000 }), 5_000);
-	assert.equal(requestedBlockingTimeoutMs("agents.runAll", { timeoutMs: 5_000 }), 5_000);
+test("blocking agent refs report only their wait window", () => {
+	assert.equal(requestedBlockingTimeoutMs("agents.run", { timeoutMs: 5_000 }), 0);
+	assert.equal(requestedBlockingTimeoutMs("agents.runAll", { timeoutMs: 5_000 }), 0);
 	assert.equal(requestedBlockingTimeoutMs("agents.run", { waitMs: 9_000, timeoutMs: 5_000 }), 9_000);
 	assert.equal(requestedBlockingTimeoutMs("agents.wait", { waitMs: 7_000 }), 7_000);
+	assert.equal(requestedBlockingTimeoutMs("agents.wait", { timeoutMs: 7_000 }), 7_000);
 	assert.equal(requestedBlockingTimeoutMs("agents.start", { timeoutMs: 5_000 }), 0);
 });
 

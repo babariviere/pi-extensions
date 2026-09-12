@@ -45,7 +45,7 @@ Two independent deadlines:
 | Deadline | Default | What happens when it hits |
 |----------|---------|---------------------------|
 | `waitMs` | `agents.waitMs` (10 min) | The call returns `{ state: "running", runId, ok: false }`. The child keeps working. Resume with `agents.wait({ runId })`, or let the result arrive on its own (see below). |
-| `timeoutMs` | `agents.timeoutMs` (2 h) | The child and its whole process group are killed and the run settles as failed, with whatever output it had produced. |
+| Child lifetime | `agents.timeoutMs` (2 h) | The child and its whole process group are killed and the run settles as failed, with whatever output it had produced. This is host configuration and cannot be overridden per call. |
 
 `request` fields:
 
@@ -58,7 +58,6 @@ Two independent deadlines:
 | `output` | no | **String** path (relative to cwd, or absolute) to persist the result at, instead of the auto run-dir file. There is no `output: false`: omit the field for the default path (a literal `"false"`/`"true"` is treated as omitted). |
 | `reads` | no | Files the agent should read first for context. Injected as a read-first instruction; the agent still needs a `read` tool. |
 | `waitMs` | no | How long to block before handing back a `running` handle. `0` returns as soon as the run is launched. Batch-level: on `runAll` it goes next to `tasks`, not inside an item. |
-| `timeoutMs` | no | Hard cap on the children's own lifetime, clamped to the configured cap. Batch-level, same as `waitMs`. |
 
 Resolves to `SpindleAgentResult`:
 
@@ -89,7 +88,7 @@ return { ok: result.ok, output: result.output };
 
 ## `agents.runAll({ tasks })`
 
-Runs several agents in parallel and waits for all of them, for at most `waitMs`. `tasks` is an array of the same request objects **without** the timing fields: `waitMs` and `timeoutMs` sit next to `tasks` and apply to the whole batch.
+Runs several agents in parallel and waits for all of them, for at most `waitMs`. `tasks` is an array of the same request objects **without** `waitMs`; the wait window sits next to `tasks` and applies to the whole batch.
 
 ```ts
 await agents.runAll({ tasks: [{ agent: "reviewer", task: "..." }], waitMs: 60_000 });
@@ -125,10 +124,8 @@ A `start` run is deliberately **not** tied to the turn that launched it: cancell
 
 ## `agents.wait({ runId, waitMs? })`
 
-`timeoutMs` is also accepted here as an alias for `waitMs`: `run`/`start`/`runAll` use
-`timeoutMs` for the child's own lifetime cap, so it is an easy name to reach for
-by habit. On `wait` it means the same thing as `waitMs` instead (this call's own
-wait window); `waitMs` wins if both are set.
+`timeoutMs` is also accepted here as an alias for `waitMs`. On `wait` it means
+this call's own wait window; `waitMs` wins if both are set.
 
 Resumes waiting on a launched batch. Resolves to:
 
