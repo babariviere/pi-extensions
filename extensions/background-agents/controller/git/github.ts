@@ -73,7 +73,7 @@ export class GitHubController {
 	}
 
 	private async gh(args: string[]): Promise<CommandResult> {
-		const result = await this.commandRunner("gh", args, {});
+		const result = await this.commandRunner("gh", args, { cwd: this.repository.root });
 		if (result.code !== 0) throw new GitHubCommandError(args, result);
 		return result;
 	}

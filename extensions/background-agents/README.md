@@ -43,7 +43,7 @@ The complete configuration is JSON. An example configuration is available at `ex
 | --- | --- | --- |
 | `configVersion` | `1` | Configuration version. Only `1` is accepted. |
 | `databasePath` | `~/.pi/agent/background-agents.sqlite` | Authoritative SQLite database on the remote host. |
-| `repositories` | `[]` | Repository records with `id`, `root`, `gitDir` (default `<root>/.git`), and `requiredChecks`. |
+| `repositories` | `[]` | Repository records with `id`, `root`, `gitDir` (default `<root>/.git`), `remote` (default `origin`), `defaultBaseBranch` (default `main`), and `requiredChecks`. |
 | `thresholds` | `{ "actionableMin": 70, "noiseMax": 30 }` | Global classifier thresholds. Both are integers from 0 to 100 and `noiseMax` must be below `actionableMin`. |
 | `thresholds.scopes` | absent | Optional maps named exactly `source`, `service`, `monitor`, `environment`, and `repository`; each entry has `actionableMin` and `noiseMax`. |
 | `pollIntervalsMs` | linear `300000`, datadog `60000`, slackReconnect `5000` | Poll/reconnect intervals in milliseconds. |
@@ -60,7 +60,7 @@ The complete configuration is JSON. An example configuration is available at `ex
 A repository's exact shape is:
 
 ```json
-{ "id": "repo-id", "root": "/srv/repositories/example", "gitDir": "/srv/repositories/example/.git", "requiredChecks": ["test"] }
+{ "id": "repo-id", "root": "/srv/repositories/example", "gitDir": "/srv/repositories/example/.git", "remote": "origin", "defaultBaseBranch": "main", "requiredChecks": ["test"] }
 ```
 
 A profile's exact shape is:

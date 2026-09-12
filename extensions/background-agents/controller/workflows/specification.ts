@@ -157,7 +157,45 @@ export class SpecificationWorkflow {
 			materialHash: latest.materialHash,
 			...(orderedWorkItems === undefined ? {} : { orderedWorkItems }),
 		};
-		return this.stateMachine.approveSpecification(caseId, specVersion, permissions, actor, options);
+		const result = this.stateMachine.approveSpecification(caseId, specVersion, permissions, actor, options);
+		this.queueNextWorker(caseId);
+		return result;
+	}
+
+	/** Queue exactly the next approved item after every earlier item is verified. */
+	queueNextWorker(caseId: string): string | undefined {
+		const approval = this.database.get<{ ordered_work_items: string | null }>(
+			"SELECT a.ordered_work_items FROM approvals a JOIN spec_versions s ON s.id = a.spec_version_id WHERE s.case_id = ? AND a.decision = 'approved' ORDER BY a.created_at DESC, a.id DESC LIMIT 1",
+			caseId,
+		);
+		if (!approval?.ordered_work_items) return undefined;
+		let ordered: string[];
+		try {
+			const value: unknown = JSON.parse(approval.ordered_work_items);
+			if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) return undefined;
+			ordered = value;
+		} catch {
+			return undefined;
+		}
+		for (let index = 0; index < ordered.length; index += 1) {
+			const workItemId = ordered[index];
+			const item = this.database.get<{ state: string }>("SELECT state FROM work_items WHERE id = ?", workItemId);
+			if (!item || item.state !== "queued") continue;
+			const previous = ordered
+				.slice(0, index)
+				.map((id) => this.database.get<{ state: string }>("SELECT state FROM work_items WHERE id = ?", id)?.state);
+			if (previous.some((state) => state !== "verified")) return undefined;
+			if (
+				this.database.get(
+					"SELECT id FROM jobs WHERE case_id = ? AND work_item_id = ? AND role = 'worker'",
+					caseId,
+					workItemId,
+				)
+			)
+				continue;
+			return this.database.createJob({ caseId, workItemId, role: "worker" });
+		}
+		return undefined;
 	}
 
 	context(caseId: string): PlannerContext {

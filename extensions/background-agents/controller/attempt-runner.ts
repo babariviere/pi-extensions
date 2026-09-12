@@ -9,7 +9,8 @@ import type { BackgroundAgentsConfig } from "../types.ts";
 import type { BackgroundAgentsDatabase, JobClaim } from "./database.ts";
 import { Classifier } from "./classification/classifier.ts";
 import { GitRepository } from "./git/repository.ts";
-import { GitWorktreeManager } from "./git/worktree.ts";
+import { backgroundBranch, GitWorktreeManager } from "./git/worktree.ts";
+import { GitHubEffects, type GitHubEffectClient } from "./effects/github.ts";
 import { BackgroundAgentsStateMachine } from "./state-machine.ts";
 import { buildContextManifest, type ContextManifest } from "./runtime/context.ts";
 import { launchAttemptThroughHerdr, type HerdrAttemptLaunchResult, type HerdrAttemptOptions } from "./runtime/herdr.ts";
@@ -27,7 +28,7 @@ import {
 	type PrivateQuestionBrief,
 } from "./workflows/question.ts";
 import { SpecificationWorkflow, type SpecificationDraft } from "./workflows/specification.ts";
-import { createEvidenceManifest } from "./verification/evidence.ts";
+import { createEvidenceManifest, formatEvidenceMarkdown } from "./verification/evidence.ts";
 import { verifyEvidence } from "./verification/verifier.ts";
 
 const require = createRequire(import.meta.url);
@@ -76,6 +77,9 @@ export interface ProductionAttemptRunnerOptions {
 	waitForUnit?: (unit: string, timeoutMs: number) => Promise<TransientServiceCompletion>;
 	repositoryFactory?: (root: string) => GitRepository;
 	worktreeFactory?: (repository: GitRepository, root: string) => GitWorktreeManager;
+	/** Injected for tests; production supplies the argv-only GitHub adapter from the controller entrypoint. */
+	githubClient?: GitHubEffectClient;
+	githubClientFactory?: (repository: GitRepository) => GitHubEffectClient;
 }
 
 const ROLE_ORDINAL: Record<AgentRole, number> = {
@@ -228,9 +232,10 @@ function attemptContext(
 		case_id: string;
 		case_state: string;
 		work_item_id: string | null;
+		manifest_id: string | null;
 		recovery_checkpoint_id: string | null;
 	}>(
-		"SELECT j.case_id, c.state AS case_state, j.work_item_id, a.recovery_checkpoint_id FROM jobs j JOIN cases c ON c.id = j.case_id JOIN attempts a ON a.id = ? WHERE j.id = ?",
+		"SELECT j.case_id, c.state AS case_state, j.work_item_id, j.manifest_id, a.recovery_checkpoint_id FROM jobs j JOIN cases c ON c.id = j.case_id JOIN attempts a ON a.id = ? WHERE j.id = ?",
 		claim.attemptId,
 		claim.jobId,
 	);
@@ -294,10 +299,12 @@ function attemptContext(
 		...base,
 	};
 	if (role === "verifier") {
-		const manifestRow = database.get<{ id: string }>(
-			"SELECT id FROM evidence_manifests WHERE case_id = ? ORDER BY version DESC LIMIT 1",
-			row.case_id,
-		);
+		const manifestRow = row.manifest_id
+			? { id: row.manifest_id }
+			: database.get<{ id: string }>(
+					"SELECT id FROM evidence_manifests WHERE case_id = ? ORDER BY version DESC LIMIT 1",
+					row.case_id,
+				);
 		if (!manifestRow) throw new Error(`No evidence manifest exists for case ${row.case_id}`);
 		context.evidenceManifest = database.getEvidenceManifest(manifestRow.id);
 	}
@@ -339,6 +346,8 @@ export class ProductionAttemptRunner {
 			let worktreeDirectory = join(attemptRoot, job.case_id, `${claim.attemptId}-workspace`);
 			let branch: string | undefined;
 			let baseRef = "HEAD";
+			let baseBranch = repository?.defaultBaseBranch ?? "main";
+			let githubEffects: GitHubEffects | undefined;
 			if (repository) {
 				const git = (this.options.repositoryFactory ?? ((root) => new GitRepository(root)))(repository.root);
 				const manager = (this.options.worktreeFactory ?? ((repo, root) => new GitWorktreeManager(repo, root)))(
@@ -347,6 +356,17 @@ export class ProductionAttemptRunner {
 						join(dirname(this.options.config.databasePath), "background-worktrees", repository.id),
 				);
 				baseRef = (await git.checked(["rev-parse", "HEAD"])).trim();
+				if (role === "worker" && job.work_item_id) {
+					const parent = database.get<{ ordinal: number; branch: string | null; state: string }>(
+						"SELECT parent.ordinal, parent.branch, parent.state FROM work_items item JOIN work_items parent ON parent.id = item.parent_id WHERE item.id = ?",
+						job.work_item_id,
+					);
+					if (parent) {
+						if (parent.state !== "verified") throw new Error("worker parent work item is not verified");
+						baseBranch = parent.branch ?? backgroundBranch(job.case_id, parent.ordinal);
+						baseRef = (await git.checked(["rev-parse", `${baseBranch}^{commit}`])).trim();
+					}
+				}
 				if (role === "verifier") {
 					const manifestRow = database.get<{ id: string; base_sha: string; candidate_sha: string }>(
 						job.manifest_id
@@ -383,6 +403,28 @@ export class ProductionAttemptRunner {
 					branch ?? null,
 					claim.attemptId,
 				);
+				if (role === "worker" && job.work_item_id && branch) {
+					database.run(
+						"UPDATE work_items SET branch = ?, worktree = ?, updated_at = ? WHERE id = ?",
+						branch,
+						worktreeDirectory,
+						new Date().toISOString(),
+						job.work_item_id,
+					);
+				}
+				if (
+					role === "verifier" &&
+					job.work_item_id &&
+					(this.options.githubClient !== undefined || this.options.githubClientFactory !== undefined)
+				) {
+					const pullRequest = database.get<{ pull_request: number | null }>(
+						"SELECT pull_request FROM work_items WHERE id = ?",
+						job.work_item_id,
+					);
+					if (!pullRequest?.pull_request) throw new Error("verifier job is not bound to a pull request");
+				}
+				const client = this.options.githubClientFactory?.(git) ?? this.options.githubClient;
+				if (client) githubEffects = new GitHubEffects(database, client, { owner: `background:${claim.attemptId}` });
 			} else {
 				if (role === "worker" || role === "verifier") throw new Error(`${role} requires a configured repository`);
 				mkdirSync(worktreeDirectory, { recursive: true, mode: 0o700 });
@@ -435,7 +477,7 @@ export class ProductionAttemptRunner {
 					JSON.stringify({
 						manifest,
 						version: VERIFICATION_RESULT_VERSION,
-						...(pullRequest?.pull_request ? { prNumber: pullRequest.pull_request } : {}),
+						prNumber: pullRequest?.pull_request,
 					}) + "\\n",
 					{ mode: 0o600 },
 				);
@@ -534,8 +576,8 @@ export class ProductionAttemptRunner {
 							rationale: "test verifier artifact",
 							uncertainties: [],
 						},
-						ci: { checks: {}, results: [], allRequiredPassed: false, missing: [], uncertainties: [] },
-						candidateSha: "",
+						ci: { checks: {}, results: [], allRequiredPassed: true, missing: [], uncertainties: [] },
+						candidateSha: job.expected_candidate_sha ?? "",
 					};
 				}
 			}
@@ -556,8 +598,13 @@ export class ProductionAttemptRunner {
 				artifact.output,
 				repository?.root,
 				worktreeDirectory,
+				attemptDirectory,
 				baseRef,
 				verificationReport,
+				baseBranch,
+				repository?.remote,
+				githubEffects,
+				repository ? combinedRequiredChecks(this.options.config.ci.requiredChecks, repository.requiredChecks) : [],
 			);
 			return { state: "succeeded" };
 		} catch (error) {
@@ -583,8 +630,13 @@ export class ProductionAttemptRunner {
 		output: Record<string, unknown>,
 		repository: string | undefined,
 		worktree: string,
+		attemptDirectory: string,
 		baseRef: string,
 		verificationReport?: unknown,
+		baseBranch = "main",
+		remote = "origin",
+		githubEffects?: GitHubEffects,
+		requiredChecks: readonly string[] = [],
 	): Promise<void> {
 		if (job.role === "classifier") {
 			const event = latestEvent(database, job.case_id);
@@ -652,17 +704,55 @@ export class ProductionAttemptRunner {
 				baseSha: baseRef,
 				candidateSha: commitSha,
 			});
-			const manifestPath = join(worktree, ".background-evidence-manifest.json");
+			const manifestPath = join(attemptDirectory, "evidence-manifest.json");
 			await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
+			const manifestBytes = await readFile(manifestPath);
 			database.createArtifact({
 				caseId: job.case_id,
 				attemptId: claim.attemptId,
 				kind: "evidence-manifest",
 				path: manifestPath,
-				hash: createHash("sha256").update(JSON.stringify(manifest)).digest("hex"),
+				hash: createHash("sha256").update(manifestBytes).digest("hex"),
 				metadata: { version: manifest.version },
 			});
 			const manifestId = database.createEvidenceManifest({ caseId: job.case_id, manifest });
+			const workItemBranch = database.get<{ branch: string | null }>(
+				"SELECT branch FROM work_items WHERE id = ?",
+				job.work_item_id,
+			)?.branch;
+			if (!workItemBranch) throw new Error("worker branch is unavailable");
+			database.run(
+				"UPDATE work_items SET branch = ?, worktree = ?, updated_at = ? WHERE id = ?",
+				workItemBranch,
+				worktree,
+				new Date().toISOString(),
+				job.work_item_id,
+			);
+			if (githubEffects) {
+				await githubEffects.pushBranch({ worktree, branch: workItemBranch, remote, expectedHeadSha: commitSha });
+				const title = database.get<{ title: string }>(
+					"SELECT title FROM work_items WHERE id = ?",
+					job.work_item_id,
+				)?.title;
+				if (!title) throw new Error("worker work item title is unavailable");
+				const body = formatEvidenceMarkdown(manifest);
+				const pullRequest = await githubEffects.createDraftPullRequest({
+					worktree,
+					branch: workItemBranch,
+					base: baseBranch,
+					title,
+					body,
+				});
+				database.run(
+					"UPDATE work_items SET branch = ?, worktree = ?, pull_request = ?, updated_at = ? WHERE id = ?",
+					workItemBranch,
+					worktree,
+					pullRequest.number,
+					new Date().toISOString(),
+					job.work_item_id,
+				);
+				await githubEffects.updatePullRequest(pullRequest.number, { title, body });
+			}
 			const machine = new BackgroundAgentsStateMachine(database);
 			const state = database.get<{ state: string }>(
 				"SELECT state FROM work_items WHERE id = ?",
@@ -711,15 +801,57 @@ export class ProductionAttemptRunner {
 			const report = verificationReport as Awaited<ReturnType<typeof verifyEvidence>>;
 			if (!report || !["pass", "fail", "needs-human"].includes(report.verdict))
 				throw new Error("verifier result is missing or invalid");
-			database.createVerificationRun({ manifestId: row.id, report, resultVersion: VERIFICATION_RESULT_VERSION });
+			const verificationRunId = database.createVerificationRun({
+				manifestId: row.id,
+				report,
+				resultVersion: VERIFICATION_RESULT_VERSION,
+			});
 			if (report.verdict === "pass") {
-				if (job.work_item_id)
-					new BackgroundAgentsStateMachine(database).transitionWorkItem(
+				if (
+					githubEffects &&
+					(report.candidateSha.toLowerCase() !== manifest.candidateSha.toLowerCase() ||
+						!report.ci.allRequiredPassed ||
+						requiredChecks.some((check) => report.ciChecks[check] !== "pass"))
+				)
+					throw new Error("verification pass is not bound to the exact manifest SHA and required CI");
+				if (githubEffects) {
+					const pullRequest = database.get<{ pull_request: number | null }>(
+						"SELECT pull_request FROM work_items WHERE id = ?",
 						job.work_item_id,
-						"verified",
-						"verifier",
-						"independent verification passed",
 					);
+					if (!pullRequest?.pull_request) throw new Error("verified work item has no pull request");
+					const ready = await githubEffects.readyForReview({
+						reference: pullRequest.pull_request,
+						verifiedCommit: manifest.candidateSha,
+						verificationPassed: true,
+						requiredCiPassed: report.ci.allRequiredPassed,
+						manifestId: row.id,
+						verificationRunId,
+						requiredChecks,
+					});
+					if (ready.status === "blocked") throw new Error("pull request head changed before readiness");
+				}
+				if (job.work_item_id)
+					if (
+						database.get<{ state: string }>("SELECT state FROM work_items WHERE id = ?", job.work_item_id)
+							?.state === "verification"
+					)
+						new BackgroundAgentsStateMachine(database).transitionWorkItem(
+							job.work_item_id,
+							"verified",
+							"verifier",
+							"independent verification passed",
+						);
+				if (githubEffects) {
+					const branches = database
+						.all<{ branch: string }>(
+							"SELECT branch FROM work_items WHERE case_id = ? AND state = 'verified' AND branch IS NOT NULL AND pull_request IS NOT NULL ORDER BY ordinal",
+							job.case_id,
+						)
+						.map((item) => item.branch);
+					await githubEffects.linkStack(branches);
+				}
+				new SpecificationWorkflow(database).queueNextWorker(job.case_id);
 				const state = database.get<{ state: string }>("SELECT state FROM cases WHERE id = ?", job.case_id)?.state;
 				if (state === "verification")
 					database.transitionCase(

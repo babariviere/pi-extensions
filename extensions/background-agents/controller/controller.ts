@@ -493,7 +493,7 @@ export class BackgroundAgentsController {
 	}
 	private dispatchAllowed(role: string, state: string, rollout: RolloutMode): boolean {
 		if (rollout === "observe" && role !== "investigator") return false;
-		return role !== "worker" || state === "implementation";
+		return role !== "worker" || ["implementation", "verification", "pull-request-review"].includes(state);
 	}
 	private async setEmergencyStop(enabled: boolean): Promise<{ accepted: true }> {
 		this.providerScheduler.setEmergencyStop(enabled, this.operator);

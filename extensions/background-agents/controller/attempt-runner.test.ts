@@ -7,8 +7,15 @@ import { normalizeBackgroundAgentsConfig } from "../config.ts";
 import { BackgroundAgentsDatabase } from "./database.ts";
 import { GitRepository } from "./git/repository.ts";
 import { GitWorktreeManager, backgroundBranch, type WorktreeRecord } from "./git/worktree.ts";
-import { combinedRequiredChecks, ProductionAttemptRunner } from "./attempt-runner.ts";
+import {
+	combinedRequiredChecks,
+	ProductionAttemptRunner,
+	VERIFICATION_RESULT_FILE,
+	VERIFICATION_RESULT_VERSION,
+} from "./attempt-runner.ts";
+import type { GitHubEffectClient } from "./effects/github.ts";
 import { BackgroundAgentsStateMachine } from "./state-machine.ts";
+import { JobScheduler } from "./jobs.ts";
 import { SpecificationWorkflow } from "./workflows/specification.ts";
 import { createEvidenceManifest } from "./verification/evidence.ts";
 
@@ -264,6 +271,257 @@ test("invalid or missing result artifacts require human review", async () => {
 		assert.equal(result.state, "needs-human");
 		assert.match(result.failure ?? "", /result artifact/);
 		assert.equal(database.get("SELECT id FROM investigation_reports WHERE case_id = ?", caseId), undefined);
+	} finally {
+		database.close();
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("delivers an approved two-item stack through durable GitHub effects", async () => {
+	const root = mkdtempSync(join(tmpdir(), "background-stack-runner-"));
+	const database = new BackgroundAgentsDatabase(":memory:");
+	const baseSha = "0".repeat(40);
+	const candidateShas = ["1".repeat(40), "2".repeat(40)];
+	const branches = [backgroundBranch("case-stack", 1), backgroundBranch("case-stack", 2)];
+	const heads = new Map<string, string>();
+	const pullRequests = new Map<
+		number,
+		{
+			number: number;
+			url: string;
+			branch: string;
+			base: string;
+			isDraft: boolean;
+			headSha?: string;
+			title?: string;
+			body?: string;
+		}
+	>();
+	const ready: number[] = [];
+	const linked: string[][] = [];
+	let nextNumber = 1;
+	const client: GitHubEffectClient = {
+		pushBranch: async (_worktree, branch, remote) => {
+			assert.equal(remote, "upstream");
+			heads.set(branch, candidateShas[branches.indexOf(branch)] ?? "");
+		},
+		getBranchHead: async (branch) => heads.get(branch) ?? null,
+		findPullRequest: async (branch, base) =>
+			[...pullRequests.values()].find((pullRequest) => pullRequest.branch === branch && pullRequest.base === base) ??
+			null,
+		createDraftPullRequest: async (input) => {
+			const pullRequest = {
+				number: nextNumber++,
+				url: `https://github.test/pr/${nextNumber}`,
+				branch: input.branch,
+				base: input.base,
+				isDraft: true,
+				headSha: heads.get(input.branch),
+				title: input.title,
+				body: input.body,
+			};
+			pullRequests.set(pullRequest.number, pullRequest);
+			return pullRequest;
+		},
+		updatePullRequest: async (reference, metadata) => {
+			const pullRequest = pullRequests.get(Number(reference));
+			assert.ok(pullRequest);
+			Object.assign(pullRequest, metadata);
+		},
+		getPullRequest: async (reference) => pullRequests.get(Number(reference)) ?? null,
+		linkStack: async (items) => {
+			linked.push([...items]);
+		},
+		isStackLinked: async () => linked.length > 0,
+		markReady: async (reference, boundary) => {
+			assert.equal(boundary.passed, true);
+			assert.equal(boundary.requiredCiPassed, true);
+			const pullRequest = pullRequests.get(Number(reference));
+			assert.ok(pullRequest);
+			pullRequest.isDraft = false;
+			ready.push(Number(reference));
+		},
+	};
+	const config = normalizeBackgroundAgentsConfig({
+		databasePath: join(root, "controller.sqlite"),
+		repositories: [
+			{
+				id: "repo",
+				root,
+				gitDir: join(root, ".git"),
+				remote: "upstream",
+				defaultBaseBranch: "trunk",
+				requiredChecks: ["repository-ci"],
+			},
+		],
+		ci: { requiredChecks: ["global-ci"] },
+		profiles: [{ id: "profile", provider: "anthropic", agentDir: root, allowedModels: ["model"] }],
+	});
+	const gitRunner = async (_command: string, args: string[]) => {
+		const cwd = args[1] ?? "";
+		if (args[2] === "rev-parse") {
+			if (cwd.endsWith("/1")) return { code: 0, stdout: `${candidateShas[0]}\n`, stderr: "" };
+			if (cwd.endsWith("/2")) return { code: 0, stdout: `${candidateShas[1]}\n`, stderr: "" };
+			if (args[3]?.includes("background/case-stack/1"))
+				return { code: 0, stdout: `${candidateShas[0]}\n`, stderr: "" };
+			return { code: 0, stdout: `${baseSha}\n`, stderr: "" };
+		}
+		return { code: 0, stdout: "", stderr: "" };
+	};
+	const runner = new ProductionAttemptRunner({
+		config,
+		attemptRoot: join(root, "attempts"),
+		worktreeRoot: join(root, "worktrees"),
+		repositoryFactory: (path) => new GitRepository(path, gitRunner),
+		worktreeFactory: (repository, path) => new TestWorktrees(repository, path),
+		githubClient: client,
+		launch: async (options) => {
+			const resultPath = String(options.context.context.resultPath);
+			const workItem = options.context.context.workItem as { ordinal?: number } | undefined;
+			const ordinal = Number(workItem?.ordinal ?? (options.worktreeDirectory.endsWith("/1") ? 1 : 2));
+			const candidateSha = candidateShas[ordinal - 1] ?? baseSha;
+			if (options.role === "worker") {
+				writeFileSync(
+					resultPath,
+					JSON.stringify({
+						version: 1,
+						attemptId: options.attemptId,
+						jobId: String(options.context.context.jobId),
+						role: "worker",
+						state: "succeeded",
+						output: {
+							commitSha: candidateSha,
+							evidenceManifest: {
+								baseSha: ordinal === 1 ? baseSha : candidateShas[ordinal - 2],
+								candidateSha,
+								commands: [
+									{ executable: "true", argv: [], timeoutMs: 1000, phase: "candidate", purpose: "acceptance" },
+								],
+							},
+						},
+					}),
+				);
+			} else {
+				const checks = { "global-ci": "pass", "repository-ci": "pass" } as const;
+				writeFileSync(
+					resultPath,
+					JSON.stringify({
+						version: 1,
+						attemptId: options.attemptId,
+						jobId: String(options.context.context.jobId),
+						role: "verifier",
+						state: "succeeded",
+						output: { verdict: "pass" },
+					}),
+				);
+				writeFileSync(
+					join(options.attemptDirectory, VERIFICATION_RESULT_FILE),
+					JSON.stringify({
+						version: VERIFICATION_RESULT_VERSION,
+						report: {
+							verdict: "pass",
+							confidence: { score: 95, rationale: "exact", uncertainties: [] },
+							ciChecks: checks,
+							rationale: "exact",
+							uncertainties: [],
+							replay: {
+								passed: true,
+								clean: true,
+								ancestry: true,
+								commands: [],
+								rationale: "exact",
+								uncertainties: [],
+							},
+							ci: { checks, results: [], allRequiredPassed: true, missing: [], uncertainties: [] },
+							candidateSha,
+						},
+					}),
+				);
+			}
+			return {
+				attemptId: options.attemptId,
+				unit: `unit-${options.attemptId}`,
+				tabId: "tab",
+				paneId: "pane",
+				contextPath: "context",
+				command: [],
+			};
+		},
+		waitForUnit: async () => ({ state: "succeeded" }),
+	});
+	try {
+		const caseId = database.createCase({ id: "case-stack", title: "stack", source: "manual", repository: "repo" });
+		const machine = new BackgroundAgentsStateMachine(database);
+		const first = machine.createWorkItem({ caseId, ordinal: 1, title: "bottom" });
+		const second = machine.createWorkItem({ caseId, ordinal: 2, parentId: first, title: "top" });
+		database.transitionCase(caseId, "classified", "test");
+		database.transitionCase(caseId, "specification", "test");
+		const specification = new SpecificationWorkflow(database);
+		specification.recordPlannerResult(caseId, {
+			specification: {},
+			decisions: [],
+			unresolvedQuestions: [],
+			permissions: [],
+			plannerSummary: "stack",
+		});
+		specification.approve(caseId, 1, [], "operator", [first, second]);
+		const execute = async (jobId: string) => {
+			const claim = database.claimJob(jobId, "test");
+			assert.ok(claim);
+			const result = await runner.run(claim!, database);
+			assert.equal(result.state, "succeeded", result.failure ?? "");
+			assert.equal(
+				new JobScheduler(database).finishAttempt({ attemptId: claim!.attemptId, state: "succeeded" }, "test"),
+				true,
+			);
+		};
+		const firstWorker = database.get<{ id: string }>(
+			"SELECT id FROM jobs WHERE work_item_id = ? AND role = 'worker'",
+			first,
+		);
+		assert.ok(firstWorker);
+		await execute(firstWorker!.id);
+		const firstVerifier = database.get<{ id: string }>(
+			"SELECT id FROM jobs WHERE work_item_id = ? AND role = 'verifier'",
+			first,
+		);
+		assert.ok(firstVerifier);
+		await execute(firstVerifier!.id);
+		const secondWorker = database.get<{ id: string }>(
+			"SELECT id FROM jobs WHERE work_item_id = ? AND role = 'worker'",
+			second,
+		);
+		assert.ok(secondWorker);
+		await execute(secondWorker!.id);
+		const secondVerifier = database.get<{ id: string }>(
+			"SELECT id FROM jobs WHERE work_item_id = ? AND role = 'verifier'",
+			second,
+		);
+		assert.ok(secondVerifier);
+		await execute(secondVerifier!.id);
+		assert.deepEqual(ready, [1, 2]);
+		assert.deepEqual(linked, [branches]);
+		assert.equal(
+			database.get<{ pull_request: number }>("SELECT pull_request FROM work_items WHERE id = ?", first)
+				?.pull_request,
+			1,
+		);
+		assert.equal(
+			database.get<{ pull_request: number }>("SELECT pull_request FROM work_items WHERE id = ?", second)
+				?.pull_request,
+			2,
+		);
+		assert.equal(
+			[...pullRequests.values()].every((pullRequest) => !pullRequest.isDraft),
+			true,
+		);
+		assert.equal(database.all("SELECT id FROM jobs WHERE role = 'worker'").length, 2);
+		assert.equal(
+			database
+				.all("SELECT path FROM artifacts WHERE kind = 'evidence-manifest'")
+				.every((row) => !String(row.path).includes("worktrees")),
+			true,
+		);
 	} finally {
 		database.close();
 		rmSync(root, { recursive: true, force: true });

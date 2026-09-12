@@ -173,7 +173,11 @@ export class GitHubEffects {
 			},
 			perform: async () => {
 				const pushed = await this.client.pushBranch(input.worktree, input.branch, remote);
-				return { branch: input.branch, remote, ...(pushed?.headSha ? { headSha: pushed.headSha } : {}) };
+				const headSha = pushed?.headSha ?? (await this.client.getBranchHead(input.branch, remote));
+				if (!headSha) throw new Error("GitHub branch head is unavailable after push");
+				if (input.expectedHeadSha && headSha.toLowerCase() !== input.expectedHeadSha.toLowerCase())
+					throw new Error("pushed branch head does not match expected commit");
+				return { branch: input.branch, remote, headSha };
 			},
 		});
 		return result;

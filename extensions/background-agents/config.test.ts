@@ -17,6 +17,22 @@ test("normalizes safe defaults and rollout overrides", () => {
 	assert.equal(config.rollout.defaultMode, "supervised");
 	assert.equal(config.rollout.sourceOverrides.slack, "observe");
 	assert.deepEqual(config.thresholds, { actionableMin: 80, noiseMax: 20 });
+	const repository = normalizeBackgroundAgentsConfig({ repositories: [{ id: "repo", root: "/tmp/repo" }] })
+		.repositories[0];
+	assert.equal(repository?.remote, "origin");
+	assert.equal(repository?.defaultBaseBranch, "main");
+});
+
+test("validates repository delivery settings", () => {
+	assert.throws(
+		() => normalizeBackgroundAgentsConfig({ repositories: [{ id: "repo", root: "/tmp/repo", remote: " " }] }),
+		/repositories\[0\]\.remote/,
+	);
+	assert.throws(
+		() =>
+			normalizeBackgroundAgentsConfig({ repositories: [{ id: "repo", root: "/tmp/repo", defaultBaseBranch: " " }] }),
+		/defaultBaseBranch/,
+	);
 });
 
 test("does not expose a configurable Linear query", () => {

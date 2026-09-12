@@ -193,6 +193,8 @@ function repository(value: unknown, index: number, baseDir: string): RepositoryC
 		id: stringValue(input.id, `repositories[${index}].id`),
 		root,
 		gitDir: pathValue(input.gitDir ?? `${root}/.git`, `repositories[${index}].gitDir`, baseDir),
+		remote: stringValue(input.remote ?? "origin", `repositories[${index}].remote`),
+		defaultBaseBranch: stringValue(input.defaultBaseBranch ?? "main", `repositories[${index}].defaultBaseBranch`),
 		requiredChecks: stringList(input.requiredChecks, `repositories[${index}].requiredChecks`),
 	};
 }
@@ -243,6 +245,10 @@ function validateConfig(
 	}
 	if (new Set(config.repositories.map((item) => item.id)).size !== config.repositories.length)
 		throw new Error("repository ids must be unique");
+	for (const item of config.repositories) {
+		if (!item.remote.trim()) throw new Error(`repository ${item.id}.remote must be non-empty`);
+		if (!item.defaultBaseBranch.trim()) throw new Error(`repository ${item.id}.defaultBaseBranch must be non-empty`);
+	}
 	if (new Set(config.profiles.map((item) => item.id)).size !== config.profiles.length)
 		throw new Error("profile ids must be unique");
 	const controllerUid = checkPaths ? (config.socket.ownerUid ?? process.getuid?.()) : undefined;

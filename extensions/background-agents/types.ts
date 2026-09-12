@@ -457,6 +457,8 @@ export interface RepositoryConfig {
 	id: string;
 	root: string;
 	gitDir: string;
+	remote: string;
+	defaultBaseBranch: string;
 	requiredChecks: string[];
 }
 

@@ -2,12 +2,17 @@ import { pathToFileURL } from "node:url";
 import { loadBackgroundAgentsConfig } from "../config.ts";
 import { createProductionAttemptRunner } from "./attempt-runner.ts";
 import { createBackgroundAgentsController, type BackgroundAgentsController } from "./controller.ts";
+import { GitHubController } from "./git/github.ts";
+import { GitHubControllerEffectClient } from "./effects/github.ts";
 
 export async function runBackgroundAgentsController(configPath?: string): Promise<BackgroundAgentsController> {
 	const config = loadBackgroundAgentsConfig({ path: configPath, checkPaths: true });
 	const controller = createBackgroundAgentsController({
 		config,
-		attemptRunner: createProductionAttemptRunner({ config }),
+		attemptRunner: createProductionAttemptRunner({
+			config,
+			githubClientFactory: (repository) => new GitHubControllerEffectClient(new GitHubController(repository)),
+		}),
 	});
 	let stopping: Promise<void> | undefined;
 	const stop = async () => {
