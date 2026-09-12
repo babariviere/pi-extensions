@@ -32,6 +32,7 @@ import { RecoveryCoordinator } from "./recovery.ts";
 import { createSqliteBackup } from "./backup.ts";
 import { BackgroundAgentsStateMachine } from "./state-machine.ts";
 import { QuestionWorkflow } from "./workflows/question.ts";
+import { QuickFixWorkflow } from "./workflows/investigation.ts";
 import { SpecificationWorkflow } from "./workflows/specification.ts";
 import { reproduceEvidenceOperation } from "./verification/reproduce.ts";
 import { BackgroundSocketServer } from "./socket-server.ts";
@@ -351,6 +352,7 @@ export class BackgroundAgentsController {
 	private readonly recovery: Pick<RecoveryCoordinator, "reconcileAttempt">;
 	private readonly stateMachine: BackgroundAgentsStateMachine;
 	private readonly questions: QuestionWorkflow;
+	private readonly quickFixes: QuickFixWorkflow;
 	private readonly specifications: SpecificationWorkflow;
 	private readonly options: BackgroundControllerOptions;
 	private readonly timers: ReturnType<typeof setInterval>[] = [];
@@ -394,7 +396,7 @@ export class BackgroundAgentsController {
 					...sourceOptions,
 					rolloutMode: sourceOptions?.rolloutMode ?? this.rolloutFor(event.source, event.repository),
 				});
-				if (result.inserted) void this.processSourceEvent(result, event);
+				this.database.reconcileClassifierJob(result.caseId);
 				return result;
 			},
 			recordSourceEventAndAdvanceCursor: (event, cursor, sourceOptions) => {
@@ -402,7 +404,7 @@ export class BackgroundAgentsController {
 					...sourceOptions,
 					rolloutMode: sourceOptions?.rolloutMode ?? this.rolloutFor(event.source, event.repository),
 				});
-				if (result.inserted) void this.processSourceEvent(result, event);
+				this.database.reconcileClassifierJob(result.caseId);
 				return result;
 			},
 			setSourceCursor: (source, cursor, revision) => this.database.setSourceCursor(source, cursor, revision),
@@ -425,6 +427,7 @@ export class BackgroundAgentsController {
 		this.recovery = options.recovery ?? new RecoveryCoordinator(this.database, { owner: this.owner });
 		this.stateMachine = new BackgroundAgentsStateMachine(this.database);
 		this.questions = new QuestionWorkflow(this.database);
+		this.quickFixes = new QuickFixWorkflow(this.database);
 		this.specifications = new SpecificationWorkflow(this.database);
 		this.sourceAdapters = [...(options.sources ?? this.productionSources(store))];
 	}
@@ -473,46 +476,11 @@ export class BackgroundAgentsController {
 			this.runtimeRollout.defaultMode
 		);
 	}
-	private async processSourceEvent(result: SourceEventResult, event: SourceEvent): Promise<void> {
-		try {
-			const classification = await this.classifier.classify(result.caseId, event);
-			const current = this.database.get<{ state: string }>(
-				"SELECT state FROM cases WHERE id = ?",
-				result.caseId,
-			)?.state;
-			if (current === "intake")
-				this.database.transitionCase(result.caseId, "classified", "classifier", "input classified");
-			if (classification.classification.inputKind === "question") {
-				this.questions.start(result.caseId, event.body, {
-					maxTimeMs: this.config.question.maxRuntimeMs,
-					maxAttempts: this.config.question.maxAttempts,
-					maxResults: this.config.question.maxResults,
-				});
-			} else if (
-				classification.classification.disposition === "actionable" &&
-				this.rolloutFor(event.source, event.repository) !== "observe"
-			)
-				this.queueInvestigation(result.caseId);
-		} catch {
-			/* failed classification remains durably ingested */
-		}
-	}
-	private queueInvestigation(caseId: string): void {
-		const state = this.database.get<{ state: string }>("SELECT state FROM cases WHERE id = ?", caseId)?.state;
-		if (state === "classified")
-			this.database.transitionCase(caseId, "investigating", "controller", "investigation queued");
-		if (
-			!this.database.get(
-				"SELECT id FROM jobs WHERE case_id = ? AND role = 'investigator' AND state IN ('queued', 'running')",
-				caseId,
-			)
-		)
-			this.database.createJob({ caseId, role: "investigator" });
-	}
 	async start(): Promise<void> {
 		if (this.started) return;
 		this.started = true;
 		this.stopping = false;
+		this.database.reconcileClassifierJobs();
 		if (this.options.startSocket !== false) {
 			this.socket = new BackgroundSocketServer({ ...this.config.socket, handle: (request) => this.handle(request) });
 			await this.socket.start();
@@ -568,6 +536,11 @@ export class BackgroundAgentsController {
 	}
 	private async schedulerTick(): Promise<void> {
 		if (!this.options.attemptRunner || this.providerScheduler.emergencyStop) return;
+		this.database.reconcileClassifierRetries(
+			this.config.classifier.maxAttempts,
+			this.config.classifier.retryBackoffMs,
+			this.options.clock?.() ?? new Date(),
+		);
 		const candidates = this.database.all<{ id: string; role: string; state: string; rollout_mode: RolloutMode }>(
 			"SELECT j.id, j.role, c.state, c.rollout_mode FROM jobs j JOIN cases c ON c.id = j.case_id WHERE j.state = 'queued' ORDER BY j.priority DESC, j.created_at ASC, j.id ASC",
 		);
@@ -597,7 +570,7 @@ export class BackgroundAgentsController {
 				}
 			}
 			this.jobs.finishAttempt(
-				{ attemptId: claim.attemptId, state: result.state, failure: result.failure },
+				{ attemptId: claim.attemptId, state: result.state, failure: result.failure, now: this.options.clock?.() },
 				this.owner,
 			);
 		};
@@ -615,7 +588,17 @@ export class BackgroundAgentsController {
 					: undefined;
 				const event = eventRow ? this.database.getSourceEvent(eventRow.id) : undefined;
 				const issue = event ? linearIssueFromEvent(event) : undefined;
-				if (issue && !(claimedRole === "investigator" && candidateStateIsQuestion(this.database, claim.jobId)))
+				const repository = caseRow
+					? this.database.get<{ repository: string | null }>(
+							"SELECT repository FROM cases WHERE id = ?",
+							caseRow.case_id,
+						)?.repository
+					: undefined;
+				if (
+					issue &&
+					repository &&
+					!(claimedRole === "investigator" && candidateStateIsQuestion(this.database, claim.jobId))
+				)
 					await this.linearEffects.startWork({ issue, phase, owner: this.owner, stopEpoch: claim.stopEpoch });
 			}
 			const result = await this.options.attemptRunner.run(claim, this.database);
@@ -628,7 +611,7 @@ export class BackgroundAgentsController {
 		}
 	}
 	private dispatchAllowed(role: string, state: string, rollout: RolloutMode): boolean {
-		if (rollout === "observe" && role !== "investigator") return false;
+		if (rollout === "observe" && role !== "classifier" && role !== "investigator") return false;
 		return role !== "worker" || ["implementation", "verification", "pull-request-review"].includes(state);
 	}
 	private async setEmergencyStop(enabled: boolean): Promise<{ accepted: true }> {
@@ -901,6 +884,29 @@ export class BackgroundAgentsController {
 					createdAt: dashboardText(row.created_at, 40),
 				})),
 		);
+		const quickFixProposals = dashboardRows(
+			this.database
+				.all<Record<string, unknown>>(
+					"SELECT id, case_id, work_item_id, findings, scope, risks, verification_plan, decision, rollout_mode, decision_reason, decided_by, created_at, updated_at FROM quick_fix_proposals ORDER BY updated_at DESC, id DESC",
+				)
+				.map((row) => ({
+					id: dashboardText(row.id, 120),
+					caseId: dashboardText(row.case_id, 120),
+					workItemId: dashboardText(row.work_item_id, 120),
+					findings: dashboardText(row.findings),
+					scope: dashboardText(row.scope),
+					risks: dashboardList(parseDashboardJson(row, "risks", [])),
+					verificationPlan: dashboardList(parseDashboardJson(row, "verification_plan", [])),
+					rolloutMode: row.rollout_mode as NonNullable<
+						DashboardSnapshot["quickFixProposals"]
+					>[number]["rolloutMode"],
+					decision: row.decision as NonNullable<DashboardSnapshot["quickFixProposals"]>[number]["decision"],
+					decisionReason: dashboardText(row.decision_reason),
+					...(row.decided_by == null ? {} : { decidedBy: dashboardText(row.decided_by, 120) }),
+					createdAt: dashboardText(row.created_at, 40),
+					updatedAt: dashboardText(row.updated_at, 40),
+				})),
+		);
 		const feedback = dashboardRows(
 			this.database
 				.all<Record<string, unknown>>(
@@ -1087,6 +1093,7 @@ export class BackgroundAgentsController {
 			memory,
 			specifications,
 			approvals,
+			quickFixProposals,
 			feedback,
 			questionBriefs,
 			artifacts,
@@ -1204,6 +1211,8 @@ export class BackgroundAgentsController {
 				if (!latest) throw new Error("case has no specification");
 				return this.specifications.approve(caseId, latest.version, [], this.operator);
 			}
+			case "approve-quick-fix":
+				return this.quickFixes.approve(caseId, this.operator);
 			case "request-changes": {
 				const latest = this.database.getLatestSpecification(caseId);
 				if (!latest) throw new Error("case has no specification");

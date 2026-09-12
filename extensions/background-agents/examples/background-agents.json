@@ -139,7 +139,9 @@
     "modelVersion": "<classifier-model-version>",
     "policyScope": "<optional-policy-scope>",
     "exampleLimit": 12,
-    "relatedCaseLimit": 8
+    "relatedCaseLimit": 8,
+    "maxAttempts": 3,
+    "retryBackoffMs": 30000
   },
   "controller": {
     "usageMs": 300000,

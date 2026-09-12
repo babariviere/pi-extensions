@@ -42,7 +42,7 @@ const CASE_STATES: CaseState[] = [
 
 const CASE_TRANSITIONS: Record<CaseState, readonly CaseState[]> = {
 	intake: ["classified", "cancelled"],
-	classified: ["investigating", "question-analysis", "specification", "paused", "cancelled"],
+	classified: ["investigating", "question-analysis", "specification", "blocked", "paused", "cancelled"],
 	investigating: ["question-analysis", "specification", "awaiting-approval", "paused", "cancelled"],
 	"question-analysis": ["investigating", "handled", "paused", "cancelled"],
 	specification: ["awaiting-approval", "paused", "cancelled"],
@@ -359,6 +359,34 @@ export interface InvestigationReportInput {
 	evidence: unknown;
 	relatedCases: unknown[];
 	report: unknown;
+}
+
+export interface QuickFixProposalInput {
+	caseId: string;
+	findings: string;
+	scope: string;
+	risks: string[];
+	verificationPlan: string[];
+	rolloutMode: RolloutMode;
+	decision: "pending" | "approved" | "observed" | "needs-human" | "rejected";
+	decisionReason: string;
+	decidedBy?: string;
+}
+
+export interface StoredQuickFixProposal {
+	id: string;
+	caseId: string;
+	workItemId: string;
+	findings: string;
+	scope: string;
+	risks: string[];
+	verificationPlan: string[];
+	rolloutMode: RolloutMode;
+	decision: QuickFixProposalInput["decision"];
+	decisionReason: string;
+	decidedBy?: string;
+	createdAt: string;
+	updatedAt: string;
 }
 
 export interface QuestionBriefInput {
@@ -784,6 +812,102 @@ export class BackgroundAgentsDatabase {
 		});
 	}
 
+	/** Ensure an intake case has one durable classifier job. Safe to call for every delivery. */
+	reconcileClassifierJob(caseId: string): string | undefined {
+		const id = requiredString(caseId, "caseId");
+		return this.withTransaction(() => {
+			const current = this.database.prepare("SELECT state FROM cases WHERE id = ?").get(id) as Row | undefined;
+			if (!current || rowString(current, "state") !== "intake") return undefined;
+			const classified = this.database.prepare("SELECT id FROM classifications WHERE case_id = ? LIMIT 1").get(id);
+			if (classified) return undefined;
+			const existing = this.database
+				.prepare(
+					"SELECT id, state FROM jobs WHERE case_id = ? AND role = 'classifier' AND state <> 'cancelled' ORDER BY created_at DESC LIMIT 1",
+				)
+				.get(id) as Row | undefined;
+			if (existing) {
+				return ["queued", "running"].includes(rowString(existing, "state")) ? rowString(existing, "id") : undefined;
+			}
+			const jobId = randomUUID();
+			this.database
+				.prepare("INSERT INTO jobs (id, case_id, role, priority) VALUES (?, ?, 'classifier', 0)")
+				.run(jobId, id);
+			return jobId;
+		});
+	}
+
+	reconcileClassifierRetries(
+		maxAttempts: number,
+		retryBackoffMs: number,
+		now = new Date(),
+	): { requeued: number; blocked: number } {
+		if (!Number.isSafeInteger(maxAttempts) || maxAttempts < 1)
+			throw new Error("maxAttempts must be a positive integer");
+		if (!Number.isSafeInteger(retryBackoffMs) || retryBackoffMs < 0)
+			throw new Error("retryBackoffMs must be a non-negative integer");
+		const timestamp = utcTimestamp(now, "now");
+		return this.withTransaction(() => {
+			const failed = this.database
+				.prepare(
+					"SELECT j.id, j.case_id, a.generation, a.failure, a.finished_at FROM jobs j JOIN cases c ON c.id = j.case_id JOIN attempts a ON a.job_id = j.id AND a.generation = (SELECT max(previous.generation) FROM attempts previous WHERE previous.job_id = j.id) WHERE j.role = 'classifier' AND j.state = 'failed' AND c.state = 'intake' AND a.state = 'failed'",
+				)
+				.all() as Row[];
+			let requeued = 0;
+			let blocked = 0;
+			for (const row of failed) {
+				const generation = Number(row.generation);
+				if (generation >= maxAttempts) {
+					const failure = row.failure == null ? "unknown classifier failure" : rowString(row, "failure");
+					const reason = `classifier retry budget exhausted after ${generation} attempt${generation === 1 ? "" : "s"}: ${failure}`;
+					this.database
+						.prepare(
+							"UPDATE jobs SET state = 'needs-human', claimed_by = NULL, claimed_at = NULL, updated_at = ? WHERE id = ? AND state = 'failed'",
+						)
+						.run(timestamp, rowString(row, "id"));
+					this.database
+						.prepare("UPDATE cases SET state = 'blocked', updated_at = ? WHERE id = ? AND state = 'intake'")
+						.run(timestamp, rowString(row, "case_id"));
+					this.appendEvent(rowString(row, "case_id"), "intake", "blocked", "classifier", reason, {
+						attempts: generation,
+						maxAttempts,
+						failure,
+					});
+					blocked += 1;
+					continue;
+				}
+				if (row.finished_at == null) continue;
+				const finishedAt = Date.parse(rowString(row, "finished_at"));
+				if (!Number.isFinite(finishedAt) || finishedAt + retryBackoffMs > Date.parse(timestamp)) continue;
+				const jobId = rowString(row, "id");
+				const nextGeneration = generation + 1;
+				const nextAttemptId = randomUUID();
+				this.database
+					.prepare(
+						"UPDATE jobs SET state = 'queued', claimed_by = NULL, claimed_at = NULL, updated_at = ? WHERE id = ? AND state = 'failed'",
+					)
+					.run(timestamp, jobId);
+				this.database
+					.prepare(
+						"INSERT INTO attempts (id, job_id, case_id, role, generation, state) VALUES (?, ?, ?, 'classifier', ?, 'queued')",
+					)
+					.run(nextAttemptId, jobId, rowString(row, "case_id"), nextGeneration);
+				requeued += 1;
+			}
+			return { requeued, blocked };
+		});
+	}
+
+	/** Reconcile after restart without reviving a failed classifier job. */
+	reconcileClassifierJobs(): string[] {
+		return this.database
+			.prepare("SELECT id FROM cases WHERE state = 'intake' ORDER BY created_at, id")
+			.all()
+			.flatMap((row) => {
+				const id = this.reconcileClassifierJob(rowString(row as Row, "id"));
+				return id ? [id] : [];
+			});
+	}
+
 	getSourceCursor(sourceName: BackgroundSource): SourceCursor | undefined {
 		const row = this.database
 			.prepare("SELECT source, cursor, revision, updated_at FROM source_cursors WHERE source = ?")
@@ -855,8 +979,13 @@ export class BackgroundAgentsDatabase {
 			const existing = this.database
 				.prepare("SELECT id, case_id FROM source_events WHERE source = ? AND source_key = ? AND revision = ?")
 				.get(caseSource, sourceKey, revision) as Row | undefined;
-			if (existing)
+			if (existing) {
+				if (event.repository)
+					this.database
+						.prepare("UPDATE cases SET repository = ?, updated_at = ? WHERE id = ? AND repository IS NULL")
+						.run(event.repository, new Date().toISOString(), rowString(existing, "case_id"));
 				return { eventId: rowString(existing, "id"), caseId: rowString(existing, "case_id"), inserted: false };
+			}
 
 			const prior = options.caseId
 				? undefined
@@ -906,6 +1035,10 @@ export class BackgroundAgentsDatabase {
 					event.service ?? null,
 					metadata,
 				);
+			if (event.repository)
+				this.database
+					.prepare("UPDATE cases SET repository = ?, updated_at = ? WHERE id = ? AND repository IS NULL")
+					.run(event.repository, new Date().toISOString(), caseId);
 			return { eventId, caseId, inserted: true };
 		}
 	}
@@ -1673,6 +1806,132 @@ export class BackgroundAgentsDatabase {
 			createdAt: rowString(row, "created_at"),
 			updatedAt: rowString(row, "updated_at"),
 		};
+	}
+
+	private readQuickFixProposal(row: Row): StoredQuickFixProposal {
+		const parseList = (field: string): string[] => JSON.parse(rowString(row, field)) as string[];
+		return {
+			id: rowString(row, "id"),
+			caseId: rowString(row, "case_id"),
+			workItemId: rowString(row, "work_item_id"),
+			findings: rowString(row, "findings"),
+			scope: rowString(row, "scope"),
+			risks: parseList("risks"),
+			verificationPlan: parseList("verification_plan"),
+			rolloutMode: rowString(row, "rollout_mode") as RolloutMode,
+			decision: rowString(row, "decision") as QuickFixProposalInput["decision"],
+			decisionReason: rowString(row, "decision_reason"),
+			...(row.decided_by == null ? {} : { decidedBy: rowString(row, "decided_by") }),
+			createdAt: rowString(row, "created_at"),
+			updatedAt: rowString(row, "updated_at"),
+		};
+	}
+
+	getQuickFixProposal(caseId: string): StoredQuickFixProposal | undefined {
+		const row = this.database
+			.prepare("SELECT * FROM quick_fix_proposals WHERE case_id = ?")
+			.get(requiredString(caseId, "caseId")) as Row | undefined;
+		return row ? this.readQuickFixProposal(row) : undefined;
+	}
+
+	createQuickFixProposal(input: QuickFixProposalInput): StoredQuickFixProposal {
+		const caseId = requiredString(input.caseId, "caseId");
+		const findings = requiredString(input.findings, "findings");
+		const scope = requiredString(input.scope, "scope");
+		const list = (value: string[], field: string): string[] => {
+			if (
+				!Array.isArray(value) ||
+				value.length === 0 ||
+				value.some((item) => typeof item !== "string" || !item.trim())
+			)
+				throw new Error(`${field} must contain non-empty strings`);
+			return value.map((item) => item.trim());
+		};
+		const risks = list(input.risks, "risks");
+		const verificationPlan = list(input.verificationPlan, "verificationPlan");
+		const existing = this.getQuickFixProposal(caseId);
+		if (existing) return existing;
+		const proposalId = randomUUID();
+		const workItemId = randomUUID();
+		const createdAt = new Date().toISOString();
+		const policyDecision = input.decision === "approved" ? "admitted" : input.decision;
+		this.withTransaction(() => {
+			if (!this.database.prepare("SELECT id FROM cases WHERE id = ?").get(caseId))
+				throw new Error(`Unknown case: ${caseId}`);
+			const ordinal =
+				Number(
+					(
+						this.database
+							.prepare("SELECT coalesce(max(ordinal), 0) AS ordinal FROM work_items WHERE case_id = ?")
+							.get(caseId) as Row
+					).ordinal,
+				) + 1;
+			this.database
+				.prepare(
+					"INSERT INTO work_items (id, case_id, ordinal, title, scope, acceptance_criteria) VALUES (?, ?, ?, ?, ?, ?)",
+				)
+				.run(
+					workItemId,
+					caseId,
+					ordinal,
+					`Quick fix: ${findings.slice(0, 160)}`,
+					scope,
+					jsonBoundary(verificationPlan, "verificationPlan"),
+				);
+			this.database
+				.prepare(
+					"INSERT INTO quick_fix_proposals (id, case_id, work_item_id, findings, scope, risks, verification_plan, decision, rollout_mode, decision_reason, decided_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+				)
+				.run(
+					proposalId,
+					caseId,
+					workItemId,
+					findings,
+					scope,
+					jsonBoundary(risks, "risks"),
+					jsonBoundary(verificationPlan, "verificationPlan"),
+					input.decision,
+					input.rolloutMode,
+					requiredString(input.decisionReason, "decisionReason"),
+					input.decidedBy ?? null,
+					createdAt,
+					createdAt,
+				);
+			this.database
+				.prepare(
+					"INSERT INTO quick_fix_policy_decisions (id, proposal_id, case_id, mode, decision, reason, actor) VALUES (?, ?, ?, ?, ?, ?, ?)",
+				)
+				.run(
+					randomUUID(),
+					proposalId,
+					caseId,
+					input.rolloutMode,
+					policyDecision,
+					input.decisionReason,
+					input.decidedBy ?? "controller",
+				);
+		});
+		return this.getQuickFixProposal(caseId)!;
+	}
+
+	approveQuickFixProposal(proposalId: string, actor: string): StoredQuickFixProposal {
+		const id = requiredString(proposalId, "proposalId");
+		const proposal = this.get<Row>("SELECT * FROM quick_fix_proposals WHERE id = ?", id);
+		if (!proposal) throw new Error(`Unknown quick-fix proposal: ${id}`);
+		const now = new Date().toISOString();
+		this.withTransaction(() => {
+			this.database
+				.prepare(
+					"UPDATE quick_fix_proposals SET decision = 'approved', decision_reason = ?, decided_by = ?, updated_at = ? WHERE id = ? AND decision = 'pending'",
+				)
+				.run("explicit human approval", requiredString(actor, "actor"), now, id);
+			this.database
+				.prepare(
+					"UPDATE quick_fix_policy_decisions SET decision = 'admitted', reason = ?, actor = ? WHERE proposal_id = ?",
+				)
+				.run("explicit human approval", actor, id);
+		});
+		return this.getQuickFixProposal(rowString(proposal, "case_id"))!;
 	}
 
 	createInvestigationReport(input: InvestigationReportInput): string {

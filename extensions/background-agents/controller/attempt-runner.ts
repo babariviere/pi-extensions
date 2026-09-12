@@ -19,6 +19,7 @@ import { waitForTransientService, type TransientServiceCompletion } from "./runt
 import {
 	InvestigationWorkflow,
 	buildInvestigationContext,
+	QuickFixWorkflow,
 	type InvestigationOutput,
 } from "./workflows/investigation.ts";
 import {
@@ -178,6 +179,11 @@ function validateRoleOutput(role: AgentRole, value: unknown, questionAnalysis = 
 		if (!["quick-fix-candidate", "spec-required", "needs-human"].includes(String(output.autonomy)))
 			throw new Error("investigator autonomy is invalid");
 		requiredText(output.findings, "investigator findings");
+		if (output.autonomy === "quick-fix-candidate") {
+			requiredText(output.scope, "quick-fix scope");
+			requiredList(output.risks, "quick-fix risks");
+			requiredList(output.verificationPlan, "quick-fix verificationPlan");
+		}
 		if (
 			typeof output.confidence !== "number" ||
 			!Number.isFinite(output.confidence) ||
@@ -764,7 +770,14 @@ export class ProductionAttemptRunner {
 			const result = await classifier.classify(job.case_id, event);
 			const state = database.get<{ state: string }>("SELECT state FROM cases WHERE id = ?", job.case_id)?.state;
 			if (state === "intake") database.transitionCase(job.case_id, "classified", "classifier", "input classified");
-			if (result.classification.inputKind === "question" || result.classification.disposition === "actionable") {
+			const rollout = database.get<{ rollout_mode: "observe" | "supervised" | "autonomous-pr" }>(
+				"SELECT rollout_mode FROM cases WHERE id = ?",
+				job.case_id,
+			)?.rollout_mode;
+			if (rollout === "observe") return;
+			if (result.classification.inputKind === "question") {
+				new QuestionWorkflow(database).start(job.case_id, event.body, questionLimits);
+			} else if (result.classification.disposition === "actionable") {
 				const current = database.get<{ state: string }>("SELECT state FROM cases WHERE id = ?", job.case_id)?.state;
 				if (current === "classified")
 					database.transitionCase(job.case_id, "investigating", "classifier", "investigation queued");
@@ -793,7 +806,31 @@ export class ProductionAttemptRunner {
 			}
 			const investigation = output as unknown as InvestigationOutput;
 			new InvestigationWorkflow(database).record(job.case_id, investigation, claim.attemptId);
-			if (investigation.autonomy !== "needs-human") new SpecificationWorkflow(database).start(job.case_id);
+			if (investigation.autonomy === "quick-fix-candidate") {
+				const rollout = database.get<{ rollout_mode: "observe" | "supervised" | "autonomous-pr" }>(
+					"SELECT rollout_mode FROM cases WHERE id = ?",
+					job.case_id,
+				)?.rollout_mode;
+				if (!rollout) throw new Error("case rollout mode is unavailable");
+				new QuickFixWorkflow(database).admit(job.case_id, investigation, rollout);
+			} else if (investigation.autonomy === "spec-required") {
+				const repository = database.get<{ repository: string | null }>(
+					"SELECT repository FROM cases WHERE id = ?",
+					job.case_id,
+				)?.repository;
+				if (!repository) {
+					if (
+						database.get<{ state: string }>("SELECT state FROM cases WHERE id = ?", job.case_id)?.state ===
+						"investigating"
+					)
+						database.transitionCase(
+							job.case_id,
+							"blocked",
+							"controller",
+							"specification requires a mapped repository",
+						);
+				} else new SpecificationWorkflow(database).start(job.case_id);
+			}
 			return;
 		}
 		if (job.role === "spec-planner") {

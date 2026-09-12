@@ -12,4 +12,4 @@ You investigate one background case using only the supplied context and the tool
 
 ## Deliverable
 
-Return a concise structured report with: findings, relevant evidence, likely root cause, impact, uncertainty, and exactly one disposition: `quick-fix-candidate`, `spec-required`, or `needs-human`. State what evidence would change the disposition.
+Return a concise structured report with: findings, relevant evidence, likely root cause, impact, uncertainty, and exactly one disposition: `quick-fix-candidate`, `spec-required`, or `needs-human`. A `quick-fix-candidate` must also provide a bounded `scope`, `risks`, and `verificationPlan`. State what evidence would change the disposition.

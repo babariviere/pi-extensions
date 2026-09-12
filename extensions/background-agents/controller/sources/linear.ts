@@ -59,6 +59,26 @@ function issueRevision(issue: LinearIssue): string {
 	return issue.updatedAt ?? fingerprint(issue);
 }
 
+/**
+ * Resolve mappings only from fields selected by CURRENT_CYCLE_QUERY. Explicit issue
+ * identifiers take precedence over team id, then team key. Prefixes avoid collisions
+ * between identifiers and team keys while retaining the convenient unprefixed form.
+ */
+export function linearRepositoryForIssue(
+	issue: Pick<LinearIssue, "identifier" | "team">,
+	mappings: Record<string, string> = {},
+): string | undefined {
+	const candidates = [
+		`issue:${issue.identifier}`,
+		issue.identifier,
+		...(issue.team?.id ? [`team-id:${issue.team.id}`, issue.team.id] : []),
+		...(issue.team?.key ? [`team-key:${issue.team.key}`, issue.team.key] : []),
+	];
+	return candidates
+		.map((key) => mappings[key])
+		.find((value): value is string => typeof value === "string" && value.trim() !== "");
+}
+
 export class LinearSourceAdapter implements SourceAdapter {
 	readonly source = "linear" as const;
 	private readonly options: LinearSourceOptions;
@@ -95,10 +115,7 @@ export class LinearSourceAdapter implements SourceAdapter {
 							revision,
 							title: `${issue.identifier}: ${issue.title}`,
 							body: issue.description ?? "",
-							repository:
-								typeof issue.repository === "string"
-									? (this.options.repositoryMappings?.[issue.repository] ?? issue.repository)
-									: undefined,
+							repository: linearRepositoryForIssue(issue, this.options.repositoryMappings),
 							fingerprint: fingerprint({
 								id: issue.id,
 								revision,

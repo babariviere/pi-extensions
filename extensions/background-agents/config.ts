@@ -58,7 +58,13 @@ export const DEFAULT_BACKGROUND_AGENTS_CONFIG: BackgroundAgentsConfig = {
 			overlapMs: 5 * 60_000,
 		},
 	},
-	classifier: { modelVersion: "controller-default", exampleLimit: 12, relatedCaseLimit: 8 },
+	classifier: {
+		modelVersion: "controller-default",
+		exampleLimit: 12,
+		relatedCaseLimit: 8,
+		maxAttempts: 3,
+		retryBackoffMs: 30_000,
+	},
 	controller: { usageMs: 5 * 60_000, schedulerMs: 5_000, heartbeatMs: 10_000, recoveryMs: 30_000, ciMs: 60_000 },
 };
 
@@ -469,6 +475,8 @@ export function normalizeBackgroundAgentsConfig(
 				: { policyScope: stringValue(rawClassifier.policyScope, "classifier.policyScope") }),
 			exampleLimit: integerValue(rawClassifier.exampleLimit ?? 12, "classifier.exampleLimit", 1, 100),
 			relatedCaseLimit: integerValue(rawClassifier.relatedCaseLimit ?? 8, "classifier.relatedCaseLimit", 1, 100),
+			maxAttempts: integerValue(rawClassifier.maxAttempts ?? 3, "classifier.maxAttempts", 1, 100),
+			retryBackoffMs: integerValue(rawClassifier.retryBackoffMs ?? 30_000, "classifier.retryBackoffMs", 0),
 		},
 		controller: {
 			usageMs: integerValue(rawController.usageMs ?? 5 * 60_000, "controller.usageMs", 1_000),

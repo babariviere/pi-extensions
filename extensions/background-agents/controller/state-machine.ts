@@ -6,8 +6,8 @@ import type { CaseState } from "../types.ts";
 export type WorkItemState = "queued" | "implementation" | "verification" | "verified" | "blocked" | "cancelled";
 
 export const CASE_TRANSITIONS: Readonly<Record<CaseState, readonly CaseState[]>> = {
-	intake: ["classified", "cancelled"],
-	classified: ["investigating", "question-analysis", "specification", "paused", "cancelled"],
+	intake: ["classified", "blocked", "cancelled"],
+	classified: ["investigating", "question-analysis", "specification", "blocked", "paused", "cancelled"],
 	investigating: ["question-analysis", "specification", "awaiting-approval", "paused", "cancelled"],
 	"question-analysis": ["investigating", "handled", "paused", "cancelled"],
 	specification: ["awaiting-approval", "paused", "cancelled"],

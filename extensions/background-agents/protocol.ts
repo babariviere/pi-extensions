@@ -5,7 +5,16 @@ export const BACKGROUND_AGENTS_PROTOCOL = "background-agents.v1" as const;
 
 export type BackgroundRequest =
 	| { version: 1; id: string; type: "dashboard.get" }
-	| { version: 1; id: string; type: "case.submit"; source: "manual"; title: string; body: string; repository?: string }
+	| {
+			version: 1;
+			id: string;
+			type: "case.submit";
+			source: "manual";
+			title: string;
+			body: string;
+			sourceKey?: string;
+			repository?: string;
+	  }
 	| { version: 1; id: string; type: "case.action"; caseId: string; action: CaseAction; comment?: string }
 	| { version: 1; id: string; type: "spec.feedback"; caseId: string; feedback: string }
 	| { version: 1; id: string; type: "spec.approve"; caseId: string; specVersion: number; permissions: string[] }
@@ -36,6 +45,7 @@ export type BackgroundResponse =
 const SOURCES = new Set<BackgroundSource>(["manual", "slack", "linear", "datadog"]);
 const ACTIONS = new Set<CaseAction>([
 	"approve-specification",
+	"approve-quick-fix",
 	"request-changes",
 	"resume",
 	"reclassify",

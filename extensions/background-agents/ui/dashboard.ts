@@ -147,6 +147,10 @@ export class BackgroundDashboard implements Component {
 			void this.caseAction("approve-specification");
 			return;
 		}
+		if (data === "q") {
+			void this.caseAction("approve-quick-fix");
+			return;
+		}
 		if (data === "f") {
 			void this.caseAction("request-changes");
 			return;

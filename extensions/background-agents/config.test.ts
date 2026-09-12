@@ -18,10 +18,34 @@ test("normalizes safe defaults and rollout overrides", () => {
 	assert.equal(config.rollout.sourceOverrides.slack, "observe");
 	assert.deepEqual(config.thresholds, { actionableMin: 80, noiseMax: 20 });
 	assert.deepEqual(config.question, { maxRuntimeMs: 60_000, maxAttempts: 1, maxResults: 10 });
+	assert.deepEqual(config.classifier, {
+		modelVersion: "controller-default",
+		exampleLimit: 12,
+		relatedCaseLimit: 8,
+		maxAttempts: 3,
+		retryBackoffMs: 30_000,
+	});
 	const repository = normalizeBackgroundAgentsConfig({ repositories: [{ id: "repo", root: "/tmp/repo" }] })
 		.repositories[0];
 	assert.equal(repository?.remote, "origin");
 	assert.equal(repository?.defaultBaseBranch, "main");
+});
+
+test("validates bounded classifier retry settings", () => {
+	assert.equal(
+		normalizeBackgroundAgentsConfig({ classifier: { maxAttempts: 2, retryBackoffMs: 250 } }).classifier.maxAttempts,
+		2,
+	);
+	assert.equal(
+		normalizeBackgroundAgentsConfig({ classifier: { maxAttempts: 2, retryBackoffMs: 250 } }).classifier
+			.retryBackoffMs,
+		250,
+	);
+	assert.throws(() => normalizeBackgroundAgentsConfig({ classifier: { maxAttempts: 0 } }), /classifier.maxAttempts/);
+	assert.throws(
+		() => normalizeBackgroundAgentsConfig({ classifier: { retryBackoffMs: -1 } }),
+		/classifier.retryBackoffMs/,
+	);
 });
 
 test("validates repository delivery settings", () => {

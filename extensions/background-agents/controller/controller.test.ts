@@ -12,7 +12,7 @@ afterEach(() => {
 	for (const database of databases.splice(0)) database.close();
 });
 
-test("controller persists and classifies manual intake in observe mode without mutating work", async () => {
+test("controller persists manual intake and queues durable classification in observe mode", async () => {
 	const database = new BackgroundAgentsDatabase(":memory:");
 	databases.push(database);
 	const controller = new BackgroundAgentsController({ database, startSocket: false });
@@ -21,6 +21,7 @@ test("controller persists and classifies manual intake in observe mode without m
 		id: "submit",
 		type: "case.submit",
 		source: "manual",
+		sourceKey: "stable",
 		title: "Bug",
 		body: "It fails",
 	});
@@ -28,11 +29,11 @@ test("controller persists and classifies manual intake in observe mode without m
 	await new Promise((resolve) => setTimeout(resolve, 10));
 	const snapshot = controller.snapshot();
 	assert.equal(snapshot.cases.length, 1);
-	assert.equal(snapshot.cases[0]?.state, "classified");
-	assert.equal(database.get<{ count: number }>("SELECT count(*) AS count FROM jobs")?.count, 0);
+	assert.equal(snapshot.cases[0]?.state, "intake");
+	assert.equal(database.get<{ role: string }>("SELECT role FROM jobs")?.role, "classifier");
 });
 
-test("supervised intake queues investigation but cannot dispatch worker work before approval", async () => {
+test("supervised intake queues classification before investigation", async () => {
 	const database = new BackgroundAgentsDatabase(":memory:");
 	databases.push(database);
 	const config = normalizeBackgroundAgentsConfig({ rollout: { defaultMode: "supervised" } });
@@ -46,8 +47,177 @@ test("supervised intake queues investigation but cannot dispatch worker work bef
 		body: "It fails",
 	});
 	await new Promise((resolve) => setTimeout(resolve, 10));
-	assert.equal(database.get<{ role: string }>("SELECT role FROM jobs LIMIT 1")?.role, "investigator");
-	assert.equal(controller.snapshot().cases[0]?.state, "investigating");
+	assert.equal(database.get<{ role: string }>("SELECT role FROM jobs LIMIT 1")?.role, "classifier");
+	assert.equal(controller.snapshot().cases[0]?.state, "intake");
+});
+
+test("duplicate delivery and controller restart reconcile one classifier job", async () => {
+	const database = new BackgroundAgentsDatabase(":memory:");
+	databases.push(database);
+	const controller = new BackgroundAgentsController({ database, startSocket: false, sources: [] });
+	const first = await controller.handle({
+		version: 1,
+		id: "first",
+		type: "case.submit",
+		source: "manual",
+		sourceKey: "stable",
+		title: "Bug",
+		body: "It fails",
+	});
+	assert.equal(first.ok, true);
+	const second = await controller.handle({
+		version: 1,
+		id: "second",
+		type: "case.submit",
+		source: "manual",
+		sourceKey: "stable",
+		title: "Bug",
+		body: "It fails",
+	});
+	assert.equal(second.ok, true);
+	assert.equal(
+		database.get<{ count: number }>("SELECT count(*) AS count FROM jobs WHERE role = 'classifier'")?.count,
+		1,
+	);
+	await controller.start();
+	await controller.stop();
+	assert.equal(
+		database.get<{ count: number }>("SELECT count(*) AS count FROM jobs WHERE role = 'classifier'")?.count,
+		1,
+	);
+	const intake = database.createCase({ title: "Restart intake", source: "manual" });
+	assert.equal(database.reconcileClassifierJobs().length, 2);
+	assert.equal(database.reconcileClassifierJobs().length, 2);
+	assert.equal(
+		database.get<{ count: number }>("SELECT count(*) AS count FROM jobs WHERE case_id = ?", intake)?.count,
+		1,
+	);
+});
+
+test("classifier failures retry only after backoff and eventually block intake", async () => {
+	const database = new BackgroundAgentsDatabase(":memory:");
+	databases.push(database);
+	let now = new Date("2026-01-01T00:00:00.000Z");
+	const config = normalizeBackgroundAgentsConfig({
+		profiles: [{ id: "classifier-profile", provider: "anthropic", agentDir: process.cwd() }],
+		classifier: { maxAttempts: 3, retryBackoffMs: 1_000 },
+	});
+	const controller = new BackgroundAgentsController({
+		database,
+		config,
+		startSocket: false,
+		clock: () => now,
+		attemptRunner: { run: async () => ({ state: "failed" as const, failure: "classifier unavailable" }) },
+	});
+	const response = await controller.handle({
+		version: 1,
+		id: "failure",
+		type: "case.submit",
+		source: "manual",
+		title: "Bug",
+		body: "It fails",
+	});
+	assert.equal(response.ok, true);
+	const jobId = database.get<{ id: string }>("SELECT id FROM jobs WHERE role = 'classifier'")?.id;
+	assert.ok(jobId);
+	const tick = () => (controller as unknown as { schedulerTick(): Promise<void> }).schedulerTick();
+	await tick();
+	assert.deepEqual(
+		database
+			.all<{ generation: number; state: string }>("SELECT generation, state FROM attempts ORDER BY generation")
+			.map((row) => ({ ...row })),
+		[{ generation: 1, state: "failed" }],
+	);
+	await tick();
+	assert.equal(database.get<{ state: string }>("SELECT state FROM jobs WHERE id = ?", jobId)?.state, "failed");
+	assert.equal(
+		database.get<{ count: number }>("SELECT count(*) AS count FROM attempts WHERE job_id = ?", jobId)?.count,
+		1,
+	);
+	now = new Date("2026-01-01T00:00:01.000Z");
+	await tick();
+	assert.equal(
+		database.get<{ generation: number; state: string }>(
+			"SELECT generation, state FROM attempts WHERE job_id = ? AND generation = 2",
+			jobId,
+		)?.state,
+		"failed",
+	);
+	now = new Date("2026-01-01T00:00:02.000Z");
+	await tick();
+	assert.equal(
+		database.get<{ generation: number; state: string }>(
+			"SELECT generation, state FROM attempts WHERE job_id = ? AND generation = 3",
+			jobId,
+		)?.state,
+		"failed",
+	);
+	now = new Date("2026-01-01T00:00:03.000Z");
+	await tick();
+	assert.equal(database.get<{ state: string }>("SELECT state FROM jobs WHERE id = ?", jobId)?.state, "needs-human");
+	assert.equal(database.get<{ state: string }>("SELECT state FROM cases LIMIT 1")?.state, "blocked");
+	assert.match(
+		database.get<{ reason: string }>("SELECT reason FROM case_events WHERE to_state = 'blocked'")?.reason ?? "",
+		/classifier retry budget exhausted/,
+	);
+});
+
+test("classifier retry generations and queued work survive controller restart", async () => {
+	const root = mkdtempSync(join(tmpdir(), "background-agents-retry-"));
+	const path = join(root, "controller.sqlite");
+	try {
+		let now = new Date("2026-01-01T00:00:00.000Z");
+		const config = normalizeBackgroundAgentsConfig({
+			profiles: [{ id: "classifier-profile", provider: "anthropic", agentDir: process.cwd() }],
+			classifier: { maxAttempts: 2, retryBackoffMs: 1_000 },
+		});
+		const firstDatabase = new BackgroundAgentsDatabase(path);
+		databases.push(firstDatabase);
+		const firstController = new BackgroundAgentsController({
+			database: firstDatabase,
+			config,
+			startSocket: false,
+			clock: () => now,
+			attemptRunner: { run: async () => ({ state: "failed" as const, failure: "temporary classifier outage" }) },
+		});
+		await firstController.handle({
+			version: 1,
+			id: "restart-failure",
+			type: "case.submit",
+			source: "manual",
+			title: "Bug",
+			body: "It fails",
+		});
+		await (firstController as unknown as { schedulerTick(): Promise<void> }).schedulerTick();
+		now = new Date("2026-01-01T00:00:01.000Z");
+		firstDatabase.reconcileClassifierRetries(2, 1_000, now);
+		firstDatabase.close();
+		const reopened = new BackgroundAgentsDatabase(path);
+		databases.push(reopened);
+		const restarted = new BackgroundAgentsController({
+			database: reopened,
+			config,
+			startSocket: false,
+			clock: () => now,
+		});
+		await restarted.start();
+		await restarted.stop();
+		assert.equal(
+			reopened.get<{ state: string }>("SELECT state FROM jobs WHERE role = 'classifier'")?.state,
+			"queued",
+		);
+		assert.deepEqual(
+			reopened
+				.all<{ generation: number; state: string }>("SELECT generation, state FROM attempts ORDER BY generation")
+				.map((row) => ({ ...row })),
+			[
+				{ generation: 1, state: "failed" },
+				{ generation: 2, state: "queued" },
+			],
+		);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
 });
 
 test("dispatches real Linear investigation through the durable start effect", async () => {
@@ -69,7 +239,12 @@ test("dispatches real Linear investigation through the durable start effect", as
 		},
 		attemptRunner: { run: async () => ({ state: "succeeded" as const }) },
 	});
-	const caseId = database.createCase({ id: "linear-dispatch", title: "Linear work", source: "linear" });
+	const caseId = database.createCase({
+		id: "linear-dispatch",
+		title: "Linear work",
+		source: "linear",
+		repository: "repo",
+	});
 	database.transitionCase(caseId, "classified", "test");
 	database.transitionCase(caseId, "investigating", "test");
 	database.recordSourceEvent(

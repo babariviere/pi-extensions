@@ -55,7 +55,7 @@ The complete configuration is JSON. An example configuration is available at `ex
 | `rollout` | default `observe`, overrides `{}` | `defaultMode`, `sourceOverrides`, and `repositoryOverrides`. Modes are `observe`, `supervised`, and `autonomous-pr`. |
 | `backup` | directory `~/.pi/agent/background-agent-backups`, interval `3600000`, retention `7` | `directory`, `intervalMs`, `retention`, and optional argv array `syncCommand`. |
 | `sources` | manual enabled; Slack, Linear, Datadog disabled | Source-specific fields are listed below. |
-| `classifier` | model `controller-default`, examples `12`, related cases `8` | `modelVersion`, optional `policyScope`, `exampleLimit`, and `relatedCaseLimit`. |
+| `classifier` | model `controller-default`, examples `12`, related cases `8`, max attempts `3`, retry backoff `30000` | `modelVersion`, optional `policyScope`, `exampleLimit`, `relatedCaseLimit`, `maxAttempts`, and `retryBackoffMs`. Failed classifier attempts are retried by the scheduler after the backoff until the bounded attempt budget is exhausted, then the intake case is blocked for human review. |
 | `controller` | usage `300000`, scheduler `5000`, heartbeat `10000`, recovery `30000`, CI `60000` | Controller loop intervals: `usageMs`, `schedulerMs`, `heartbeatMs`, `recoveryMs`, and `ciMs`. |
 
 A repository's exact shape is:
@@ -111,7 +111,7 @@ Create a Slack app for the workspace, enable Socket Mode, and create an app-leve
 
 ### Linear
 
-Use a token that can read the authenticated user's identity, active cycles, issues, teams, and workflow states, and can update an issue state if `supervised` or `autonomous-pr` operation is intended. The adapter's fixed query is the active cycle with `assignee.isMe`; `pageSize` controls pagination. `repositoryMappings` maps an upstream repository value to a configured repository ID.
+Use a token that can read the authenticated user's identity, active cycles, issues, teams, and workflow states, and can update an issue state if `supervised` or `autonomous-pr` operation is intended. The adapter's fixed query is the active cycle with `assignee.isMe`; `pageSize` controls pagination. `repositoryMappings` maps fetched Linear fields to a configured repository ID. Mapping precedence is explicit issue identifier (`issue:ENG-1`, then `ENG-1`), team ID (`team-id:<id>`, then the raw ID), and team key (`team-key:ENG`, then `ENG`). The first matching key wins in that order. The adapter never reads an unqueried `issue.repository` field. Unmapped cases remain private intake and cannot admit code work until an operator supplies a repository.
 
 When real investigation or specification starts, the narrow effect layer may advance a backlog/unstarted issue to the team's started state, choosing a state named `In Progress` first. It will not move work backward, reopen terminal work, create issues, add comments, or automatically set review/done/completed/cancelled states. Reconciliation protects a newer human change and stable operation keys make retries idempotent.
 
@@ -192,7 +192,7 @@ Dashboard keys:
 - `Tab`/right and `Shift-Tab`/left change views. `1` through `12` select the corresponding view.
 - `j`/down and `k`/up select a case or attempt. `r` refreshes.
 - `R` starts evidence reproduction for the selected case. `Enter` resumes it.
-- `A` approves a specification, `f` requests changes, `c` reclassifies, `h` marks handled, `n` rejects, and `x`/`X` cancels.
+- `A` approves a specification, `q` approves a supervised quick-fix proposal, `f` requests changes, `c` reclassifies, `h` marks handled, `n` rejects, and `x`/`X` cancels.
 - In Rollout, `o` selects `observe`, `s` selects `supervised`, and `p` selects `autonomous-pr`.
 - In System, `e` toggles emergency stop. `Esc` or `Ctrl-C` closes the dashboard and returns to the normal editor.
 

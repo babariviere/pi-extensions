@@ -5,7 +5,12 @@ import { afterEach, describe, test } from "node:test";
 import assert from "node:assert/strict";
 import { BackgroundAgentsDatabase } from "../database.ts";
 import { approveMemoryEntry, createMemoryEntry } from "../classification/memory.ts";
-import { buildInvestigationContext, retrieveFullCase, InvestigationWorkflow } from "./investigation.ts";
+import {
+	buildInvestigationContext,
+	retrieveFullCase,
+	InvestigationWorkflow,
+	QuickFixWorkflow,
+} from "./investigation.ts";
 import { buildQuestionContext, QuestionWorkflow } from "./question.ts";
 import { SpecificationWorkflow } from "./specification.ts";
 
@@ -35,6 +40,55 @@ afterEach(() => {
 });
 
 describe("background-agent workflows", () => {
+	test("quick-fix candidates use one bounded item and rollout-specific admission", () => {
+		const database = new BackgroundAgentsDatabase(databasePath());
+		const autonomous = classified(database, "autonomous");
+		database.run("UPDATE cases SET repository = ?, rollout_mode = 'autonomous-pr' WHERE id = ?", "repo", autonomous);
+		const output = {
+			autonomy: "quick-fix-candidate" as const,
+			findings: "bounded finding",
+			scope: "one function",
+			risks: ["regression"],
+			verificationPlan: ["run focused test"],
+			confidence: 99,
+			uncertainties: [],
+		};
+		const admitted = new QuickFixWorkflow(database).admit(autonomous, output, "autonomous-pr");
+		assert.equal(
+			database.get<{ count: number }>("SELECT count(*) AS count FROM work_items WHERE case_id = ?", autonomous)
+				?.count,
+			1,
+		);
+		assert.equal(
+			database.get<{ role: string }>("SELECT role FROM jobs WHERE case_id = ?", autonomous)?.role,
+			"worker",
+		);
+		assert.equal(admitted.decision, "approved");
+
+		const supervised = classified(database, "supervised");
+		database.run("UPDATE cases SET repository = ?, rollout_mode = 'supervised' WHERE id = ?", "repo", supervised);
+		const pending = new QuickFixWorkflow(database).admit(supervised, output, "supervised");
+		assert.equal(pending.decision, "pending");
+		assert.equal(
+			database.get<{ count: number }>("SELECT count(*) AS count FROM jobs WHERE case_id = ?", supervised)?.count,
+			0,
+		);
+		new QuickFixWorkflow(database).approve(supervised, "operator");
+		assert.equal(
+			database.get<{ role: string }>("SELECT role FROM jobs WHERE case_id = ?", supervised)?.role,
+			"worker",
+		);
+
+		const unmapped = classified(database, "unmapped");
+		const needsHuman = new QuickFixWorkflow(database).admit(unmapped, output, "autonomous-pr");
+		assert.equal(needsHuman.decision, "needs-human");
+		assert.equal(
+			database.get<{ count: number }>("SELECT count(*) AS count FROM jobs WHERE case_id = ?", unmapped)?.count,
+			0,
+		);
+		assert.equal(database.get<{ state: string }>("SELECT state FROM cases WHERE id = ?", unmapped)?.state, "blocked");
+		database.close();
+	});
 	test("investigation includes current evidence and bounded related summaries, with full retrieval explicit", () => {
 		const database = new BackgroundAgentsDatabase(databasePath());
 		const prior = classified(database, "prior", "old evidence");

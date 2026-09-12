@@ -24,6 +24,7 @@ export type CaseState =
 
 export type CaseAction =
 	| "approve-specification"
+	| "approve-quick-fix"
 	| "request-changes"
 	| "resume"
 	| "reclassify"
@@ -331,6 +332,22 @@ export interface DashboardApproval {
 	createdAt: string;
 }
 
+export interface DashboardQuickFixProposal {
+	id: string;
+	caseId: string;
+	workItemId: string;
+	findings: string;
+	scope: string;
+	risks: string[];
+	verificationPlan: string[];
+	rolloutMode: RolloutMode;
+	decision: "pending" | "approved" | "observed" | "needs-human" | "rejected";
+	decisionReason: string;
+	decidedBy?: string;
+	createdAt: string;
+	updatedAt: string;
+}
+
 export interface DashboardFeedback {
 	id: string;
 	caseId?: string;
@@ -451,6 +468,7 @@ export interface DashboardSnapshot {
 	memory: DashboardMemory[];
 	specifications: DashboardSpecification[];
 	approvals: DashboardApproval[];
+	quickFixProposals?: DashboardQuickFixProposal[];
 	feedback: DashboardFeedback[];
 	questionBriefs: DashboardQuestionBrief[];
 	artifacts: DashboardArtifact[];
@@ -554,6 +572,8 @@ export interface ClassifierConfig {
 	policyScope?: string;
 	exampleLimit: number;
 	relatedCaseLimit: number;
+	maxAttempts: number;
+	retryBackoffMs: number;
 }
 
 export interface ControllerIntervals {
