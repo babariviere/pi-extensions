@@ -16,6 +16,12 @@ import { BackgroundAgentsDatabase, type JobClaim, type SourceEventResult } from 
 import { ManualSourceAdapter, type ManualSubmission } from "./sources/manual.ts";
 import { SlackSourceAdapter } from "./sources/slack.ts";
 import { LinearSourceAdapter, type LinearGraphqlClient } from "./sources/linear.ts";
+import {
+	LinearEffects,
+	type LinearEffectClient,
+	type LinearIssueSnapshot,
+	type LinearWorkflowState,
+} from "./effects/linear.ts";
 import { DatadogSourceAdapter, type DatadogClient } from "./sources/datadog.ts";
 import type { SourceAdapter, SourceStore } from "./sources/source.ts";
 import { Classifier, type ClassifierLauncher } from "./classification/classifier.ts";
@@ -123,7 +129,7 @@ export class SlackConnectionsClient {
 		return result.url;
 	}
 }
-export class LinearHttpClient implements LinearGraphqlClient {
+export class LinearHttpClient implements LinearGraphqlClient, LinearEffectClient {
 	constructor(
 		private readonly url: string,
 		private readonly credentialPath: string,
@@ -141,6 +147,57 @@ export class LinearHttpClient implements LinearGraphqlClient {
 		);
 		if (Array.isArray(result.errors) && result.errors.length > 0) throw new Error("Linear GraphQL returned errors");
 		return result as T;
+	}
+	async getIssue(issueId: string): Promise<LinearIssueSnapshot | null> {
+		const result = await this.query<{ data?: { issue?: Record<string, unknown> }; issue?: Record<string, unknown> }>(
+			`query BackgroundAgentsIssue($id: String!) {
+  issue(id: $id) { id updatedAt state { id name type } team { id key } }
+}`,
+			{ id: issueId },
+		);
+		const issue = result.data?.issue ?? result.issue;
+		if (!issue) return null;
+		const state = issue.state as { id?: string; name?: string; type?: string } | undefined;
+		if (
+			typeof issue.id !== "string" ||
+			typeof issue.updatedAt !== "string" ||
+			!state?.id ||
+			!state.name ||
+			!state.type
+		)
+			return null;
+		const team = issue.team as { id?: string; key?: string } | undefined;
+		return {
+			id: issue.id,
+			revision: issue.updatedAt,
+			...(team?.id ? { teamId: team.id } : {}),
+			...(team?.key ? { teamKey: team.key } : {}),
+			state: { id: state.id, name: state.name, type: state.type },
+		};
+	}
+	async getStartedStates(team: { id?: string; key?: string }): Promise<LinearWorkflowState[]> {
+		const result = await this.query<{
+			data?: { workflowStates?: { nodes?: LinearWorkflowState[] } };
+			workflowStates?: { nodes?: LinearWorkflowState[] };
+		}>(
+			`query BackgroundAgentsStartedStates($teamId: ID!) {
+  workflowStates(filter: { team: { id: { eq: $teamId } } }) { nodes { id name type } }
+}`,
+			{ teamId: team.id },
+		);
+		return result.data?.workflowStates?.nodes ?? result.workflowStates?.nodes ?? [];
+	}
+	async updateIssueState(issueId: string, stateId: string): Promise<boolean> {
+		const result = await this.query<{
+			data?: { issueUpdate?: { success?: boolean } };
+			issueUpdate?: { success?: boolean };
+		}>(
+			`mutation BackgroundAgentsStartIssue($id: String!, $stateId: String!) {
+  issueUpdate(id: $id, input: { stateId: $stateId }) { success }
+}`,
+			{ id: issueId, stateId },
+		);
+		return (result.data?.issueUpdate ?? result.issueUpdate)?.success === true;
 	}
 }
 export class DatadogHttpClient implements DatadogClient {
@@ -210,6 +267,7 @@ export interface BackgroundControllerOptions {
 	credentialStat?: CredentialStat;
 	runtimeControls?: BackgroundRuntimeControls;
 	recovery?: Pick<RecoveryCoordinator, "reconcileAttempt">;
+	linearEffects?: Pick<LinearEffects, "startWork">;
 }
 function defaultClassifier(event: SourceEvent) {
 	const text = `${event.title}\n${event.body}`.toLowerCase();
@@ -238,6 +296,33 @@ function defaultClassifier(event: SourceEvent) {
 	};
 }
 
+function linearIssueFromEvent(event: SourceEvent): LinearIssueSnapshot | undefined {
+	if (event.source !== "linear" || !event.sourceKey.startsWith("linear:")) return undefined;
+	const state = event.metadata?.state;
+	if (!state || typeof state !== "object" || Array.isArray(state)) return undefined;
+	const value = state as Record<string, unknown>;
+	if (typeof value.id !== "string" || typeof value.name !== "string" || typeof value.type !== "string")
+		return undefined;
+	const team = event.metadata?.team;
+	const teamValue = team && typeof team === "object" && !Array.isArray(team) ? (team as Record<string, unknown>) : {};
+	return {
+		id: event.sourceKey.slice("linear:".length),
+		revision: event.revision ?? "",
+		...(typeof teamValue.id === "string" ? { teamId: teamValue.id } : {}),
+		...(typeof teamValue.key === "string" ? { teamKey: teamValue.key } : {}),
+		state: { id: value.id, name: value.name, type: value.type },
+	};
+}
+
+function candidateStateIsQuestion(database: BackgroundAgentsDatabase, jobId: string): boolean {
+	return (
+		database.get<{ state: string }>(
+			"SELECT c.state FROM cases c JOIN jobs j ON j.case_id = c.id WHERE j.id = ?",
+			jobId,
+		)?.state === "question-analysis"
+	);
+}
+
 export class BackgroundAgentsController {
 	readonly database: BackgroundAgentsDatabase;
 	readonly config: BackgroundAgentsConfig;
@@ -256,6 +341,7 @@ export class BackgroundAgentsController {
 	private readonly timers: ReturnType<typeof setInterval>[] = [];
 	private readonly runtimeRollout: BackgroundAgentsConfig["rollout"];
 	private readonly runtimeControls: BackgroundRuntimeControls;
+	private readonly linearEffects?: Pick<LinearEffects, "startWork">;
 	private socket?: BackgroundSocketServer;
 	private started = false;
 	private stopping = false;
@@ -277,6 +363,16 @@ export class BackgroundAgentsController {
 			terminateSystemdUnit: (unit) => stopTransientService(unit),
 			isSystemdUnitStopped: async (unit) => ["inactive", "failed"].includes(await inspectTransientService(unit)),
 		};
+		const linearConfig = this.config.sources.linear;
+		this.linearEffects =
+			options.linearEffects ??
+			(linearConfig.enabled && linearConfig.credentialPath
+				? new LinearEffects(
+						this.database,
+						new LinearHttpClient(linearConfig.url, linearConfig.credentialPath, this.options.fetcher ?? fetch),
+						{ owner: `background:${this.owner}` },
+					)
+				: undefined);
 		const store: SourceStore = {
 			recordSourceEvent: (event, sourceOptions) => {
 				const result = this.database.recordSourceEvent(event, {
@@ -463,6 +559,11 @@ export class BackgroundAgentsController {
 			if (claim) break;
 		}
 		if (!claim) return;
+		const claimedRole = this.database.get<{ role: AgentRole }>(
+			"SELECT role FROM jobs WHERE id = ?",
+			claim.jobId,
+		)?.role;
+		const phase = claimedRole === "investigator" ? "investigation" : "specification";
 		const finish = async (result: AttemptRunnerResult): Promise<void> => {
 			const role = this.database.get<{ role: AgentRole }>("SELECT role FROM jobs WHERE id = ?", claim.jobId)?.role;
 			if (result.state === "failed" && role === "worker") {
@@ -482,6 +583,22 @@ export class BackgroundAgentsController {
 			);
 		};
 		try {
+			if (this.linearEffects && (claimedRole === "investigator" || claimedRole === "spec-planner")) {
+				const caseRow = this.database.get<{ case_id: string }>(
+					"SELECT case_id FROM jobs WHERE id = ?",
+					claim.jobId,
+				);
+				const eventRow = caseRow
+					? this.database.get<{ id: string }>(
+							"SELECT id FROM source_events WHERE case_id = ? ORDER BY received_at DESC, created_at DESC LIMIT 1",
+							caseRow.case_id,
+						)
+					: undefined;
+				const event = eventRow ? this.database.getSourceEvent(eventRow.id) : undefined;
+				const issue = event ? linearIssueFromEvent(event) : undefined;
+				if (issue && !(claimedRole === "investigator" && candidateStateIsQuestion(this.database, claim.jobId)))
+					await this.linearEffects.startWork({ issue, phase, owner: this.owner });
+			}
 			const result = await this.options.attemptRunner.run(claim, this.database);
 			await finish(result);
 		} catch (error) {
@@ -496,8 +613,15 @@ export class BackgroundAgentsController {
 		return role !== "worker" || ["implementation", "verification", "pull-request-review"].includes(state);
 	}
 	private async setEmergencyStop(enabled: boolean): Promise<{ accepted: true }> {
-		this.providerScheduler.setEmergencyStop(enabled, this.operator);
-		if (!enabled) return { accepted: true };
+		if (!enabled) {
+			this.database.resumeEmergencyStopJobs(this.options.clock?.() ?? new Date());
+			this.providerScheduler.setEmergencyStop(false, this.operator);
+			return { accepted: true };
+		}
+		this.providerScheduler.setEmergencyStop(true, this.operator);
+		const pausedJobIds = this.database
+			.all<{ id: string }>("SELECT id FROM jobs WHERE state IN ('queued', 'running') ORDER BY id")
+			.map((job) => job.id);
 		const active = this.database.all<{
 			id: string;
 			case_id: string;
@@ -523,24 +647,20 @@ export class BackgroundAgentsController {
 				} catch (error) {
 					failures.push(`attempt ${attempt.id} pane: ${error instanceof Error ? error.message : String(error)}`);
 				}
-		}
-		const affectedCases = this.database.all<{ case_id: string }>(
-			"SELECT DISTINCT case_id FROM jobs WHERE state IN ('queued', 'running')",
-		);
-		for (const caseId of affectedCases.map((row) => row.case_id))
-			try {
-				this.jobs.pauseCaseJobs(caseId);
-			} catch (error) {
-				failures.push(`case ${caseId} pause: ${error instanceof Error ? error.message : String(error)}`);
-			}
-		for (const attempt of active)
 			try {
 				await this.recovery.reconcileAttempt(attempt.id);
 			} catch (error) {
 				failures.push(`attempt ${attempt.id} reconcile: ${error instanceof Error ? error.message : String(error)}`);
 			}
+		}
+		try {
+			this.database.pauseEmergencyStopJobs(pausedJobIds, this.options.clock?.() ?? new Date());
+		} catch (error) {
+			failures.push(`emergency-stop pause: ${error instanceof Error ? error.message : String(error)}`);
+		}
 		this.database.recordOperatorEvent("emergency-stop.reconciled", this.operator, {
 			attemptIds: active.map((attempt) => attempt.id),
+			pausedJobIds,
 			failures,
 		});
 		if (failures.length > 0) throw new Error(`Emergency stop completed with failures: ${failures.join("; ")}`);

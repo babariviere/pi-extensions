@@ -158,4 +158,24 @@ describe("background-agents SQLite ownership", () => {
 		database.close();
 		assert.throws(() => new BackgroundAgentsDatabase(path), /newer than the controller schema/);
 	});
+
+	test("persists emergency-stop ownership across restart and resumes only its jobs", () => {
+		const path = databasePath();
+		const first = new BackgroundAgentsDatabase(path);
+		const firstCase = first.createCase({ title: "stop", source: "manual" });
+		const firstJob = first.createJob({ caseId: firstCase, role: "investigator" });
+		const otherCase = first.createCase({ title: "other", source: "manual" });
+		const otherJob = first.createJob({ caseId: otherCase, role: "investigator" });
+		first.run("UPDATE jobs SET state = 'paused' WHERE id = ?", otherJob);
+		assert.equal(first.pauseEmergencyStopJobs([firstJob, otherJob]), 1);
+		first.close();
+
+		const reopened = new BackgroundAgentsDatabase(path);
+		assert.equal(reopened.get<{ state: string }>("SELECT state FROM jobs WHERE id = ?", firstJob)?.state, "paused");
+		assert.equal(reopened.get<{ state: string }>("SELECT state FROM jobs WHERE id = ?", otherJob)?.state, "paused");
+		assert.equal(reopened.resumeEmergencyStopJobs(), 1);
+		assert.equal(reopened.get<{ state: string }>("SELECT state FROM jobs WHERE id = ?", firstJob)?.state, "queued");
+		assert.equal(reopened.get<{ state: string }>("SELECT state FROM jobs WHERE id = ?", otherJob)?.state, "paused");
+		reopened.close();
+	});
 });

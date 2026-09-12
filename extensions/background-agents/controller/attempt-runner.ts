@@ -10,9 +10,9 @@ import type { BackgroundAgentsDatabase, JobClaim } from "./database.ts";
 import { Classifier } from "./classification/classifier.ts";
 import { GitRepository } from "./git/repository.ts";
 import { backgroundBranch, GitWorktreeManager } from "./git/worktree.ts";
-import { GitHubEffects, type GitHubEffectClient } from "./effects/github.ts";
+import { GitHubDraftConflictError, GitHubEffects, type GitHubEffectClient } from "./effects/github.ts";
 import { BackgroundAgentsStateMachine } from "./state-machine.ts";
-import { buildContextManifest, type ContextManifest } from "./runtime/context.ts";
+import { buildContextManifest, persistContextManifest, type ContextManifest } from "./runtime/context.ts";
 import { launchAttemptThroughHerdr, type HerdrAttemptLaunchResult, type HerdrAttemptOptions } from "./runtime/herdr.ts";
 import { prepareRuntimeProfile, selectRuntimeProfile } from "./runtime/profiles.ts";
 import { waitForTransientService, type TransientServiceCompletion } from "./runtime/systemd.ts";
@@ -345,8 +345,8 @@ export class ProductionAttemptRunner {
 			const repository = repositoryConfig(this.options.config, database, job.case_id);
 			let worktreeDirectory = join(attemptRoot, job.case_id, `${claim.attemptId}-workspace`);
 			let branch: string | undefined;
-			let baseRef = "HEAD";
 			let baseBranch = repository?.defaultBaseBranch ?? "main";
+			let baseRef = baseBranch;
 			let githubEffects: GitHubEffects | undefined;
 			if (repository) {
 				const git = (this.options.repositoryFactory ?? ((root) => new GitRepository(root)))(repository.root);
@@ -355,7 +355,7 @@ export class ProductionAttemptRunner {
 					this.options.worktreeRoot ??
 						join(dirname(this.options.config.databasePath), "background-worktrees", repository.id),
 				);
-				baseRef = (await git.checked(["rev-parse", "HEAD"])).trim();
+				baseRef = (await git.checked(["rev-parse", `${baseBranch}^{commit}`])).trim();
 				if (role === "worker" && job.work_item_id) {
 					const parent = database.get<{ ordinal: number; branch: string | null; state: string }>(
 						"SELECT parent.ordinal, parent.branch, parent.state FROM work_items item JOIN work_items parent ON parent.id = item.parent_id WHERE item.id = ?",
@@ -452,6 +452,18 @@ export class ProductionAttemptRunner {
 				? join(this.options.roleDirectory, `${role}.md`)
 				: fileURLToPath(new URL(`../roles/${role}.md`, import.meta.url));
 			const contextPath = join(attemptDirectory, "context-manifest.json");
+			const contextArtifact = persistContextManifest(context, { attemptDirectory, database });
+			database.recordTrustedCheckpoint({
+				attemptId: claim.attemptId,
+				kind: "context",
+				path: contextArtifact.path,
+				digest: contextArtifact.hash,
+				metadata: {
+					hash: contextArtifact.hash,
+					artifactId: contextArtifact.artifactId,
+					artifactReference: contextArtifact.artifactId ?? contextArtifact.path,
+				},
+			});
 			const questionAnalysis =
 				role === "investigator" &&
 				database.get<{ state: string }>("SELECT state FROM cases WHERE id = ?", job.case_id)?.state ===
@@ -515,6 +527,7 @@ export class ProductionAttemptRunner {
 					primaryCheckout: repository?.root ?? attemptDirectory,
 					gitDirectory: repository?.gitDir ?? attemptDirectory,
 					context,
+					contextArtifact,
 					runtime,
 					rolePromptPath,
 					limits: this.options.config.systemd,
@@ -610,7 +623,12 @@ export class ProductionAttemptRunner {
 		} catch (error) {
 			const failure = error instanceof Error ? error.message : String(error);
 			return {
-				state: failure.includes("result artifact") || failure.includes("output") ? "needs-human" : "failed",
+				state:
+					error instanceof GitHubDraftConflictError ||
+					failure.includes("result artifact") ||
+					failure.includes("output")
+						? "needs-human"
+						: "failed",
 				failure,
 			};
 		}
@@ -743,6 +761,10 @@ export class ProductionAttemptRunner {
 					title,
 					body,
 				});
+				if (pullRequest.base !== baseBranch)
+					throw new Error("GitHub pull request base does not match controller assignment");
+				if (pullRequest.baseSha && pullRequest.baseSha.toLowerCase() !== baseRef.toLowerCase())
+					throw new Error("GitHub pull request base SHA does not match controller assignment");
 				database.run(
 					"UPDATE work_items SET branch = ?, worktree = ?, pull_request = ?, updated_at = ? WHERE id = ?",
 					workItemBranch,

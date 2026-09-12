@@ -30,7 +30,8 @@ export async function quarantineWorktree(path: string, reason: string): Promise<
 	const destination = join(dirname(path), `${basename(path)}.quarantine-${Date.now()}-${randomUUID()}`);
 	await mkdir(dirname(destination), { recursive: true });
 	const repository = new GitRepository(path);
-	await repository.withMutation(async () => {
+	const primary = new GitRepository((await repository.detailsOf()).primaryCheckout, repository.runner);
+	await primary.withMutation(async () => {
 		await repository.checked(["worktree", "move", path, destination]);
 		await repository.checked(["checkout", "--detach"], destination);
 		await repository.checked(["worktree", "repair"], destination);

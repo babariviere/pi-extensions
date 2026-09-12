@@ -62,6 +62,32 @@ test("creates deterministic Git worktrees and preserves dirty worktrees across r
 	}
 });
 
+test("runs GitHub reads in the configured repository", async () => {
+	const paths = await repositoryRoot();
+	try {
+		let cwd: string | undefined;
+		const github = new GitHubController(new GitRepository(paths.primary), async (_executable, _args, options) => {
+			cwd = options?.cwd;
+			return {
+				code: 0,
+				stdout: JSON.stringify({
+					number: 1,
+					url: "https://github.test/pr/1",
+					isDraft: true,
+					headRefName: "feature",
+					baseRefName: "main",
+					baseRefOid: "base",
+				}),
+				stderr: "",
+			};
+		});
+		assert.equal((await github.getPullRequest("feature"))?.baseSha, "base");
+		assert.equal(cwd, paths.primary);
+	} finally {
+		rmSync(paths.root, { recursive: true, force: true });
+	}
+});
+
 test("delivers a sequential draft stack with argv-only GitHub operations", async () => {
 	const paths = await repositoryRoot();
 	try {

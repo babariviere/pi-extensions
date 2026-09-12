@@ -17,6 +17,13 @@ export interface GitHubEffectPullRequest extends GitHubPullRequest {
 	body?: string;
 }
 
+export class GitHubDraftConflictError extends Error {
+	constructor(readonly pullRequest: GitHubEffectPullRequest) {
+		super(`an existing pull request is not a draft: #${pullRequest.number}`);
+		this.name = "GitHubDraftConflictError";
+	}
+}
+
 export interface GitHubEffectClient {
 	pushBranch(worktree: string, branch: string, remote: string): Promise<{ headSha?: string } | void>;
 	getBranchHead(branch: string, remote: string): Promise<string | null>;
@@ -125,8 +132,14 @@ export function githubPushOperationKey(remote: string, branch: string, expectedH
 	return `github:push:${remote}:${branch}:${expectedHeadSha ?? "branch"}`;
 }
 
-export function githubDraftOperationKey(branch: string, base: string): string {
-	return `github:pr:create:${branch}:${base}`;
+export function githubDraftOperationKey(branch: string, base: string, baseSha?: string): string {
+	return `github:pr:create:${branch}:${base}${baseSha ? `:${baseSha}` : ""}`;
+}
+
+function validateDraftPullRequest(input: DraftPullRequestInput, pullRequest: GitHubEffectPullRequest): void {
+	if (pullRequest.base !== input.base) throw new Error("GitHub pull request base does not match requested base");
+	if (input.baseSha && pullRequest.baseSha && pullRequest.baseSha.toLowerCase() !== input.baseSha.toLowerCase())
+		throw new Error("GitHub pull request base SHA does not match requested base");
 }
 
 export function githubEditOperationKey(reference: number | string, title: string, body: string): string {
@@ -184,7 +197,7 @@ export class GitHubEffects {
 	}
 
 	async createDraftPullRequest(input: DraftPullRequestInput): Promise<GitHubEffectPullRequest> {
-		const operationKey = githubDraftOperationKey(input.branch, input.base);
+		const operationKey = githubDraftOperationKey(input.branch, input.base, input.baseSha);
 		const result = await this.executor.execute<DraftPullRequestResult>({
 			operationKey,
 			provider: "github",
@@ -192,11 +205,20 @@ export class GitHubEffects {
 			intent: input,
 			reconcile: async () => {
 				const pullRequest = await this.client.findPullRequest(input.branch, input.base);
+				if (pullRequest && !pullRequest.isDraft) throw new GitHubDraftConflictError(pullRequest);
+				if (pullRequest) validateDraftPullRequest(input, pullRequest);
 				return pullRequest ? { found: true, value: { pullRequest } } : { found: false };
 			},
 			perform: async () => {
+				const existing = await this.client.findPullRequest(input.branch, input.base);
+				if (existing) {
+					if (!existing.isDraft) throw new GitHubDraftConflictError(existing);
+					validateDraftPullRequest(input, existing);
+					return { pullRequest: existing };
+				}
 				const pullRequest = await this.client.createDraftPullRequest(input);
 				if (!pullRequest.isDraft) throw new Error("GitHub pull request was not created as a draft");
+				validateDraftPullRequest(input, pullRequest);
 				return { pullRequest };
 			},
 			remoteIdentifier: (value) => String(value.pullRequest.number),

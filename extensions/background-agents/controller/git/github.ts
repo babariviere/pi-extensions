@@ -8,6 +8,7 @@ export interface GitHubPullRequest {
 	base: string;
 	isDraft: boolean;
 	headSha?: string;
+	baseSha?: string;
 	title?: string;
 	body?: string;
 }
@@ -25,6 +26,7 @@ export interface DraftPullRequestInput {
 	worktree: string;
 	branch: string;
 	base: string;
+	baseSha?: string;
 	title: string;
 	body: string;
 }
@@ -106,7 +108,7 @@ export class GitHubController {
 			"view",
 			input.branch,
 			"--json",
-			"number,url,isDraft,headRefName,baseRefName,headRefOid,title,body",
+			"number,url,isDraft,headRefName,baseRefName,headRefOid,baseRefOid,title,body",
 		]);
 		const details = jsonObject(viewed.stdout.trim());
 		if (!details) throw new Error("gh pr view returned invalid JSON");
@@ -121,6 +123,7 @@ export class GitHubController {
 			base: typeof value.baseRefName === "string" ? value.baseRefName : base,
 			isDraft: value.isDraft === undefined ? true : value.isDraft === true,
 			...(typeof value.headRefOid === "string" ? { headSha: value.headRefOid } : {}),
+			...(typeof value.baseRefOid === "string" ? { baseSha: value.baseRefOid } : {}),
 			...(typeof value.title === "string" ? { title: value.title } : {}),
 			...(typeof value.body === "string" ? { body: value.body } : {}),
 		};
@@ -132,9 +135,9 @@ export class GitHubController {
 			"view",
 			String(reference),
 			"--json",
-			"number,url,isDraft,headRefName,baseRefName,headRefOid,title,body",
+			"number,url,isDraft,headRefName,baseRefName,headRefOid,baseRefOid,title,body",
 		];
-		const result = await this.commandRunner("gh", args, {});
+		const result = await this.commandRunner("gh", args, { cwd: this.repository.root });
 		if (result.code !== 0) {
 			if (/not found|could not resolve to a pull request|no pull request/i.test(result.stderr)) return null;
 			throw new GitHubCommandError(args, result);

@@ -217,6 +217,12 @@ test("production runner dispatches every role through its profile boundary", asy
 			assert.match(call.prompt, /context-manifest\.json/);
 			assert.match(call.prompt, /result\.json/);
 		}
+		const checkpoint = database.get<{ digest: string; path: string; metadata: string }>(
+			"SELECT digest, path, metadata FROM recovery_checkpoints ORDER BY created_at DESC LIMIT 1",
+		);
+		assert.equal(checkpoint?.digest?.length, 64);
+		assert.ok(checkpoint?.path?.endsWith("context-manifest.json"));
+		assert.match(checkpoint?.metadata ?? "", /artifactId/);
 		workerBaseSha = "different-controller-base";
 		const worker = jobs.find((item) => item.role === "worker")!;
 		const retryJobId = database.createJob({ caseId: worker.caseId, role: "worker", workItemId: worker.workItemId });

@@ -50,6 +50,49 @@ test("supervised intake queues investigation but cannot dispatch worker work bef
 	assert.equal(controller.snapshot().cases[0]?.state, "investigating");
 });
 
+test("dispatches real Linear investigation through the durable start effect", async () => {
+	const database = new BackgroundAgentsDatabase(":memory:");
+	databases.push(database);
+	const started: Array<{ phase: string; issueId: string }> = [];
+	const config = normalizeBackgroundAgentsConfig({
+		profiles: [{ id: "profile", provider: "anthropic", agentDir: process.cwd() }],
+	});
+	const controller = new BackgroundAgentsController({
+		database,
+		config,
+		startSocket: false,
+		linearEffects: {
+			startWork: async ({ issue, phase }) => {
+				started.push({ phase, issueId: issue.id });
+				return { status: "started", issueId: issue.id, state: issue.state };
+			},
+		},
+		attemptRunner: { run: async () => ({ state: "succeeded" as const }) },
+	});
+	const caseId = database.createCase({ id: "linear-dispatch", title: "Linear work", source: "linear" });
+	database.transitionCase(caseId, "classified", "test");
+	database.transitionCase(caseId, "investigating", "test");
+	database.recordSourceEvent(
+		{
+			source: "linear",
+			sourceKey: "linear:issue-1",
+			revision: "revision-1",
+			receivedAt: new Date().toISOString(),
+			title: "ENG-1: Linear work",
+			body: "Investigate",
+			metadata: {
+				state: { id: "todo", name: "Todo", type: "unstarted" },
+				team: { id: "team-1", key: "ENG" },
+			},
+		},
+		{ caseId },
+	);
+	const jobId = database.createJob({ caseId, role: "investigator" });
+	await (controller as unknown as { schedulerTick(): Promise<void> }).schedulerTick();
+	assert.deepEqual(started, [{ phase: "investigation", issueId: "issue-1" }]);
+	assert.equal(database.get<{ state: string }>("SELECT state FROM jobs WHERE id = ?", jobId)?.state, "succeeded");
+});
+
 test("controller rejects insecure source credentials before reading them", () => {
 	const root = mkdtempSync(join(tmpdir(), "background-agents-controller-credentials-"));
 	try {

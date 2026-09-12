@@ -19,6 +19,7 @@ export interface HerdrAttemptOptions {
 	primaryCheckout: string;
 	gitDirectory: string;
 	context: ContextManifest;
+	contextArtifact?: { path: string; hash: string; artifactId?: string };
 	runtime: PreparedRuntimeProfile;
 	rolePromptPath: string;
 	limits: Parameters<typeof buildSystemdRunArgs>[0]["limits"];
@@ -103,10 +104,12 @@ export async function launchAttemptThroughHerdr(
 	} = {},
 ): Promise<HerdrAttemptLaunchResult> {
 	const runtime = options.runtime;
-	const contextArtifact = persistContextManifest(options.context, {
-		attemptDirectory: options.attemptDirectory,
-		database: options.database,
-	});
+	const contextArtifact =
+		options.contextArtifact ??
+		persistContextManifest(options.context, {
+			attemptDirectory: options.attemptDirectory,
+			database: options.database,
+		});
 	const unit = options.unit ?? `background-agent-${options.attemptId}`;
 	persistLaunchIntent(options, unit);
 	options.database.run(

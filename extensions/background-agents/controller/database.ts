@@ -518,6 +518,64 @@ export class BackgroundAgentsDatabase {
 		});
 	}
 
+	/** Pause only jobs captured by an emergency-stop activation. */
+	pauseEmergencyStopJobs(jobIds: readonly string[], now = new Date()): number {
+		const pausedAt = utcTimestamp(now, "now");
+		return this.withTransaction(() => {
+			let changed = 0;
+			for (const jobId of jobIds) {
+				const job = this.database
+					.prepare("SELECT state FROM jobs WHERE id = ?")
+					.get(requiredString(jobId, "jobId")) as Row | undefined;
+				if (!job || !["queued", "running", "needs-human"].includes(rowString(job, "state"))) continue;
+				this.database
+					.prepare("INSERT INTO emergency_stop_paused_jobs (job_id, paused_at) VALUES (?, ?)")
+					.run(jobId, pausedAt);
+				this.database
+					.prepare("UPDATE attempts SET state = 'paused', finished_at = ? WHERE job_id = ? AND state = 'running'")
+					.run(pausedAt, jobId);
+				this.database
+					.prepare("DELETE FROM attempt_leases WHERE attempt_id IN (SELECT id FROM attempts WHERE job_id = ?)")
+					.run(jobId);
+				this.database
+					.prepare(
+						"UPDATE jobs SET state = 'paused', claimed_by = NULL, claimed_at = NULL, updated_at = ? WHERE id = ?",
+					)
+					.run(pausedAt, jobId);
+				changed += 1;
+			}
+			this.database.exec(
+				"UPDATE provider_profile_state SET active_attempts = (SELECT count(*) FROM attempts WHERE profile_id = provider_profile_state.profile_id AND state = 'running')",
+			);
+			return changed;
+		});
+	}
+
+	/** Resume only jobs paused by an emergency stop. A later claim creates the next attempt generation. */
+	resumeEmergencyStopJobs(now = new Date()): number {
+		const resumedAt = utcTimestamp(now, "now");
+		return this.withTransaction(() => {
+			const jobs = this.database
+				.prepare(
+					"SELECT job_id FROM emergency_stop_paused_jobs WHERE resumed_at IS NULL ORDER BY paused_at, job_id",
+				)
+				.all() as Row[];
+			let resumed = 0;
+			for (const row of jobs) {
+				const result = this.database
+					.prepare(
+						"UPDATE jobs SET state = 'queued', claimed_by = NULL, claimed_at = NULL, updated_at = ? WHERE id = ? AND state = 'paused'",
+					)
+					.run(resumedAt, rowString(row, "job_id"));
+				if (result.changes === 1) resumed += 1;
+			}
+			this.database
+				.prepare("UPDATE emergency_stop_paused_jobs SET resumed_at = ? WHERE resumed_at IS NULL")
+				.run(resumedAt);
+			return resumed;
+		});
+	}
+
 	setRollout(
 		scope: "global" | "source" | "repository",
 		value: RolloutMode,

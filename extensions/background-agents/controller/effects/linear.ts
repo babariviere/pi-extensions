@@ -116,7 +116,7 @@ export class LinearEffects {
 		const states = (await this.client.getStartedStates({ id: current.teamId, key: current.teamKey })).filter(
 			isStarted,
 		);
-		const target = states.find((state) => normalized(state.name) === "in progress") ?? states[0];
+		const target = states.find((state) => normalized(state.name) === "in progress");
 		if (!target) return { kind: "preserved", state: current.state };
 		return { kind: "advance", state: current.state, target };
 	}

@@ -118,6 +118,40 @@ describe("durable external effects", () => {
 		database.close();
 	});
 
+	test("does not create a draft over an existing ready pull request", async () => {
+		const database = new BackgroundAgentsDatabase(databasePath());
+		const client: GitHubEffectClient = {
+			pushBranch: async () => {},
+			getBranchHead: async () => null,
+			findPullRequest: async () => ({
+				number: 9,
+				url: "https://github.test/pr/9",
+				branch: "feature",
+				base: "main",
+				isDraft: false,
+			}),
+			createDraftPullRequest: async () => {
+				throw new Error("must not create");
+			},
+			updatePullRequest: async () => {},
+			getPullRequest: async () => null,
+			linkStack: async () => {},
+			isStackLinked: async () => false,
+			markReady: async () => {},
+		};
+		await assert.rejects(
+			new GitHubEffects(database, client, { owner: "github-conflict" }).createDraftPullRequest({
+				worktree: "/tmp/worktree",
+				branch: "feature",
+				base: "main",
+				title: "title",
+				body: "body",
+			}),
+			/existing pull request is not a draft/,
+		);
+		database.close();
+	});
+
 	test("reconciles a GitHub push and ready effect without repeating mutations", async () => {
 		const database = new BackgroundAgentsDatabase(databasePath());
 		const caseId = database.createCase({ title: "Ready", source: "manual" });
