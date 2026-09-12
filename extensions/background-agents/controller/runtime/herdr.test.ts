@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { test } from "node:test";
@@ -61,7 +61,7 @@ test("persists context and launch metadata while keeping secrets out of pane arg
 							claim.attemptId,
 						);
 						assert.equal(pending?.systemd_unit, `background-agent-${claim.attemptId}`);
-						assert.equal(pending?.pane_id, `pending:background-agent-${claim.attemptId}`);
+						assert.equal(pending?.pane_id, "pane");
 						calls.push(argv);
 						return { ok: true };
 					},
@@ -78,6 +78,7 @@ test("persists context and launch metadata while keeping secrets out of pane arg
 			"pane",
 		);
 		assert.equal(calls[0]!.includes("not-in-command"), false);
+		assert.equal(JSON.parse(readFileSync(join(attempt, "launch-intent.json"), "utf8")).paneIntent, undefined);
 		assert.equal(calls[0]![0], "systemd-run");
 		const promptIndex = calls[0]!.indexOf("--append-system-prompt");
 		assert.notEqual(promptIndex, -1);

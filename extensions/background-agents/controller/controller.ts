@@ -209,6 +209,7 @@ export interface BackgroundControllerOptions {
 	clock?: () => Date;
 	credentialStat?: CredentialStat;
 	runtimeControls?: BackgroundRuntimeControls;
+	recovery?: Pick<RecoveryCoordinator, "reconcileAttempt">;
 }
 function defaultClassifier(event: SourceEvent) {
 	const text = `${event.title}\n${event.body}`.toLowerCase();
@@ -247,7 +248,7 @@ export class BackgroundAgentsController {
 	private readonly classifier: Classifier;
 	private readonly jobs: JobScheduler;
 	private readonly providerScheduler: ProviderScheduler;
-	private readonly recovery: RecoveryCoordinator;
+	private readonly recovery: Pick<RecoveryCoordinator, "reconcileAttempt">;
 	private readonly stateMachine: BackgroundAgentsStateMachine;
 	private readonly questions: QuestionWorkflow;
 	private readonly specifications: SpecificationWorkflow;
@@ -310,7 +311,7 @@ export class BackgroundAgentsController {
 		this.providerScheduler = new ProviderScheduler(this.database, this.config, {
 			emergencyStop: durableControls.emergencyStop,
 		});
-		this.recovery = new RecoveryCoordinator(this.database, { owner: this.owner });
+		this.recovery = options.recovery ?? new RecoveryCoordinator(this.database, { owner: this.owner });
 		this.stateMachine = new BackgroundAgentsStateMachine(this.database);
 		this.questions = new QuestionWorkflow(this.database);
 		this.specifications = new SpecificationWorkflow(this.database);
@@ -371,9 +372,7 @@ export class BackgroundAgentsController {
 			if (current === "intake")
 				this.database.transitionCase(result.caseId, "classified", "classifier", "input classified");
 			if (classification.classification.inputKind === "question") {
-				if (this.rolloutFor(event.source, event.repository) === "observe")
-					this.questions.start(result.caseId, event.body, { maxTimeMs: 60_000, maxCostUsd: 0, maxResults: 10 });
-				else this.queueInvestigation(result.caseId);
+				this.questions.start(result.caseId, event.body, { maxTimeMs: 60_000, maxCostUsd: 0, maxResults: 10 });
 			} else if (
 				classification.classification.disposition === "actionable" &&
 				this.rolloutFor(event.source, event.repository) !== "observe"
@@ -464,21 +463,32 @@ export class BackgroundAgentsController {
 			if (claim) break;
 		}
 		if (!claim) return;
-		try {
-			const result = await this.options.attemptRunner.run(claim, this.database);
+		const finish = async (result: AttemptRunnerResult): Promise<void> => {
+			const role = this.database.get<{ role: AgentRole }>("SELECT role FROM jobs WHERE id = ?", claim.jobId)?.role;
+			if (result.state === "failed" && role === "worker") {
+				try {
+					const recovery = await this.recovery.reconcileAttempt(claim.attemptId);
+					if (recovery.action === "running" || recovery.action === "replaced" || recovery.action === "needs-human")
+						return;
+				} catch (error) {
+					const failure = error instanceof Error ? error.message : String(error);
+					this.database.markAttemptNeedsHuman(claim.attemptId, `worker failure recovery failed: ${failure}`);
+					return;
+				}
+			}
 			this.jobs.finishAttempt(
 				{ attemptId: claim.attemptId, state: result.state, failure: result.failure },
 				this.owner,
 			);
+		};
+		try {
+			const result = await this.options.attemptRunner.run(claim, this.database);
+			await finish(result);
 		} catch (error) {
-			this.jobs.finishAttempt(
-				{
-					attemptId: claim.attemptId,
-					state: "failed",
-					failure: error instanceof Error ? error.message : String(error),
-				},
-				this.owner,
-			);
+			await finish({
+				state: "failed",
+				failure: error instanceof Error ? error.message : String(error),
+			});
 		}
 	}
 	private dispatchAllowed(role: string, state: string, rollout: RolloutMode): boolean {
@@ -494,21 +504,46 @@ export class BackgroundAgentsController {
 			systemd_unit: string | null;
 			pane_id: string | null;
 		}>("SELECT id, case_id, systemd_unit, pane_id FROM attempts WHERE state = 'running' ORDER BY id");
+		const failures: string[] = [];
 		for (const attempt of active) {
 			if (attempt.systemd_unit) {
-				await this.runtimeControls.terminateSystemdUnit(attempt.systemd_unit);
-				if (!(await this.runtimeControls.isSystemdUnitStopped(attempt.systemd_unit)))
-					throw new Error(`systemd unit did not terminate: ${attempt.systemd_unit}`);
+				try {
+					await this.runtimeControls.terminateSystemdUnit(attempt.systemd_unit);
+					if (!(await this.runtimeControls.isSystemdUnitStopped(attempt.systemd_unit)))
+						throw new Error(`systemd unit did not terminate: ${attempt.systemd_unit}`);
+				} catch (error) {
+					failures.push(
+						`attempt ${attempt.id} systemd: ${error instanceof Error ? error.message : String(error)}`,
+					);
+				}
 			}
-			if (attempt.pane_id && this.runtimeControls.closePane) await this.runtimeControls.closePane(attempt.pane_id);
+			if (attempt.pane_id && this.runtimeControls.closePane)
+				try {
+					await this.runtimeControls.closePane(attempt.pane_id);
+				} catch (error) {
+					failures.push(`attempt ${attempt.id} pane: ${error instanceof Error ? error.message : String(error)}`);
+				}
 		}
 		const affectedCases = this.database.all<{ case_id: string }>(
 			"SELECT DISTINCT case_id FROM jobs WHERE state IN ('queued', 'running')",
 		);
-		for (const caseId of affectedCases.map((row) => row.case_id)) this.jobs.pauseCaseJobs(caseId);
+		for (const caseId of affectedCases.map((row) => row.case_id))
+			try {
+				this.jobs.pauseCaseJobs(caseId);
+			} catch (error) {
+				failures.push(`case ${caseId} pause: ${error instanceof Error ? error.message : String(error)}`);
+			}
+		for (const attempt of active)
+			try {
+				await this.recovery.reconcileAttempt(attempt.id);
+			} catch (error) {
+				failures.push(`attempt ${attempt.id} reconcile: ${error instanceof Error ? error.message : String(error)}`);
+			}
 		this.database.recordOperatorEvent("emergency-stop.reconciled", this.operator, {
 			attemptIds: active.map((attempt) => attempt.id),
+			failures,
 		});
+		if (failures.length > 0) throw new Error(`Emergency stop completed with failures: ${failures.join("; ")}`);
 		return { accepted: true };
 	}
 	private heartbeatTick(): void {

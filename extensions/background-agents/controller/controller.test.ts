@@ -195,3 +195,91 @@ test("restores durable controls across controller restart and reconciles an emer
 	assert.equal(resumed.ok, true);
 	assert.equal(second.snapshot().emergencyStop, false);
 });
+
+test("emergency stop attempts every unit and pane, pauses jobs, reconciles every attempt, and aggregates failures", async () => {
+	const database = new BackgroundAgentsDatabase(":memory:");
+	databases.push(database);
+	const stopped: string[] = [];
+	const closed: string[] = [];
+	const reconciled: string[] = [];
+	const attempts: string[] = [];
+	const runtimeControls = {
+		terminateSystemdUnit: async (unit: string) => {
+			stopped.push(unit);
+			if (unit === "unit-one") throw new Error("stop-one");
+		},
+		isSystemdUnitStopped: async () => true,
+		closePane: async (pane: string) => {
+			closed.push(pane);
+			if (pane === "pane-one") throw new Error("close-one");
+		},
+	};
+	const controller = new BackgroundAgentsController({
+		database,
+		startSocket: false,
+		runtimeControls,
+		recovery: {
+			reconcileAttempt: async (attemptId) => {
+				reconciled.push(attemptId);
+				return { attemptId, action: "needs-human", systemdState: "unknown", reason: "paused" };
+			},
+		},
+	});
+	for (const [unit, pane] of [
+		["unit-one", "pane-one"],
+		["unit-two", "pane-two"],
+	]) {
+		const caseId = database.createCase({ title: unit, source: "manual" });
+		const jobId = database.createJob({ caseId, role: "investigator" });
+		const claim = database.claimJob(jobId, "runner", 60_000)!;
+		database.run("UPDATE attempts SET systemd_unit = ?, pane_id = ? WHERE id = ?", unit, pane, claim.attemptId);
+		attempts.push(claim.attemptId);
+	}
+	const response = await controller.handle({ version: 1, id: "stop-all", type: "emergency.stop", enabled: true });
+	assert.equal(response.ok, false);
+	assert.match((response as { error?: { message?: string } }).error?.message ?? "", /stop-one/);
+	assert.match((response as { error?: { message?: string } }).error?.message ?? "", /close-one/);
+	assert.deepEqual(stopped.sort(), ["unit-one", "unit-two"]);
+	assert.deepEqual(closed.sort(), ["pane-one", "pane-two"]);
+	assert.deepEqual(reconciled.sort(), attempts.sort());
+	assert.equal(database.get<{ count: number }>("SELECT count(*) AS count FROM jobs WHERE state = 'paused'")?.count, 2);
+});
+
+test("failed worker attempts are reconciled before the controller terminalizes them", async () => {
+	const database = new BackgroundAgentsDatabase(":memory:");
+	databases.push(database);
+	const caseId = database.createCase({ title: "failed worker", source: "manual" });
+	database.run("UPDATE cases SET state = 'implementation', rollout_mode = 'supervised' WHERE id = ?", caseId);
+	const jobId = database.createJob({ caseId, role: "worker" });
+	const reconciled: string[] = [];
+	const controller = new BackgroundAgentsController({
+		database,
+		startSocket: false,
+		config: normalizeBackgroundAgentsConfig({
+			rollout: { defaultMode: "supervised" },
+			profiles: [{ id: "profile", provider: "anthropic", agentDir: process.cwd() }],
+		}),
+		attemptRunner: { run: async (claim) => ({ state: "failed", failure: "unit failed" }) },
+		recovery: {
+			reconcileAttempt: async (attemptId) => {
+				reconciled.push(attemptId);
+				return { attemptId, action: "needs-human", systemdState: "failed", reason: "dirty worktree" };
+			},
+		},
+	});
+	const usage = (controller as unknown as { providerScheduler: { usage: { states: Map<string, unknown> } } })
+		.providerScheduler.usage;
+	usage.states.set("profile", {
+		profileId: "profile",
+		provider: "anthropic",
+		observedAt: new Date(),
+		windows: [{ label: "test", usedPercent: 0 }],
+		available: true,
+	});
+	await (controller as unknown as { schedulerTick(): Promise<void> }).schedulerTick();
+	assert.equal(reconciled.length, 1);
+	assert.equal(
+		database.get<{ state: string }>("SELECT state FROM attempts WHERE job_id = ?", jobId)?.state,
+		"running",
+	);
+});

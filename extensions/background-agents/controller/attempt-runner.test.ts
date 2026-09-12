@@ -7,12 +7,16 @@ import { normalizeBackgroundAgentsConfig } from "../config.ts";
 import { BackgroundAgentsDatabase } from "./database.ts";
 import { GitRepository } from "./git/repository.ts";
 import { GitWorktreeManager, backgroundBranch, type WorktreeRecord } from "./git/worktree.ts";
-import { ProductionAttemptRunner } from "./attempt-runner.ts";
+import { combinedRequiredChecks, ProductionAttemptRunner } from "./attempt-runner.ts";
 import { BackgroundAgentsStateMachine } from "./state-machine.ts";
 import { SpecificationWorkflow } from "./workflows/specification.ts";
 import { createEvidenceManifest } from "./verification/evidence.ts";
 
 const SHA = "0123456789012345678901234567890123456789";
+
+test("verifier requirements combine global and repository checks without duplicates", () => {
+	assert.deepEqual(combinedRequiredChecks(["lint", "test"], ["test", "integration"]), ["lint", "test", "integration"]);
+});
 
 class TestWorktrees extends GitWorktreeManager {
 	constructor(repository: GitRepository, root: string) {
@@ -53,7 +57,8 @@ function outputFor(role: string): Record<string, unknown> {
 test("production runner dispatches every role through its profile boundary", async () => {
 	const root = mkdtempSync(join(tmpdir(), "background-attempt-runner-"));
 	const database = new BackgroundAgentsDatabase(":memory:");
-	const calls: Array<{ role: string; tools: string[] }> = [];
+	const calls: Array<{ role: string; tools: string[]; prompt: string; rolePromptPath: string }> = [];
+	let workerBaseSha = SHA;
 	try {
 		const config = normalizeBackgroundAgentsConfig({
 			databasePath: join(root, "controller.sqlite"),
@@ -72,7 +77,12 @@ test("production runner dispatches every role through its profile boundary", asy
 			repositoryFactory: (path) => new GitRepository(path, gitRunner),
 			worktreeFactory: (repository, path) => new TestWorktrees(repository, path),
 			launch: async (options) => {
-				calls.push({ role: options.role, tools: options.runtime.tools });
+				calls.push({
+					role: options.role,
+					tools: options.runtime.tools,
+					prompt: options.prompt ?? "",
+					rolePromptPath: options.rolePromptPath,
+				});
 				const resultPath = String(options.context.context.resultPath);
 				writeFileSync(
 					resultPath,
@@ -82,7 +92,16 @@ test("production runner dispatches every role through its profile boundary", asy
 						jobId: String(options.context.context.jobId),
 						role: options.role,
 						state: "succeeded",
-						output: outputFor(options.role),
+						output:
+							options.role === "worker"
+								? {
+										...outputFor(options.role),
+										evidenceManifest: {
+											...(outputFor(options.role).evidenceManifest as object),
+											baseSha: workerBaseSha,
+										},
+									}
+								: outputFor(options.role),
 					}),
 				);
 				return {
@@ -186,6 +205,17 @@ test("production runner dispatches every role through its profile boundary", asy
 				["read", "grep", "find", "ls", "bash"],
 			],
 		);
+		for (const call of calls) {
+			assert.match(call.rolePromptPath, new RegExp(`/extensions/background-agents/roles/${call.role}\\.md$`));
+			assert.match(call.prompt, /context-manifest\.json/);
+			assert.match(call.prompt, /result\.json/);
+		}
+		workerBaseSha = "different-controller-base";
+		const worker = jobs.find((item) => item.role === "worker")!;
+		const retryJobId = database.createJob({ caseId: worker.caseId, role: "worker", workItemId: worker.workItemId });
+		const retryResult = await runner.run(database.claimJob(retryJobId, "test")!, database);
+		assert.equal(retryResult.state, "failed");
+		assert.match(retryResult.failure ?? "", /baseSha does not match controller assignment/);
 	} finally {
 		database.close();
 		rmSync(root, { recursive: true, force: true });
@@ -234,6 +264,79 @@ test("invalid or missing result artifacts require human review", async () => {
 		assert.equal(result.state, "needs-human");
 		assert.match(result.failure ?? "", /result artifact/);
 		assert.equal(database.get("SELECT id FROM investigation_reports WHERE case_id = ?", caseId), undefined);
+	} finally {
+		database.close();
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("question investigators store a private brief and never start specification work", async () => {
+	const root = mkdtempSync(join(tmpdir(), "background-question-runner-"));
+	const database = new BackgroundAgentsDatabase(":memory:");
+	try {
+		const config = normalizeBackgroundAgentsConfig({
+			profiles: [{ id: "profile", provider: "anthropic", agentDir: root }],
+		});
+		const caseId = database.createCase({ id: "question-runner", title: "question", source: "manual" });
+		database.transitionCase(caseId, "classified", "test");
+		database.transitionCase(caseId, "question-analysis", "test");
+		database.recordSourceEvent(
+			{
+				source: "manual",
+				sourceKey: "question-source",
+				receivedAt: new Date().toISOString(),
+				title: "question",
+				body: "Why did this happen?",
+			},
+			{ caseId },
+		);
+		const jobId = database.createJob({ caseId, role: "investigator" });
+		const claim = database.claimJob(jobId, "test")!;
+		let capturedContext: Record<string, unknown> | undefined;
+		let capturedPrompt = "";
+		const runner = new ProductionAttemptRunner({
+			config,
+			attemptRoot: join(root, "attempts"),
+			launch: async (options) => {
+				capturedContext = options.context.context;
+				capturedPrompt = options.prompt ?? "";
+				writeFileSync(
+					String(options.context.context.resultPath),
+					JSON.stringify({
+						version: 1,
+						attemptId: options.attemptId,
+						jobId,
+						role: "investigator",
+						state: "succeeded",
+						output: { findings: "transient", sources: ["event"], confidence: 80, uncertainties: [] },
+					}),
+				);
+				return {
+					attemptId: options.attemptId,
+					unit: "unit",
+					tabId: "tab",
+					paneId: "pane",
+					contextPath: "context",
+					command: [],
+				};
+			},
+			waitForUnit: async () => ({ state: "succeeded" }),
+		});
+		assert.equal((await runner.run(claim, database)).state, "succeeded");
+		assert.equal(capturedContext?.mode, "question-analysis");
+		assert.equal(capturedContext?.question, "Why did this happen?");
+		assert.match(capturedPrompt, /private brief/);
+		assert.equal(database.get<{ state: string }>("SELECT state FROM cases WHERE id = ?", caseId)?.state, "handled");
+		assert.equal(
+			database.get<{ count: number }>("SELECT count(*) AS count FROM question_briefs WHERE case_id = ?", caseId)
+				?.count,
+			1,
+		);
+		assert.equal(
+			database.get<{ count: number }>("SELECT count(*) AS count FROM spec_versions WHERE case_id = ?", caseId)
+				?.count,
+			0,
+		);
 	} finally {
 		database.close();
 		rmSync(root, { recursive: true, force: true });

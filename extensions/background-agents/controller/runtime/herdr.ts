@@ -61,24 +61,20 @@ function piArgs(options: HerdrAttemptOptions, contextPath: string): string[] {
 	if (options.runtime.thinking !== "off") args.push("--thinking", options.runtime.thinking);
 	if (options.runtime.tools.length === 0) args.push("--no-tools");
 	else args.push("--tools", options.runtime.tools.join(","));
-	args.push(
-		"--append-system-prompt",
-		options.rolePromptPath,
-		"--no-context-files",
-		"--no-approve",
-		"--",
-		options.prompt ?? `Read the context manifest at ${contextPath} and perform the assigned ${options.role} task.`,
-	);
+	const suppliedPrompt = options.prompt ?? `Perform the assigned ${options.role} task.`;
+	const prompt = suppliedPrompt.includes(contextPath)
+		? suppliedPrompt
+		: `${suppliedPrompt} Read the persisted context manifest at ${contextPath} before acting.`;
+	args.push("--append-system-prompt", options.rolePromptPath, "--no-context-files", "--no-approve", "--", prompt);
 	return args;
 }
 
-function persistLaunchIntent(options: HerdrAttemptOptions, unit: string, paneIntent: string): string {
+function persistLaunchIntent(options: HerdrAttemptOptions, unit: string): string {
 	const path = join(options.attemptDirectory, "launch-intent.json");
 	const content = `${JSON.stringify({
 		version: 1,
 		attemptId: options.attemptId,
 		unit,
-		paneIntent,
 		worktree: options.worktreeDirectory,
 	})}\n`;
 	mkdirSync(options.attemptDirectory, { recursive: true, mode: 0o700 });
@@ -92,7 +88,7 @@ function persistLaunchIntent(options: HerdrAttemptOptions, unit: string, paneInt
 		attemptId: options.attemptId,
 		kind: "launch-intent",
 		path,
-		metadata: { version: 1, unit, paneIntent },
+		metadata: { version: 1, unit, worktree: options.worktreeDirectory },
 	});
 	return path;
 }
@@ -112,12 +108,10 @@ export async function launchAttemptThroughHerdr(
 		database: options.database,
 	});
 	const unit = options.unit ?? `background-agent-${options.attemptId}`;
-	const paneIntent = `pending:${unit}`;
-	persistLaunchIntent(options, unit, paneIntent);
+	persistLaunchIntent(options, unit);
 	options.database.run(
-		"UPDATE attempts SET systemd_unit = ?, pane_id = ?, worktree = ? WHERE id = ?",
+		"UPDATE attempts SET systemd_unit = ?, worktree = ? WHERE id = ?",
 		unit,
-		paneIntent,
 		options.worktreeDirectory,
 		options.attemptId,
 	);
@@ -159,6 +153,13 @@ export async function launchAttemptThroughHerdr(
 		options.worktreeDirectory,
 	);
 	if (!tab?.rootPaneId) throw new Error("Herdr did not return a root pane");
+	options.database.run(
+		"UPDATE attempts SET systemd_unit = ?, pane_id = ?, worktree = ? WHERE id = ?",
+		unit,
+		tab.rootPaneId,
+		options.worktreeDirectory,
+		options.attemptId,
+	);
 	const ready = await host.waitForShellReady(tab.rootPaneId, dependencies.readyTimeoutMs ?? 10_000);
 	if (!ready.ok) {
 		await host.closeTab(tab.tabId);
@@ -169,13 +170,6 @@ export async function launchAttemptThroughHerdr(
 		await host.closeTab(tab.tabId);
 		throw new Error(`systemd service launch failed: ${launched.error ?? "unknown error"}`);
 	}
-	options.database.run(
-		"UPDATE attempts SET systemd_unit = ?, pane_id = ?, worktree = ? WHERE id = ?",
-		unit,
-		tab.rootPaneId,
-		options.worktreeDirectory,
-		options.attemptId,
-	);
 	return {
 		attemptId: options.attemptId,
 		unit,

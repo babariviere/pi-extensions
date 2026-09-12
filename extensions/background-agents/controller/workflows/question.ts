@@ -23,6 +23,12 @@ export interface PrivateQuestionBrief {
 	uncertainties: string[];
 }
 
+export const DEFAULT_QUESTION_LIMITS: QuestionLimits = {
+	maxTimeMs: 60_000,
+	maxCostUsd: 0,
+	maxResults: 10,
+};
+
 function validLimits(limits: QuestionLimits): QuestionLimits {
 	if (!Number.isSafeInteger(limits.maxTimeMs) || limits.maxTimeMs <= 0) throw new Error("maxTimeMs must be positive");
 	if (!Number.isFinite(limits.maxCostUsd) || limits.maxCostUsd < 0) throw new Error("maxCostUsd must be non-negative");

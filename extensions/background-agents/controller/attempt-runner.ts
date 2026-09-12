@@ -20,6 +20,12 @@ import {
 	buildInvestigationContext,
 	type InvestigationOutput,
 } from "./workflows/investigation.ts";
+import {
+	DEFAULT_QUESTION_LIMITS,
+	buildQuestionContext,
+	QuestionWorkflow,
+	type PrivateQuestionBrief,
+} from "./workflows/question.ts";
 import { SpecificationWorkflow, type SpecificationDraft } from "./workflows/specification.ts";
 import { createEvidenceManifest } from "./verification/evidence.ts";
 import { verifyEvidence } from "./verification/verifier.ts";
@@ -41,6 +47,10 @@ const report = await verifyEvidence({
 });
 writeFileSync(verificationPath, JSON.stringify({ version: 1, report }) + "\n", { mode: 0o600 });
 writeFileSync(artifactPath, JSON.stringify({ version: 1, attemptId, jobId, role: "verifier", state: "succeeded", output: { verdict: report.verdict } }) + "\n", { mode: 0o600 });`;
+
+export function combinedRequiredChecks(globalChecks: readonly string[], repositoryChecks: readonly string[]): string[] {
+	return [...new Set([...globalChecks, ...repositoryChecks])];
+}
 
 export const ATTEMPT_RESULT_VERSION = 1 as const;
 export const ATTEMPT_RESULT_FILE = "result.json";
@@ -114,7 +124,7 @@ function requiredList(value: unknown, field: string): unknown[] {
 	return value;
 }
 
-function validateRoleOutput(role: AgentRole, value: unknown): Record<string, unknown> {
+function validateRoleOutput(role: AgentRole, value: unknown, questionAnalysis = false): Record<string, unknown> {
 	const output = requiredObject(value, `${role} output`);
 	if (role === "classifier") {
 		requiredText(output.inputKind, "classifier inputKind");
@@ -124,6 +134,22 @@ function validateRoleOutput(role: AgentRole, value: unknown): Record<string, unk
 		requiredText(output.rationale, "classifier rationale");
 	}
 	if (role === "investigator") {
+		if (questionAnalysis) {
+			const questionFields = new Set(["findings", "sources", "confidence", "uncertainties"]);
+			if (Object.keys(output).some((field) => !questionFields.has(field)))
+				throw new Error("question result contains fields outside the private brief contract");
+			if (!("findings" in output)) throw new Error("question findings are required");
+			requiredList(output.sources, "question sources");
+			if (
+				typeof output.confidence !== "number" ||
+				!Number.isFinite(output.confidence) ||
+				output.confidence < 0 ||
+				output.confidence > 100
+			)
+				throw new Error("question confidence must be between 0 and 100");
+			requiredList(output.uncertainties, "question uncertainties");
+			return output;
+		}
 		if (!["quick-fix-candidate", "spec-required", "needs-human"].includes(String(output.autonomy)))
 			throw new Error("investigator autonomy is invalid");
 		requiredText(output.findings, "investigator findings");
@@ -152,7 +178,12 @@ function validateRoleOutput(role: AgentRole, value: unknown): Record<string, unk
 	return output;
 }
 
-function validateArtifact(value: unknown, claim: JobClaim, role: AgentRole): AttemptResultArtifact {
+function validateArtifact(
+	value: unknown,
+	claim: JobClaim,
+	role: AgentRole,
+	questionAnalysis = false,
+): AttemptResultArtifact {
 	const artifact = requiredObject(value, "attempt result artifact");
 	const fields = new Set(["version", "attemptId", "jobId", "role", "state", "output"]);
 	if (Object.keys(artifact).some((field) => !fields.has(field)))
@@ -161,7 +192,7 @@ function validateArtifact(value: unknown, claim: JobClaim, role: AgentRole): Att
 	if (artifact.attemptId !== claim.attemptId || artifact.jobId !== claim.jobId || artifact.role !== role)
 		throw new Error("attempt result artifact identity does not match the running attempt");
 	if (artifact.state !== "succeeded") throw new Error("attempt result artifact is not successful");
-	const output = validateRoleOutput(role, artifact.output);
+	const output = validateRoleOutput(role, artifact.output, questionAnalysis);
 	return { version: 1, attemptId: claim.attemptId, jobId: claim.jobId, role, state: "succeeded", output };
 }
 
@@ -193,8 +224,13 @@ function attemptContext(
 	role: AgentRole,
 	resultPath: string,
 ): ContextManifest {
-	const row = database.get<{ case_id: string; work_item_id: string | null; recovery_checkpoint_id: string | null }>(
-		"SELECT j.case_id, j.work_item_id, a.recovery_checkpoint_id FROM jobs j JOIN attempts a ON a.id = ? WHERE j.id = ?",
+	const row = database.get<{
+		case_id: string;
+		case_state: string;
+		work_item_id: string | null;
+		recovery_checkpoint_id: string | null;
+	}>(
+		"SELECT j.case_id, c.state AS case_state, j.work_item_id, a.recovery_checkpoint_id FROM jobs j JOIN cases c ON c.id = j.case_id JOIN attempts a ON a.id = ? WHERE j.id = ?",
 		claim.attemptId,
 		claim.jobId,
 	);
@@ -212,6 +248,22 @@ function attemptContext(
 			context: { event: latestEvent(database, row.case_id), ...recoveryContext, ...base },
 		});
 	}
+	if (role === "investigator" && row.case_state === "question-analysis")
+		return buildContextManifest({
+			attemptId: claim.attemptId,
+			caseId: row.case_id,
+			role,
+			context: {
+				...buildQuestionContext(
+					database,
+					row.case_id,
+					latestEvent(database, row.case_id).body,
+					DEFAULT_QUESTION_LIMITS,
+				),
+				...recoveryContext,
+				...base,
+			},
+		});
 	if (role === "investigator")
 		return buildContextManifest({
 			attemptId: claim.attemptId,
@@ -356,8 +408,13 @@ export class ProductionAttemptRunner {
 			const runtime = prepareRuntimeProfile(selected);
 			const rolePromptPath = this.options.roleDirectory
 				? join(this.options.roleDirectory, `${role}.md`)
-				: fileURLToPath(new URL(`../../roles/${role}.md`, import.meta.url));
-			const prompt = `Write a version ${ATTEMPT_RESULT_VERSION} result artifact to ${resultPath}. It must be JSON with version ${ATTEMPT_RESULT_VERSION}, attemptId ${claim.attemptId}, jobId ${claim.jobId}, role ${role}, state succeeded, and an output object containing your deliverable. Do not claim success without this artifact.`;
+				: fileURLToPath(new URL(`../roles/${role}.md`, import.meta.url));
+			const contextPath = join(attemptDirectory, "context-manifest.json");
+			const questionAnalysis =
+				role === "investigator" &&
+				database.get<{ state: string }>("SELECT state FROM cases WHERE id = ?", job.case_id)?.state ===
+					"question-analysis";
+			const prompt = `Read the persisted context manifest at ${contextPath} before acting. Write a version ${ATTEMPT_RESULT_VERSION} result artifact to ${resultPath}. It must be JSON with version ${ATTEMPT_RESULT_VERSION}, attemptId ${claim.attemptId}, jobId ${claim.jobId}, role ${role}, state succeeded, and an output object containing your deliverable. Do not claim success without this artifact.${questionAnalysis ? " This is question-analysis: output only a private brief with findings, sources, confidence, and uncertainties. Do not propose a specification or make mutations." : ""}`;
 			const launch = this.options.launch ?? launchAttemptThroughHerdr;
 			const verificationPath = join(attemptDirectory, VERIFICATION_RESULT_FILE);
 			let command: string | undefined;
@@ -393,8 +450,10 @@ export class ProductionAttemptRunner {
 					verifierInputPath,
 					resultPath,
 					verificationPath,
+					claim.attemptId,
+					claim.jobId,
 					repository.root,
-					JSON.stringify(this.options.config.ci.requiredChecks),
+					JSON.stringify(combinedRequiredChecks(this.options.config.ci.requiredChecks, repository.requiredChecks)),
 				];
 				writeFileSync(join(attemptDirectory, "verifier-service.mjs"), VERIFIER_SERVICE, { mode: 0o700 });
 			}
@@ -447,7 +506,7 @@ export class ProductionAttemptRunner {
 			} catch {
 				throw new Error("attempt result artifact is missing or invalid");
 			}
-			const artifact = validateArtifact(rawArtifact, claim, role);
+			const artifact = validateArtifact(rawArtifact, claim, role, questionAnalysis);
 			let verificationReport: unknown;
 			if (role === "verifier") {
 				try {
@@ -556,6 +615,18 @@ export class ProductionAttemptRunner {
 			return;
 		}
 		if (job.role === "investigator") {
+			const caseState = database.get<{ state: string }>("SELECT state FROM cases WHERE id = ?", job.case_id)?.state;
+			if (caseState === "question-analysis") {
+				const event = latestEvent(database, job.case_id);
+				new QuestionWorkflow(database).record(
+					job.case_id,
+					event.body,
+					output as unknown as PrivateQuestionBrief,
+					DEFAULT_QUESTION_LIMITS,
+					claim.attemptId,
+				);
+				return;
+			}
 			const investigation = output as unknown as InvestigationOutput;
 			new InvestigationWorkflow(database).record(job.case_id, investigation, claim.attemptId);
 			if (investigation.autonomy !== "needs-human") new SpecificationWorkflow(database).start(job.case_id);
@@ -574,9 +645,11 @@ export class ProductionAttemptRunner {
 			const input = requiredObject(output.evidenceManifest, "evidenceManifest") as unknown as Parameters<
 				typeof createEvidenceManifest
 			>[0];
+			if (input.baseSha !== baseRef)
+				throw new Error("worker evidence manifest baseSha does not match controller assignment");
 			const manifest = createEvidenceManifest({
 				...input,
-				baseSha: input.baseSha || baseRef,
+				baseSha: baseRef,
 				candidateSha: commitSha,
 			});
 			const manifestPath = join(worktree, ".background-evidence-manifest.json");
