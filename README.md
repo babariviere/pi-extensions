@@ -21,7 +21,7 @@ directory, and `themes/*.json` files. The current inventory is:
 | `pr` | `/review-comments` hands selected unresolved review comments to the agent; `/autofix` watches PR CI and `/autofix-stop` stops it. |
 | `preview-system-prompt` | `/system-prompt` displays the assembled system prompt. |
 | `secrets` | `/secret-list`; injects `fnox` secrets into shell commands and replaces secret values in tool results with reversible references. |
-| `code-mode` | `code_mode` runs bounded QuickJS programs with explicitly registered Pi, web.search/web.fetch, MCP, and agents capabilities; it also provides `/sandbox`, `/mcp`, and `/mcp-auth` controls. Existing `spindle.json` configuration remains supported, and `spindle_exec` visibility entries migrate to `code_mode`. |
+| `code-mode` | `code_mode` runs bounded TypeScript programs through the shared code-mode runtime. Full code mode exposes Pi core tools and only the explicitly registered `web.search` and `web.fetch` aliases, plus MCP and agents; orchestration-only mode keeps MCP, agents, and trusted custom providers while hiding full-code-only capabilities. It also provides `/sandbox`, `/mcp`, and `/mcp-auth` controls. Existing `spindle.json` configuration remains supported, and `spindle_exec` visibility entries migrate to `code_mode`. |
 | `taptap` | Requires two `Esc` presses within 600ms to cancel a running agent turn, while preserving pi's idle and completion behaviors. |
 | `todos` | `todo` manages file-backed todos and `/todos` provides the interactive manager. |
 | `tool-substitute` | Adds pi search-tool guidance and blocks Git writes inside jj repositories, converting simple safe Git operations where possible. |
@@ -77,14 +77,12 @@ the extension-specific docs contain examples where relevant.
 
 ## Requirements
 
-- Node.js `>=18.0.0`, as declared by `package.json`.
-- Node 24 is used by CI and is required by the optional
-  `background-agents` controller, which imports `node:sqlite`. The regular
-  background-agent Pi client remains Node 18-safe.
+- Node.js `>=24.0.0`, as required by the shared code-mode runtime and used by CI.
 - The pi host supplies the peer packages `@earendil-works/pi-ai`,
   `@earendil-works/pi-coding-agent`, `@earendil-works/pi-tui`, and `typebox`.
   The package installs its declared runtime dependencies such as `defuddle`,
-  `parse5`, `quickjs-emscripten`, `shiki`, and `yaml`.
+  `parse5`, `shiki`, and `yaml`; code mode also consumes the shared
+  `@babariviere/code-mode` runtime and its host-pi adapter.
 - Optional integrations need their own tools and credentials. Examples include
   Kagi, `fnox`, Linear, GitHub CLI, jj, Herdr, and the platform facilities
   required by night mode or the background-agent controller.
@@ -100,7 +98,7 @@ extension README.
 | --- | --- |
 | `~/.pi/agent/settings.json` | Pi settings, `workspaces`, the user `nightMode` configuration, shell path, and manually loaded extensions. |
 | `<cwd>/.pi/settings.json` | Project `nightMode` settings, which take precedence over user night settings when the project is trusted; project MCP configuration may also live here. |
-| `~/.pi/agent/spindle.json` and trusted `<cwd>/.pi/spindle.json` | Spindle configuration. Project values are merged over user values. Full code mode and sandbox settings are separate from pi's own config. |
+| `~/.pi/agent/spindle.json` and trusted `<cwd>/.pi/spindle.json` | Code-mode configuration (legacy filename retained). Project values are merged over user values. Full code mode and sandbox settings are separate from pi's own config. |
 | `~/.pi/agent/mcp.json` | Spindle's MCP server configuration. Spindle has no separate MCP credential store; OAuth/keyring behavior follows its MCP implementation. |
 | `~/.pi/agent/secrets.json` | Per-machine `KAGI_SESSION_TOKEN` and `LINEAR_API_KEY` values read directly by those extensions. This file is not the source for the `secrets` extension. |
 | Nearest `fnox.toml` | `secrets` discovers this file upward from the working directory and calls `fnox export --format json`. |
@@ -171,7 +169,11 @@ boundary:
   by default for ordinary sessions. `read-only` and `workspace-write` enforce
   direct read/write paths; night mode enables its own workspace-oriented policy
   and read-only MCP policy by default. Treat shell/network access as capable of
-  side effects and inspect the effective `/sandbox` status.
+  side effects and inspect the effective `/sandbox` status. Captured web
+  capabilities are explicit aliases, not a generic view of sibling extension
+  tools. Unselected siblings remain on Pi's native direct path. A trusted
+  custom provider is available in orchestration-only mode unless it declares
+  itself full-code-only.
 - `night-mode` can hold a wake lock. The macOS `pmset` backend changes a
   persistent sleep setting and may need narrowly scoped passwordless sudo; a
   crash can require manual restoration. See its wake-lock documentation.
@@ -215,7 +217,8 @@ The CI workflow runs `npm ci`, `npm run typecheck`, and `npm test` on Node 24.
   caveats.
 - [Usage](extensions/usage/README.md), including Codex pacing semantics and
   persisted state.
-- [Spindle evaluation](extensions/code-mode/evaluation/README.md), including the
+- [Code-mode migration and configuration](extensions/code-mode/README.md).
+- [Code-mode evaluation](extensions/code-mode/evaluation/README.md), including the
   JSONL format and experiment protocol.
-- [Spindle patch format](extensions/code-mode/NATIVE_APPLY_PATCH.md).
+- [Code-mode patch format](extensions/code-mode/NATIVE_APPLY_PATCH.md).
 - [pi documentation](https://github.com/earendil-works/pi).

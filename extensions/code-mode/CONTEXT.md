@@ -32,7 +32,7 @@ plus its wiring, and none pulls in a dropped subsystem.
 | `failure-progress.ts` | `src/failure-progress.ts` | a failed program names the calls that already succeeded |
 | `output-budget.ts` | `src/output-budget.ts` | oversized output spills to a temp artifact instead of losing its middle |
 | `config.ts` (`executor.maxTimeoutMs`), `execution-service.ts` (`requestedTimeoutMs`) | same fields upstream | a per-invocation `timeoutMs` raises (never lowers) the program deadline |
-| `runtime/dynamic-guest-types.ts` | `src/runtime/dynamic-guest-types.ts` (mcp section rewritten) | `extensions.<tool>` is typed from the live captured catalog; `mcp` is typed from the on-disk MCP tool cache as an indexed tool map, so generation never connects a server |
+| `runtime/dynamic-guest-types.ts` | `src/runtime/dynamic-guest-types.ts` (mcp section rewritten) | no arbitrary captured sibling namespace is generated; `mcp` is typed from the on-disk MCP tool cache as an indexed tool map, so generation never connects a server |
 | `core/action-repair.ts`, `providers/arg-normalization.ts` | same names upstream | near-miss action names and argument keys repair from the declared catalog/schema, with didactic failures |
 | `core/pi-bash-error.ts` | `src/core/pi-bash-error.ts` | `pi.bash({ settle: true })` keeps its exit status across `tool_result` middleware |
 | `core/core-override-guidance.ts` | `src/core/core-override-guidance.ts` | an exact-name core override keeps its authored prompt text in full code mode |
@@ -141,7 +141,7 @@ decisions.
 Globals inside `code_mode`:
 
 - `pi.*` — Pi core tools (full code mode only), via `providers/pi-tools-provider.ts`
-- `extensions.*` — tools registered by sibling extensions, via `capture/` + `providers/captured-tools-provider.ts`
+- `web.*` — explicitly registered captured web aliases, via `capture/` + `providers/captured-tools-provider.ts`; unrelated captured siblings remain on Pi's native direct path
 - `tools.*` — cross-provider discovery and generic dispatch (full code mode only): `providers` / `catalog` / `list` / `search` / `describe` / `call` over every registered provider
 - `mcp.*` — MCP tools from `~/.pi/agent/mcp.json`, served by spindle's own MCP client (`mcp/client-hub.ts` behind `providers/mcp-client-provider.ts`)
 - `agents.*` — custom markdown subagents, via `providers/agents-provider.ts` + `agents/`

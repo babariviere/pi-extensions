@@ -161,7 +161,7 @@ When a batch settles and nobody is waiting on it (its window expired, or it was 
 
 ## Agent tool allowlists
 
-An agent definition's `tools:` frontmatter restricts what that agent may call. The child `pi` process always keeps `code_mode` regardless of the list, because it is the child's only tool path in full code mode. The declared list is enforced one level down instead, inside the child's sandbox: disallowed tools are removed from the declared `pi.*` schema, hidden from listings, and rejected at the `pi.*` / `extensions.*` boundary with an explicit "not in this agent's tool allowlist" error.
+An agent definition's `tools:` frontmatter restricts what that agent may call. The child `pi` process always keeps `code_mode` regardless of the list. The declared list is also enforced inside the child's sandbox: disallowed Pi core tools and captured web capabilities are removed from declarations, hidden from listings, and rejected at dispatch with an explicit "not in this agent's tool allowlist" error. Use the native tool names (`read`, `web_search`, `fetch_content`) in the allowlist.
 
 `mcp.*` and `agents.*` are not covered by `tools:`.
 
