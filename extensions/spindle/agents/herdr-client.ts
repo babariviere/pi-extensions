@@ -48,6 +48,15 @@ export class HerdrClient {
 		return res.ok ? parseTabs(res.result) : [];
 	}
 
+	/** Confirm tab absence. Transport failures are not confirmation. */
+	async isTabClosed(tabId: string): Promise<boolean> {
+		const res = await this.#transport.run(["tab", "list"]);
+		return (
+			Boolean(res.ok && res.result && Array.isArray(res.result.tabs)) &&
+			!parseTabs(res.result).some((tab) => tab.tabId === tabId)
+		);
+	}
+
 	async createTab(label: string, workspaceId?: string, cwd?: string): Promise<HerdrTab | undefined> {
 		const args = ["tab", "create", "--label", label, "--no-focus"];
 		if (workspaceId) args.push("--workspace", workspaceId);

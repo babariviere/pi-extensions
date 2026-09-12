@@ -22,6 +22,14 @@ import { createEvidenceManifest } from "./verification/evidence.ts";
 
 const SHA = "0123456789012345678901234567890123456789";
 
+class InvalidateAfterPublicationDatabase extends BackgroundAgentsDatabase {
+	override withAttemptPublication<T>(attemptId: string, stopEpoch: number, callback: () => T): T {
+		const result = super.withAttemptPublication(attemptId, stopEpoch, callback);
+		this.run("UPDATE attempts SET publish_invalidated = 1 WHERE id = ?", attemptId);
+		return result;
+	}
+}
+
 test("verifier isolation denies every configured profile, source, and control-plane path", () => {
 	const root = mkdtempSync(join(tmpdir(), "background-verifier-paths-"));
 	try {
@@ -341,6 +349,61 @@ test("invalid or missing result artifacts require human review", async () => {
 		assert.equal(result.state, "needs-human");
 		assert.match(result.failure ?? "", /result artifact/);
 		assert.equal(database.get("SELECT id FROM investigation_reports WHERE case_id = ?", caseId), undefined);
+	} finally {
+		database.close();
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("does not finalize an attempt invalidated as applyOutput completes", async () => {
+	const root = mkdtempSync(join(tmpdir(), "background-attempt-invalidation-"));
+	const database = new InvalidateAfterPublicationDatabase(":memory:");
+	try {
+		const config = normalizeBackgroundAgentsConfig({
+			profiles: [{ id: "profile", provider: "anthropic", agentDir: root }],
+		});
+		const caseId = database.createCase({ id: "invalidated-output", title: "invalidated", source: "manual" });
+		database.recordSourceEvent(
+			{
+				source: "manual",
+				sourceKey: "invalidated-source",
+				receivedAt: new Date().toISOString(),
+				title: "bug",
+				body: "body",
+			},
+			{ caseId },
+		);
+		const jobId = database.createJob({ caseId, role: "classifier" });
+		const claim = database.claimJob(jobId, "test")!;
+		const runner = new ProductionAttemptRunner({
+			config,
+			attemptRoot: join(root, "attempts"),
+			launch: async (options) => {
+				writeFileSync(
+					String(options.context.context.resultPath),
+					JSON.stringify({
+						version: 1,
+						attemptId: options.attemptId,
+						jobId,
+						role: "classifier",
+						state: "succeeded",
+						output: outputFor("classifier"),
+					}),
+				);
+				return {
+					attemptId: options.attemptId,
+					unit: "unit",
+					tabId: "tab",
+					paneId: "pane",
+					contextPath: "context",
+					command: [],
+				};
+			},
+			waitForUnit: async () => ({ state: "succeeded" }),
+		});
+		const result = await runner.run(claim, database);
+		assert.equal(result.state, "failed");
+		assert.match(result.failure ?? "", /invalidated/);
 	} finally {
 		database.close();
 		rmSync(root, { recursive: true, force: true });

@@ -210,6 +210,7 @@ export interface CredentialFileStats {
 	uid: number;
 	mode: number;
 	isFile(): boolean;
+	isDirectory?(): boolean;
 	isSymbolicLink(): boolean;
 }
 
@@ -230,6 +231,25 @@ function validateCredentialPath(path: string, field: string, ownerUid: number | 
 	}
 	if (stats.isSymbolicLink()) throw new Error(`${field} must not be a symlink: ${path}`);
 	if (!stats.isFile()) throw new Error(`${field} must be a regular file: ${path}`);
+	if (ownerUid === undefined) throw new Error(`${field} owner cannot be verified: ${path}`);
+	if (stats.uid !== ownerUid) throw new Error(`${field} must be owned by the controller user: ${path}`);
+	if ((stats.mode & 0o077) !== 0) throw new Error(`${field} must not be group- or world-accessible: ${path}`);
+}
+
+function validateProfileAgentDirectory(
+	path: string,
+	field: string,
+	ownerUid: number | undefined,
+	stat: CredentialStat,
+): void {
+	let stats: CredentialFileStats;
+	try {
+		stats = stat(path);
+	} catch {
+		throw new Error(`${field} does not exist: ${path}`);
+	}
+	if (stats.isSymbolicLink()) throw new Error(`${field} must not be a symlink: ${path}`);
+	if (!stats.isDirectory?.()) throw new Error(`${field} must be a directory: ${path}`);
 	if (ownerUid === undefined) throw new Error(`${field} owner cannot be verified: ${path}`);
 	if (stats.uid !== ownerUid) throw new Error(`${field} must be owned by the controller user: ${path}`);
 	if ((stats.mode & 0o077) !== 0) throw new Error(`${field} must not be group- or world-accessible: ${path}`);
@@ -275,8 +295,9 @@ function validateConfig(
 			validatePath(item.gitDir, `repository ${item.id}.gitDir`, "file-or-directory");
 		}
 		for (const item of config.profiles) {
-			validatePath(item.agentDir, `profile ${item.id}.agentDir`, "directory");
-			for (const file of item.authFiles) validatePath(file, `profile ${item.id}.authFiles`, "file-or-directory");
+			validateProfileAgentDirectory(item.agentDir, `profile ${item.id}.agentDir`, controllerUid, credentialStat);
+			for (const file of item.authFiles)
+				validateCredentialPath(file, `profile ${item.id}.authFiles`, controllerUid, credentialStat);
 		}
 	}
 	return config;

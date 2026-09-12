@@ -37,6 +37,7 @@ import { SpecificationWorkflow } from "./workflows/specification.ts";
 import { reproduceEvidenceOperation } from "./verification/reproduce.ts";
 import { BackgroundSocketServer } from "./socket-server.ts";
 import { inspectTransientService, stopTransientService } from "./runtime/systemd.ts";
+import { herdr as defaultHerdr } from "../../spindle/agents/herdr-client.ts";
 
 export type FetchLike = (input: string | URL, init?: RequestInit) => Promise<Response>;
 
@@ -265,6 +266,8 @@ export interface AttemptRunner {
 export interface BackgroundRuntimeControls {
 	terminateSystemdUnit(unit: string): Promise<void>;
 	isSystemdUnitStopped(unit: string): Promise<boolean>;
+	closeTab?(tabId: string): Promise<void>;
+	isTabClosed?(tabId: string): Promise<boolean>;
 	closePane?(paneId: string): Promise<void>;
 	isPaneStopped?(paneId: string): Promise<boolean>;
 }
@@ -380,6 +383,8 @@ export class BackgroundAgentsController {
 		this.runtimeControls = options.runtimeControls ?? {
 			terminateSystemdUnit: (unit) => stopTransientService(unit),
 			isSystemdUnitStopped: async (unit) => ["inactive", "failed"].includes(await inspectTransientService(unit)),
+			closeTab: (tabId) => defaultHerdr.closeTab(tabId),
+			isTabClosed: (tabId) => defaultHerdr.isTabClosed(tabId),
 		};
 		const linearConfig = this.config.sources.linear;
 		this.linearEffects =
@@ -425,6 +430,8 @@ export class BackgroundAgentsController {
 		this.providerScheduler = new ProviderScheduler(this.database, this.config, {
 			emergencyStop: durableControls.emergencyStop,
 			usageOptions: {
+				credentialStat: options.credentialStat,
+				credentialOwnerUid: this.config.socket.ownerUid ?? process.getuid?.(),
 				reconcileAttempt: (attempt, reason, now) => this.reconcileUsageAttempt(attempt, reason, now),
 			},
 		});
@@ -489,6 +496,13 @@ export class BackgroundAgentsController {
 			this.socket = new BackgroundSocketServer({ ...this.config.socket, handle: (request) => this.handle(request) });
 			await this.socket.start();
 		}
+		if (this.providerScheduler.emergencyStop) {
+			try {
+				await this.reconcileEmergencyStopAttempts();
+			} catch {
+				// Keep the durable stop active and retry on the next recovery tick.
+			}
+		}
 		await this.refreshUsage();
 		for (const source of this.sourceAdapters)
 			if (source.start)
@@ -547,6 +561,7 @@ export class BackgroundAgentsController {
 						caseId: attempt.case_id,
 						role: attempt.role,
 						...(intent.systemdUnit ? { systemdUnit: intent.systemdUnit } : {}),
+						...(intent.tabId ? { tabId: intent.tabId } : {}),
 						...(intent.paneId ? { paneId: intent.paneId } : {}),
 					},
 					intent.reason,
@@ -564,6 +579,7 @@ export class BackgroundAgentsController {
 			caseId: string;
 			role: AgentRole;
 			systemdUnit?: string;
+			tabId?: string;
 			paneId?: string;
 			worktree?: string;
 		},
@@ -583,17 +599,32 @@ export class BackgroundAgentsController {
 			} catch (error) {
 				failures.push(`systemd stop: ${error instanceof Error ? error.message : String(error)}`);
 			}
-		if (attempt.paneId && this.runtimeControls.closePane && !intent?.paneConfirmed)
-			try {
-				await this.runtimeControls.closePane(attempt.paneId);
-				const stopped = this.runtimeControls.isPaneStopped
-					? await this.runtimeControls.isPaneStopped(attempt.paneId)
-					: true;
-				if (!stopped) failures.push(`pane remains active: ${attempt.paneId}`);
-				else this.database.markUsageStopIntent(attempt.attemptId, { paneConfirmed: true });
-			} catch (error) {
-				failures.push(`pane close: ${error instanceof Error ? error.message : String(error)}`);
-			}
+		if (attempt.tabId && !intent?.tabConfirmed) {
+			if (this.runtimeControls.closeTab) {
+				try {
+					await this.runtimeControls.closeTab(attempt.tabId);
+					if (!this.runtimeControls.isTabClosed) throw new Error("tab closure cannot be confirmed");
+					const closed = await this.runtimeControls.isTabClosed(attempt.tabId);
+					if (!closed) failures.push(`tab remains active: ${attempt.tabId}`);
+					else this.database.markUsageStopIntent(attempt.attemptId, { tabConfirmed: true });
+				} catch (error) {
+					failures.push(`tab close: ${error instanceof Error ? error.message : String(error)}`);
+				}
+			} else failures.push(`tab close is unavailable: ${attempt.tabId}`);
+		} else if (!attempt.tabId && attempt.paneId && !intent?.paneConfirmed) {
+			if (this.runtimeControls.closePane) {
+				try {
+					await this.runtimeControls.closePane(attempt.paneId);
+					const stopped = this.runtimeControls.isPaneStopped
+						? await this.runtimeControls.isPaneStopped(attempt.paneId)
+						: true;
+					if (!stopped) failures.push(`pane remains active: ${attempt.paneId}`);
+					else this.database.markUsageStopIntent(attempt.attemptId, { paneConfirmed: true });
+				} catch (error) {
+					failures.push(`pane close: ${error instanceof Error ? error.message : String(error)}`);
+				}
+			} else this.database.markUsageStopIntent(attempt.attemptId, { paneConfirmed: true });
+		}
 		const state = this.database.get<{ state: string }>("SELECT state FROM cases WHERE id = ?", attempt.caseId)?.state;
 		if (state !== "paused-usage") {
 			try {
@@ -721,7 +752,7 @@ export class BackgroundAgentsController {
 			if (
 				this.database
 					.listEmergencyStopAttempts()
-					.some((attempt) => !attempt.systemdConfirmed || !attempt.reconciled)
+					.some((attempt) => !attempt.systemdConfirmed || !attempt.tabConfirmed || !attempt.reconciled)
 			)
 				throw new Error("Emergency stop attempts are not fully reconciled");
 			this.database.resumeEmergencyStopJobs(this.options.clock?.() ?? new Date());
@@ -752,36 +783,73 @@ export class BackgroundAgentsController {
 			const attempt = this.database.get<{
 				id: string;
 				systemd_unit: string | null;
+				tab_id: string | null;
 				pane_id: string | null;
 				state: string;
-			}>("SELECT id, systemd_unit, pane_id, state FROM attempts WHERE id = ?", stopAttempt.attemptId);
+			}>("SELECT id, systemd_unit, tab_id, pane_id, state FROM attempts WHERE id = ?", stopAttempt.attemptId);
 			if (!attempt) {
-				this.database.markEmergencyStopAttempt(stopAttempt.attemptId, { systemdConfirmed: true, reconciled: true });
+				this.database.markEmergencyStopAttempt(stopAttempt.attemptId, {
+					systemdConfirmed: true,
+					tabConfirmed: true,
+					reconciled: true,
+				});
 				continue;
 			}
-			if (attempt.systemd_unit) {
+			let systemdConfirmed = stopAttempt.systemdConfirmed;
+			if (attempt.systemd_unit && !stopAttempt.systemdConfirmed) {
 				try {
 					if (!["inactive", "failed"].includes(attempt.state))
 						await this.runtimeControls.terminateSystemdUnit(attempt.systemd_unit);
 					if (!(await this.runtimeControls.isSystemdUnitStopped(attempt.systemd_unit)))
 						throw new Error(`systemd unit did not terminate: ${attempt.systemd_unit}`);
+					systemdConfirmed = true;
 					this.database.markEmergencyStopAttempt(attempt.id, { systemdConfirmed: true });
 				} catch (error) {
 					failures.push(
 						`attempt ${attempt.id} systemd: ${error instanceof Error ? error.message : String(error)}`,
 					);
 				}
-			} else this.database.markEmergencyStopAttempt(attempt.id, { systemdConfirmed: true });
-			if (attempt.pane_id && this.runtimeControls.closePane)
-				try {
-					await this.runtimeControls.closePane(attempt.pane_id);
-				} catch (error) {
-					failures.push(`attempt ${attempt.id} pane: ${error instanceof Error ? error.message : String(error)}`);
-				}
+			} else if (!attempt.systemd_unit) {
+				systemdConfirmed = true;
+				this.database.markEmergencyStopAttempt(attempt.id, { systemdConfirmed: true });
+			}
+			let runtimeConfirmed = attempt.tab_id ? stopAttempt.tabConfirmed : !attempt.pane_id;
+			if (attempt.tab_id && !runtimeConfirmed) {
+				if (this.runtimeControls.closeTab) {
+					try {
+						await this.runtimeControls.closeTab(attempt.tab_id);
+						if (!this.runtimeControls.isTabClosed) throw new Error("tab closure cannot be confirmed");
+						runtimeConfirmed = await this.runtimeControls.isTabClosed(attempt.tab_id);
+						if (!runtimeConfirmed) failures.push(`attempt ${attempt.id} tab remains active: ${attempt.tab_id}`);
+						else this.database.markEmergencyStopAttempt(attempt.id, { tabConfirmed: true });
+					} catch (error) {
+						failures.push(`attempt ${attempt.id} tab: ${error instanceof Error ? error.message : String(error)}`);
+					}
+				} else failures.push(`attempt ${attempt.id} tab close is unavailable: ${attempt.tab_id}`);
+			} else if (!attempt.tab_id && attempt.pane_id && !runtimeConfirmed) {
+				if (this.runtimeControls.closePane) {
+					try {
+						await this.runtimeControls.closePane(attempt.pane_id);
+						runtimeConfirmed = this.runtimeControls.isPaneStopped
+							? await this.runtimeControls.isPaneStopped(attempt.pane_id)
+							: true;
+						if (!runtimeConfirmed) failures.push(`attempt ${attempt.id} pane remains active: ${attempt.pane_id}`);
+						else this.database.markEmergencyStopAttempt(attempt.id, { tabConfirmed: true });
+					} catch (error) {
+						failures.push(
+							`attempt ${attempt.id} pane: ${error instanceof Error ? error.message : String(error)}`,
+						);
+					}
+				} else failures.push(`attempt ${attempt.id} pane close is unavailable: ${attempt.pane_id}`);
+			} else if (!attempt.tab_id && !attempt.pane_id) {
+				runtimeConfirmed = true;
+				this.database.markEmergencyStopAttempt(attempt.id, { tabConfirmed: true });
+			}
 			try {
 				const result = await this.recovery.reconcileAttempt(attempt.id);
 				if (result.action === "running") throw new Error("attempt remains active");
-				this.database.markEmergencyStopAttempt(attempt.id, { reconciled: true });
+				if (systemdConfirmed && runtimeConfirmed)
+					this.database.markEmergencyStopAttempt(attempt.id, { reconciled: true });
 			} catch (error) {
 				failures.push(`attempt ${attempt.id} reconcile: ${error instanceof Error ? error.message : String(error)}`);
 			}
@@ -797,6 +865,7 @@ export class BackgroundAgentsController {
 	}
 	private async recoveryTick(): Promise<void> {
 		await this.reconcileUsageStopIntents();
+		if (this.providerScheduler.emergencyStop) await this.reconcileEmergencyStopAttempts();
 		for (const attempt of this.database.all<{ id: string }>("SELECT id FROM attempts WHERE state = 'running'")) {
 			try {
 				await this.recovery.reconcileAttempt(attempt.id);
@@ -841,7 +910,7 @@ export class BackgroundAgentsController {
 		const attempts = dashboardRows(
 			this.database
 				.all<Record<string, unknown>>(
-					"SELECT id, case_id, role, generation, state, profile_id, model, systemd_unit, pane_id, worktree, branch, heartbeat_at, started_at, finished_at, failure FROM attempts ORDER BY created_at DESC",
+					"SELECT id, case_id, role, generation, state, profile_id, model, systemd_unit, tab_id, pane_id, worktree, branch, heartbeat_at, started_at, finished_at, failure FROM attempts ORDER BY created_at DESC",
 				)
 				.map((row) => ({
 					id: dashboardText(row.id, 120),
@@ -852,6 +921,7 @@ export class BackgroundAgentsController {
 					...(row.profile_id == null ? {} : { profileId: dashboardText(row.profile_id, 120) }),
 					...(row.model == null ? {} : { model: dashboardText(row.model, 160) }),
 					...(row.systemd_unit == null ? {} : { systemdUnit: dashboardText(row.systemd_unit, 160) }),
+					...(row.tab_id == null ? {} : { tabId: dashboardText(row.tab_id, 160) }),
 					...(row.pane_id == null ? {} : { paneId: dashboardText(row.pane_id, 160) }),
 					...(row.worktree == null ? {} : { worktree: dashboardText(row.worktree, 240) }),
 					...(row.branch == null ? {} : { branch: dashboardText(row.branch, 240) }),

@@ -85,6 +85,10 @@ test("loads a configuration relative to its file and validates repository and pr
 		mkdirSync(join(repository, ".git"), { recursive: true });
 		mkdirSync(agentDir);
 		writeFileSync(authFile, "{}");
+		chmodSync(agentDir, 0o700);
+		chmodSync(authFile, 0o600);
+		chmodSync(agentDir, 0o700);
+		chmodSync(authFile, 0o600);
 		const configPath = join(root, "background-agents.json");
 		writeFileSync(
 			configPath,

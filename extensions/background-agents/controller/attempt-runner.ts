@@ -730,6 +730,7 @@ export class ProductionAttemptRunner {
 				githubEffects,
 				repository ? combinedRequiredChecks(this.options.config.ci.requiredChecks, repository.requiredChecks) : [],
 			);
+			assertAuthorized();
 			return { state: "succeeded" };
 		} catch (error) {
 			const failure = error instanceof Error ? error.message : String(error);

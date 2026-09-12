@@ -152,6 +152,7 @@ export interface AttemptRecord {
 	profileId?: string;
 	model?: string;
 	systemdUnit?: string;
+	tabId?: string;
 	paneId?: string;
 	worktree?: string;
 	branch?: string;

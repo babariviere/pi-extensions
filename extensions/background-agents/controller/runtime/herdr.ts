@@ -159,10 +159,22 @@ export async function launchAttemptThroughHerdr(
 		undefined,
 		options.worktreeDirectory,
 	);
-	if (!tab?.rootPaneId) throw new Error("Herdr did not return a root pane");
+	if (!tab?.tabId) throw new Error("Herdr did not return a tab");
 	options.database.run(
-		"UPDATE attempts SET systemd_unit = ?, pane_id = ?, worktree = ? WHERE id = ?",
+		"UPDATE attempts SET systemd_unit = ?, tab_id = ?, worktree = ? WHERE id = ?",
 		unit,
+		tab.tabId,
+		options.worktreeDirectory,
+		options.attemptId,
+	);
+	if (!tab.rootPaneId) {
+		await host.closeTab(tab.tabId);
+		throw new Error("Herdr did not return a root pane");
+	}
+	options.database.run(
+		"UPDATE attempts SET systemd_unit = ?, tab_id = ?, pane_id = ?, worktree = ? WHERE id = ?",
+		unit,
+		tab.tabId,
 		tab.rootPaneId,
 		options.worktreeDirectory,
 		options.attemptId,

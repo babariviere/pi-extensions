@@ -8,6 +8,8 @@ import { normalizeBackgroundAgentsConfig } from "../config.ts";
 import { BackgroundAgentsController } from "./controller.ts";
 
 const databases: BackgroundAgentsDatabase[] = [];
+const controllerProfileDir = mkdtempSync(join(tmpdir(), "background-controller-profile-"));
+chmodSync(controllerProfileDir, 0o700);
 afterEach(() => {
 	for (const database of databases.splice(0)) database.close();
 });
@@ -37,7 +39,9 @@ test("usage refresh pauses an active run even when runtime termination fails", a
 	const database = new BackgroundAgentsDatabase(":memory:");
 	databases.push(database);
 	const config = normalizeBackgroundAgentsConfig({
-		profiles: [{ id: "usage-profile", provider: "anthropic", agentDir: process.cwd(), allowedModels: ["model"] }],
+		profiles: [
+			{ id: "usage-profile", provider: "anthropic", agentDir: controllerProfileDir, allowedModels: ["model"] },
+		],
 	});
 	const caseId = database.createCase({ title: "usage termination", source: "manual" });
 	database.transitionCase(caseId, "classified", "test");
@@ -89,7 +93,9 @@ test("recovery retries persisted usage stops after the attempt and job are pause
 	const database = new BackgroundAgentsDatabase(":memory:");
 	databases.push(database);
 	const config = normalizeBackgroundAgentsConfig({
-		profiles: [{ id: "retry-profile", provider: "anthropic", agentDir: process.cwd(), allowedModels: ["model"] }],
+		profiles: [
+			{ id: "retry-profile", provider: "anthropic", agentDir: controllerProfileDir, allowedModels: ["model"] },
+		],
 	});
 	const caseId = database.createCase({ title: "retry usage stop", source: "manual" });
 	database.transitionCase(caseId, "classified", "test");
@@ -203,7 +209,7 @@ test("classifier failures retry only after backoff and eventually block intake",
 	databases.push(database);
 	let now = new Date("2026-01-01T00:00:00.000Z");
 	const config = normalizeBackgroundAgentsConfig({
-		profiles: [{ id: "classifier-profile", provider: "anthropic", agentDir: process.cwd() }],
+		profiles: [{ id: "classifier-profile", provider: "anthropic", agentDir: controllerProfileDir }],
 		classifier: { maxAttempts: 3, retryBackoffMs: 1_000 },
 	});
 	const controller = new BackgroundAgentsController({
@@ -272,7 +278,7 @@ test("classifier retry generations and queued work survive controller restart", 
 	try {
 		let now = new Date("2026-01-01T00:00:00.000Z");
 		const config = normalizeBackgroundAgentsConfig({
-			profiles: [{ id: "classifier-profile", provider: "anthropic", agentDir: process.cwd() }],
+			profiles: [{ id: "classifier-profile", provider: "anthropic", agentDir: controllerProfileDir }],
 			classifier: { maxAttempts: 2, retryBackoffMs: 1_000 },
 		});
 		const firstDatabase = new BackgroundAgentsDatabase(path);
@@ -329,7 +335,7 @@ test("dispatches real Linear investigation through the durable start effect", as
 	databases.push(database);
 	const started: Array<{ phase: string; issueId: string }> = [];
 	const config = normalizeBackgroundAgentsConfig({
-		profiles: [{ id: "profile", provider: "anthropic", agentDir: process.cwd() }],
+		profiles: [{ id: "profile", provider: "anthropic", agentDir: controllerProfileDir }],
 	});
 	const controller = new BackgroundAgentsController({
 		database,
@@ -483,8 +489,12 @@ test("restores durable controls across controller restart and reconciles an emer
 			calls.push(`inspect:${unit}`);
 			return true;
 		},
+		closeTab: async (tab: string) => {
+			calls.push(`close:${tab}`);
+		},
+		isTabClosed: async () => true,
 		closePane: async (pane: string) => {
-			calls.push(`close:${pane}`);
+			calls.push(`close-pane:${pane}`);
 		},
 	};
 	const first = new BackgroundAgentsController({
@@ -498,15 +508,16 @@ test("restores durable controls across controller restart and reconciles an emer
 	const claim = database.claimJob(jobId, "runner", 60_000);
 	assert.ok(claim);
 	database.run(
-		"UPDATE attempts SET systemd_unit = ?, pane_id = ? WHERE id = ?",
+		"UPDATE attempts SET systemd_unit = ?, tab_id = ?, pane_id = ? WHERE id = ?",
 		"background-agent-test",
+		"tab-test",
 		"pane-test",
 		claim?.attemptId,
 	);
 	await first.handle({ version: 1, id: "rollout", type: "rollout.set", scope: "global", value: "supervised" });
 	const stopped = await first.handle({ version: 1, id: "stop", type: "emergency.stop", enabled: true });
 	assert.equal(stopped.ok, true);
-	assert.deepEqual(calls, ["stop:background-agent-test", "inspect:background-agent-test", "close:pane-test"]);
+	assert.deepEqual(calls, ["stop:background-agent-test", "inspect:background-agent-test", "close:tab-test"]);
 	assert.equal(database.get<{ state: string }>("SELECT state FROM jobs WHERE id = ?", jobId)?.state, "needs-human");
 
 	const second = new BackgroundAgentsController({
@@ -518,6 +529,8 @@ test("restores durable controls across controller restart and reconciles an emer
 	assert.equal(second.snapshot().emergencyStop, true);
 	assert.equal(second.snapshot().rollout, "supervised");
 	assert.equal(database.get<{ count: number }>("SELECT count(*) AS count FROM operator_events")?.count, 3);
+	await second.start();
+	await second.stop();
 	const resumed = await second.handle({ version: 1, id: "resume-stop", type: "emergency.stop", enabled: false });
 	assert.equal(resumed.ok, true);
 	assert.equal(second.snapshot().emergencyStop, false);
@@ -584,7 +597,7 @@ test("failed worker attempts are reconciled before the controller terminalizes t
 		startSocket: false,
 		config: normalizeBackgroundAgentsConfig({
 			rollout: { defaultMode: "supervised" },
-			profiles: [{ id: "profile", provider: "anthropic", agentDir: process.cwd() }],
+			profiles: [{ id: "profile", provider: "anthropic", agentDir: controllerProfileDir }],
 		}),
 		attemptRunner: { run: async (claim) => ({ state: "failed", failure: "unit failed" }) },
 		recovery: {

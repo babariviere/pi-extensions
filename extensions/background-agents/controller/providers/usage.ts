@@ -1,5 +1,6 @@
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { lstatSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import type { CredentialFileStats, CredentialStat } from "../../config.ts";
 import type { BackgroundAgentsDatabase } from "../database.ts";
 import type { AgentRole, ProviderProfile } from "../../types.ts";
 import { fetchUsageSnapshot, isOAuthToken } from "../../../usage/source.ts";
@@ -42,28 +43,49 @@ function clockNow(clock: UsageClock): Date {
 	return new Date(typeof clock === "function" ? clock().getTime() : clock.now().getTime());
 }
 
-function jsonFiles(paths: string[]): string[] {
-	const files: string[] = [];
-	const seen = new Set<string>();
-	const visit = (path: string): void => {
-		if (seen.has(path) || !existsSync(path)) return;
-		seen.add(path);
-		try {
-			if (statSync(path).isDirectory()) {
-				for (const entry of readdirSync(path)) if (entry === "auth.json") visit(join(path, entry));
-			} else files.push(path);
-		} catch {
-			// A profile disappearing during a refresh is unavailable, not a controller failure.
-		}
-	};
-	for (const path of paths) visit(path);
-	return files;
+export interface ProfileCredentialReadOptions {
+	stat?: CredentialStat;
+	ownerUid?: number;
+}
+
+function secureCredential(
+	path: string,
+	stat: CredentialStat,
+	ownerUid: number | undefined,
+): CredentialFileStats | undefined {
+	if (ownerUid === undefined) return undefined;
+	try {
+		const value = stat(path);
+		if (value.isSymbolicLink() || !value.isFile() || value.uid !== ownerUid || (value.mode & 0o077) !== 0)
+			return undefined;
+		return value;
+	} catch {
+		return undefined;
+	}
 }
 
 /** Read only the selected profile's credential files. Values never enter durable state. */
-export function loadProfileSubscriptionToken(profile: ProviderProfile): string | undefined {
-	const paths = jsonFiles([...profile.authFiles, join(profile.agentDir, "auth.json")]);
+export function loadProfileSubscriptionToken(
+	profile: ProviderProfile,
+	options: ProfileCredentialReadOptions = {},
+): string | undefined {
+	const stat = options.stat ?? lstatSync;
+	const ownerUid = options.ownerUid ?? process.getuid?.();
+	try {
+		const agentDir = stat(profile.agentDir);
+		if (
+			agentDir.isSymbolicLink() ||
+			!agentDir.isDirectory?.() ||
+			agentDir.uid !== ownerUid ||
+			(agentDir.mode & 0o077) !== 0
+		)
+			return undefined;
+	} catch {
+		return undefined;
+	}
+	const paths = [...profile.authFiles, join(profile.agentDir, "auth.json")];
 	for (const path of paths) {
+		if (!secureCredential(path, stat, ownerUid)) continue;
 		try {
 			const value = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
 			const anthropic = value.anthropic as Record<string, unknown> | undefined;
@@ -83,8 +105,10 @@ export function loadProfileSubscriptionToken(profile: ProviderProfile): string |
 }
 
 export class DefaultProfileUsageCollector implements ProfileUsageCollector {
+	constructor(private readonly credentialOptions: ProfileCredentialReadOptions = {}) {}
+
 	async collect(profile: ProviderProfile, now: Date): Promise<ProfileUsageSnapshot> {
-		const token = loadProfileSubscriptionToken(profile);
+		const token = loadProfileSubscriptionToken(profile, this.credentialOptions);
 		if (!token || (profile.provider === "anthropic" && !isOAuthToken(token))) {
 			return {
 				profileId: profile.id,
@@ -145,6 +169,8 @@ function normalizeCollection(profile: ProviderProfile, value: UsageCollection, n
 export interface ProfileUsageControllerOptions {
 	collector?: ProfileUsageCollector | ((profile: ProviderProfile, now: Date) => Promise<UsageCollection>);
 	clock?: UsageClock;
+	credentialStat?: CredentialStat;
+	credentialOwnerUid?: number;
 	reconcileAttempt?: (
 		attempt: {
 			attemptId: string;
@@ -152,6 +178,7 @@ export interface ProfileUsageControllerOptions {
 			caseId: string;
 			role: AgentRole;
 			systemdUnit?: string;
+			tabId?: string;
 			paneId?: string;
 			worktree?: string;
 		},
@@ -177,7 +204,11 @@ export class ProfileUsageController {
 		this.collector =
 			typeof options.collector === "function"
 				? { collect: options.collector }
-				: (options.collector ?? new DefaultProfileUsageCollector());
+				: (options.collector ??
+					new DefaultProfileUsageCollector({
+						stat: options.credentialStat,
+						ownerUid: options.credentialOwnerUid,
+					}));
 		for (const profile of profiles)
 			database.upsertProviderProfileState({
 				profileId: profile.id,
@@ -230,10 +261,11 @@ export class ProfileUsageController {
 				case_id: string;
 				role: AgentRole;
 				systemd_unit: string | null;
+				tab_id: string | null;
 				pane_id: string | null;
 				worktree: string | null;
 			}>(
-				"SELECT id, job_id, case_id, role, systemd_unit, pane_id, worktree FROM attempts WHERE profile_id = ? AND state = 'running' AND role IN ('spec-planner', 'worker')",
+				"SELECT id, job_id, case_id, role, systemd_unit, tab_id, pane_id, worktree FROM attempts WHERE profile_id = ? AND state = 'running' AND role IN ('spec-planner', 'worker')",
 				profileId,
 			);
 			const reason =
@@ -248,6 +280,7 @@ export class ProfileUsageController {
 							caseId: attempt.case_id,
 							role: attempt.role,
 							...(attempt.systemd_unit ? { systemdUnit: attempt.systemd_unit } : {}),
+							...(attempt.tab_id ? { tabId: attempt.tab_id } : {}),
 							...(attempt.pane_id ? { paneId: attempt.pane_id } : {}),
 							...(attempt.worktree ? { worktree: attempt.worktree } : {}),
 						},

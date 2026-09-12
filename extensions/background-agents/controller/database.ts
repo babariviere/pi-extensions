@@ -199,9 +199,11 @@ export interface UsageStopIntent {
 	caseId: string;
 	profileId?: string;
 	systemdUnit?: string;
+	tabId?: string;
 	paneId?: string;
 	status: UsageStopStatus;
 	systemdConfirmed: boolean;
+	tabConfirmed: boolean;
 	paneConfirmed: boolean;
 	reason: string;
 	createdAt: string;
@@ -593,14 +595,14 @@ export class BackgroundAgentsDatabase {
 			if (enabled && !wasEnabled) {
 				this.database
 					.prepare(
-						"INSERT OR IGNORE INTO emergency_stop_attempts (stop_epoch, attempt_id, created_at, updated_at) SELECT ?, id, ?, ? FROM attempts WHERE state = 'running'",
+						"INSERT OR IGNORE INTO emergency_stop_attempts (stop_epoch, attempt_id, tab_id, tab_confirmed, created_at, updated_at) SELECT ?, id, tab_id, CASE WHEN tab_id IS NULL THEN 1 ELSE 0 END, ?, ? FROM attempts WHERE state = 'running'",
 					)
 					.run(epoch, createdAt, createdAt);
 			}
 			if (!enabled) {
 				const pending = this.database
 					.prepare(
-						"SELECT count(*) AS count FROM emergency_stop_attempts WHERE stop_epoch = ? AND (systemd_confirmed = 0 OR reconciled = 0)",
+						"SELECT count(*) AS count FROM emergency_stop_attempts WHERE stop_epoch = ? AND (systemd_confirmed = 0 OR tab_confirmed = 0 OR reconciled = 0)",
 					)
 					.get(epoch) as Row;
 				if (Number(pending.count) > 0) throw new Error("emergency stop attempts are not fully reconciled");
@@ -617,13 +619,15 @@ export class BackgroundAgentsDatabase {
 	listEmergencyStopAttempts(): Array<{
 		stopEpoch: number;
 		attemptId: string;
+		tabId?: string;
 		systemdConfirmed: boolean;
+		tabConfirmed: boolean;
 		reconciled: boolean;
 	}> {
 		const epoch = this.getEmergencyStopEpoch();
 		return this.database
 			.prepare(
-				"SELECT stop_epoch, attempt_id, systemd_confirmed, reconciled FROM emergency_stop_attempts WHERE stop_epoch = ? ORDER BY attempt_id",
+				"SELECT stop_epoch, attempt_id, tab_id, systemd_confirmed, tab_confirmed, reconciled FROM emergency_stop_attempts WHERE stop_epoch = ? ORDER BY attempt_id",
 			)
 			.all(epoch)
 			.map((row) => {
@@ -631,17 +635,23 @@ export class BackgroundAgentsDatabase {
 				return {
 					stopEpoch: Number(value.stop_epoch),
 					attemptId: rowString(value, "attempt_id"),
+					...(value.tab_id == null ? {} : { tabId: rowString(value, "tab_id") }),
 					systemdConfirmed: Number(value.systemd_confirmed) === 1,
+					tabConfirmed: Number(value.tab_confirmed) === 1,
 					reconciled: Number(value.reconciled) === 1,
 				};
 			});
 	}
 
-	markEmergencyStopAttempt(attemptId: string, status: { systemdConfirmed?: boolean; reconciled?: boolean }): void {
+	markEmergencyStopAttempt(
+		attemptId: string,
+		status: { systemdConfirmed?: boolean; tabConfirmed?: boolean; reconciled?: boolean },
+	): void {
 		const epoch = this.getEmergencyStopEpoch();
 		this.run(
-			"UPDATE emergency_stop_attempts SET systemd_confirmed = coalesce(?, systemd_confirmed), reconciled = coalesce(?, reconciled), updated_at = ? WHERE stop_epoch = ? AND attempt_id = ?",
+			"UPDATE emergency_stop_attempts SET systemd_confirmed = coalesce(?, systemd_confirmed), tab_confirmed = coalesce(?, tab_confirmed), reconciled = coalesce(?, reconciled), updated_at = ? WHERE stop_epoch = ? AND attempt_id = ?",
 			status.systemdConfirmed === undefined ? null : status.systemdConfirmed ? 1 : 0,
+			status.tabConfirmed === undefined ? null : status.tabConfirmed ? 1 : 0,
 			status.reconciled === undefined ? null : status.reconciled ? 1 : 0,
 			new Date().toISOString(),
 			epoch,
@@ -1510,10 +1520,11 @@ export class BackgroundAgentsDatabase {
 				profile_id: string | null;
 				role: AgentRole;
 				systemd_unit: string | null;
+				tab_id: string | null;
 				pane_id: string | null;
 				state: string;
 			}>(
-				"SELECT job_id, case_id, profile_id, role, systemd_unit, pane_id, state FROM attempts WHERE id = ?",
+				"SELECT job_id, case_id, profile_id, role, systemd_unit, tab_id, pane_id, state FROM attempts WHERE id = ?",
 				attemptId,
 			);
 			if (!attempt || attempt.state !== "running" || attempt.role === "verifier") return false;
@@ -1533,18 +1544,21 @@ export class BackgroundAgentsDatabase {
 				pausedAt,
 			);
 			const systemdConfirmed = attempt.systemd_unit == null ? 1 : 0;
-			const paneConfirmed = attempt.pane_id == null ? 1 : 0;
+			const tabConfirmed = attempt.tab_id == null ? 1 : 0;
+			const paneConfirmed = attempt.tab_id == null && attempt.pane_id == null ? 1 : 0;
 			this.run(
-				"INSERT INTO usage_stop_intents (id, attempt_id, job_id, case_id, profile_id, systemd_unit, pane_id, status, systemd_confirmed, pane_confirmed, reason, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+				"INSERT INTO usage_stop_intents (id, attempt_id, job_id, case_id, profile_id, systemd_unit, tab_id, pane_id, status, systemd_confirmed, tab_confirmed, pane_confirmed, reason, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
 				randomUUID(),
 				attemptId,
 				attempt.job_id,
 				attempt.case_id,
 				attempt.profile_id,
 				attempt.systemd_unit,
+				attempt.tab_id,
 				attempt.pane_id,
-				systemdConfirmed && paneConfirmed ? "complete" : "pending",
+				systemdConfirmed && tabConfirmed && paneConfirmed ? "complete" : "pending",
 				systemdConfirmed,
+				tabConfirmed,
 				paneConfirmed,
 				requiredString(reason, "reason"),
 				pausedAt,
@@ -1572,7 +1586,7 @@ export class BackgroundAgentsDatabase {
 
 	listPendingUsageStopIntents(): UsageStopIntent[] {
 		return this.all<Row>(
-			"SELECT id, attempt_id, job_id, case_id, profile_id, systemd_unit, pane_id, status, systemd_confirmed, pane_confirmed, reason, created_at, updated_at FROM usage_stop_intents WHERE status <> 'complete' ORDER BY created_at, id",
+			"SELECT id, attempt_id, job_id, case_id, profile_id, systemd_unit, tab_id, pane_id, status, systemd_confirmed, tab_confirmed, pane_confirmed, reason, created_at, updated_at FROM usage_stop_intents WHERE status <> 'complete' ORDER BY created_at, id",
 		).map((row) => ({
 			id: rowString(row, "id"),
 			attemptId: rowString(row, "attempt_id"),
@@ -1580,9 +1594,11 @@ export class BackgroundAgentsDatabase {
 			caseId: rowString(row, "case_id"),
 			...(row.profile_id == null ? {} : { profileId: rowString(row, "profile_id") }),
 			...(row.systemd_unit == null ? {} : { systemdUnit: rowString(row, "systemd_unit") }),
+			...(row.tab_id == null ? {} : { tabId: rowString(row, "tab_id") }),
 			...(row.pane_id == null ? {} : { paneId: rowString(row, "pane_id") }),
 			status: rowString(row, "status") as UsageStopStatus,
 			systemdConfirmed: Number(row.systemd_confirmed) === 1,
+			tabConfirmed: Number(row.tab_confirmed) === 1,
 			paneConfirmed: Number(row.pane_confirmed) === 1,
 			reason: rowString(row, "reason"),
 			createdAt: rowString(row, "created_at"),
@@ -1592,27 +1608,35 @@ export class BackgroundAgentsDatabase {
 
 	markUsageStopIntent(
 		attemptId: string,
-		status: { systemdConfirmed?: boolean; paneConfirmed?: boolean },
+		status: { systemdConfirmed?: boolean; tabConfirmed?: boolean; paneConfirmed?: boolean },
 		now = new Date(),
 	): void {
 		this.withTransaction(() => {
-			const current = this.get<{ systemd_confirmed: number; pane_confirmed: number }>(
-				"SELECT systemd_confirmed, pane_confirmed FROM usage_stop_intents WHERE attempt_id = ? AND status <> 'complete'",
+			const current = this.get<{
+				systemd_confirmed: number;
+				tab_confirmed: number;
+				pane_confirmed: number;
+				tab_id: string | null;
+			}>(
+				"SELECT systemd_confirmed, tab_confirmed, pane_confirmed, tab_id FROM usage_stop_intents WHERE attempt_id = ? AND status <> 'complete'",
 				attemptId,
 			);
 			if (!current) return;
 			const systemdConfirmed = status.systemdConfirmed ?? Number(current.systemd_confirmed) === 1;
+			const tabConfirmed = status.tabConfirmed ?? Number(current.tab_confirmed) === 1;
 			const paneConfirmed = status.paneConfirmed ?? Number(current.pane_confirmed) === 1;
+			const runtimeConfirmed = current.tab_id == null ? paneConfirmed : tabConfirmed;
 			this.run(
-				"UPDATE usage_stop_intents SET status = ?, systemd_confirmed = ?, pane_confirmed = ?, updated_at = ? WHERE attempt_id = ? AND status <> 'complete'",
-				systemdConfirmed && paneConfirmed
+				"UPDATE usage_stop_intents SET status = ?, systemd_confirmed = ?, tab_confirmed = ?, pane_confirmed = ?, updated_at = ? WHERE attempt_id = ? AND status <> 'complete'",
+				systemdConfirmed && runtimeConfirmed
 					? "complete"
 					: systemdConfirmed
 						? "systemd-confirmed"
-						: paneConfirmed
+						: runtimeConfirmed
 							? "pane-confirmed"
 							: "pending",
 				systemdConfirmed ? 1 : 0,
+				tabConfirmed ? 1 : 0,
 				paneConfirmed ? 1 : 0,
 				utcTimestamp(now, "now"),
 				attemptId,
