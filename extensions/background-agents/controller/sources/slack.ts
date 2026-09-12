@@ -5,8 +5,10 @@ import { type SourceAdapter, type SourceAdapterOptions, fingerprint, persistSour
 export interface SlackEnvelope {
 	envelope_id?: string;
 	type?: string;
+	team_id?: string;
 	payload?: {
 		event?: SlackEvent;
+		team_id?: string;
 		[key: string]: unknown;
 	};
 	[key: string]: unknown;
@@ -21,6 +23,7 @@ export interface SlackEvent {
 	channel?: string;
 	user?: string;
 	team?: string;
+	team_id?: string;
 	thread_ts?: string;
 	[key: string]: unknown;
 }
@@ -35,6 +38,17 @@ export interface SlackSourceOptions extends SourceAdapterOptions {
 function textFromEvent(event: SlackEvent): string {
 	if (typeof event.text === "string") return event.text;
 	return JSON.stringify(event);
+}
+
+function workspaceId(envelope: SlackEnvelope, event: SlackEvent): string {
+	const candidates = [envelope.team_id, envelope.payload?.team_id, event.team_id, event.team];
+	if (candidates.every((value) => value === undefined))
+		throw new Error("Slack event is missing workspace/team identity");
+	if (candidates.some((value) => value !== undefined && (typeof value !== "string" || value.trim() === "")))
+		throw new Error("Slack event has invalid workspace/team identity");
+	const identities = candidates.filter((value): value is string => value !== undefined).map((value) => value.trim());
+	if (new Set(identities).size !== 1) throw new Error("Slack event has conflicting workspace/team identities");
+	return identities[0];
 }
 
 function parseEnvelope(raw: WebSocket.RawData | string): SlackEnvelope {
@@ -86,16 +100,17 @@ export class SlackSourceAdapter implements SourceAdapter {
 		const eventId = typeof event.event_id === "string" ? event.event_id : undefined;
 		const eventKey = eventId ?? envelopeId;
 		if (!eventKey) throw new Error("Slack event has neither event_id nor envelope_id");
+		const teamId = workspaceId(envelope, event);
 		const result = persistSourceEvent(this.options, {
 			source: "slack",
-			sourceKey: `slack:${eventKey}`,
+			sourceKey: `slack:${teamId}:${eventKey}`,
 			revision: event.event_ts ?? event.ts ?? "",
 			receivedAt: this.options.now?.() ?? new Date(),
 			title: `Slack ${event.type ?? "event"}`,
 			body: textFromEvent(event),
 			fingerprint: fingerprint({ eventId, event }),
 			service: typeof event.channel === "string" ? event.channel : undefined,
-			metadata: { envelopeId, event },
+			metadata: { envelopeId, teamId, event },
 		});
 		if (envelopeId) this.ack(socket, envelopeId);
 		return result;

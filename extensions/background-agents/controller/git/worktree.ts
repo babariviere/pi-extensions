@@ -1,5 +1,6 @@
 import { mkdir, realpath, stat } from "node:fs/promises";
-import { resolve, relative, isAbsolute } from "node:path";
+import { randomUUID } from "node:crypto";
+import { basename, resolve, relative, isAbsolute, dirname, join } from "node:path";
 import { GitCommandError, GitRepository } from "./repository.ts";
 
 export interface WorktreeRecord {
@@ -22,6 +23,20 @@ export function backgroundBranch(caseId: string, ordinal: number): string {
 		throw new Error("caseId must be a single safe Git branch path segment");
 	if (!Number.isSafeInteger(ordinal) || ordinal <= 0) throw new Error("ordinal must be a positive integer");
 	return `background/${caseId}/${ordinal}`;
+}
+
+/** Move a dirty worktree through Git's registry, detach it, and repair its metadata. */
+export async function quarantineWorktree(path: string, reason: string): Promise<string> {
+	const destination = join(dirname(path), `${basename(path)}.quarantine-${Date.now()}-${randomUUID()}`);
+	await mkdir(dirname(destination), { recursive: true });
+	const repository = new GitRepository(path);
+	await repository.withMutation(async () => {
+		await repository.checked(["worktree", "move", path, destination]);
+		await repository.checked(["checkout", "--detach"], destination);
+		await repository.checked(["worktree", "repair"], destination);
+	});
+	void reason;
+	return destination;
 }
 
 function required(value: string, field: string): string {

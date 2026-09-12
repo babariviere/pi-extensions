@@ -19,6 +19,13 @@ test("normalizes safe defaults and rollout overrides", () => {
 	assert.deepEqual(config.thresholds, { actionableMin: 80, noiseMax: 20 });
 });
 
+test("does not expose a configurable Linear query", () => {
+	const config = normalizeBackgroundAgentsConfig({
+		sources: { linear: { query: "query Bypass { issues { nodes { id } } }" } },
+	});
+	assert.equal("query" in config.sources.linear, false);
+});
+
 test("rejects unsafe thresholds, socket permissions, and inline credentials", () => {
 	assert.throws(
 		() => normalizeBackgroundAgentsConfig({ thresholds: { actionableMin: 20, noiseMax: 20 } }),

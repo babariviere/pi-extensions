@@ -338,7 +338,6 @@ export class BackgroundAgentsController {
 					client: new LinearHttpClient(linear.url, linear.credentialPath, fetcher),
 					pageSize: linear.pageSize,
 					repositoryMappings: linear.repositoryMappings,
-					query: linear.query,
 				}),
 			);
 		const datadog = this.config.sources.datadog;

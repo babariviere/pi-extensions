@@ -104,7 +104,6 @@
       "enabled": false,
       "url": "https://api.linear.app/graphql",
       "credentialPath": "/srv/<operator>/background-credentials/linear.json",
-      "query": "<optional GraphQL query>",
       "pageSize": 100,
       "repositoryMappings": {
         "<linear-repository-value>": "example-repository"

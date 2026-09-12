@@ -22,7 +22,6 @@ export interface LinearSourceOptions extends SourceAdapterOptions {
 	client: LinearGraphqlClient;
 	pageSize?: number;
 	repositoryMappings?: Record<string, string>;
-	query?: string;
 }
 
 interface LinearPage {
@@ -76,7 +75,7 @@ export class LinearSourceAdapter implements SourceAdapter {
 		let latestRevision: string | undefined;
 		do {
 			const page = unwrapPage(
-				await this.options.client.query<LinearPage>(this.options.query ?? CURRENT_CYCLE_QUERY, {
+				await this.options.client.query<LinearPage>(CURRENT_CYCLE_QUERY, {
 					after,
 					first: this.options.pageSize ?? 100,
 				}),

@@ -432,7 +432,6 @@ export function normalizeBackgroundAgentsConfig(
 				...(optionalPath(rawLinear.credentialPath, "sources.linear.credentialPath", baseDir)
 					? { credentialPath: optionalPath(rawLinear.credentialPath, "sources.linear.credentialPath", baseDir) }
 					: {}),
-				...(rawLinear.query === undefined ? {} : { query: stringValue(rawLinear.query, "sources.linear.query") }),
 				...(rawLinear.pageSize === undefined
 					? {}
 					: { pageSize: integerValue(rawLinear.pageSize, "sources.linear.pageSize", 1, 1_000) }),

@@ -1,9 +1,8 @@
 import { execFile } from "node:child_process";
-import { existsSync, mkdirSync, renameSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync } from "node:fs";
 import { promisify } from "node:util";
-import { randomUUID } from "node:crypto";
 import type { BackgroundAgentsDatabase, QueuedRecovery, TrustedCheckpoint } from "./database.ts";
+import { quarantineWorktree } from "./git/worktree.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -78,14 +77,7 @@ const defaultWorktrees: WorktreeInspector = {
 	},
 	async quarantine(path, reason) {
 		if (!existsSync(path)) return path;
-		const destination = join(
-			dirname(path),
-			`${path.split("/").pop() ?? "worktree"}.quarantine-${Date.now()}-${randomUUID()}`,
-		);
-		mkdirSync(dirname(destination), { recursive: true });
-		renameSync(path, destination);
-		void reason;
-		return destination;
+		return quarantineWorktree(path, reason);
 	},
 };
 

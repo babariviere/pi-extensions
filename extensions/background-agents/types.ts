@@ -517,7 +517,6 @@ export interface BackgroundSourceConfig {
 		enabled: boolean;
 		url: string;
 		credentialPath?: string;
-		query?: string;
 		pageSize?: number;
 		repositoryMappings: Record<string, string>;
 	};
