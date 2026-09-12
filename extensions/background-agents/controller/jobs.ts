@@ -21,15 +21,16 @@ export class JobScheduler {
 		private readonly database: BackgroundAgentsDatabase,
 		options: JobSchedulerOptions = {},
 	) {
-		this.stopped = options.emergencyStop ?? false;
+		this.stopped = database.isEmergencyStop() || options.emergencyStop === true;
 	}
 
 	get emergencyStop(): boolean {
-		return this.stopped;
+		return this.stopped || this.database.isEmergencyStop();
 	}
 
-	setEmergencyStop(enabled: boolean): void {
+	setEmergencyStop(enabled: boolean, actor = "system"): void {
 		this.stopped = enabled;
+		this.database.setEmergencyStop(enabled, actor);
 	}
 
 	queueJob(input: JobInput): string {
@@ -50,7 +51,7 @@ export class JobScheduler {
 		now = new Date(),
 		assignment?: { profileId?: string; model?: string },
 	): JobClaim | null {
-		if (this.stopped) return null;
+		if (this.emergencyStop) return null;
 		const candidates = this.database.all<{ id: string }>(
 			`SELECT j.id
 			 FROM jobs j
@@ -64,7 +65,7 @@ export class JobScheduler {
 			 ORDER BY j.priority DESC, j.created_at ASC, j.id ASC`,
 		);
 		for (const candidate of candidates) {
-			if (this.stopped) return null;
+			if (this.emergencyStop) return null;
 			const claim = this.database.claimJob(candidate.id, owner, leaseMs, now, assignment);
 			if (claim) return claim;
 		}
@@ -78,7 +79,7 @@ export class JobScheduler {
 		now = new Date(),
 		assignment?: { profileId?: string; model?: string },
 	): JobClaim | null {
-		if (this.stopped) return null;
+		if (this.emergencyStop) return null;
 		const candidate = this.database.get<{ id: string }>(
 			`SELECT j.id
 			 FROM jobs j

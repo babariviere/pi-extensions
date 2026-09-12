@@ -63,8 +63,8 @@ export class ProviderScheduler {
 		return this.jobs.emergencyStop;
 	}
 
-	setEmergencyStop(enabled: boolean): void {
-		this.jobs.setEmergencyStop(enabled);
+	setEmergencyStop(enabled: boolean, actor = "system"): void {
+		this.jobs.setEmergencyStop(enabled, actor);
 	}
 
 	private activeAttempts(profileId: string): number {

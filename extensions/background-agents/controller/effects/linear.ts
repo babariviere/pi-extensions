@@ -1,4 +1,9 @@
-import { ExternalEffectExecutor, type EffectReconciliation, type EffectStore } from "./effects.ts";
+import {
+	ExternalEffectExecutor,
+	type EffectExecutorOptions,
+	type EffectReconciliation,
+	type EffectStore,
+} from "./effects.ts";
 
 export interface LinearWorkflowState {
 	id: string;
@@ -64,7 +69,7 @@ export class LinearEffects {
 	constructor(
 		readonly store: EffectStore,
 		readonly client: LinearEffectClient,
-		options: { owner: string; leaseMs?: number; now?: () => Date },
+		options: EffectExecutorOptions,
 	) {
 		this.executor = new ExternalEffectExecutor(store, options);
 	}

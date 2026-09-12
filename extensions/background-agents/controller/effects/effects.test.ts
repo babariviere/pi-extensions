@@ -56,6 +56,28 @@ describe("durable external effects", () => {
 		database.close();
 	});
 
+	test("does not perform a mutation after the durable emergency stop is set", async () => {
+		const database = new BackgroundAgentsDatabase(databasePath());
+		let performed = false;
+		database.setEmergencyStop(true, "operator");
+		await assert.rejects(
+			new ExternalEffectExecutor(database, { owner: "stopped-test" }).execute({
+				operationKey: "test:stopped:1",
+				provider: "test",
+				action: "mutate",
+				intent: {},
+				reconcile: async () => ({ found: false }),
+				perform: async () => {
+					performed = true;
+					return {};
+				},
+			}),
+			/emergency stop/,
+		);
+		assert.equal(performed, false);
+		database.close();
+	});
+
 	test("only advances an unchanged active Linear issue to preferred In Progress", async () => {
 		const database = new BackgroundAgentsDatabase(databasePath());
 		let issue: LinearIssueSnapshot = {

@@ -175,18 +175,23 @@ function attemptContext(
 	role: AgentRole,
 	resultPath: string,
 ): ContextManifest {
-	const row = database.get<{ case_id: string; work_item_id: string | null }>(
-		"SELECT case_id, work_item_id FROM jobs WHERE id = ?",
+	const row = database.get<{ case_id: string; work_item_id: string | null; recovery_checkpoint_id: string | null }>(
+		"SELECT j.case_id, j.work_item_id, a.recovery_checkpoint_id FROM jobs j JOIN attempts a ON a.id = ? WHERE j.id = ?",
+		claim.attemptId,
 		claim.jobId,
 	);
 	if (!row) throw new Error(`Unknown job: ${claim.jobId}`);
 	const base = { resultPath, generation: claim.generation, jobId: claim.jobId };
+	const recoveryCheckpoint = row.recovery_checkpoint_id
+		? database.trustedCheckpoint(row.recovery_checkpoint_id)
+		: undefined;
+	const recoveryContext = recoveryCheckpoint ? { recoveryCheckpoint } : {};
 	if (role === "classifier") {
 		return buildContextManifest({
 			attemptId: claim.attemptId,
 			caseId: row.case_id,
 			role,
-			context: { event: latestEvent(database, row.case_id), ...base },
+			context: { event: latestEvent(database, row.case_id), ...recoveryContext, ...base },
 		});
 	}
 	if (role === "investigator")
@@ -194,7 +199,7 @@ function attemptContext(
 			attemptId: claim.attemptId,
 			caseId: row.case_id,
 			role,
-			context: { ...buildInvestigationContext(database, row.case_id), ...base },
+			context: { ...buildInvestigationContext(database, row.case_id), ...recoveryContext, ...base },
 		});
 	if (role === "spec-planner") {
 		const context = new SpecificationWorkflow(database).context(row.case_id);
@@ -202,7 +207,7 @@ function attemptContext(
 			attemptId: claim.attemptId,
 			caseId: row.case_id,
 			role,
-			context: { ...context, ...base },
+			context: { ...context, ...recoveryContext, ...base },
 		});
 	}
 	const workItem = row.work_item_id
@@ -215,6 +220,7 @@ function attemptContext(
 		),
 		workItem,
 		latestSpecification: database.getLatestSpecification(row.case_id),
+		...recoveryContext,
 		...base,
 	};
 	if (role === "verifier") {

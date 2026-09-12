@@ -6,6 +6,11 @@ export interface EffectStore {
 	claimEffect(operationKey: string, owner: string, leaseMs?: number, now?: Date): EffectClaim | null;
 	completeEffect(operationKey: string, owner: string, outcome?: unknown, remoteIdentifier?: string): void;
 	markEffectUnknown(operationKey: string, owner: string, outcome: unknown): void;
+	isEmergencyStop?(): boolean;
+}
+
+export interface ExternalMutationControls {
+	isStopped(): boolean;
 }
 
 export interface EffectReconciliation<T> {
@@ -25,6 +30,7 @@ export interface EffectExecutorOptions {
 	owner: string;
 	leaseMs?: number;
 	now?: () => Date;
+	controls?: ExternalMutationControls;
 }
 
 function errorOutcome(error: unknown): { error: string } {
@@ -75,6 +81,7 @@ export class ExternalEffectExecutor {
 				}
 			}
 
+			if (this.stopped()) throw new Error("external mutations are disabled by emergency stop");
 			const value = await operation.perform();
 			this.store.completeEffect(
 				operation.operationKey,
@@ -91,6 +98,10 @@ export class ExternalEffectExecutor {
 			}
 			throw error;
 		}
+	}
+
+	private stopped(): boolean {
+		return this.options.controls?.isStopped() ?? this.store.isEmergencyStop?.() ?? false;
 	}
 
 	private decode<T>(operation: EffectOperation<T>, outcome: unknown): T {

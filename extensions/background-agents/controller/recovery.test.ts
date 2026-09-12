@@ -69,7 +69,22 @@ describe("background-agents recovery", () => {
 			"failed",
 		);
 		assert.equal(result.replacement?.generation, 2);
-		assert.equal(database.get<{ state: string }>("SELECT state FROM jobs WHERE id = ?", jobId)?.state, "running");
+		assert.equal(database.get<{ state: string }>("SELECT state FROM jobs WHERE id = ?", jobId)?.state, "queued");
+		assert.equal(
+			database.get<{ state: string; profile_id: string | null; model: string | null }>(
+				"SELECT state, profile_id, model FROM attempts WHERE id = ?",
+				result.replacement?.attemptId,
+			)?.state,
+			"queued",
+		);
+		database.upsertProviderProfileState({ profileId: "recovery-profile", concurrencyLimit: 1 });
+		const dispatched = database.claimJob(jobId, "provider", 60_000, new Date("2026-01-01T00:02:00Z"), {
+			profileId: "recovery-profile",
+			model: "recovery-model",
+		});
+		assert.equal(dispatched?.attemptId, result.replacement?.attemptId);
+		assert.equal(dispatched?.profileId, "recovery-profile");
+		assert.equal(dispatched?.model, "recovery-model");
 		const decisions = database.all<{ decision: string }>(
 			"SELECT decision FROM recovery_decisions WHERE attempt_id = ? ORDER BY rowid",
 			attemptId,

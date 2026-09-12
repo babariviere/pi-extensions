@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, renameSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { randomUUID } from "node:crypto";
-import type { BackgroundAgentsDatabase, JobClaim, TrustedCheckpoint } from "./database.ts";
+import type { BackgroundAgentsDatabase, QueuedRecovery, TrustedCheckpoint } from "./database.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -40,7 +40,7 @@ export interface RecoveryResult {
 	worktreeState?: WorktreeState;
 	checkpoint?: TrustedCheckpoint;
 	quarantinedPath?: string;
-	replacement?: JobClaim;
+	replacement?: QueuedRecovery;
 	reason: string;
 }
 
@@ -227,12 +227,7 @@ export class RecoveryCoordinator {
 				recoveryTime,
 			);
 
-		const replacement = this.database.replaceAttempt(
-			attemptId,
-			this.options.owner,
-			this.options.leaseMs,
-			recoveryTime,
-		);
+		const replacement = this.database.queueReplacementAttempt(attemptId, checkpoint.id, recoveryTime);
 		if (!replacement)
 			return this.needsHuman(
 				attemptId,
@@ -250,7 +245,7 @@ export class RecoveryCoordinator {
 			worktreeState,
 			checkpointId: checkpoint.id,
 			replacementAttemptId: replacement.attemptId,
-			metadata: quarantinedPath ? { quarantinedPath } : {},
+			metadata: { ...(quarantinedPath ? { quarantinedPath } : {}), queued: true },
 			createdAt: recoveryTime,
 		});
 		return {
@@ -261,7 +256,7 @@ export class RecoveryCoordinator {
 			checkpoint,
 			quarantinedPath,
 			replacement,
-			reason: "replacement created from trusted checkpoint",
+			reason: "replacement queued from trusted checkpoint",
 		};
 	}
 

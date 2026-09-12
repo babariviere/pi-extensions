@@ -132,6 +132,17 @@ export interface DatabaseOptions {
 	timeoutMs?: number;
 }
 
+export interface DurableRolloutState {
+	defaultMode: RolloutMode;
+	sourceOverrides: Partial<Record<BackgroundSource, RolloutMode>>;
+	repositoryOverrides: Record<string, RolloutMode>;
+}
+
+export interface DurableControlState {
+	emergencyStop: boolean;
+	rollout: DurableRolloutState;
+}
+
 export interface NewCase {
 	id?: string;
 	title: string;
@@ -249,7 +260,14 @@ export interface TrustedCheckpoint {
 	kind: string;
 	path?: string;
 	digest?: string;
+	metadata: unknown;
 	createdAt: string;
+}
+
+export interface QueuedRecovery {
+	jobId: string;
+	attemptId: string;
+	generation: number;
 }
 
 export interface PolicyInput {
@@ -427,6 +445,135 @@ export class BackgroundAgentsDatabase {
 
 	all<T extends Row = Row>(sql: string, ...parameters: unknown[]): T[] {
 		return this.database.prepare(sql).all(...(parameters as never[])) as T[];
+	}
+
+	getControlState(): DurableControlState {
+		const row = this.database
+			.prepare(
+				"SELECT emergency_stop, rollout_default, source_overrides, repository_overrides FROM controller_control_state WHERE id = 1",
+			)
+			.get() as Row | undefined;
+		if (!row) throw new Error("controller control state is unavailable");
+		const parse = (field: string): Record<string, RolloutMode> => {
+			try {
+				const value: unknown = JSON.parse(rowString(row, field));
+				if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("not an object");
+				return value as Record<string, RolloutMode>;
+			} catch (error) {
+				throw new Error("Stored control state has invalid " + field, { cause: error });
+			}
+		};
+		return {
+			emergencyStop: Number(row.emergency_stop) === 1,
+			rollout: {
+				defaultMode: rowString(row, "rollout_default") as RolloutMode,
+				sourceOverrides: parse("source_overrides"),
+				repositoryOverrides: parse("repository_overrides"),
+			},
+		};
+	}
+
+	/** Apply configuration defaults only to a never-initialized database. */
+	initializeControlState(rollout: DurableRolloutState): void {
+		this.withTransaction(() => {
+			const state = this.database.prepare("SELECT initialized FROM controller_control_state WHERE id = 1").get() as
+				| Row
+				| undefined;
+			if (Number(state?.initialized ?? 0) !== 0) return;
+			this.database
+				.prepare(
+					"UPDATE controller_control_state SET initialized = 1, rollout_default = ?, source_overrides = ?, repository_overrides = ?, updated_at = ? WHERE id = 1",
+				)
+				.run(
+					rollout.defaultMode,
+					jsonBoundary(rollout.sourceOverrides, "source overrides"),
+					jsonBoundary(rollout.repositoryOverrides, "repository overrides"),
+					new Date().toISOString(),
+				);
+		});
+	}
+
+	isEmergencyStop(): boolean {
+		return this.getControlState().emergencyStop;
+	}
+
+	setEmergencyStop(enabled: boolean, actor: string, now = new Date()): void {
+		const createdAt = utcTimestamp(now, "now");
+		this.withTransaction(() => {
+			this.database
+				.prepare(
+					"UPDATE controller_control_state SET initialized = 1, emergency_stop = ?, updated_at = ? WHERE id = 1",
+				)
+				.run(enabled ? 1 : 0, createdAt);
+			this.recordOperatorEventInTransaction(
+				enabled ? "emergency-stop.enabled" : "emergency-stop.disabled",
+				actor,
+				{ enabled },
+				createdAt,
+			);
+		});
+	}
+
+	setRollout(
+		scope: "global" | "source" | "repository",
+		value: RolloutMode,
+		actor: string,
+		target?: string,
+		now = new Date(),
+	): void {
+		if (!["observe", "supervised", "autonomous-pr"].includes(value)) throw new Error("rollout value is invalid");
+		const createdAt = utcTimestamp(now, "now");
+		this.withTransaction(() => {
+			const current = this.getControlState().rollout;
+			if (scope === "global") current.defaultMode = value;
+			else if (scope === "source") {
+				if (!target || !SOURCES.includes(target as BackgroundSource)) throw new Error("rollout source is required");
+				current.sourceOverrides[target as BackgroundSource] = value;
+			} else {
+				if (!target?.trim()) throw new Error("repository is required");
+				current.repositoryOverrides[target] = value;
+			}
+			this.database
+				.prepare(
+					"UPDATE controller_control_state SET initialized = 1, rollout_default = ?, source_overrides = ?, repository_overrides = ?, updated_at = ? WHERE id = 1",
+				)
+				.run(
+					current.defaultMode,
+					jsonBoundary(current.sourceOverrides, "source overrides"),
+					jsonBoundary(current.repositoryOverrides, "repository overrides"),
+					createdAt,
+				);
+			this.recordOperatorEventInTransaction(
+				"rollout.set",
+				actor,
+				{ scope, value, ...(target ? { target } : {}) },
+				createdAt,
+			);
+		});
+	}
+
+	recordOperatorEvent(eventType: string, actor: string, details: unknown = {}, now = new Date()): string {
+		const createdAt = utcTimestamp(now, "now");
+		return this.withTransaction(() => this.recordOperatorEventInTransaction(eventType, actor, details, createdAt));
+	}
+
+	private recordOperatorEventInTransaction(
+		eventType: string,
+		actor: string,
+		details: unknown,
+		createdAt: string,
+	): string {
+		const id = randomUUID();
+		this.database
+			.prepare("INSERT INTO operator_events (id, event_type, actor, details, created_at) VALUES (?, ?, ?, ?, ?)")
+			.run(
+				id,
+				requiredString(eventType, "eventType"),
+				requiredString(actor, "actor"),
+				jsonBoundary(details, "operator event details"),
+				createdAt,
+			);
+		return id;
 	}
 
 	withTransaction<T>(callback: () => T): T {
@@ -807,6 +954,7 @@ export class BackgroundAgentsDatabase {
 		const claimedAt = utcTimestamp(now, "now");
 		if (!Number.isSafeInteger(leaseMs) || leaseMs <= 0) throw new Error("leaseMs must be a positive integer");
 		return this.withTransaction(() => {
+			if (this.isEmergencyStop()) return null;
 			const job = this.database.prepare("SELECT id, case_id, role, state FROM jobs WHERE id = ?").get(jobId) as
 				| Row
 				| undefined;
@@ -1599,16 +1747,35 @@ export class BackgroundAgentsDatabase {
 	latestTrustedCheckpoint(jobId: string): TrustedCheckpoint | undefined {
 		const row = this.database
 			.prepare(
-				"SELECT c.id, c.attempt_id, c.kind, c.path, c.digest, c.created_at FROM recovery_checkpoints c JOIN attempts a ON a.id = c.attempt_id WHERE a.job_id = ? ORDER BY c.trusted_at DESC, c.id DESC LIMIT 1",
+				"SELECT c.id, c.attempt_id, c.kind, c.path, c.digest, c.metadata, c.created_at FROM recovery_checkpoints c JOIN attempts a ON a.id = c.attempt_id WHERE a.job_id = ? ORDER BY c.trusted_at DESC, c.id DESC LIMIT 1",
 			)
 			.get(requiredString(jobId, "jobId")) as Row | undefined;
-		if (!row) return undefined;
+		return row ? this.readTrustedCheckpoint(row) : undefined;
+	}
+
+	trustedCheckpoint(checkpointId: string): TrustedCheckpoint | undefined {
+		const row = this.database
+			.prepare(
+				"SELECT id, attempt_id, kind, path, digest, metadata, created_at FROM recovery_checkpoints WHERE id = ?",
+			)
+			.get(requiredString(checkpointId, "checkpointId")) as Row | undefined;
+		return row ? this.readTrustedCheckpoint(row) : undefined;
+	}
+
+	private readTrustedCheckpoint(row: Row): TrustedCheckpoint {
+		let metadata: unknown = {};
+		try {
+			metadata = JSON.parse(rowString(row, "metadata"));
+		} catch (error) {
+			throw new Error("Stored checkpoint metadata contains invalid JSON", { cause: error });
+		}
 		return {
 			id: rowString(row, "id"),
 			attemptId: rowString(row, "attempt_id"),
 			kind: rowString(row, "kind"),
 			path: row.path == null ? undefined : rowString(row, "path"),
 			digest: row.digest == null ? undefined : rowString(row, "digest"),
+			metadata,
 			createdAt: rowString(row, "created_at"),
 		};
 	}
@@ -1637,15 +1804,17 @@ export class BackgroundAgentsDatabase {
 		return id;
 	}
 
-	replaceAttempt(attemptId: string, owner: string, leaseMs = DEFAULT_LEASE_MS, now = new Date()): JobClaim | null {
+	/** Preserve a stale attempt and queue its next generation for normal provider assignment. */
+	queueReplacementAttempt(attemptId: string, checkpointId: string, now = new Date()): QueuedRecovery | null {
 		const timestamp = utcTimestamp(now, "now");
-		if (!Number.isSafeInteger(leaseMs) || leaseMs <= 0) throw new Error("leaseMs must be a positive integer");
 		return this.withTransaction(() => {
 			const attempt = this.database
 				.prepare("SELECT job_id, case_id, role, state FROM attempts WHERE id = ?")
 				.get(attemptId) as Row | undefined;
 			if (!attempt) throw new Error(`Unknown attempt: ${attemptId}`);
 			if (rowString(attempt, "state") !== "running") return null;
+			if (!this.database.prepare("SELECT id FROM recovery_checkpoints WHERE id = ?").get(checkpointId))
+				throw new Error(`Unknown checkpoint: ${checkpointId}`);
 			this.database
 				.prepare(
 					"UPDATE attempts SET state = 'failed', failure = ?, finished_at = ? WHERE id = ? AND state = 'running'",
@@ -1662,11 +1831,9 @@ export class BackgroundAgentsDatabase {
 				.get(rowString(attempt, "job_id")) as Row;
 			const generation = Number(previous.generation) + 1;
 			const replacementAttemptId = randomUUID();
-			const leaseId = randomUUID();
-			const expiresAt = new Date(now.getTime() + leaseMs).toISOString();
 			this.database
 				.prepare(
-					"INSERT INTO attempts (id, job_id, case_id, role, generation, state, heartbeat_at, started_at) VALUES (?, ?, ?, ?, ?, 'running', ?, ?)",
+					"INSERT INTO attempts (id, job_id, case_id, role, generation, state, recovery_checkpoint_id) VALUES (?, ?, ?, ?, ?, 'queued', ?)",
 				)
 				.run(
 					replacementAttemptId,
@@ -1674,24 +1841,9 @@ export class BackgroundAgentsDatabase {
 					rowString(attempt, "case_id"),
 					rowString(attempt, "role"),
 					generation,
-					timestamp,
-					timestamp,
+					checkpointId,
 				);
-			this.database
-				.prepare(
-					"INSERT INTO attempt_leases (id, attempt_id, owner, generation, expires_at, last_renewed_at) VALUES (?, ?, ?, ?, ?, ?)",
-				)
-				.run(leaseId, replacementAttemptId, requiredString(owner, "owner"), generation, expiresAt, timestamp);
-			this.database
-				.prepare("UPDATE jobs SET state = 'running', claimed_by = ?, claimed_at = ?, updated_at = ? WHERE id = ?")
-				.run(owner, timestamp, timestamp, rowString(attempt, "job_id"));
-			return {
-				jobId: rowString(attempt, "job_id"),
-				attemptId: replacementAttemptId,
-				leaseId,
-				generation,
-				expiresAt,
-			};
+			return { jobId: rowString(attempt, "job_id"), attemptId: replacementAttemptId, generation };
 		});
 	}
 

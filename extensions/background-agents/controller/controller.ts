@@ -29,6 +29,7 @@ import { QuestionWorkflow } from "./workflows/question.ts";
 import { SpecificationWorkflow } from "./workflows/specification.ts";
 import { reproduceEvidenceOperation } from "./verification/reproduce.ts";
 import { BackgroundSocketServer } from "./socket-server.ts";
+import { inspectTransientService, stopTransientService } from "./runtime/systemd.ts";
 
 export type FetchLike = (input: string | URL, init?: RequestInit) => Promise<Response>;
 
@@ -187,6 +188,12 @@ export interface AttemptRunnerResult {
 export interface AttemptRunner {
 	run(claim: JobClaim, database: BackgroundAgentsDatabase): Promise<AttemptRunnerResult>;
 }
+
+export interface BackgroundRuntimeControls {
+	terminateSystemdUnit(unit: string): Promise<void>;
+	isSystemdUnitStopped(unit: string): Promise<boolean>;
+	closePane?(paneId: string): Promise<void>;
+}
 export interface BackgroundControllerOptions {
 	config?: BackgroundAgentsConfig;
 	database?: BackgroundAgentsDatabase;
@@ -201,6 +208,7 @@ export interface BackgroundControllerOptions {
 	startSocket?: boolean;
 	clock?: () => Date;
 	credentialStat?: CredentialStat;
+	runtimeControls?: BackgroundRuntimeControls;
 }
 function defaultClassifier(event: SourceEvent) {
 	const text = `${event.title}\n${event.body}`.toLowerCase();
@@ -246,6 +254,7 @@ export class BackgroundAgentsController {
 	private readonly options: BackgroundControllerOptions;
 	private readonly timers: ReturnType<typeof setInterval>[] = [];
 	private readonly runtimeRollout: BackgroundAgentsConfig["rollout"];
+	private readonly runtimeControls: BackgroundRuntimeControls;
 	private socket?: BackgroundSocketServer;
 	private started = false;
 	private stopping = false;
@@ -254,12 +263,18 @@ export class BackgroundAgentsController {
 		this.config = options.config ?? normalizeBackgroundAgentsConfig({});
 		validateBackgroundAgentsConfig(this.config, { checkPaths: true, credentialStat: options.credentialStat });
 		this.database = options.database ?? new BackgroundAgentsDatabase(this.config.databasePath);
+		this.database.initializeControlState(this.config.rollout);
+		const durableControls = this.database.getControlState();
 		this.owner = options.owner?.trim() || `background-controller-${process.pid}`;
 		this.operator = options.operator?.trim() || "socket-owner";
 		this.runtimeRollout = {
-			defaultMode: this.config.rollout.defaultMode,
-			sourceOverrides: { ...this.config.rollout.sourceOverrides },
-			repositoryOverrides: { ...this.config.rollout.repositoryOverrides },
+			defaultMode: durableControls.rollout.defaultMode,
+			sourceOverrides: { ...durableControls.rollout.sourceOverrides },
+			repositoryOverrides: { ...durableControls.rollout.repositoryOverrides },
+		};
+		this.runtimeControls = options.runtimeControls ?? {
+			terminateSystemdUnit: (unit) => stopTransientService(unit),
+			isSystemdUnitStopped: async (unit) => ["inactive", "failed"].includes(await inspectTransientService(unit)),
 		};
 		const store: SourceStore = {
 			recordSourceEvent: (event, sourceOptions) => {
@@ -291,8 +306,10 @@ export class BackgroundAgentsController {
 			exampleLimit: this.config.classifier.exampleLimit,
 			relatedCaseLimit: this.config.classifier.relatedCaseLimit,
 		});
-		this.jobs = new JobScheduler(this.database);
-		this.providerScheduler = new ProviderScheduler(this.database, this.config);
+		this.jobs = new JobScheduler(this.database, { emergencyStop: durableControls.emergencyStop });
+		this.providerScheduler = new ProviderScheduler(this.database, this.config, {
+			emergencyStop: durableControls.emergencyStop,
+		});
 		this.recovery = new RecoveryCoordinator(this.database, { owner: this.owner });
 		this.stateMachine = new BackgroundAgentsStateMachine(this.database);
 		this.questions = new QuestionWorkflow(this.database);
@@ -468,6 +485,32 @@ export class BackgroundAgentsController {
 	private dispatchAllowed(role: string, state: string, rollout: RolloutMode): boolean {
 		if (rollout === "observe" && role !== "investigator") return false;
 		return role !== "worker" || state === "implementation";
+	}
+	private async setEmergencyStop(enabled: boolean): Promise<{ accepted: true }> {
+		this.providerScheduler.setEmergencyStop(enabled, this.operator);
+		if (!enabled) return { accepted: true };
+		const active = this.database.all<{
+			id: string;
+			case_id: string;
+			systemd_unit: string | null;
+			pane_id: string | null;
+		}>("SELECT id, case_id, systemd_unit, pane_id FROM attempts WHERE state = 'running' ORDER BY id");
+		for (const attempt of active) {
+			if (attempt.systemd_unit) {
+				await this.runtimeControls.terminateSystemdUnit(attempt.systemd_unit);
+				if (!(await this.runtimeControls.isSystemdUnitStopped(attempt.systemd_unit)))
+					throw new Error(`systemd unit did not terminate: ${attempt.systemd_unit}`);
+			}
+			if (attempt.pane_id && this.runtimeControls.closePane) await this.runtimeControls.closePane(attempt.pane_id);
+		}
+		const affectedCases = this.database.all<{ case_id: string }>(
+			"SELECT DISTINCT case_id FROM jobs WHERE state IN ('queued', 'running')",
+		);
+		for (const caseId of affectedCases.map((row) => row.case_id)) this.jobs.pauseCaseJobs(caseId);
+		this.database.recordOperatorEvent("emergency-stop.reconciled", this.operator, {
+			attemptIds: active.map((attempt) => attempt.id),
+		});
+		return { accepted: true };
 	}
 	private heartbeatTick(): void {
 		for (const attempt of this.database.all<{ id: string }>(
@@ -913,13 +956,7 @@ export class BackgroundAgentsController {
 					result = this.setRollout(request.scope, request.value, request.source, request.repository);
 					break;
 				case "emergency.stop":
-					this.providerScheduler.setEmergencyStop(request.enabled);
-					if (request.enabled)
-						for (const row of this.database.all<{ case_id: string }>(
-							"SELECT DISTINCT case_id FROM jobs WHERE state IN ('queued', 'running')",
-						))
-							this.jobs.pauseCaseJobs(row.case_id);
-					result = { accepted: true };
+					result = await this.setEmergencyStop(request.enabled);
 					break;
 				case "pane.focus":
 					if (this.options.paneFocus) await this.options.paneFocus(request.paneId);
@@ -998,6 +1035,8 @@ export class BackgroundAgentsController {
 		source?: BackgroundSource,
 		repository?: string,
 	): { accepted: true } {
+		const target = scope === "source" ? source : scope === "repository" ? repository : undefined;
+		this.database.setRollout(scope, value, this.operator, target);
 		if (scope === "global") this.runtimeRollout.defaultMode = value;
 		else if (scope === "source" && source) this.runtimeRollout.sourceOverrides[source] = value;
 		else if (scope === "repository" && repository) this.runtimeRollout.repositoryOverrides[repository] = value;

@@ -111,3 +111,50 @@ test("evidence reproduction requires an existing manifest owned by the selected 
 	assert.equal(wrongCase.ok, false);
 	assert.equal(database.get<{ count: number }>("SELECT count(*) AS count FROM verification_runs")?.count, 0);
 });
+
+test("restores durable controls across controller restart and reconciles an emergency stop", async () => {
+	const database = new BackgroundAgentsDatabase(":memory:");
+	databases.push(database);
+	const calls: string[] = [];
+	const runtimeControls = {
+		terminateSystemdUnit: async (unit: string) => {
+			calls.push(`stop:${unit}`);
+		},
+		isSystemdUnitStopped: async (unit: string) => {
+			calls.push(`inspect:${unit}`);
+			return true;
+		},
+		closePane: async (pane: string) => {
+			calls.push(`close:${pane}`);
+		},
+	};
+	const first = new BackgroundAgentsController({
+		database,
+		startSocket: false,
+		runtimeControls,
+		operator: "operator",
+	});
+	const caseId = database.createCase({ title: "Running", source: "manual" });
+	const jobId = database.createJob({ caseId, role: "investigator" });
+	const claim = database.claimJob(jobId, "runner", 60_000);
+	assert.ok(claim);
+	database.run(
+		"UPDATE attempts SET systemd_unit = ?, pane_id = ? WHERE id = ?",
+		"background-agent-test",
+		"pane-test",
+		claim?.attemptId,
+	);
+	await first.handle({ version: 1, id: "rollout", type: "rollout.set", scope: "global", value: "supervised" });
+	const stopped = await first.handle({ version: 1, id: "stop", type: "emergency.stop", enabled: true });
+	assert.equal(stopped.ok, true);
+	assert.deepEqual(calls, ["stop:background-agent-test", "inspect:background-agent-test", "close:pane-test"]);
+	assert.equal(database.get<{ state: string }>("SELECT state FROM jobs WHERE id = ?", jobId)?.state, "paused");
+
+	const second = new BackgroundAgentsController({ database, startSocket: false, operator: "operator" });
+	assert.equal(second.snapshot().emergencyStop, true);
+	assert.equal(second.snapshot().rollout, "supervised");
+	assert.equal(database.get<{ count: number }>("SELECT count(*) AS count FROM operator_events")?.count, 3);
+	const resumed = await second.handle({ version: 1, id: "resume-stop", type: "emergency.stop", enabled: false });
+	assert.equal(resumed.ok, true);
+	assert.equal(second.snapshot().emergencyStop, false);
+});

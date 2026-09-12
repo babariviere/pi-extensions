@@ -1,4 +1,9 @@
-import { ExternalEffectExecutor, type EffectReconciliation, type EffectStore } from "./effects.ts";
+import {
+	ExternalEffectExecutor,
+	type EffectExecutorOptions,
+	type EffectReconciliation,
+	type EffectStore,
+} from "./effects.ts";
 import {
 	GitHubController,
 	type DraftPullRequestInput,
@@ -129,7 +134,7 @@ export class GitHubEffects {
 	constructor(
 		readonly store: EffectStore,
 		readonly client: GitHubEffectClient,
-		options: { owner: string; leaseMs?: number; now?: () => Date },
+		options: EffectExecutorOptions,
 	) {
 		this.executor = new ExternalEffectExecutor(store, options);
 	}

@@ -215,6 +215,31 @@ export interface SystemdUnitInspector {
 
 const defaultInspector: SystemdUnitInspector = defaultRunner;
 
+/** Stop a controller-owned deterministic transient unit without invoking a shell. */
+export async function stopTransientService(unit: string, runner: CommandRunner = defaultRunner): Promise<void> {
+	safeUnit(unit);
+	const result = await runner.run("systemctl", ["--user", "stop", unit]);
+	if (!result.ok) throw new Error(result.error ?? `unable to stop systemd unit ${unit}`);
+}
+
+export async function inspectTransientService(
+	unit: string,
+	inspector: SystemdUnitInspector = defaultInspector,
+): Promise<string> {
+	safeUnit(unit);
+	const result = await inspector.run("systemctl", [
+		"--user",
+		"show",
+		"--no-pager",
+		"--property=ActiveState",
+		"--value",
+		unit,
+	]);
+	if (!result.ok) return "unknown";
+	const state = (result.stdout ?? "").trim();
+	return ["active", "activating", "deactivating", "inactive", "failed"].includes(state) ? state : "unknown";
+}
+
 /** Wait for the user manager to observe the transient unit's terminal state. */
 export async function waitForTransientService(
 	unit: string,
