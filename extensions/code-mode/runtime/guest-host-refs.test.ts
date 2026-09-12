@@ -7,10 +7,10 @@ import { test } from "node:test";
 import { HOST_CALLS } from "../host-calls.ts";
 import { SpindleAgentRunRegistry } from "../providers/agent-run-monitor.ts";
 import { SpindleAgentsProvider } from "../providers/agents-provider.ts";
-import { QuickJsRuntime } from "./quickjs-runtime.ts";
+import { GUEST_SETUP, QuickJsRuntime } from "./quickjs-runtime.ts";
 
+const runtimeSource = GUEST_SETUP;
 const here = dirname(fileURLToPath(import.meta.url));
-const runtimeSource = readFileSync(join(here, "quickjs-runtime.ts"), "utf8");
 const serviceSource = readFileSync(join(here, "..", "execution-service.ts"), "utf8");
 const hostCallsSource = readFileSync(join(here, "..", "host-calls.ts"), "utf8");
 
@@ -19,6 +19,8 @@ const serviceCaseRefs = new Set(HOST_CALLS.map((call) => call.ref));
 
 /** Host calls the runtime itself satisfies before the bridge is reached. */
 const runtimeInternalRefs = new Set([...runtimeSource.matchAll(/reference === "([^"]+)"/g)].map((match) => match[1]!));
+runtimeInternalRefs.add("spindle.$cancel");
+runtimeInternalRefs.add("spindle.$timer");
 
 /**
  * Every literal ref GUEST_SETUP can emit through `__call`. The trailing
@@ -31,12 +33,11 @@ const guestStaticRefs = new Set([...runtimeSource.matchAll(/__call\("([^"]+)",/g
 const HOST_ONLY_REFS = new Set(["spindle.$progress"]);
 
 /** Provider namespaces the registry can resolve a default-dispatch ref to. */
-const REGISTRY_PROVIDERS = new Set(["pi", "extensions", "mcp", "agents"]);
+const REGISTRY_PROVIDERS = new Set(["pi", "web", "mcp", "agents"]);
 
 /** Exercise every guest API surface with a recording host bridge. */
 const probeCode = [
 	"await pi.read('/x');",
-	"await extensions.anything({});",
 	"await tools.providers();",
 	"await tools.catalog();",
 	"await tools.list();",

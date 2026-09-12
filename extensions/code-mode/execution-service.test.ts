@@ -62,7 +62,7 @@ const execute = (service: SpindleExecutionService, code: string, parentToolCallI
 	});
 
 test("type errors fail before execution and carry positions", async () => {
-	const service = serviceWith([makeProvider("extensions", { echo: (args) => ({ echoed: args }) })]);
+	const service = serviceWith([makeProvider("web", { echo: (args) => ({ echoed: args }) })]);
 	const result = await execute(service, "return missing_identifier;");
 	assert.equal(result.success, false);
 	assert.equal(result.audits.length, 0);
@@ -73,27 +73,27 @@ test("type errors fail before execution and carry positions", async () => {
 	assert.match(result.trace.error ?? "", /Type checking failed: L1:\d+ Cannot find name 'missing_identifier'/);
 });
 
-test("a program can call a registered extension tool", async () => {
-	const service = serviceWith([makeProvider("extensions", { echo: (args) => ({ echoed: args }) })]);
-	const result = await execute(service, "return await extensions.echo({ x: 1 });");
+test("a program can call a registered web capability", async () => {
+	const service = serviceWith([makeProvider("web", { echo: (args) => ({ echoed: args }) })]);
+	const result = await execute(service, "return await web.echo({ x: 1 });");
 	assert.equal(result.success, true);
 	assert.deepEqual(result.value, { echoed: { x: 1 } });
 	assert.equal(result.audits.length, 1);
-	assert.equal(result.audits[0]!.ref, "extensions.echo");
+	assert.equal(result.audits[0]!.ref, "web.echo");
 	assert.equal(result.audits[0]!.success, true);
 	assert.ok(result.elapsedMs >= 0);
 });
 
 test("discovery actions dispatch through the static host calls", async () => {
-	const service = serviceWith([makeProvider("extensions", { echo: (args) => ({ echoed: args }) })]);
+	const service = serviceWith([makeProvider("web", { echo: (args) => ({ echoed: args }) })]);
 	const result = await execute(
 		service,
 		[
 			"const providers = await tools.providers();",
 			"const listed = await tools.list({});",
 			"const found = await tools.search({ query: 'echo' });",
-			"const described = await tools.describe({ ref: 'extensions.echo' });",
-			"const called = await tools.call({ ref: 'extensions.echo', args: { via: 'call' } });",
+			"const described = await tools.describe({ ref: 'web.echo' });",
+			"const called = await tools.call({ ref: 'web.echo', args: { via: 'call' } });",
 			"return {",
 			"  providers: providers.map((provider) => provider.name),",
 			"  listed: listed.length,",
@@ -111,21 +111,35 @@ test("discovery actions dispatch through the static host calls", async () => {
 		described: string;
 		called: { echoed: Record<string, unknown> };
 	};
-	assert.deepEqual(value.providers, ["extensions"]);
+	assert.deepEqual(value.providers, ["web"]);
 	assert.equal(value.listed, 1);
-	assert.deepEqual(value.found, ["extensions.echo"]);
+	assert.deepEqual(value.found, ["web.echo"]);
 	assert.equal(value.described, "echo");
 	assert.deepEqual(value.called, { echoed: { via: "call" } });
 });
 
-test("discovery finds snake_case names through the extensions compatibility alias", async () => {
-	const service = serviceWith([makeProvider("extensions", { web_search: () => ({}) })]);
+test("discovery finds snake_case names through the web compatibility alias", async () => {
+	const service = serviceWith([makeProvider("web", { web_search: () => ({}) })]);
 	const result = await execute(
 		service,
-		"return (await extensions.tools.search({ query: 'web search' })).map((action) => action.ref);",
+		"return (await tools.search({ query: 'web search' })).map((action) => action.ref);",
 	);
 	assert.equal(result.success, true, result.error ?? "");
-	assert.deepEqual(result.value, ["extensions.web_search"]);
+	assert.deepEqual(result.value, ["web.web_search"]);
+});
+
+test("trusted custom provider namespaces remain available", async () => {
+	const service = serviceWith([makeProvider("custom", { echo: (args) => ({ echoed: args }) })]);
+	const result = await execute(service, "return await custom.echo({ x: 1 });");
+	assert.equal(result.success, true, result.error ?? "");
+	assert.deepEqual(result.value, { echoed: { x: 1 } });
+	assert.equal(result.audits[0]?.ref, "custom.echo");
+});
+
+test("execution succeeds when optional web capture is not registered", async () => {
+	const result = await execute(serviceWith([]), "return 42;");
+	assert.equal(result.success, true, result.error ?? "");
+	assert.equal(result.value, 42);
 });
 
 test("mapLimit bounds how many thunks run at once", async () => {

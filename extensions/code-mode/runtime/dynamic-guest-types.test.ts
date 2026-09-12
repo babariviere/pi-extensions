@@ -17,37 +17,18 @@ const searchTool = {
 
 test("an empty source set keeps the loose declarations", () => {
 	assert.deepEqual(buildDynamicGuestDeclarations({}), {});
-	assert.deepEqual(buildDynamicGuestDeclarations({ extensionTools: [] }), {});
 });
 
-test("extension tools render with their declared schemas", () => {
-	const dynamic = buildDynamicGuestDeclarations({ extensionTools: [searchTool] });
-	assert.match(String(dynamic.extensions), /web_search\(args: \{ limit\?: number; query: string \}\)/);
-	assert.match(String(dynamic.extensions), /declare const extensions: SpindleExtensionsApiDynamic;/);
+test("captured sibling tools do not create a guest namespace", () => {
+	const dynamic = buildDynamicGuestDeclarations({});
+	assert.deepEqual(dynamic, {});
 });
 
-test("non-identifier tool names render as quoted members", () => {
-	const dynamic = buildDynamicGuestDeclarations({
-		extensionTools: [{ name: "linear-issue", inputSchema: { type: "object", properties: {} } }],
-	});
-	assert.match(String(dynamic.extensions), /"linear-issue"\(args\?:/);
-});
-
-test("the generated surface replaces the loose declaration and gates bad arguments", () => {
-	const declarations = guestTypeDeclarations(
-		true,
-		buildDynamicGuestDeclarations({
-			extensionTools: [searchTool],
-		}),
-	);
-	assert.equal(declarations.includes("declare const extensions: SpindleExtensionsApi;\n"), false);
-
-	const good = typeCheckSpindleCode("return await extensions.web_search({ query: 'x' });", declarations);
-	assert.deepEqual(good.errors, []);
-
-	const bad = typeCheckSpindleCode("return await extensions.web_search({ quer: 'x' });", declarations);
-	assert.ok(bad.errors.length > 0);
-	assert.match(bad.errors[0]!.message, /quer/);
+test("explicit web tools are not represented by the removed dynamic fallback", () => {
+	const declarations = guestTypeDeclarations(true, buildDynamicGuestDeclarations({}));
+	assert.equal(declarations.includes("declare const extensions"), false);
+	const outcome = typeCheckSpindleCode("return await web.search({ query: 'x' });", declarations);
+	assert.deepEqual(outcome.errors, []);
 });
 
 const readChannel = {

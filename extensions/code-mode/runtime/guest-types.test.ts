@@ -23,7 +23,7 @@ test("full code mode declares the tools discovery namespace", () => {
 	assert.match(declarations, /call\(args: \{ ref: string; args\?: Record<string, unknown> \}\): Promise<unknown>;/);
 });
 
-test("orchestration-only mode strips the tools global alongside pi and extensions", () => {
+test("orchestration-only mode strips the tools global alongside pi and web", () => {
 	const declarations = guestTypeDeclarations(false);
 	assert.doesNotMatch(declarations, /declare const tools: SpindleToolsApi;/);
 	assert.doesNotMatch(declarations, /declare const pi: PiToolsApi;/);
