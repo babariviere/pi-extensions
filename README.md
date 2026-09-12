@@ -21,7 +21,7 @@ directory, and `themes/*.json` files. The current inventory is:
 | `pr` | `/review-comments` hands selected unresolved review comments to the agent; `/autofix` watches PR CI and `/autofix-stop` stops it. |
 | `preview-system-prompt` | `/system-prompt` displays the assembled system prompt. |
 | `secrets` | `/secret-list`; injects `fnox` secrets into shell commands and replaces secret values in tool results with reversible references. |
-| `code-mode` | `code_mode` runs bounded QuickJS programs; also provides `agents.*`, MCP tools, and `/sandbox`, `/mcp`, and `/mcp-auth` controls. |
+| `code-mode` | `code_mode` runs bounded QuickJS programs with explicitly registered Pi, web.search/web.fetch, MCP, and agents capabilities; it also provides `/sandbox`, `/mcp`, and `/mcp-auth` controls. Existing `spindle.json` configuration remains supported, and `spindle_exec` visibility entries migrate to `code_mode`. |
 | `taptap` | Requires two `Esc` presses within 600ms to cancel a running agent turn, while preserving pi's idle and completion behaviors. |
 | `todos` | `todo` manages file-backed todos and `/todos` provides the interactive manager. |
 | `tool-substitute` | Adds pi search-tool guidance and blocks Git writes inside jj repositories, converting simple safe Git operations where possible. |
@@ -167,7 +167,7 @@ boundary:
 
 - `guardrail` catches known destructive command shapes. Its own documentation
   lists bypasses such as indirect mutations and destructive scripts.
-- Spindle's filesystem sandbox is configured through `spindle.json` and is off
+- Code mode's filesystem sandbox is configured through `spindle.json` and is off
   by default for ordinary sessions. `read-only` and `workspace-write` enforce
   direct read/write paths; night mode enables its own workspace-oriented policy
   and read-only MCP policy by default. Treat shell/network access as capable of
