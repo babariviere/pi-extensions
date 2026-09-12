@@ -110,6 +110,43 @@ test("evidence reproduction requires an existing manifest owned by the selected 
 	});
 	assert.equal(wrongCase.ok, false);
 	assert.equal(database.get<{ count: number }>("SELECT count(*) AS count FROM verification_runs")?.count, 0);
+	const marker = join(tmpdir(), `background-replay-${Date.now()}-${Math.random()}`);
+	const queuedManifest = database.createEvidenceManifest({
+		caseId,
+		manifest: {
+			version: 1,
+			baseSha: "base-sha",
+			candidateSha: "candidate-sha",
+			createdAt: new Date().toISOString(),
+			commands: [
+				{
+					executable: process.execPath,
+					argv: ["-e", `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "executed")`],
+					cwd: ".",
+					timeoutMs: 1000,
+					environment: [],
+					phase: "candidate",
+					purpose: "acceptance",
+					expected: { exitCode: 0 },
+				},
+			],
+		},
+	});
+	const queued = await controller.handle({
+		version: 1,
+		id: "queue-reproduction",
+		type: "evidence.reproduce",
+		caseId,
+		manifestId: queuedManifest,
+	});
+	assert.equal(queued.ok, true);
+	assert.equal(typeof (queued as { result?: { jobId?: string } }).result?.jobId, "string");
+	assert.equal(database.get<{ count: number }>("SELECT count(*) AS count FROM verification_runs")?.count, 0);
+	assert.equal(
+		database.get<{ count: number }>("SELECT count(*) AS count FROM jobs WHERE role = 'verifier'")?.count,
+		1,
+	);
+	assert.throws(() => lstatSync(marker), /ENOENT/);
 });
 
 test("restores durable controls across controller restart and reconciles an emergency stop", async () => {

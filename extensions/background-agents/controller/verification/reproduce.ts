@@ -384,34 +384,25 @@ export interface EvidenceReproduceOperationResult {
 	operation: typeof EVIDENCE_REPRODUCE_OPERATION;
 	caseId: string;
 	manifestId: string;
-	verificationRunId: string;
-	replay: ReplayResult;
+	jobId: string;
 }
 
 export interface EvidenceReproduceDependencies {
 	database: {
 		getEvidenceManifest(id: string): EvidenceManifest | undefined;
-		listVerificationRuns(id: string): Array<{ id: string }>;
-		createVerificationRun(input: {
+		getEvidenceManifestOwner(id: string): { caseId: string; baseSha: string; candidateSha: string } | undefined;
+		createJob(input: {
+			caseId: string;
+			role: "verifier";
 			manifestId: string;
-			report: {
-				verdict: "pass" | "fail" | "needs-human";
-				confidence: { score: number; rationale: string; uncertainties: string[] };
-				ciChecks: Record<string, string>;
-				rationale: string;
-				uncertainties: string[];
-				replay: { commands: Array<{ actual: unknown }> };
-			};
-			replayOf?: string;
+			expectedBaseSha: string;
+			expectedCandidateSha: string;
+			priority?: number;
 		}): string;
 	};
-	repository: string;
-	runner?: ReplayProcessRunner;
-	requiredChecks?: readonly string[];
-	environment?: NodeJS.ProcessEnv;
 }
 
-/** Controller-facing contract. Every invocation creates a new retained verifier result. */
+/** Controller-facing contract. It only queues a verifier service and never runs evidence commands. */
 export async function reproduceEvidenceOperation(
 	request: EvidenceReproduceRequest,
 	dependencies: EvidenceReproduceDependencies,
@@ -419,26 +410,21 @@ export async function reproduceEvidenceOperation(
 	if (request.operation !== EVIDENCE_REPRODUCE_OPERATION) throw new Error("unsupported evidence operation");
 	const manifest = dependencies.database.getEvidenceManifest(request.manifestId);
 	if (!manifest) throw new Error(`Unknown evidence manifest: ${request.manifestId}`);
-	const { verifyEvidence } = await import("./verifier.ts");
-	const report = await verifyEvidence({
-		manifest,
-		repository: dependencies.repository,
-		prNumber: request.prNumber,
-		requiredChecks: dependencies.requiredChecks,
-		runner: dependencies.runner,
-		environment: dependencies.environment,
-	});
-	const previous = dependencies.database.listVerificationRuns(request.manifestId).at(-1)?.id;
-	const verificationRunId = dependencies.database.createVerificationRun({
+	const owner = dependencies.database.getEvidenceManifestOwner(request.manifestId);
+	if (!owner || owner.caseId !== request.caseId)
+		throw new Error("evidence manifest does not belong to the selected case");
+	const jobId = dependencies.database.createJob({
+		caseId: request.caseId,
+		role: "verifier",
 		manifestId: request.manifestId,
-		report,
-		...(previous ? { replayOf: previous } : {}),
+		expectedBaseSha: owner.baseSha,
+		expectedCandidateSha: owner.candidateSha,
+		priority: 100,
 	});
 	return {
 		operation: EVIDENCE_REPRODUCE_OPERATION,
 		caseId: request.caseId,
 		manifestId: request.manifestId,
-		verificationRunId,
-		replay: report.replay,
+		jobId,
 	};
 }

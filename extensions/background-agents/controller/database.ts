@@ -172,6 +172,9 @@ export interface JobInput {
 	workItemId?: string;
 	role: AgentRole;
 	priority?: number;
+	manifestId?: string;
+	expectedBaseSha?: string;
+	expectedCandidateSha?: string;
 }
 
 export interface JobClaim {
@@ -381,6 +384,7 @@ export interface VerificationRunInput {
 		replay?: { commands: Array<{ actual: unknown }> };
 	};
 	replayOf?: string;
+	resultVersion?: number;
 }
 
 export interface StoredPolicy {
@@ -882,12 +886,24 @@ export class BackgroundAgentsDatabase {
 		};
 	}
 
+	getEvidenceManifestOwner(id: string): { caseId: string; baseSha: string; candidateSha: string } | undefined {
+		const row = this.database
+			.prepare("SELECT case_id, base_sha, candidate_sha FROM evidence_manifests WHERE id = ?")
+			.get(id) as Row | undefined;
+		if (!row) return undefined;
+		return {
+			caseId: rowString(row, "case_id"),
+			baseSha: rowString(row, "base_sha"),
+			candidateSha: rowString(row, "candidate_sha"),
+		};
+	}
+
 	createVerificationRun(input: VerificationRunInput): string {
 		const id = input.id ?? randomUUID();
 		this.withTransaction(() => {
 			this.database
 				.prepare(
-					"INSERT INTO verification_runs (id, manifest_id, verdict, confidence, ci_checks, rationale, uncertainties, actual_results, replay_history, replay_of) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+					"INSERT INTO verification_runs (id, manifest_id, verdict, confidence, ci_checks, rationale, uncertainties, actual_results, replay_history, replay_of, result_version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
 				)
 				.run(
 					id,
@@ -900,20 +916,43 @@ export class BackgroundAgentsDatabase {
 					jsonBoundary(input.report.replay?.commands.map((command) => command.actual) ?? [], "actual results"),
 					jsonBoundary(input.replayOf ? [input.replayOf] : [], "replay history"),
 					input.replayOf ?? null,
+					input.resultVersion ?? 1,
 				);
 		});
 		return id;
 	}
 
+	getReadyVerification(
+		manifestId: string,
+		verificationRunId: string,
+	): { id: string; candidateSha: string; ciChecks: Record<string, string> } | undefined {
+		const row = this.database
+			.prepare(
+				"SELECT vr.id, vr.verdict, vr.ci_checks, em.candidate_sha FROM verification_runs vr JOIN evidence_manifests em ON em.id = vr.manifest_id WHERE vr.id = ? AND vr.manifest_id = ? ORDER BY vr.created_at DESC, vr.rowid DESC LIMIT 1",
+			)
+			.get(verificationRunId, manifestId) as Row | undefined;
+		if (!row || rowString(row, "verdict") !== "pass") return undefined;
+		const latest = this.database
+			.prepare("SELECT id FROM verification_runs WHERE manifest_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1")
+			.get(manifestId) as Row | undefined;
+		if (!latest || rowString(latest, "id") !== rowString(row, "id")) return undefined;
+		return {
+			id: rowString(row, "id"),
+			candidateSha: rowString(row, "candidate_sha"),
+			ciChecks: JSON.parse(rowString(row, "ci_checks")) as Record<string, string>,
+		};
+	}
+
 	listVerificationRuns(manifestId: string): VerificationRun[] {
 		return this.database
 			.prepare(
-				"SELECT id, manifest_id, verdict, confidence, ci_checks, rationale, uncertainties, created_at, replay_history FROM verification_runs WHERE manifest_id = ? ORDER BY created_at, rowid",
+				"SELECT id, manifest_id, verdict, confidence, ci_checks, rationale, uncertainties, created_at, replay_history, result_version FROM verification_runs WHERE manifest_id = ? ORDER BY created_at, rowid",
 			)
 			.all(manifestId)
 			.map((row) => ({
 				id: rowString(row as Row, "id"),
 				manifestId: rowString(row as Row, "manifest_id"),
+				version: Number((row as Row).result_version ?? 1),
 				verdict: rowString(row as Row, "verdict") as VerificationRun["verdict"],
 				confidence: {
 					score: Number((row as Row).confidence),
@@ -932,13 +971,18 @@ export class BackgroundAgentsDatabase {
 		const id = input.id ?? randomUUID();
 		this.withTransaction(() => {
 			this.database
-				.prepare("INSERT INTO jobs (id, case_id, work_item_id, role, priority) VALUES (?, ?, ?, ?, ?)")
+				.prepare(
+					"INSERT INTO jobs (id, case_id, work_item_id, role, priority, manifest_id, expected_base_sha, expected_candidate_sha) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+				)
 				.run(
 					id,
 					requiredString(input.caseId, "caseId"),
 					input.workItemId ?? null,
 					role(input.role),
 					input.priority ?? 0,
+					input.manifestId ?? null,
+					input.expectedBaseSha ?? null,
+					input.expectedCandidateSha ?? null,
 				);
 		});
 		return id;

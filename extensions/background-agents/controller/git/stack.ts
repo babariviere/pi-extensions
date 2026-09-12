@@ -28,6 +28,7 @@ export interface StackDeliveryOptions {
 		pullRequest: GitHubPullRequest;
 		parent?: StackItemResult;
 	}) => Promise<VerificationBoundary>;
+	markReady?: (reference: number | string, verification: VerificationBoundary) => Promise<void>;
 }
 
 function validateItems(items: readonly StackItemInput[]): void {
@@ -92,7 +93,7 @@ export class GitStackController {
 				...(parent ? { parent } : {}),
 			});
 			if (!verification.passed) throw new Error(`verification failed for stack item ${item.ordinal}`);
-			await this.github.markReady(pullRequest.number, verification);
+			if (options.markReady) await options.markReady(pullRequest.number, verification);
 			results.push({ item, branch, base, worktree, pullRequest, verification });
 		}
 

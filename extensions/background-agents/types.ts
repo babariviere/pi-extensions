@@ -216,6 +216,7 @@ export interface EvidenceManifest {
 export interface VerificationRun {
 	id: string;
 	manifestId: string;
+	version: number;
 	verdict: VerificationVerdict;
 	confidence: Confidence;
 	ciChecks: Record<string, "pass" | "fail" | "pending" | "missing">;

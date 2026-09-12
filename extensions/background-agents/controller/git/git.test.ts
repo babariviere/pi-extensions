@@ -3,6 +3,7 @@ import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { test } from "node:test";
+import { GitHubControllerEffectClient } from "../effects/github.ts";
 import { GitHubController } from "./github.ts";
 import { GitRepository, spawnCommandRunner, type CommandRunner } from "./repository.ts";
 import { GitStackController } from "./stack.ts";
@@ -89,7 +90,6 @@ test("delivers a sequential draft stack with argv-only GitHub operations", async
 		const worktrees = new GitWorktreeManager(repository, paths.worktrees);
 		const github = new GitHubController(repository);
 		const stack = new GitStackController(worktrees, github);
-		await assert.rejects(github.markReady(10, { passed: false }), /passed verification/);
 		const verified: string[] = [];
 		const result = await stack.deliver(
 			[
@@ -119,6 +119,67 @@ test("delivers a sequential draft stack with argv-only GitHub operations", async
 		assert.equal(
 			calls.some((call) => call.executable === "sh" || call.executable === "bash"),
 			false,
+		);
+	} finally {
+		rmSync(paths.root, { recursive: true, force: true });
+	}
+});
+
+test("requires a verified boundary and current PR head before marking ready", async () => {
+	const paths = await repositoryRoot();
+	try {
+		const calls: Array<{ executable: string; args: string[] }> = [];
+		let currentHead = "different-head";
+		let readyCalls = 0;
+		const runner: CommandRunner = async (executable, args, options) => {
+			calls.push({ executable, args: [...args] });
+			if (executable !== "gh") return spawnCommandRunner(executable, args, options);
+			if (args[0] === "pr" && args[1] === "view") {
+				return {
+					code: 0,
+					stdout: JSON.stringify({
+						number: 1,
+						url: "https://github.test/pr/1",
+						headRefName: "background/case/1",
+						baseRefName: "main",
+						isDraft: true,
+						headRefOid: currentHead,
+					}),
+					stderr: "",
+				};
+			}
+			if (args[0] === "pr" && args[1] === "ready") {
+				readyCalls += 1;
+			}
+			return { code: 0, stdout: "", stderr: "" };
+		};
+		const repository = new GitRepository(paths.primary, runner);
+		const client = new GitHubControllerEffectClient(new GitHubController(repository));
+		const validBoundary = { passed: true, verifiedCommit: "abc", requiredCiPassed: true } as const;
+
+		await assert.rejects(client.markReady(1, { ...validBoundary, passed: false }), /passed verification/);
+		await assert.rejects(client.markReady(1, { ...validBoundary, verifiedCommit: "  " }), /verified commit/);
+		await assert.rejects(client.markReady(1, { ...validBoundary, requiredCiPassed: false }), /required CI/);
+		await assert.rejects(client.markReady(1, { passed: true, verifiedCommit: "abc" }), /required CI/);
+		assert.equal(calls.length, 0);
+
+		await assert.rejects(client.markReady(1, validBoundary), /head does not match verified commit/);
+		assert.equal(readyCalls, 0);
+		assert.deepEqual(
+			calls.map((call) => call.args.slice(0, 2)),
+			[["pr", "view"]],
+		);
+
+		currentHead = "abc";
+		await client.markReady(1, validBoundary);
+		assert.equal(readyCalls, 1);
+		assert.deepEqual(
+			calls.map((call) => call.args.slice(0, 2)),
+			[
+				["pr", "view"],
+				["pr", "view"],
+				["pr", "ready"],
+			],
 		);
 	} finally {
 		rmSync(paths.root, { recursive: true, force: true });

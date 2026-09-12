@@ -95,23 +95,6 @@ test("production runner dispatches every role through its profile boundary", asy
 				};
 			},
 			waitForUnit: async () => ({ state: "succeeded" }),
-			verify: async ({ manifest }) => ({
-				verdict: "pass",
-				confidence: { score: 95, rationale: "verified", uncertainties: [] },
-				ciChecks: {},
-				rationale: "verified",
-				uncertainties: [],
-				replay: {
-					passed: true,
-					clean: true,
-					ancestry: true,
-					commands: [],
-					rationale: "verified",
-					uncertainties: [],
-				},
-				ci: { checks: {}, results: [], allRequiredPassed: true, missing: [], uncertainties: [] },
-				candidateSha: manifest.candidateSha,
-			}),
 		});
 		const machine = new BackgroundAgentsStateMachine(database);
 		const jobs: Array<{

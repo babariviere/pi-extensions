@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { createRequire } from "node:module";
 import { readFile, writeFile } from "node:fs/promises";
 import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -22,6 +23,24 @@ import {
 import { SpecificationWorkflow, type SpecificationDraft } from "./workflows/specification.ts";
 import { createEvidenceManifest } from "./verification/evidence.ts";
 import { verifyEvidence } from "./verification/verifier.ts";
+
+const require = createRequire(import.meta.url);
+export const VERIFICATION_RESULT_VERSION = 1 as const;
+export const VERIFICATION_RESULT_FILE = "verification-result.json";
+
+const VERIFIER_SERVICE = String.raw`import { readFileSync, writeFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+const [verifierModule, inputPath, artifactPath, verificationPath, attemptId, jobId, repository, requiredChecks] = process.argv.slice(2);
+const input = JSON.parse(readFileSync(inputPath, "utf8"));
+const { verifyEvidence } = await import(pathToFileURL(verifierModule).href);
+const report = await verifyEvidence({
+  manifest: input.manifest,
+  repository,
+  prNumber: input.prNumber,
+  requiredChecks: JSON.parse(requiredChecks),
+});
+writeFileSync(verificationPath, JSON.stringify({ version: 1, report }) + "\n", { mode: 0o600 });
+writeFileSync(artifactPath, JSON.stringify({ version: 1, attemptId, jobId, role: "verifier", state: "succeeded", output: { verdict: report.verdict } }) + "\n", { mode: 0o600 });`;
 
 export const ATTEMPT_RESULT_VERSION = 1 as const;
 export const ATTEMPT_RESULT_FILE = "result.json";
@@ -47,7 +66,6 @@ export interface ProductionAttemptRunnerOptions {
 	waitForUnit?: (unit: string, timeoutMs: number) => Promise<TransientServiceCompletion>;
 	repositoryFactory?: (root: string) => GitRepository;
 	worktreeFactory?: (repository: GitRepository, root: string) => GitWorktreeManager;
-	verify?: typeof verifyEvidence;
 }
 
 const ROLE_ORDINAL: Record<AgentRole, number> = {
@@ -244,8 +262,15 @@ export class ProductionAttemptRunner {
 		claim: JobClaim,
 		database: BackgroundAgentsDatabase,
 	): Promise<{ state: "succeeded" | "failed" | "needs-human"; failure?: string }> {
-		const job = database.get<{ case_id: string; role: AgentRole; work_item_id: string | null }>(
-			"SELECT case_id, role, work_item_id FROM jobs WHERE id = ?",
+		const job = database.get<{
+			case_id: string;
+			role: AgentRole;
+			work_item_id: string | null;
+			manifest_id: string | null;
+			expected_base_sha: string | null;
+			expected_candidate_sha: string | null;
+		}>(
+			"SELECT case_id, role, work_item_id, manifest_id, expected_base_sha, expected_candidate_sha FROM jobs WHERE id = ?",
 			claim.jobId,
 		);
 		if (!job) return { state: "failed", failure: `Unknown job: ${claim.jobId}` };
@@ -271,11 +296,18 @@ export class ProductionAttemptRunner {
 				);
 				baseRef = (await git.checked(["rev-parse", "HEAD"])).trim();
 				if (role === "verifier") {
-					const manifestRow = database.get<{ candidate_sha: string }>(
-						"SELECT candidate_sha FROM evidence_manifests WHERE case_id = ? ORDER BY version DESC LIMIT 1",
-						job.case_id,
+					const manifestRow = database.get<{ id: string; base_sha: string; candidate_sha: string }>(
+						job.manifest_id
+							? "SELECT id, base_sha, candidate_sha FROM evidence_manifests WHERE id = ?"
+							: "SELECT id, base_sha, candidate_sha FROM evidence_manifests WHERE case_id = ? ORDER BY version DESC LIMIT 1",
+						job.manifest_id ?? job.case_id,
 					);
 					if (!manifestRow) throw new Error(`No evidence manifest exists for case ${job.case_id}`);
+					if (
+						(job.expected_base_sha && job.expected_base_sha !== manifestRow.base_sha) ||
+						(job.expected_candidate_sha && job.expected_candidate_sha !== manifestRow.candidate_sha)
+					)
+						throw new Error("verifier job is not bound to the manifest commits");
 					baseRef = manifestRow.candidate_sha;
 				}
 				const ordinal = job.work_item_id
@@ -327,6 +359,45 @@ export class ProductionAttemptRunner {
 				: fileURLToPath(new URL(`../../roles/${role}.md`, import.meta.url));
 			const prompt = `Write a version ${ATTEMPT_RESULT_VERSION} result artifact to ${resultPath}. It must be JSON with version ${ATTEMPT_RESULT_VERSION}, attemptId ${claim.attemptId}, jobId ${claim.jobId}, role ${role}, state succeeded, and an output object containing your deliverable. Do not claim success without this artifact.`;
 			const launch = this.options.launch ?? launchAttemptThroughHerdr;
+			const verificationPath = join(attemptDirectory, VERIFICATION_RESULT_FILE);
+			let command: string | undefined;
+			let commandArgsPrefix: string[] | undefined;
+			if (role === "verifier" && !this.options.launch) {
+				if (!repository) throw new Error("verifier requires a configured repository");
+				const verifierInputPath = join(attemptDirectory, "verifier-input.json");
+				const manifest = database.getEvidenceManifest(job.manifest_id ?? "");
+				if (!manifest) throw new Error("verifier evidence manifest is unavailable");
+				const pullRequest = job.work_item_id
+					? database.get<{ pull_request: number | null }>(
+							"SELECT pull_request FROM work_items WHERE id = ?",
+							job.work_item_id,
+						)
+					: undefined;
+				await writeFile(
+					verifierInputPath,
+					JSON.stringify({
+						manifest,
+						version: VERIFICATION_RESULT_VERSION,
+						...(pullRequest?.pull_request ? { prNumber: pullRequest.pull_request } : {}),
+					}) + "\\n",
+					{ mode: 0o600 },
+				);
+				const loader = require.resolve("tsx/esm");
+				const verifierModule = fileURLToPath(new URL("./verification/verifier.ts", import.meta.url));
+				command = process.execPath;
+				commandArgsPrefix = [
+					"--import",
+					loader,
+					join(attemptDirectory, "verifier-service.mjs"),
+					verifierModule,
+					verifierInputPath,
+					resultPath,
+					verificationPath,
+					repository.root,
+					JSON.stringify(this.options.config.ci.requiredChecks),
+				];
+				writeFileSync(join(attemptDirectory, "verifier-service.mjs"), VERIFIER_SERVICE, { mode: 0o700 });
+			}
 			if (!this.options.launch) {
 				const wrapperPath = join(attemptDirectory, "runner.mjs");
 				writeFileSync(wrapperPath, WRAPPER, { mode: 0o700 });
@@ -361,6 +432,7 @@ export class ProductionAttemptRunner {
 									role,
 								],
 							}),
+					...(command ? { command, commandArgsPrefix } : {}),
 				},
 				this.options.launch ? {} : undefined,
 			);
@@ -376,6 +448,38 @@ export class ProductionAttemptRunner {
 				throw new Error("attempt result artifact is missing or invalid");
 			}
 			const artifact = validateArtifact(rawArtifact, claim, role);
+			let verificationReport: unknown;
+			if (role === "verifier") {
+				try {
+					const stored = JSON.parse(await readFile(verificationPath, "utf8")) as {
+						version?: number;
+						report?: unknown;
+					};
+					if (stored.version !== VERIFICATION_RESULT_VERSION || !stored.report)
+						throw new Error("verification result has an unsupported version");
+					verificationReport = stored.report;
+				} catch (error) {
+					if (!this.options.launch)
+						throw new Error("verifier service result is missing or invalid", { cause: error });
+					verificationReport = {
+						verdict: (artifact.output as { verdict?: string }).verdict ?? "needs-human",
+						confidence: { score: 0, rationale: "test verifier artifact", uncertainties: [] },
+						ciChecks: {},
+						rationale: "test verifier artifact",
+						uncertainties: [],
+						replay: {
+							passed: false,
+							clean: false,
+							ancestry: false,
+							commands: [],
+							rationale: "test verifier artifact",
+							uncertainties: [],
+						},
+						ci: { checks: {}, results: [], allRequiredPassed: false, missing: [], uncertainties: [] },
+						candidateSha: "",
+					};
+				}
+			}
 			database.createArtifact({
 				caseId: job.case_id,
 				attemptId: claim.attemptId,
@@ -386,7 +490,16 @@ export class ProductionAttemptRunner {
 					.digest("hex"),
 				metadata: { version: artifact.version, role },
 			});
-			await this.applyOutput(database, claim, job, artifact.output, repository?.root, worktreeDirectory, baseRef);
+			await this.applyOutput(
+				database,
+				claim,
+				job,
+				artifact.output,
+				repository?.root,
+				worktreeDirectory,
+				baseRef,
+				verificationReport,
+			);
 			return { state: "succeeded" };
 		} catch (error) {
 			const failure = error instanceof Error ? error.message : String(error);
@@ -400,11 +513,19 @@ export class ProductionAttemptRunner {
 	private async applyOutput(
 		database: BackgroundAgentsDatabase,
 		claim: JobClaim,
-		job: { case_id: string; role: AgentRole; work_item_id: string | null },
+		job: {
+			case_id: string;
+			role: AgentRole;
+			work_item_id: string | null;
+			manifest_id: string | null;
+			expected_base_sha: string | null;
+			expected_candidate_sha: string | null;
+		},
 		output: Record<string, unknown>,
 		repository: string | undefined,
 		worktree: string,
 		baseRef: string,
+		verificationReport?: unknown,
 	): Promise<void> {
 		if (job.role === "classifier") {
 			const event = latestEvent(database, job.case_id);
@@ -468,7 +589,7 @@ export class ProductionAttemptRunner {
 				hash: createHash("sha256").update(JSON.stringify(manifest)).digest("hex"),
 				metadata: { version: manifest.version },
 			});
-			database.createEvidenceManifest({ caseId: job.case_id, manifest });
+			const manifestId = database.createEvidenceManifest({ caseId: job.case_id, manifest });
 			const machine = new BackgroundAgentsStateMachine(database);
 			const state = database.get<{ state: string }>(
 				"SELECT state FROM work_items WHERE id = ?",
@@ -488,24 +609,36 @@ export class ProductionAttemptRunner {
 					job.work_item_id,
 				)
 			)
-				database.createJob({ caseId: job.case_id, workItemId: job.work_item_id, role: "verifier" });
+				database.createJob({
+					caseId: job.case_id,
+					workItemId: job.work_item_id,
+					role: "verifier",
+					manifestId,
+					expectedBaseSha: manifest.baseSha,
+					expectedCandidateSha: manifest.candidateSha,
+				});
 			return;
 		}
 		if (job.role === "verifier") {
 			if (!repository) throw new Error("verifier output has no repository");
-			const row = database.get<{ id: string }>(
-				"SELECT id FROM evidence_manifests WHERE case_id = ? ORDER BY version DESC LIMIT 1",
-				job.case_id,
+			const row = database.get<{ id: string; base_sha: string; candidate_sha: string }>(
+				job.manifest_id
+					? "SELECT id, base_sha, candidate_sha FROM evidence_manifests WHERE id = ?"
+					: "SELECT id, base_sha, candidate_sha FROM evidence_manifests WHERE case_id = ? ORDER BY version DESC LIMIT 1",
+				job.manifest_id ?? job.case_id,
 			);
 			if (!row) throw new Error("verifier has no evidence manifest");
+			if (
+				(job.expected_base_sha && job.expected_base_sha !== row.base_sha) ||
+				(job.expected_candidate_sha && job.expected_candidate_sha !== row.candidate_sha)
+			)
+				throw new Error("verifier job is not bound to the manifest commits");
 			const manifest = database.getEvidenceManifest(row.id);
 			if (!manifest) throw new Error("verifier evidence manifest is unavailable");
-			const report = await (this.options.verify ?? verifyEvidence)({
-				manifest,
-				repository,
-				requiredChecks: this.options.config.ci.requiredChecks,
-			});
-			database.createVerificationRun({ manifestId: row.id, report });
+			const report = verificationReport as Awaited<ReturnType<typeof verifyEvidence>>;
+			if (!report || !["pass", "fail", "needs-human"].includes(report.verdict))
+				throw new Error("verifier result is missing or invalid");
+			database.createVerificationRun({ manifestId: row.id, report, resultVersion: VERIFICATION_RESULT_VERSION });
 			if (report.verdict === "pass") {
 				if (job.work_item_id)
 					new BackgroundAgentsStateMachine(database).transitionWorkItem(

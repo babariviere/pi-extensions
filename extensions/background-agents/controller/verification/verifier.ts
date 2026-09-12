@@ -12,7 +12,7 @@ export interface VerificationInput {
 	now?: () => Date;
 }
 
-export interface VerificationReport extends Omit<VerificationRun, "id" | "manifestId" | "createdAt"> {
+export interface VerificationReport extends Omit<VerificationRun, "id" | "manifestId" | "version" | "createdAt"> {
 	replay: ReplayResult;
 	ci: CiVerification;
 	candidateSha: string;

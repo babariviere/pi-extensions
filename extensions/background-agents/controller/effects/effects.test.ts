@@ -120,6 +120,28 @@ describe("durable external effects", () => {
 
 	test("reconciles a GitHub push and ready effect without repeating mutations", async () => {
 		const database = new BackgroundAgentsDatabase(databasePath());
+		const caseId = database.createCase({ title: "Ready", source: "manual" });
+		const manifestId = database.createEvidenceManifest({
+			caseId,
+			manifest: {
+				version: 1,
+				baseSha: "base",
+				candidateSha: "abc",
+				commands: [],
+				createdAt: new Date().toISOString(),
+			},
+		});
+		const verificationRunId = database.createVerificationRun({
+			manifestId,
+			report: {
+				verdict: "pass",
+				confidence: { score: 95, rationale: "verified", uncertainties: [] },
+				ciChecks: {},
+				rationale: "verified",
+				uncertainties: [],
+				replay: { commands: [] },
+			},
+		});
 		let branchHead: string | null = null;
 		let pullRequest = {
 			number: 7,
@@ -127,7 +149,7 @@ describe("durable external effects", () => {
 			branch: "background/case/1",
 			base: "main",
 			isDraft: true,
-			headSha: "abc",
+			headSha: "different-head",
 			title: "Title",
 			body: "Body",
 		};
@@ -146,7 +168,10 @@ describe("durable external effects", () => {
 			getPullRequest: async () => pullRequest,
 			linkStack: async () => undefined,
 			isStackLinked: async () => false,
-			markReady: async () => {
+			markReady: async (_reference, boundary) => {
+				assert.equal(boundary.passed, true);
+				assert.equal(boundary.verifiedCommit, "abc");
+				assert.equal(boundary.requiredCiPassed, true);
 				readyCalls += 1;
 				pullRequest = { ...pullRequest, isDraft: false };
 				if (readyCalls === 1) throw new Error("ready response lost");
@@ -155,11 +180,15 @@ describe("durable external effects", () => {
 		const effects = new GitHubEffects(database, client, { owner: "github-test" });
 		const blocked = await effects.readyForReview({
 			reference: 7,
-			verifiedCommit: "different-head",
+			verifiedCommit: "abc",
 			verificationPassed: true,
+			manifestId,
+			verificationRunId,
+			requiredChecks: [],
 		});
 		assert.equal(blocked.status, "blocked");
 		assert.equal(readyCalls, 0);
+		pullRequest = { ...pullRequest, headSha: "abc" };
 		await assert.rejects(
 			effects.pushBranch({ worktree: "/worktree", branch: pullRequest.branch, expectedHeadSha: "abc" }),
 			/push response lost/,
@@ -173,16 +202,118 @@ describe("durable external effects", () => {
 		assert.equal(pushes, 1);
 
 		await assert.rejects(
-			effects.readyForReview({ reference: 7, verifiedCommit: "abc", verificationPassed: true }),
+			effects.readyForReview({
+				reference: 7,
+				verifiedCommit: "abc",
+				verificationPassed: true,
+				manifestId,
+				verificationRunId,
+				requiredChecks: [],
+			}),
 			/ready response lost/,
 		);
 		const ready = await new GitHubEffects(database, client, { owner: "github-test-2" }).readyForReview({
 			reference: 7,
 			verifiedCommit: "abc",
 			verificationPassed: true,
+			manifestId,
+			verificationRunId,
+			requiredChecks: [],
 		});
 		assert.equal(ready.status, "already-ready");
 		assert.equal(readyCalls, 1);
+		database.close();
+	});
+
+	test("blocks readiness without current verification, required CI, or emergency-stop clearance", async () => {
+		const database = new BackgroundAgentsDatabase(databasePath());
+		const caseId = database.createCase({ title: "Guards", source: "manual" });
+		const manifestId = database.createEvidenceManifest({
+			caseId,
+			manifest: {
+				version: 1,
+				baseSha: "base",
+				candidateSha: "candidate",
+				commands: [],
+				createdAt: new Date().toISOString(),
+			},
+		});
+		const verificationRunId = database.createVerificationRun({
+			manifestId,
+			report: {
+				verdict: "pass",
+				confidence: { score: 95, rationale: "verified", uncertainties: [] },
+				ciChecks: {},
+				rationale: "verified",
+				uncertainties: [],
+				replay: { commands: [] },
+			},
+		});
+		let readyCalls = 0;
+		const client: GitHubEffectClient = {
+			pushBranch: async () => undefined,
+			getBranchHead: async () => "candidate",
+			findPullRequest: async () => null,
+			createDraftPullRequest: async () => ({
+				number: 1,
+				url: "https://github.test/1",
+				branch: "b",
+				base: "main",
+				isDraft: true,
+				headSha: "candidate",
+			}),
+			updatePullRequest: async () => undefined,
+			getPullRequest: async () => ({
+				number: 1,
+				url: "https://github.test/1",
+				branch: "b",
+				base: "main",
+				isDraft: true,
+				headSha: "candidate",
+			}),
+			linkStack: async () => undefined,
+			isStackLinked: async () => false,
+			markReady: async (_reference, boundary) => {
+				assert.equal(boundary.passed, true);
+				assert.equal(boundary.verifiedCommit, "candidate");
+				assert.equal(boundary.requiredCiPassed, true);
+				readyCalls += 1;
+			},
+		};
+		const effects = new GitHubEffects(database, client, { owner: "guard-test" });
+		await assert.rejects(
+			effects.readyForReview({
+				reference: 1,
+				verifiedCommit: "candidate",
+				verificationPassed: true,
+				requiredChecks: [],
+			}),
+			/stored verification/,
+		);
+		await assert.rejects(
+			effects.readyForReview({
+				reference: 1,
+				verifiedCommit: "candidate",
+				verificationPassed: true,
+				manifestId,
+				verificationRunId,
+				requiredChecks: ["build"],
+			}),
+			/required CI check/,
+		);
+		database.setEmergencyStop(true, "operator");
+		await assert.rejects(
+			effects.readyForReview({
+				reference: 1,
+				verifiedCommit: "candidate",
+				verificationPassed: true,
+				manifestId,
+				verificationRunId,
+				requiredChecks: [],
+			}),
+			/emergency stop/,
+		);
+		assert.equal(readyCalls, 0);
 		database.close();
 	});
 });

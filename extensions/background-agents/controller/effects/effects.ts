@@ -7,6 +7,10 @@ export interface EffectStore {
 	completeEffect(operationKey: string, owner: string, outcome?: unknown, remoteIdentifier?: string): void;
 	markEffectUnknown(operationKey: string, owner: string, outcome: unknown): void;
 	isEmergencyStop?(): boolean;
+	getReadyVerification?: (
+		manifestId: string,
+		verificationRunId: string,
+	) => { id: string; candidateSha: string; ciChecks: Record<string, string> } | undefined;
 }
 
 export interface ExternalMutationControls {

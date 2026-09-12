@@ -16,6 +16,9 @@ export interface VerificationBoundary {
 	passed: boolean;
 	verifiedCommit?: string;
 	requiredCiPassed?: boolean;
+	manifestId?: string;
+	verificationRunId?: string;
+	requiredChecks?: readonly string[];
 }
 
 export interface DraftPullRequestInput {
@@ -154,11 +157,5 @@ export class GitHubController {
 	async linkStack(branches: readonly string[]): Promise<void> {
 		if (branches.length < 2) return;
 		await this.gh(["stack", "link", ...branches]);
-	}
-
-	async markReady(reference: number | string, boundary: VerificationBoundary): Promise<void> {
-		if (!boundary.passed) throw new Error("a pull request can become ready only after passed verification");
-		if (boundary.requiredCiPassed === false) throw new Error("required CI has not passed");
-		await this.gh(["pr", "ready", String(reference)]);
 	}
 }

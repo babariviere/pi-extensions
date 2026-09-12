@@ -26,7 +26,7 @@ export interface GitHubEffectClient {
 	getPullRequest(reference: number | string): Promise<GitHubEffectPullRequest | null>;
 	linkStack(branches: readonly string[]): Promise<void>;
 	isStackLinked(branches: readonly string[]): Promise<boolean>;
-	markReady(reference: number | string): Promise<void>;
+	markReady(reference: number | string, boundary: VerificationBoundary): Promise<void>;
 }
 
 /** Adapter for the argv-only GitHub controller used by the repository layer. */
@@ -71,8 +71,19 @@ export class GitHubControllerEffectClient implements GitHubEffectClient {
 		return true;
 	}
 
-	markReady(reference: number | string): Promise<void> {
-		return this.github.markReady(reference, { passed: true, requiredCiPassed: true });
+	async markReady(reference: number | string, boundary: VerificationBoundary): Promise<void> {
+		if (!boundary.passed) throw new Error("a pull request can become ready only after passed verification");
+		const verifiedCommit = boundary.verifiedCommit?.trim();
+		if (!verifiedCommit) throw new Error("ready-for-review requires a verified commit");
+		if (boundary.requiredCiPassed !== true) throw new Error("required CI has not passed");
+		const pullRequest = await this.github.getPullRequest(reference);
+		if (!pullRequest) throw new Error("GitHub pull request was not found");
+		if (pullRequest.headSha?.toLowerCase() !== verifiedCommit.toLowerCase())
+			throw new Error("GitHub pull request head does not match verified commit");
+		const result = await this.github.repository.runner("gh", ["pr", "ready", String(reference)], {
+			cwd: this.github.repository.root,
+		});
+		if (result.code !== 0) throw new Error(result.stderr.trim() || "gh pr ready failed");
 	}
 }
 
@@ -98,6 +109,9 @@ export interface ReadyForReviewInput {
 	verifiedCommit: string;
 	verificationPassed: boolean;
 	requiredCiPassed?: boolean;
+	manifestId?: string;
+	verificationRunId?: string;
+	requiredChecks: readonly string[];
 }
 
 export type ReadyForReviewStatus = "ready" | "already-ready" | "blocked";
@@ -123,8 +137,13 @@ export function githubStackOperationKey(branches: readonly string[]): string {
 	return `github:stack:link:${branches.join(",")}`;
 }
 
-export function githubReadyOperationKey(reference: number | string, verifiedCommit: string): string {
-	return `github:pr:ready:${reference}:${verifiedCommit}`;
+export function githubReadyOperationKey(
+	reference: number | string,
+	verifiedCommit: string,
+	verificationRunId = "verification-required",
+	requiredChecks: readonly string[] = [],
+): string {
+	return `github:pr:ready:${reference}:${verifiedCommit}:${verificationRunId}:${requiredChecks.join(",")}`;
 }
 
 /** Durable GitHub delivery effects. There is intentionally no merge operation. */
@@ -238,7 +257,25 @@ export class GitHubEffects {
 		if (!input.verificationPassed) throw new Error("a pull request can become ready only after passed verification");
 		if (input.requiredCiPassed === false) throw new Error("required CI has not passed");
 		if (!input.verifiedCommit.trim()) throw new Error("ready-for-review requires a verified commit");
-		const operationKey = githubReadyOperationKey(input.reference, input.verifiedCommit);
+		if (this.store.isEmergencyStop?.()) throw new Error("external mutations are disabled by emergency stop");
+		if (!input.manifestId || !input.verificationRunId)
+			throw new Error("ready-for-review requires a stored verification run");
+		const verification = this.store.getReadyVerification?.(input.manifestId, input.verificationRunId);
+		if (!verification) throw new Error("ready-for-review requires a current passing verification");
+		if (verification.candidateSha.toLowerCase() !== input.verifiedCommit.toLowerCase())
+			throw new Error("verified commit does not match the verification manifest candidate");
+		for (const check of input.requiredChecks ?? [])
+			if (verification.ciChecks[check] !== "pass") throw new Error(`required CI check has not passed: ${check}`);
+		const current = await this.client.getPullRequest(input.reference);
+		if (!current) throw new Error("GitHub pull request was not found");
+		if (current.headSha?.toLowerCase() !== input.verifiedCommit.toLowerCase())
+			return { status: "blocked", pullRequest: current };
+		const operationKey = githubReadyOperationKey(
+			input.reference,
+			input.verifiedCommit,
+			input.verificationRunId,
+			input.requiredChecks,
+		);
 		return this.executor.execute<ReadyForReviewResult>({
 			operationKey,
 			provider: "github",
@@ -250,7 +287,14 @@ export class GitHubEffects {
 				if (!pullRequest) throw new Error("GitHub pull request was not found");
 				if (pullRequest.headSha !== input.verifiedCommit) return { status: "blocked", pullRequest };
 				if (!pullRequest.isDraft) return { status: "already-ready", pullRequest };
-				await this.client.markReady(input.reference);
+				await this.client.markReady(input.reference, {
+					passed: true,
+					verifiedCommit: input.verifiedCommit,
+					requiredCiPassed: input.requiredCiPassed ?? true,
+					manifestId: input.manifestId,
+					verificationRunId: input.verificationRunId,
+					requiredChecks: input.requiredChecks,
+				});
 				const ready = await this.client.getPullRequest(input.reference);
 				if (!ready || ready.headSha !== input.verifiedCommit)
 					throw new Error("GitHub pull request head changed while marking ready");
@@ -267,6 +311,9 @@ export class GitHubEffects {
 			verifiedCommit: boundary.verifiedCommit,
 			verificationPassed: boundary.passed,
 			requiredCiPassed: boundary.requiredCiPassed,
+			manifestId: boundary.manifestId,
+			verificationRunId: boundary.verificationRunId,
+			requiredChecks: boundary.requiredChecks ?? [],
 		});
 	}
 

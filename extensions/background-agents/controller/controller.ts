@@ -970,11 +970,9 @@ export class BackgroundAgentsController {
 					if (!manifestCase) throw new Error(`Unknown evidence manifest: ${request.manifestId}`);
 					if (manifestCase.case_id !== request.caseId)
 						throw new Error("evidence manifest does not belong to the selected case");
-					const repository = manifestCase.repository;
-					if (!repository) throw new Error("case has no repository for evidence reproduction");
 					result = await reproduceEvidenceOperation(
 						{ operation: "evidence.reproduce", caseId: request.caseId, manifestId: request.manifestId },
-						{ database: this.database, repository, requiredChecks: this.config.ci.requiredChecks },
+						{ database: this.database },
 					);
 					break;
 				}
