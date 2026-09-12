@@ -47,6 +47,32 @@ test("builds strict transient-service argv with only approved write paths", () =
 	);
 });
 
+test("verifier mode fails closed for home, network, credentials, and shared Git metadata", () => {
+	const args = buildSystemdRunArgs({
+		unit: "background-verifier",
+		workingDirectory: "/tmp/attempt/workspace",
+		attemptDirectory: "/tmp/attempt",
+		worktreeDirectory: "/tmp/attempt/workspace",
+		primaryCheckout: "/tmp/primary",
+		gitDirectory: "/tmp/primary/.git",
+		profileDirectory: "/tmp/attempt/pi-profile",
+		sessionDirectory: "/tmp/attempt/sessions",
+		piArgs: [],
+		limits: { maxRuntimeMs: 1000, memoryLimitBytes: 1024, cpuQuotaPercent: 50, processLimit: 10 },
+		security: "verifier",
+		inaccessiblePaths: ["/home/operator/.pi/agent/auth.json", "/home/operator/.pi/agent/background-agents.sock"],
+	});
+	assert.ok(args.includes("--property=ProtectHome=tmpfs"));
+	assert.ok(args.includes("--property=PrivateNetwork=yes"));
+	assert.ok(args.some((arg) => arg.startsWith("--property=UnsetEnvironment=") && arg.includes("GITHUB_TOKEN")));
+	assert.ok(args.includes("--property=ReadOnlyPaths=/tmp/primary/.git"));
+	assert.equal(
+		args.some((arg) => arg === "--property=ReadWritePaths=/tmp/primary/.git"),
+		false,
+	);
+	assert.ok(args.includes("--property=InaccessiblePaths=/home/operator/.pi/agent/auth.json"));
+});
+
 test("fails closed on portable non-Linux hosts and checks injected Linux dependencies", async () => {
 	assert.deepEqual(await preflightLinuxHost({ platform: "darwin" }), {
 		ok: false,

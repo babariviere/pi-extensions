@@ -1,4 +1,5 @@
 import type { ReplayProcessResult, ReplayProcessRunner } from "./reproduce.ts";
+import { spawnCommandRunner } from "../git/repository.ts";
 
 export type CiState = "pass" | "fail" | "pending" | "missing";
 export interface CiCheckResult {
@@ -17,7 +18,14 @@ export interface CiVerification {
 	allRequiredPassed: boolean;
 	missing: string[];
 	uncertainties: string[];
+	polls?: CiCheckResult[][];
 }
+
+/** Authenticated GitHub calls stay in the controller process, outside evidence replay. */
+export const spawnGithubVerificationRunner: ReplayProcessRunner = async (executable, argv, options) => {
+	const result = await spawnCommandRunner(executable, argv, { cwd: options.cwd });
+	return { code: result.code, stdout: result.stdout, stderr: result.stderr };
+};
 
 function json(value: string, field: string): unknown {
 	try {
@@ -109,20 +117,60 @@ export interface CiVerifierOptions {
 	requiredChecks: readonly string[];
 	runner: ReplayProcessRunner;
 	cwd: string;
+	maxWaitMs?: number;
+	clock?: () => number;
+	sleep?: (ms: number) => Promise<void>;
+	pollMs?: number;
+	onResult?: (result: CiVerification) => void | Promise<void>;
 }
 
 export async function verifyPullRequestCi(options: CiVerifierOptions): Promise<CiVerification> {
-	const identity = await pullRequestIdentity(options.reference, options.runner, options.cwd);
-	if (identity.headSha !== options.candidateSha.toLowerCase()) {
-		return {
-			checks: {},
-			results: [],
-			allRequiredPassed: false,
-			missing: [],
-			uncertainties: ["pull request head SHA does not match candidate"],
-		};
+	const clock = options.clock ?? Date.now;
+	const sleep = options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+	const maxWaitMs = options.maxWaitMs ?? 0;
+	if (!Number.isSafeInteger(maxWaitMs) || maxWaitMs < 0)
+		throw new Error("CI maxWaitMs must be a non-negative integer");
+	const deadline = clock() + maxWaitMs;
+	const polls: CiCheckResult[][] = [];
+	let latest: CiVerification | undefined;
+	while (true) {
+		const identity = await pullRequestIdentity(options.reference, options.runner, options.cwd);
+		if (identity.headSha !== options.candidateSha.toLowerCase()) {
+			return {
+				checks: {},
+				results: [],
+				allRequiredPassed: false,
+				missing: [],
+				uncertainties: ["pull request head SHA does not match candidate"],
+				polls,
+			};
+		}
+		latest = await checkRequiredCi(options.reference, options.requiredChecks, options.runner, options.cwd);
+		const currentIdentity = await pullRequestIdentity(options.reference, options.runner, options.cwd);
+		if (currentIdentity.headSha !== options.candidateSha.toLowerCase()) {
+			return {
+				checks: {},
+				results: [],
+				allRequiredPassed: false,
+				missing: [],
+				uncertainties: ["pull request head SHA changed during CI verification"],
+				polls,
+			};
+		}
+		polls.push(latest.results);
+		const observed = { ...latest, polls: [...polls] };
+		await options.onResult?.(observed);
+		if (latest.allRequiredPassed) return observed;
+		if (clock() >= deadline) {
+			return {
+				...observed,
+				uncertainties: [
+					...new Set([...observed.uncertainties, "required CI did not pass before the configured deadline"]),
+				],
+			};
+		}
+		await sleep(Math.min(options.pollMs ?? 1_000, Math.max(1, deadline - clock())));
 	}
-	return checkRequiredCi(options.reference, options.requiredChecks, options.runner, options.cwd);
 }
 
 export type { ReplayProcessResult };

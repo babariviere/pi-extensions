@@ -5,7 +5,7 @@ export const QUESTION_READ_ONLY_TOOLS = ["read", "grep", "find", "ls"] as const;
 
 export interface QuestionLimits {
 	maxTimeMs: number;
-	maxCostUsd: number;
+	maxAttempts: number;
 	maxResults: number;
 }
 
@@ -25,13 +25,14 @@ export interface PrivateQuestionBrief {
 
 export const DEFAULT_QUESTION_LIMITS: QuestionLimits = {
 	maxTimeMs: 60_000,
-	maxCostUsd: 0,
+	maxAttempts: 1,
 	maxResults: 10,
 };
 
 function validLimits(limits: QuestionLimits): QuestionLimits {
 	if (!Number.isSafeInteger(limits.maxTimeMs) || limits.maxTimeMs <= 0) throw new Error("maxTimeMs must be positive");
-	if (!Number.isFinite(limits.maxCostUsd) || limits.maxCostUsd < 0) throw new Error("maxCostUsd must be non-negative");
+	if (!Number.isSafeInteger(limits.maxAttempts) || limits.maxAttempts <= 0)
+		throw new Error("maxAttempts must be positive");
 	if (!Number.isSafeInteger(limits.maxResults) || limits.maxResults <= 0)
 		throw new Error("maxResults must be positive");
 	return { ...limits, maxResults: Math.min(limits.maxResults, 50) };

@@ -33,6 +33,7 @@ export const DEFAULT_BACKGROUND_AGENTS_CONFIG: BackgroundAgentsConfig = {
 		processLimit: 256,
 	},
 	ci: { requiredChecks: [], maxWaitMs: 30 * 60_000 },
+	question: { maxRuntimeMs: 60_000, maxAttempts: 1, maxResults: 10 },
 	socket: {
 		path: resolve(homedir(), ".pi", "agent", "background-agents.sock"),
 		mode: 0o600,
@@ -305,6 +306,7 @@ export function normalizeBackgroundAgentsConfig(
 	const rawPolling = input.pollIntervalsMs === undefined ? {} : recordValue(input.pollIntervalsMs, "pollIntervalsMs");
 	const rawSystemd = input.systemd === undefined ? {} : recordValue(input.systemd, "systemd");
 	const rawCi = input.ci === undefined ? {} : recordValue(input.ci, "ci");
+	const rawQuestion = input.question === undefined ? {} : recordValue(input.question, "question");
 	const rawSocket = input.socket === undefined ? {} : recordValue(input.socket, "socket");
 	const rawRollout = input.rollout === undefined ? {} : recordValue(input.rollout, "rollout");
 	const rawBackup = input.backup === undefined ? {} : recordValue(input.backup, "backup");
@@ -384,6 +386,11 @@ export function normalizeBackgroundAgentsConfig(
 		ci: {
 			requiredChecks: stringList(rawCi.requiredChecks, "ci.requiredChecks"),
 			maxWaitMs: integerValue(rawCi.maxWaitMs ?? 30 * 60_000, "ci.maxWaitMs", 1_000),
+		},
+		question: {
+			maxRuntimeMs: integerValue(rawQuestion.maxRuntimeMs ?? 60_000, "question.maxRuntimeMs", 1_000),
+			maxAttempts: integerValue(rawQuestion.maxAttempts ?? 1, "question.maxAttempts", 1, 100),
+			maxResults: integerValue(rawQuestion.maxResults ?? 10, "question.maxResults", 1, 50),
 		},
 		socket: {
 			path: pathValue(rawSocket.path ?? DEFAULT_BACKGROUND_AGENTS_CONFIG.socket.path, "socket.path", baseDir),

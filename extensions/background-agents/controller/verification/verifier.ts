@@ -1,6 +1,6 @@
 import type { Confidence, EvidenceManifest, VerificationRun, VerificationVerdict } from "../../types.ts";
-import { checkRequiredCi, pullRequestIdentity, type CiVerification } from "./ci.ts";
-import { replayEvidence, spawnReplayRunner, type ReplayProcessRunner, type ReplayResult } from "./reproduce.ts";
+import { spawnGithubVerificationRunner, verifyPullRequestCi, type CiVerification } from "./ci.ts";
+import { replayEvidence, type ReplayProcessRunner, type ReplayResult } from "./reproduce.ts";
 
 export interface VerificationInput {
 	manifest: EvidenceManifest;
@@ -10,12 +10,30 @@ export interface VerificationInput {
 	runner?: ReplayProcessRunner;
 	environment?: NodeJS.ProcessEnv;
 	now?: () => Date;
+	githubRunner?: ReplayProcessRunner;
+	maxWaitMs?: number;
+	clock?: () => number;
+	sleep?: (ms: number) => Promise<void>;
+	onCiResult?: (result: CiVerification) => void | Promise<void>;
 }
 
 export interface VerificationReport extends Omit<VerificationRun, "id" | "manifestId" | "version" | "createdAt"> {
 	replay: ReplayResult;
 	ci: CiVerification;
 	candidateSha: string;
+}
+
+export interface ReplayVerificationInput {
+	manifest: EvidenceManifest;
+	replay: ReplayResult;
+	prNumber?: number;
+	requiredChecks?: readonly string[];
+	githubRunner?: ReplayProcessRunner;
+	repository?: string;
+	maxWaitMs?: number;
+	clock?: () => number;
+	sleep?: (ms: number) => Promise<void>;
+	onCiResult?: (result: CiVerification) => void | Promise<void>;
 }
 
 function confidence(verdict: VerificationVerdict, replay: ReplayResult, ci: CiVerification): Confidence {
@@ -35,6 +53,56 @@ function confidence(verdict: VerificationVerdict, replay: ReplayResult, ci: CiVe
 }
 
 /** Independent verifier boundary. It receives a manifest, never worker assertions. */
+export async function verifyReplayAndGithub(input: ReplayVerificationInput): Promise<VerificationReport> {
+	const requiredChecks = [...(input.requiredChecks ?? [])];
+	let ci: CiVerification = {
+		checks: {},
+		results: [],
+		allRequiredPassed: requiredChecks.length === 0,
+		missing: [],
+		uncertainties: [],
+	};
+	const replay = input.replay;
+	const uncertainties = [...replay.uncertainties];
+	if (replay.passed && input.prNumber !== undefined) {
+		try {
+			ci = await verifyPullRequestCi({
+				reference: input.prNumber,
+				candidateSha: input.manifest.candidateSha,
+				requiredChecks,
+				runner: input.githubRunner ?? spawnGithubVerificationRunner,
+				cwd: input.repository ?? ".",
+				maxWaitMs: input.maxWaitMs,
+				clock: input.clock,
+				sleep: input.sleep,
+				onResult: input.onCiResult,
+			});
+		} catch (error) {
+			uncertainties.push(error instanceof Error ? error.message : String(error));
+		}
+	}
+	const ciFailed = Object.values(ci.checks).some((value) => value === "fail");
+	const ciMissing = Object.values(ci.checks).some((value) => value === "missing" || value === "pending");
+	let verdict: VerificationVerdict;
+	if (!replay.passed || ciFailed) verdict = "fail";
+	else if (uncertainties.length > 0 || ciMissing || !ci.allRequiredPassed) verdict = "needs-human";
+	else verdict = "pass";
+	const finalReplay = uncertainties.length === replay.uncertainties.length ? replay : { ...replay, uncertainties };
+	const finalConfidence = confidence(verdict, finalReplay, ci);
+	return {
+		verdict,
+		confidence: finalConfidence,
+		ciChecks: ci.checks,
+		ciHistory: ci.polls ?? [],
+		rationale: verdict === "pass" ? "exact commits replayed successfully" : finalConfidence.rationale,
+		uncertainties: finalConfidence.uncertainties,
+		replay: finalReplay,
+		ci,
+		candidateSha: input.manifest.candidateSha,
+	};
+}
+
+/** Replay runs in the sterile verifier service; this controller-side step may use gh authentication. */
 export async function verifyEvidence(input: VerificationInput): Promise<VerificationReport> {
 	let replay: ReplayResult;
 	try {
@@ -54,54 +122,18 @@ export async function verifyEvidence(input: VerificationInput): Promise<Verifica
 			uncertainties: [],
 		};
 	}
-	const requiredChecks = [...(input.requiredChecks ?? [])];
-	let ci: CiVerification = {
-		checks: {},
-		results: [],
-		allRequiredPassed: requiredChecks.length === 0,
-		missing: [],
-		uncertainties: [],
-	};
-	const uncertainties = [...replay.uncertainties];
-	if (input.prNumber !== undefined) {
-		try {
-			const identity = await pullRequestIdentity(
-				input.prNumber,
-				input.runner ?? spawnReplayRunner,
-				input.repository,
-			);
-			if (identity.headSha !== input.manifest.candidateSha.toLowerCase())
-				uncertainties.push("pull request head SHA does not match candidate");
-			if (uncertainties.length === 0) {
-				ci = await checkRequiredCi(
-					input.prNumber,
-					requiredChecks,
-					input.runner ?? spawnReplayRunner,
-					input.repository,
-				);
-			}
-		} catch (error) {
-			uncertainties.push(error instanceof Error ? error.message : String(error));
-		}
-	}
-	const ciFailed = Object.values(ci.checks).some((value) => value === "fail");
-	const ciMissing = Object.values(ci.checks).some((value) => value === "missing" || value === "pending");
-	let verdict: VerificationVerdict;
-	if (!replay.passed || ciFailed) verdict = "fail";
-	else if (uncertainties.length > 0 || ciMissing || !ci.allRequiredPassed) verdict = "needs-human";
-	else verdict = "pass";
-	const finalReplay = uncertainties.length === replay.uncertainties.length ? replay : { ...replay, uncertainties };
-	const finalConfidence = confidence(verdict, finalReplay, ci);
-	return {
-		verdict,
-		confidence: finalConfidence,
-		ciChecks: ci.checks,
-		rationale: verdict === "pass" ? "exact commits replayed successfully" : finalConfidence.rationale,
-		uncertainties: finalConfidence.uncertainties,
-		replay: finalReplay,
-		ci,
-		candidateSha: input.manifest.candidateSha,
-	};
+	return verifyReplayAndGithub({
+		manifest: input.manifest,
+		replay,
+		prNumber: input.prNumber,
+		requiredChecks: input.requiredChecks,
+		githubRunner: input.githubRunner,
+		repository: input.repository,
+		maxWaitMs: input.maxWaitMs,
+		clock: input.clock,
+		sleep: input.sleep,
+		onCiResult: input.onCiResult,
+	});
 }
 
 export interface StoredVerification {
@@ -131,3 +163,5 @@ export async function verifyAndStore(
 	const id = input.store.createVerificationRun({ manifestId, report });
 	return { id, manifestId, report, createdAt: (input.now ?? (() => new Date()))().toISOString() };
 }
+
+export { replayEvidence } from "./reproduce.ts";

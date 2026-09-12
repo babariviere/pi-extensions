@@ -468,7 +468,11 @@ export class BackgroundAgentsController {
 			if (current === "intake")
 				this.database.transitionCase(result.caseId, "classified", "classifier", "input classified");
 			if (classification.classification.inputKind === "question") {
-				this.questions.start(result.caseId, event.body, { maxTimeMs: 60_000, maxCostUsd: 0, maxResults: 10 });
+				this.questions.start(result.caseId, event.body, {
+					maxTimeMs: this.config.question.maxRuntimeMs,
+					maxAttempts: this.config.question.maxAttempts,
+					maxResults: this.config.question.maxResults,
+				});
 			} else if (
 				classification.classification.disposition === "actionable" &&
 				this.rolloutFor(event.source, event.repository) !== "observe"

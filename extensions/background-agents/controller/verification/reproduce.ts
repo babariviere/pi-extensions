@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { join, resolve, relative, isAbsolute } from "node:path";
 import { tmpdir } from "node:os";
 import { spawn } from "node:child_process";
@@ -178,6 +178,8 @@ export interface ReplayOptions {
 	manifest: EvidenceManifest;
 	runner?: ReplayProcessRunner;
 	environment?: NodeJS.ProcessEnv;
+	attemptDirectory?: string;
+	homeDirectory?: string;
 }
 
 function git(
@@ -319,6 +321,10 @@ export async function replayEvidence(options: ReplayOptions): Promise<ReplayResu
 		["rev-parse", `${manifest.candidateSha}^{commit}`],
 		environment,
 	);
+	if (baseResolved.toLowerCase() !== manifest.baseSha.toLowerCase())
+		throw new Error("base SHA did not resolve exactly");
+	if (candidateResolved.toLowerCase() !== manifest.candidateSha.toLowerCase())
+		throw new Error("candidate SHA did not resolve exactly");
 	const ancestryResult = await git(
 		runner,
 		options.repository,
@@ -335,7 +341,12 @@ export async function replayEvidence(options: ReplayOptions): Promise<ReplayResu
 			rationale: "candidate is not descended from base",
 			uncertainties,
 		};
-	const parent = await mkdtemp(join(tmpdir(), "background-verifier-"));
+	const parent = await mkdtemp(
+		join(options.attemptDirectory ? resolve(options.attemptDirectory) : tmpdir(), "background-verifier-"),
+	);
+	const home = options.homeDirectory ? resolve(options.homeDirectory) : join(parent, "home");
+	await mkdir(home, { recursive: true, mode: 0o700 });
+	const isolatedEnvironment = { ...environment, HOME: home, TMPDIR: parent };
 	const commandResults: CommandReplay[] = [];
 	try {
 		for (const phase of ["base", "candidate"] as const) {
@@ -343,19 +354,16 @@ export async function replayEvidence(options: ReplayOptions): Promise<ReplayResu
 			if (phaseCommands.length === 0) continue;
 			const worktree = join(parent, phase);
 			const sha = phase === "base" ? baseResolved : candidateResolved;
-			const added = await git(
-				runner,
-				options.repository,
-				["worktree", "add", "--detach", worktree, sha],
-				environment,
+			const cloned = await runner(
+				"git",
+				["clone", "--no-local", "--no-hardlinks", "--no-checkout", options.repository, worktree],
+				{ cwd: parent, env: buildReplayEnvironment(isolatedEnvironment) },
 			);
-			if (added.code !== 0) throw new Error(added.stderr || "unable to create verifier worktree");
-			try {
-				for (const command of phaseCommands)
-					commandResults.push(await replayCommand(command, phase, worktree, runner, environment));
-			} finally {
-				await git(runner, options.repository, ["worktree", "remove", "--force", worktree], environment);
-			}
+			if (cloned.code !== 0)
+				throw new Error(cloned.stderr || cloned.stdout || "unable to create isolated verifier clone");
+			await checkedGit(runner, worktree, ["checkout", "--detach", sha], isolatedEnvironment);
+			for (const command of phaseCommands)
+				commandResults.push(await replayCommand(command, phase, worktree, runner, isolatedEnvironment));
 		}
 	} finally {
 		await rm(parent, { recursive: true, force: true });

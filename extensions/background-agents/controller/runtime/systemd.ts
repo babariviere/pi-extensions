@@ -108,6 +108,8 @@ export interface SystemdLaunchOptions {
 	sessionDirectory: string;
 	piArgs: string[];
 	limits: BackgroundAgentsConfig["systemd"];
+	security?: "agent" | "verifier";
+	inaccessiblePaths?: readonly string[];
 	command?: string;
 }
 
@@ -134,6 +136,7 @@ export function buildSystemdRunArgs(options: SystemdLaunchOptions): string[] {
 	const git = absolute(options.gitDirectory, "gitDirectory");
 	const profile = absolute(options.profileDirectory, "profileDirectory");
 	const session = absolute(options.sessionDirectory, "sessionDirectory");
+	const security = options.security ?? "agent";
 	if (descendant(worktree, primary)) throw new Error("worktree must not be inside the primary checkout");
 	for (const [path, field] of [
 		[profile, "profileDirectory"],
@@ -165,7 +168,13 @@ export function buildSystemdRunArgs(options: SystemdLaunchOptions): string[] {
 		`--property=TasksMax=${limits.processLimit}`,
 		"--property=PrivateUsers=yes",
 		"--property=ProtectSystem=strict",
-		"--property=ProtectHome=read-only",
+		`--property=ProtectHome=${security === "verifier" ? "tmpfs" : "read-only"}`,
+		...(security === "verifier" ? ["--property=PrivateNetwork=yes"] : []),
+		...(security === "verifier"
+			? [
+					"--property=UnsetEnvironment=GH_TOKEN GITHUB_TOKEN GH_ENTERPRISE_TOKEN ANTHROPIC_API_KEY OPENAI_API_KEY AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN GOOGLE_APPLICATION_CREDENTIALS NPM_TOKEN NODE_AUTH_TOKEN",
+				]
+			: []),
 		"--property=NoNewPrivileges=yes",
 		"--property=CapabilityBoundingSet=",
 		"--property=AmbientCapabilities=",
@@ -186,11 +195,16 @@ export function buildSystemdRunArgs(options: SystemdLaunchOptions): string[] {
 		"--property=UMask=0077",
 		`--property=ReadWritePaths=${attempt}`,
 		`--property=ReadWritePaths=${worktree}`,
-		`--property=ReadWritePaths=${git}`,
 		`--property=ReadOnlyPaths=${primary}`,
+		...(security === "verifier" ? [`--property=ReadOnlyPaths=${git}`] : []),
+		...(security === "agent" ? [`--property=ReadWritePaths=${git}`] : []),
+		...(options.inaccessiblePaths ?? []).map(
+			(path) => `--property=InaccessiblePaths=${absolute(path, "inaccessiblePath")}`,
+		),
 		`--setenv=PI_CODING_AGENT_DIR=${profile}`,
 		`--setenv=PI_CODING_AGENT_SESSION_DIR=${session}`,
 		"--setenv=PI_BACKGROUND_AGENT_ATTEMPT=1",
+		...(security === "verifier" ? ["--setenv=PATH=/usr/local/bin:/usr/bin:/bin"] : []),
 		`--setenv=HOME=${profile}`,
 		`--setenv=TMPDIR=${attempt}`,
 		options.command ?? "pi",

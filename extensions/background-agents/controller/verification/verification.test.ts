@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { test } from "node:test";
 import { buildReplayEnvironment, spawnReplayRunner, replayEvidence } from "./reproduce.ts";
+import { verifyPullRequestCi } from "./ci.ts";
 import { createEvidenceManifest, MAX_OUTPUT_BYTES, sha256, withEvidenceSection } from "./evidence.ts";
 import { spawnCommandRunner } from "../git/repository.ts";
 import { BackgroundAgentsDatabase } from "../database.ts";
@@ -248,4 +249,43 @@ test("timeout cleanup terminates descendants, not just the command child", async
 	} finally {
 		rmSync(paths.path, { recursive: true, force: true });
 	}
+});
+
+test("polls pending required CI with an injected clock and records every result", async () => {
+	const candidateSha = "c".repeat(40);
+	let checksPoll = 0;
+	let now = 0;
+	const polls: string[] = [];
+	const runner = async (_executable: string, argv: string[]) => {
+		if (argv[1] === "view")
+			return {
+				code: 0,
+				stdout: JSON.stringify({ number: 7, headRefOid: candidateSha }),
+				stderr: "",
+			};
+		checksPoll += 1;
+		return {
+			code: 0,
+			stdout: JSON.stringify([{ name: "required", state: checksPoll === 1 ? "pending" : "success" }]),
+			stderr: "",
+		};
+	};
+	const result = await verifyPullRequestCi({
+		reference: 7,
+		candidateSha,
+		requiredChecks: ["required"],
+		runner,
+		cwd: ".",
+		maxWaitMs: 100,
+		clock: () => now,
+		sleep: async (ms) => {
+			now += ms;
+		},
+		onResult: (poll) => {
+			polls.push(poll.results[0]?.state ?? "missing");
+		},
+	});
+	assert.equal(result.allRequiredPassed, true);
+	assert.deepEqual(polls, ["pending", "pass"]);
+	assert.equal(result.polls?.length, 2);
 });

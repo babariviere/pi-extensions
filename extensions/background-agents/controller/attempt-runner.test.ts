@@ -558,12 +558,14 @@ test("question investigators store a private brief and never start specification
 		const claim = database.claimJob(jobId, "test")!;
 		let capturedContext: Record<string, unknown> | undefined;
 		let capturedPrompt = "";
+		let capturedRuntimeMs = 0;
 		const runner = new ProductionAttemptRunner({
 			config,
 			attemptRoot: join(root, "attempts"),
 			launch: async (options) => {
 				capturedContext = options.context.context;
 				capturedPrompt = options.prompt ?? "";
+				capturedRuntimeMs = options.limits.maxRuntimeMs;
 				writeFileSync(
 					String(options.context.context.resultPath),
 					JSON.stringify({
@@ -589,6 +591,8 @@ test("question investigators store a private brief and never start specification
 		assert.equal((await runner.run(claim, database)).state, "succeeded");
 		assert.equal(capturedContext?.mode, "question-analysis");
 		assert.equal(capturedContext?.question, "Why did this happen?");
+		assert.equal((capturedContext?.limits as { maxAttempts?: number }).maxAttempts, 1);
+		assert.equal(capturedRuntimeMs, 60_000);
 		assert.match(capturedPrompt, /private brief/);
 		assert.equal(database.get<{ state: string }>("SELECT state FROM cases WHERE id = ?", caseId)?.state, "handled");
 		assert.equal(

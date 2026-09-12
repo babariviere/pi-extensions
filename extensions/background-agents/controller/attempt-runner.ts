@@ -29,7 +29,8 @@ import {
 } from "./workflows/question.ts";
 import { SpecificationWorkflow, type SpecificationDraft } from "./workflows/specification.ts";
 import { createEvidenceManifest, formatEvidenceMarkdown } from "./verification/evidence.ts";
-import { verifyEvidence } from "./verification/verifier.ts";
+import type { ReplayResult } from "./verification/reproduce.ts";
+import { verifyReplayAndGithub } from "./verification/verifier.ts";
 
 const require = createRequire(import.meta.url);
 export const VERIFICATION_RESULT_VERSION = 1 as const;
@@ -37,17 +38,16 @@ export const VERIFICATION_RESULT_FILE = "verification-result.json";
 
 const VERIFIER_SERVICE = String.raw`import { readFileSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
-const [verifierModule, inputPath, artifactPath, verificationPath, attemptId, jobId, repository, requiredChecks] = process.argv.slice(2);
+const [verifierModule, inputPath, artifactPath, verificationPath, attemptId, jobId, repository, attemptDirectory] = process.argv.slice(2);
 const input = JSON.parse(readFileSync(inputPath, "utf8"));
-const { verifyEvidence } = await import(pathToFileURL(verifierModule).href);
-const report = await verifyEvidence({
+const { replayEvidence } = await import(pathToFileURL(verifierModule).href);
+const replay = await replayEvidence({
   manifest: input.manifest,
   repository,
-  prNumber: input.prNumber,
-  requiredChecks: JSON.parse(requiredChecks),
+  attemptDirectory,
 });
-writeFileSync(verificationPath, JSON.stringify({ version: 1, report }) + "\n", { mode: 0o600 });
-writeFileSync(artifactPath, JSON.stringify({ version: 1, attemptId, jobId, role: "verifier", state: "succeeded", output: { verdict: report.verdict } }) + "\n", { mode: 0o600 });`;
+writeFileSync(verificationPath, JSON.stringify({ version: 1, replay }) + "\n", { mode: 0o600 });
+writeFileSync(artifactPath, JSON.stringify({ version: 1, attemptId, jobId, role: "verifier", state: "succeeded", output: { verdict: replay.passed ? "pass" : "fail" } }) + "\n", { mode: 0o600 });`;
 
 export function combinedRequiredChecks(globalChecks: readonly string[], repositoryChecks: readonly string[]): string[] {
 	return [...new Set([...globalChecks, ...repositoryChecks])];
@@ -227,6 +227,7 @@ function attemptContext(
 	claim: JobClaim,
 	role: AgentRole,
 	resultPath: string,
+	questionLimits = DEFAULT_QUESTION_LIMITS,
 ): ContextManifest {
 	const row = database.get<{
 		case_id: string;
@@ -259,12 +260,7 @@ function attemptContext(
 			caseId: row.case_id,
 			role,
 			context: {
-				...buildQuestionContext(
-					database,
-					row.case_id,
-					latestEvent(database, row.case_id).body,
-					DEFAULT_QUESTION_LIMITS,
-				),
+				...buildQuestionContext(database, row.case_id, latestEvent(database, row.case_id).body, questionLimits),
 				...recoveryContext,
 				...base,
 			},
@@ -341,7 +337,12 @@ export class ProductionAttemptRunner {
 		const resultPath = join(attemptDirectory, ATTEMPT_RESULT_FILE);
 		try {
 			mkdirSync(attemptDirectory, { recursive: true, mode: 0o700 });
-			const context = attemptContext(database, claim, role, resultPath);
+			const questionLimits = {
+				maxTimeMs: this.options.config.question.maxRuntimeMs,
+				maxAttempts: this.options.config.question.maxAttempts,
+				maxResults: this.options.config.question.maxResults,
+			};
+			const context = attemptContext(database, claim, role, resultPath, questionLimits);
 			const repository = repositoryConfig(this.options.config, database, job.case_id);
 			let worktreeDirectory = join(attemptRoot, job.case_id, `${claim.attemptId}-workspace`);
 			let branch: string | undefined;
@@ -382,35 +383,47 @@ export class ProductionAttemptRunner {
 						throw new Error("verifier job is not bound to the manifest commits");
 					baseRef = manifestRow.candidate_sha;
 				}
-				const ordinal = job.work_item_id
-					? Number(
-							database.get<{ ordinal: number }>("SELECT ordinal FROM work_items WHERE id = ?", job.work_item_id)
-								?.ordinal,
-						)
-					: ROLE_ORDINAL[role];
-				if (!Number.isSafeInteger(ordinal) || ordinal <= 0) throw new Error("work item ordinal is invalid");
-				const ensured = await manager.ensure({
-					caseId: job.case_id,
-					ordinal: ordinal + (role === "worker" ? 0 : ROLE_ORDINAL[role]),
-					owner: claim.attemptId,
-					baseRef,
-				});
-				worktreeDirectory = ensured.path;
-				branch = ensured.branch;
-				database.run(
-					"UPDATE attempts SET worktree = ?, branch = ? WHERE id = ?",
-					worktreeDirectory,
-					branch ?? null,
-					claim.attemptId,
-				);
-				if (role === "worker" && job.work_item_id && branch) {
+				if (role === "verifier") {
+					worktreeDirectory = join(attemptDirectory, "verification-workspace");
+					mkdirSync(worktreeDirectory, { recursive: true, mode: 0o700 });
 					database.run(
-						"UPDATE work_items SET branch = ?, worktree = ?, updated_at = ? WHERE id = ?",
-						branch,
+						"UPDATE attempts SET worktree = ?, branch = NULL WHERE id = ?",
 						worktreeDirectory,
-						new Date().toISOString(),
-						job.work_item_id,
+						claim.attemptId,
 					);
+				} else {
+					const ordinal = job.work_item_id
+						? Number(
+								database.get<{ ordinal: number }>(
+									"SELECT ordinal FROM work_items WHERE id = ?",
+									job.work_item_id,
+								)?.ordinal,
+							)
+						: ROLE_ORDINAL[role];
+					if (!Number.isSafeInteger(ordinal) || ordinal <= 0) throw new Error("work item ordinal is invalid");
+					const ensured = await manager.ensure({
+						caseId: job.case_id,
+						ordinal: ordinal + (role === "worker" ? 0 : ROLE_ORDINAL[role]),
+						owner: claim.attemptId,
+						baseRef,
+					});
+					worktreeDirectory = ensured.path;
+					branch = ensured.branch;
+					database.run(
+						"UPDATE attempts SET worktree = ?, branch = ? WHERE id = ?",
+						worktreeDirectory,
+						branch ?? null,
+						claim.attemptId,
+					);
+					if (role === "worker" && job.work_item_id && branch) {
+						database.run(
+							"UPDATE work_items SET branch = ?, worktree = ?, updated_at = ? WHERE id = ?",
+							branch,
+							worktreeDirectory,
+							new Date().toISOString(),
+							job.work_item_id,
+						);
+					}
 				}
 				if (
 					role === "verifier" &&
@@ -447,7 +460,7 @@ export class ProductionAttemptRunner {
 				profileId: claim.profileId,
 				model: claim.model,
 			});
-			const runtime = prepareRuntimeProfile(selected);
+			const runtime = prepareRuntimeProfile(selected, { copyCredentials: role !== "verifier" });
 			const rolePromptPath = this.options.roleDirectory
 				? join(this.options.roleDirectory, `${role}.md`)
 				: fileURLToPath(new URL(`../roles/${role}.md`, import.meta.url));
@@ -507,7 +520,7 @@ export class ProductionAttemptRunner {
 					claim.attemptId,
 					claim.jobId,
 					repository.root,
-					JSON.stringify(combinedRequiredChecks(this.options.config.ci.requiredChecks, repository.requiredChecks)),
+					attemptDirectory,
 				];
 				writeFileSync(join(attemptDirectory, "verifier-service.mjs"), VERIFIER_SERVICE, { mode: 0o700 });
 			}
@@ -530,7 +543,22 @@ export class ProductionAttemptRunner {
 					contextArtifact,
 					runtime,
 					rolePromptPath,
-					limits: this.options.config.systemd,
+					limits: questionAnalysis
+						? {
+								...this.options.config.systemd,
+								maxRuntimeMs: Math.min(this.options.config.systemd.maxRuntimeMs, questionLimits.maxTimeMs),
+							}
+						: this.options.config.systemd,
+					security: role === "verifier" ? "verifier" : "agent",
+					...(role === "verifier"
+						? {
+								inaccessiblePaths: [
+									this.options.config.socket.path,
+									...(selected.profile.authFiles ?? []),
+									selected.profile.agentDir,
+								],
+							}
+						: {}),
 					model: claim.model,
 					prompt,
 					...(repository ? {} : { preflight: { platform: "linux", paths: [] } }),
@@ -568,10 +596,44 @@ export class ProductionAttemptRunner {
 					const stored = JSON.parse(await readFile(verificationPath, "utf8")) as {
 						version?: number;
 						report?: unknown;
+						replay?: ReplayResult;
 					};
-					if (stored.version !== VERIFICATION_RESULT_VERSION || !stored.report)
+					if (stored.version !== VERIFICATION_RESULT_VERSION || (!stored.report && !stored.replay))
 						throw new Error("verification result has an unsupported version");
-					verificationReport = stored.report;
+					if (stored.report) verificationReport = stored.report;
+					else {
+						if (!stored.replay || !repository) throw new Error("verifier replay result is incomplete");
+						const requiredChecks = repository
+							? combinedRequiredChecks(this.options.config.ci.requiredChecks, repository.requiredChecks)
+							: [];
+						let poll = 0;
+						verificationReport = await verifyReplayAndGithub({
+							manifest: database.getEvidenceManifest(job.manifest_id ?? "")!,
+							replay: stored.replay,
+							prNumber: job.work_item_id
+								? (database.get<{ pull_request: number | null }>(
+										"SELECT pull_request FROM work_items WHERE id = ?",
+										job.work_item_id,
+									)?.pull_request ?? undefined)
+								: undefined,
+							requiredChecks,
+							repository: repository.root,
+							maxWaitMs: this.options.config.ci.maxWaitMs,
+							onCiResult: async (result) => {
+								const path = join(attemptDirectory, `ci-poll-${++poll}.json`);
+								const bytes = Buffer.from(`${JSON.stringify(result)}\n`);
+								await writeFile(path, bytes, { mode: 0o600 });
+								database.createArtifact({
+									caseId: job.case_id,
+									attemptId: claim.attemptId,
+									kind: "verification-ci-poll",
+									path,
+									hash: createHash("sha256").update(bytes).digest("hex"),
+									metadata: { poll },
+								});
+							},
+						});
+					}
 				} catch (error) {
 					if (!this.options.launch)
 						throw new Error("verifier service result is missing or invalid", { cause: error });
@@ -656,6 +718,11 @@ export class ProductionAttemptRunner {
 		githubEffects?: GitHubEffects,
 		requiredChecks: readonly string[] = [],
 	): Promise<void> {
+		const questionLimits = {
+			maxTimeMs: this.options.config.question.maxRuntimeMs,
+			maxAttempts: this.options.config.question.maxAttempts,
+			maxResults: this.options.config.question.maxResults,
+		};
 		if (job.role === "classifier") {
 			const event = latestEvent(database, job.case_id);
 			const classifier = new Classifier({
@@ -692,7 +759,7 @@ export class ProductionAttemptRunner {
 					job.case_id,
 					event.body,
 					output as unknown as PrivateQuestionBrief,
-					DEFAULT_QUESTION_LIMITS,
+					questionLimits,
 					claim.attemptId,
 				);
 				return;
@@ -820,7 +887,7 @@ export class ProductionAttemptRunner {
 				throw new Error("verifier job is not bound to the manifest commits");
 			const manifest = database.getEvidenceManifest(row.id);
 			if (!manifest) throw new Error("verifier evidence manifest is unavailable");
-			const report = verificationReport as Awaited<ReturnType<typeof verifyEvidence>>;
+			const report = verificationReport as Awaited<ReturnType<typeof verifyReplayAndGithub>>;
 			if (!report || !["pass", "fail", "needs-human"].includes(report.verdict))
 				throw new Error("verifier result is missing or invalid");
 			const verificationRunId = database.createVerificationRun({

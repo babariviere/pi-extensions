@@ -382,6 +382,7 @@ export interface VerificationRunInput {
 		rationale: string;
 		uncertainties: string[];
 		replay?: { commands: Array<{ actual: unknown }> };
+		ciHistory?: unknown[][];
 	};
 	replayOf?: string;
 	resultVersion?: number;
@@ -961,7 +962,7 @@ export class BackgroundAgentsDatabase {
 		this.withTransaction(() => {
 			this.database
 				.prepare(
-					"INSERT INTO verification_runs (id, manifest_id, verdict, confidence, ci_checks, rationale, uncertainties, actual_results, replay_history, replay_of, result_version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+					"INSERT INTO verification_runs (id, manifest_id, verdict, confidence, ci_checks, rationale, uncertainties, actual_results, replay_history, ci_history, replay_of, result_version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
 				)
 				.run(
 					id,
@@ -973,6 +974,7 @@ export class BackgroundAgentsDatabase {
 					jsonBoundary(input.report.uncertainties, "verification uncertainties"),
 					jsonBoundary(input.report.replay?.commands.map((command) => command.actual) ?? [], "actual results"),
 					jsonBoundary(input.replayOf ? [input.replayOf] : [], "replay history"),
+					jsonBoundary(input.report.ciHistory ?? [], "CI history"),
 					input.replayOf ?? null,
 					input.resultVersion ?? 1,
 				);
@@ -1004,7 +1006,7 @@ export class BackgroundAgentsDatabase {
 	listVerificationRuns(manifestId: string): VerificationRun[] {
 		return this.database
 			.prepare(
-				"SELECT id, manifest_id, verdict, confidence, ci_checks, rationale, uncertainties, created_at, replay_history, result_version FROM verification_runs WHERE manifest_id = ? ORDER BY created_at, rowid",
+				"SELECT id, manifest_id, verdict, confidence, ci_checks, rationale, uncertainties, created_at, replay_history, ci_history, result_version FROM verification_runs WHERE manifest_id = ? ORDER BY created_at, rowid",
 			)
 			.all(manifestId)
 			.map((row) => ({
@@ -1021,6 +1023,7 @@ export class BackgroundAgentsDatabase {
 				rationale: rowString(row as Row, "rationale"),
 				uncertainties: JSON.parse(rowString(row as Row, "uncertainties")),
 				replayHistory: JSON.parse(rowString(row as Row, "replay_history")),
+				ciHistory: JSON.parse(rowString(row as Row, "ci_history")),
 				createdAt: rowString(row as Row, "created_at"),
 			}));
 	}

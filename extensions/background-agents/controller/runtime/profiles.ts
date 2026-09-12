@@ -100,14 +100,17 @@ export interface PreparedRuntimeProfile extends SelectedRuntimeProfile {
 }
 
 /** Copy only explicitly configured credentials into the attempt-owned profile. */
-export function prepareRuntimeProfile(selected: SelectedRuntimeProfile): PreparedRuntimeProfile {
+export function prepareRuntimeProfile(
+	selected: SelectedRuntimeProfile,
+	options: { copyCredentials?: boolean } = {},
+): PreparedRuntimeProfile {
 	mkdirSync(selected.agentDir, { recursive: true, mode: 0o700 });
 	mkdirSync(selected.sessionDir, { recursive: true, mode: 0o700 });
 	chmodSync(selected.agentDir, 0o700);
 	chmodSync(selected.sessionDir, 0o700);
 	const credentialFiles: string[] = [];
 	const names = new Set<string>();
-	for (const source of selected.profile.authFiles) {
+	for (const source of options.copyCredentials === false ? [] : selected.profile.authFiles) {
 		const sourcePath = requiredPath(source, "credential file");
 		const stat = lstatSync(sourcePath);
 		if (!stat.isFile()) throw new Error(`credential file is not a regular file: ${sourcePath}`);

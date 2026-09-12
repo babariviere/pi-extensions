@@ -17,6 +17,7 @@ test("normalizes safe defaults and rollout overrides", () => {
 	assert.equal(config.rollout.defaultMode, "supervised");
 	assert.equal(config.rollout.sourceOverrides.slack, "observe");
 	assert.deepEqual(config.thresholds, { actionableMin: 80, noiseMax: 20 });
+	assert.deepEqual(config.question, { maxRuntimeMs: 60_000, maxAttempts: 1, maxResults: 10 });
 	const repository = normalizeBackgroundAgentsConfig({ repositories: [{ id: "repo", root: "/tmp/repo" }] })
 		.repositories[0];
 	assert.equal(repository?.remote, "origin");

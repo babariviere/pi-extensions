@@ -223,6 +223,7 @@ export interface VerificationRun {
 	rationale: string;
 	uncertainties: string[];
 	replayHistory?: string[];
+	ciHistory?: Array<Array<{ name: string; state: "pass" | "fail" | "pending" | "missing"; detail?: string }>>;
 	createdAt: string;
 }
 
@@ -494,6 +495,11 @@ export interface BackgroundAgentsConfig {
 	ci: {
 		requiredChecks: string[];
 		maxWaitMs: number;
+	};
+	question: {
+		maxRuntimeMs: number;
+		maxAttempts: number;
+		maxResults: number;
 	};
 	socket: SocketContract;
 	rollout: {

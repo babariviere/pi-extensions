@@ -61,7 +61,7 @@ describe("background-agent workflows", () => {
 	test("question mode is bounded read-only and stores only a private brief", () => {
 		const database = new BackgroundAgentsDatabase(databasePath());
 		const caseId = classified(database, "question");
-		const limits = { maxTimeMs: 1000, maxCostUsd: 0.25, maxResults: 3 };
+		const limits = { maxTimeMs: 1000, maxAttempts: 1, maxResults: 3 };
 		const context = buildQuestionContext(database, caseId, "What happened?", limits);
 		assert.equal(context.capabilities.mutations, false);
 		assert.equal(context.capabilities.externalResponses, false);

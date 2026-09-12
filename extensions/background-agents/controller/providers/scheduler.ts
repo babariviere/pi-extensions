@@ -95,6 +95,21 @@ export class ProviderScheduler {
 		return row.role;
 	}
 
+	private questionAttemptAvailable(jobId: string): boolean {
+		const job = this.database.get<{ role: AgentRole; case_id: string }>(
+			"SELECT j.role, j.case_id FROM jobs j WHERE j.id = ?",
+			jobId,
+		);
+		if (!job || job.role !== "investigator") return true;
+		const state = this.database.get<{ state: string }>("SELECT state FROM cases WHERE id = ?", job.case_id)?.state;
+		if (state !== "question-analysis") return true;
+		const attempts = Number(
+			this.database.get<{ count: number }>("SELECT count(*) AS count FROM attempts WHERE job_id = ?", jobId)
+				?.count ?? 0,
+		);
+		return attempts < this.config.question.maxAttempts;
+	}
+
 	selectProfile(jobId: string, now = nowFrom(this.clock)): ProviderSelection | null {
 		const role = this.jobRole(jobId);
 		const kind = schedulingClass(role);
@@ -119,6 +134,7 @@ export class ProviderScheduler {
 
 	claim(jobId: string, owner: string, leaseMs = this.defaultLeaseMs, now = nowFrom(this.clock)): JobClaim | null {
 		if (this.emergencyStop) return null;
+		if (!this.questionAttemptAvailable(jobId)) return null;
 		const selection = this.selectProfile(jobId, now);
 		if (!selection) return null;
 		const claim = this.jobs.claim(jobId, owner, leaseMs, now, {

@@ -29,6 +29,8 @@ export interface HerdrAttemptOptions {
 	command?: string;
 	commandArgsPrefix?: string[];
 	preflight?: HostPreflightOptions;
+	security?: "agent" | "verifier";
+	inaccessiblePaths?: readonly string[];
 }
 
 export interface HerdrAttemptHost {
@@ -132,6 +134,8 @@ export async function launchAttemptThroughHerdr(
 			sessionDirectory: runtime.sessionDir,
 			piArgs: [...(options.commandArgsPrefix ?? []), ...childArgs],
 			limits: options.limits,
+			...(options.security ? { security: options.security } : {}),
+			...(options.inaccessiblePaths ? { inaccessiblePaths: options.inaccessiblePaths } : {}),
 			...(options.command ? { command: options.command } : {}),
 		}),
 	];
