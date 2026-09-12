@@ -1,6 +1,8 @@
 import { spawn } from "node:child_process";
 import { realpath } from "node:fs/promises";
 import { resolve } from "node:path";
+import { mkdir } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 
 export interface CommandOptions {
 	cwd?: string;
@@ -117,6 +119,65 @@ export class GitRepository {
 
 	async branchCommit(branch: string): Promise<string> {
 		return (await this.checked(["rev-parse", `${branch}^{commit}`])).trim();
+	}
+
+	/** Make a private object/ref store. No worker process receives the primary .git. */
+	async cloneForAttempt(destination: string): Promise<GitRepository> {
+		if (resolve(destination) === this.root) throw new Error("isolated Git repository must differ from primary");
+		await mkdir(resolve(destination), { recursive: true });
+		const args = ["clone", "--no-hardlinks", "--no-local", this.root, resolve(destination)];
+		const result = await this.runner("git", args, {});
+		if (result.code !== 0) throw new GitCommandError("git", args, result);
+		return new GitRepository(resolve(destination), this.runner);
+	}
+
+	/** Validate and import one exact candidate object into the durable repository. */
+	async importCommit(worktree: string, branch: string, candidateSha: string, expectedBaseSha: string): Promise<void> {
+		if (!/^[0-9a-f]{40,64}$/i.test(candidateSha) || !/^[0-9a-f]{40,64}$/i.test(expectedBaseSha))
+			throw new Error("Git import requires full object IDs");
+		if (!/^[A-Za-z0-9._/-]+$/.test(branch) || branch.startsWith("-") || branch.includes(".."))
+			throw new Error("invalid branch for Git import");
+		await this.withMutation(async () => {
+			const sourceResult = await this.command(["rev-parse", "--verify", `${candidateSha}^{commit}`], worktree);
+			if (sourceResult.code !== 0)
+				throw new GitCommandError("git", ["rev-parse", "--verify", `${candidateSha}^{commit}`], sourceResult);
+			const source = sourceResult.stdout.trim();
+			if (source.toLowerCase() !== candidateSha.toLowerCase()) throw new Error("candidate Git object is not exact");
+			const tempRef = `refs/background-import/${randomUUID()}`;
+			const fetchArgs = ["fetch", "--no-tags", "--no-write-fetch-head", worktree, `${candidateSha}:${tempRef}`];
+			const fetched = await this.command(fetchArgs);
+			if (fetched.code !== 0) throw new GitCommandError("git", fetchArgs, fetched);
+			try {
+				const checked = await this.command(["cat-file", "-e", `${candidateSha}^{commit}`]);
+				if (checked.code !== 0)
+					throw new GitCommandError("git", ["cat-file", "-e", `${candidateSha}^{commit}`], checked);
+				const ancestry = await this.command(["merge-base", "--is-ancestor", expectedBaseSha, candidateSha]);
+				if (ancestry.code !== 0)
+					throw new GitCommandError(
+						"git",
+						["merge-base", "--is-ancestor", expectedBaseSha, candidateSha],
+						ancestry,
+					);
+				const current = await this.command(["rev-parse", "--verify", `${branch}^{commit}`]);
+				if (current.code === 0 && current.stdout.trim().toLowerCase() === candidateSha.toLowerCase()) return;
+				if (current.code === 0 && current.stdout.trim().toLowerCase() !== expectedBaseSha.toLowerCase())
+					throw new Error("durable branch no longer points at the assigned base");
+				const updateArgs = [
+					"update-ref",
+					`refs/heads/${branch}`,
+					candidateSha,
+					current.code === 0 ? expectedBaseSha : "",
+				];
+				const updated = await this.command(updateArgs);
+				if (updated.code !== 0) {
+					const after = await this.command(["rev-parse", "--verify", `${branch}^{commit}`]);
+					if (after.code !== 0 || after.stdout.trim().toLowerCase() !== candidateSha.toLowerCase())
+						throw new GitCommandError("git", updateArgs, updated);
+				}
+			} finally {
+				await this.command(["update-ref", "-d", tempRef]);
+			}
+		});
 	}
 
 	async listBranches(prefix = ""): Promise<string[]> {

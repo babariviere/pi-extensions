@@ -3,7 +3,13 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { test } from "node:test";
-import { buildSystemdRunArgs, preflightLinuxHost, waitForTransientService } from "./systemd.ts";
+import {
+	buildSystemdRunArgs,
+	inspectTransientService,
+	preflightLinuxHost,
+	stopTransientService,
+	waitForTransientService,
+} from "./systemd.ts";
 
 test("builds strict transient-service argv with only approved write paths", () => {
 	const args = buildSystemdRunArgs({
@@ -73,12 +79,46 @@ test("verifier mode fails closed for home, network, credentials, and shared Git 
 	assert.ok(args.includes("--property=ProtectHome=tmpfs"));
 	assert.ok(args.includes("--property=PrivateNetwork=yes"));
 	assert.ok(args.some((arg) => arg.startsWith("--property=UnsetEnvironment=") && arg.includes("GITHUB_TOKEN")));
-	assert.ok(args.includes("--property=ReadOnlyPaths=/tmp/primary/.git"));
+	assert.ok(args.includes("--property=BindReadOnlyPaths=/tmp/primary/.git"));
 	assert.equal(
 		args.some((arg) => arg === "--property=ReadWritePaths=/tmp/primary/.git"),
 		false,
 	);
 	assert.ok(args.includes("--property=InaccessiblePaths=/home/operator/.pi/agent/auth.json"));
+});
+
+test("worker services clear arbitrary inherited environment and hide the primary Git metadata", () => {
+	const args = buildSystemdRunArgs({
+		unit: "background-worker",
+		workingDirectory: "/tmp/attempt/worktree",
+		attemptDirectory: "/tmp/attempt",
+		worktreeDirectory: "/tmp/attempt/worktree",
+		primaryCheckout: "/tmp/primary",
+		gitDirectory: "/tmp/attempt/git/.git",
+		profileDirectory: "/tmp/attempt/pi-profile",
+		sessionDirectory: "/tmp/attempt/sessions",
+		piArgs: [],
+		limits: { maxRuntimeMs: 1000, memoryLimitBytes: 1024, cpuQuotaPercent: 50, processLimit: 10 },
+		inaccessiblePaths: ["/tmp/primary", "/tmp/primary/.git"],
+		writableGit: true,
+		exposePrimaryCheckout: false,
+	});
+	const envIndex = args.indexOf("/usr/bin/env");
+	assert.ok(envIndex >= 0);
+	assert.deepEqual(args.slice(envIndex, envIndex + 6), [
+		"/usr/bin/env",
+		"-i",
+		"HOME=/tmp/attempt/pi-profile",
+		"PATH=/usr/local/bin:/usr/bin:/bin",
+		"TMPDIR=/tmp/attempt",
+		"PI_CODING_AGENT_DIR=/tmp/attempt/pi-profile",
+	]);
+	assert.equal(
+		args.some((arg) => arg === "--setenv=SECRET_FROM_CONTROLLER=leaked"),
+		false,
+	);
+	assert.equal(args.includes("--property=BindReadOnlyPaths=/tmp/primary"), false);
+	assert.ok(args.includes("--property=InaccessiblePaths=/tmp/primary"));
 });
 
 test("exposes only the staged prompt as an additional read-only path", () => {
@@ -141,4 +181,21 @@ test("waits for a transient unit to report a successful terminal state", async (
 		inspector: { run: async () => ({ ok: true, stdout: states.shift() ?? states[0] }) },
 	});
 	assert.deepEqual(result, { state: "succeeded", exitCode: 0 });
+});
+
+test("confirms a nonexistent systemd unit is absent rather than unknown", async () => {
+	const inspector = {
+		run: async () => ({ ok: true, stdout: "LoadState=not-found\nActiveState=inactive\n" }),
+	};
+	assert.equal(await inspectTransientService("background-missing", inspector), "not-found");
+	let calls = 0;
+	await stopTransientService("background-missing", {
+		run: async (_command, args) => {
+			calls += 1;
+			return args[1] === "stop"
+				? { ok: false, error: "unit not loaded" }
+				: { ok: true, stdout: "LoadState=not-found\n" };
+		},
+	});
+	assert.equal(calls, 2);
 });

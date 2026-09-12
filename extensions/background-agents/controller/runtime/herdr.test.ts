@@ -164,3 +164,73 @@ test("launch cleanup keeps a tab intent pending when close fails", async () => {
 		rmSync(root, { recursive: true, force: true });
 	}
 });
+
+test("reconciles an ambiguous Herdr creation by its unique attempt label and leaves failed close pending", async () => {
+	const root = mkdtempSync(join(tmpdir(), "background-runtime-herdr-ambiguous-"));
+	const database = new BackgroundAgentsDatabase(":memory:");
+	try {
+		const primary = join(root, "primary");
+		const worktree = join(root, "worktree");
+		const attempt = join(root, "attempt");
+		mkdirSync(join(primary, ".git"), { recursive: true });
+		mkdirSync(worktree);
+		mkdirSync(attempt);
+		const config = normalizeBackgroundAgentsConfig({
+			profiles: [{ id: "p", provider: "anthropic", agentDir: root }],
+		});
+		const runtime = prepareRuntimeProfile(selectRuntimeProfile(config, "worker", { attemptDir: attempt }));
+		const caseId = database.createCase({ title: "ambiguous tab", source: "manual" });
+		const jobId = database.createJob({ caseId, role: "worker" });
+		const claim = database.claimJob(jobId, "controller")!;
+		await assert.rejects(
+			launchAttemptThroughHerdr(
+				{
+					database,
+					attemptId: claim.attemptId,
+					caseId,
+					role: "worker",
+					attemptDirectory: attempt,
+					worktreeDirectory: worktree,
+					primaryCheckout: primary,
+					gitDirectory: join(primary, ".git"),
+					context: buildContextManifest({ attemptId: claim.attemptId, caseId, role: "worker", context: {} }),
+					runtime,
+					rolePromptPath: join(root, "worker.md"),
+					limits: config.systemd,
+				},
+				{
+					preflight: async () => {},
+					herdr: {
+						createTab: async () => undefined,
+						listTabs: async () => [
+							{
+								tabId: "ambiguous-tab",
+								rootPaneId: "pane",
+								label: `background ${caseId} worker ${claim.attemptId}`,
+							},
+						],
+						waitForShellReady: async () => ({ ok: true }),
+						runCommand: async () => ({ ok: true }),
+						closeTab: async () => {
+							throw new Error("close failed");
+						},
+					},
+				},
+			),
+			/Herdr did not return a tab/,
+		);
+		assert.deepEqual(
+			database
+				.listPendingRuntimeCleanupIntents()
+				.map((intent) => [intent.kind, intent.resourceId])
+				.sort((a, b) => a[0].localeCompare(b[0])),
+			[
+				["tab", "ambiguous-tab"],
+				["unit", `background-agent-${claim.attemptId}`],
+			],
+		);
+	} finally {
+		database.close();
+		rmSync(root, { recursive: true, force: true });
+	}
+});

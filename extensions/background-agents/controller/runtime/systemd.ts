@@ -111,6 +111,10 @@ export interface SystemdLaunchOptions {
 	security?: "agent" | "verifier";
 	inaccessiblePaths?: readonly string[];
 	readOnlyPaths?: readonly string[];
+	runtimePaths?: readonly string[];
+	writableGit?: boolean;
+	writableWorktree?: boolean;
+	exposePrimaryCheckout?: boolean;
 	command?: string;
 }
 
@@ -137,6 +141,9 @@ export function buildSystemdRunArgs(options: SystemdLaunchOptions): string[] {
 	const git = absolute(options.gitDirectory, "gitDirectory");
 	const profile = absolute(options.profileDirectory, "profileDirectory");
 	const session = absolute(options.sessionDirectory, "sessionDirectory");
+	const runtimePaths = [...(options.runtimePaths ?? [])].map((path) => absolute(path, "runtimePath"));
+	for (const path of runtimePaths)
+		if (!existsSync(path)) throw new Error(`required runtime path does not exist: ${path}`);
 	const security = options.security ?? "agent";
 	if (security === "verifier" && (!options.inaccessiblePaths || options.inaccessiblePaths.length === 0))
 		throw new Error("verifier services require a computed inaccessible path deny list");
@@ -146,8 +153,8 @@ export function buildSystemdRunArgs(options: SystemdLaunchOptions): string[] {
 		[session, "sessionDirectory"],
 	] as const)
 		if (!descendant(path, attempt)) throw new Error(`${field} must be inside attemptDirectory`);
-	if (!descendant(git, primary) && git !== primary)
-		throw new Error("gitDirectory must be the configured shared git path");
+	if (!descendant(git, primary) && !descendant(git, attempt))
+		throw new Error("gitDirectory must be the configured repository or attempt Git path");
 	if (options.workingDirectory !== worktree) throw new Error("workingDirectory must be the dedicated worktree");
 	if (options.piArgs.some((arg) => arg.includes("\0"))) throw new Error("Pi arguments contain a NUL byte");
 	const limits = options.limits;
@@ -172,6 +179,7 @@ export function buildSystemdRunArgs(options: SystemdLaunchOptions): string[] {
 		"--property=PrivateUsers=yes",
 		"--property=ProtectSystem=strict",
 		"--property=ProtectHome=tmpfs",
+		"--property=TemporaryFileSystem=/:ro",
 		...(security === "verifier" ? ["--property=PrivateNetwork=yes"] : []),
 		"--property=UnsetEnvironment=GH_TOKEN GITHUB_TOKEN GH_ENTERPRISE_TOKEN ANTHROPIC_API_KEY OPENAI_API_KEY AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN GOOGLE_APPLICATION_CREDENTIALS NPM_TOKEN NODE_AUTH_TOKEN SLACK_TOKEN LINEAR_API_KEY DATADOG_API_KEY DATABASE_URL",
 		"--property=NoNewPrivileges=yes",
@@ -193,12 +201,19 @@ export function buildSystemdRunArgs(options: SystemdLaunchOptions): string[] {
 		"--property=LockPersonality=yes",
 		"--property=UMask=0077",
 		`--property=ReadWritePaths=${attempt}`,
-		`--property=ReadWritePaths=${worktree}`,
+		...(options.writableWorktree === false ? [] : [`--property=ReadWritePaths=${worktree}`]),
 		`--property=BindPaths=${attempt}`,
-		`--property=BindPaths=${worktree}`,
-		`--property=BindReadOnlyPaths=${primary}`,
-		...(security === "agent" ? [`--property=BindPaths=${git}`] : []),
-		...(security === "verifier" ? [`--property=ReadOnlyPaths=${git}`] : []),
+		...(options.writableWorktree === false
+			? [`--property=BindReadOnlyPaths=${worktree}`]
+			: [`--property=BindPaths=${worktree}`]),
+		...(options.exposePrimaryCheckout === false ? [] : [`--property=BindReadOnlyPaths=${primary}`]),
+		...runtimePaths.map((path) => `--property=BindReadOnlyPaths=${path}`),
+		...(security === "agent"
+			? options.writableGit === false
+				? [`--property=BindReadOnlyPaths=${git}`]
+				: [`--property=BindPaths=${git}`]
+			: []),
+		...(security === "verifier" ? [`--property=BindReadOnlyPaths=${git}`] : []),
 		...(options.readOnlyPaths ?? []).map((path) => `--property=BindReadOnlyPaths=${absolute(path, "readOnlyPath")}`),
 		...(options.inaccessiblePaths ?? []).map(
 			(path) => `--property=InaccessiblePaths=${absolute(path, "inaccessiblePath")}`,
@@ -206,9 +221,17 @@ export function buildSystemdRunArgs(options: SystemdLaunchOptions): string[] {
 		`--setenv=PI_CODING_AGENT_DIR=${profile}`,
 		`--setenv=PI_CODING_AGENT_SESSION_DIR=${session}`,
 		"--setenv=PI_BACKGROUND_AGENT_ATTEMPT=1",
-		...(security === "verifier" ? ["--setenv=PATH=/usr/local/bin:/usr/bin:/bin"] : []),
+		"--setenv=PATH=/usr/local/bin:/usr/bin:/bin",
 		`--setenv=HOME=${profile}`,
 		`--setenv=TMPDIR=${attempt}`,
+		"/usr/bin/env",
+		"-i",
+		`HOME=${profile}`,
+		"PATH=/usr/local/bin:/usr/bin:/bin",
+		`TMPDIR=${attempt}`,
+		`PI_CODING_AGENT_DIR=${profile}`,
+		`PI_CODING_AGENT_SESSION_DIR=${session}`,
+		"PI_BACKGROUND_AGENT_ATTEMPT=1",
 		options.command ?? "pi",
 		...options.piArgs,
 	];
@@ -235,7 +258,14 @@ const defaultInspector: SystemdUnitInspector = defaultRunner;
 export async function stopTransientService(unit: string, runner: CommandRunner = defaultRunner): Promise<void> {
 	safeUnit(unit);
 	const result = await runner.run("systemctl", ["--user", "stop", unit]);
-	if (!result.ok) throw new Error(result.error ?? `unable to stop systemd unit ${unit}`);
+	if (result.ok) return;
+	const inspected = await runner.run("systemctl", ["--user", "show", "--no-pager", "--property=LoadState", unit]);
+	if (inspected.ok && /^LoadState=not-found(?:\n|$)/m.test(inspected.stdout ?? "")) return;
+	if (!inspected.ok)
+		throw new Error(
+			`${result.error ?? `unable to stop systemd unit ${unit}`}; unable to inspect cleanup state: ${inspected.error ?? "unknown error"}`,
+		);
+	throw new Error(result.error ?? `unable to stop systemd unit ${unit}`);
 }
 
 export async function inspectTransientService(
@@ -247,12 +277,14 @@ export async function inspectTransientService(
 		"--user",
 		"show",
 		"--no-pager",
-		"--property=ActiveState",
-		"--value",
+		"--property=LoadState,ActiveState",
 		unit,
 	]);
 	if (!result.ok) return "unknown";
-	const state = (result.stdout ?? "").trim();
+	if ((result.stdout ?? "").trim() === "not-found") return "not-found";
+	const values = Object.fromEntries((result.stdout ?? "").split("\n").map((line) => line.split("=", 2)));
+	if (values.LoadState === "not-found") return "not-found";
+	const state = values.ActiveState ?? (result.stdout ?? "").trim();
 	return ["active", "activating", "deactivating", "inactive", "failed"].includes(state) ? state : "unknown";
 }
 

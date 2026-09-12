@@ -1,4 +1,5 @@
-import { chmodSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { HerdrTab } from "../../../spindle/agents/herdr-parse.ts";
@@ -35,6 +36,7 @@ export interface HerdrAttemptOptions {
 
 export interface HerdrAttemptHost {
 	createTab(label: string, workspaceId?: string, cwd?: string): Promise<HerdrTab | undefined>;
+	listTabs?(workspaceId?: string): Promise<HerdrTab[]>;
 	waitForShellReady(paneId: string, timeoutMs: number, signal?: AbortSignal): Promise<{ ok: boolean; error?: string }>;
 	runCommand(paneId: string, argv: string[], signal?: AbortSignal): Promise<{ ok: boolean; error?: string }>;
 	closeTab(tabId: string): Promise<void>;
@@ -54,6 +56,33 @@ async function closeTabOrConfirmAbsence(host: HerdrAttemptHost, tabId: string): 
 			return false;
 		}
 	}
+}
+
+async function reconcileAmbiguousTabCreation(host: HerdrAttemptHost, label: string): Promise<string | undefined> {
+	if (!host.listTabs) throw new Error("Herdr tab listing is unavailable for ambiguous creation");
+	const matches = (await host.listTabs()).filter((tab) => tab.label === label);
+	if (matches.length > 1) throw new Error(`ambiguous Herdr tab creation for ${label}`);
+	if (matches.length === 1 && !(await closeTabOrConfirmAbsence(host, matches[0]!.tabId))) return matches[0]!.tabId;
+	return undefined;
+}
+
+function runtimeDependencies(): string[] {
+	const paths = new Set<string>([process.execPath, "/usr/bin/env"]);
+	for (const executable of [process.execPath, "/usr/bin/env"]) {
+		if (!existsSync(executable)) continue;
+		try {
+			const output = execFileSync("ldd", [executable], { encoding: "utf8" });
+			for (const match of output.matchAll(/(?:=>\s*)?(\/[^\s(]+)/g)) if (existsSync(match[1]!)) paths.add(match[1]!);
+		} catch {
+			// Non-Linux hosts are rejected by preflight; Linux must supply paths
+			// explicitly when ldd cannot establish them.
+			if (process.platform === "linux")
+				throw new Error(`unable to establish runtime dependencies for ${executable}`);
+		}
+	}
+	for (const certificate of ["/etc/ssl/certs/ca-certificates.crt", "/etc/pki/tls/certs/ca-bundle.crt"])
+		if (existsSync(certificate)) paths.add(certificate);
+	return [...paths];
 }
 
 async function cleanupLaunchResources(
@@ -158,6 +187,19 @@ export async function launchAttemptThroughHerdr(
 			database: options.database,
 		});
 	const unit = options.unit ?? `background-agent-${options.attemptId}`;
+	const tabLabel = `background ${options.caseId} ${options.role} ${options.attemptId}`;
+	const tabIntentPath = join(options.attemptDirectory, "herdr-tab-create-intent.json");
+	mkdirSync(options.attemptDirectory, { recursive: true, mode: 0o700 });
+	writeFileSync(tabIntentPath, `${JSON.stringify({ version: 1, attemptId: options.attemptId, label: tabLabel })}\n`, {
+		mode: 0o600,
+	});
+	options.database.createArtifact({
+		caseId: options.caseId,
+		attemptId: options.attemptId,
+		kind: "herdr-tab-create-intent",
+		path: tabIntentPath,
+		metadata: { version: 1, label: tabLabel },
+	});
 	persistLaunchIntent(options, unit);
 	options.database.run(
 		"UPDATE attempts SET systemd_unit = ?, worktree = ? WHERE id = ?",
@@ -181,7 +223,11 @@ export async function launchAttemptThroughHerdr(
 			limits: options.limits,
 			...(options.security ? { security: options.security } : {}),
 			inaccessiblePaths: [...new Set([...(options.inaccessiblePaths ?? []), ...runtime.profile.authFiles])],
-			readOnlyPaths: [options.rolePromptPath],
+			readOnlyPaths: [options.rolePromptPath, contextArtifact.path, runtime.agentDir],
+			runtimePaths: [...runtimeDependencies(), ...(options.preflight?.paths ?? [])],
+			writableGit: options.role === "worker",
+			writableWorktree: options.role === "worker",
+			exposePrimaryCheckout: options.role === "verifier",
 			...(options.command ? { command: options.command } : {}),
 		}),
 	];
@@ -196,6 +242,7 @@ export async function launchAttemptThroughHerdr(
 			runtime.agentDir,
 			runtime.sessionDir,
 			...(options.preflight?.paths ?? []),
+			options.rolePromptPath,
 		],
 		credentialFiles: [...runtime.credentialFiles, ...(options.preflight?.credentialFiles ?? [])],
 	});
@@ -212,12 +259,30 @@ export async function launchAttemptThroughHerdr(
 	}
 	let tab: HerdrTab | undefined;
 	try {
-		tab = await host.createTab(`background ${options.caseId} ${options.role}`, undefined, options.worktreeDirectory);
+		tab = await host.createTab(tabLabel, undefined, options.worktreeDirectory);
 	} catch (error) {
-		await cleanupLaunchResources(options, host, unit);
+		try {
+			const pendingTabId = await reconcileAmbiguousTabCreation(host, tabLabel);
+			await cleanupLaunchResources(options, host, unit, pendingTabId);
+		} catch (reconcileError) {
+			await cleanupLaunchResources(options, host, unit);
+			throw new Error(
+				`Herdr tab creation is ambiguous: ${reconcileError instanceof Error ? reconcileError.message : String(reconcileError)}`,
+				{ cause: error },
+			);
+		}
 		throw error;
 	}
-	if (!tab?.tabId) throw new Error("Herdr did not return a tab");
+	if (!tab?.tabId) {
+		try {
+			const pendingTabId = await reconcileAmbiguousTabCreation(host, tabLabel);
+			await cleanupLaunchResources(options, host, unit, pendingTabId);
+		} catch (error) {
+			await cleanupLaunchResources(options, host, unit);
+			throw error;
+		}
+		throw new Error("Herdr did not return a tab");
+	}
 	options.database.run(
 		"UPDATE attempts SET systemd_unit = ?, tab_id = ?, worktree = ? WHERE id = ?",
 		unit,

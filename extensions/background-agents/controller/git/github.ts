@@ -81,6 +81,38 @@ export class GitHubController {
 		return result;
 	}
 
+	private async repositoryName(): Promise<{ owner: string; name: string }> {
+		const result = await this.gh(["repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"]);
+		const value = result.stdout.trim();
+		const match = /^([A-Za-z0-9][A-Za-z0-9._-]*)\/([A-Za-z0-9][A-Za-z0-9._-]*)$/.exec(value);
+		if (!match) throw new Error("gh repo view returned an unsafe repository name");
+		return { owner: match[1]!, name: match[2]! };
+	}
+
+	private async branchLockEndpoint(branch: string): Promise<string> {
+		if (
+			!/^[A-Za-z0-9._/-]+$/.test(branch) ||
+			branch.startsWith("-") ||
+			branch.includes("..") ||
+			branch.includes("//") ||
+			branch.startsWith("/") ||
+			branch.endsWith("/")
+		)
+			throw new Error("invalid branch for readiness lock");
+		const repository = await this.repositoryName();
+		return `repos/${repository.owner}/${repository.name}/branches/${encodeURIComponent(branch)}/lock`;
+	}
+
+	private async deleteBranchLock(endpoint: string): Promise<void> {
+		const args = ["api", "--method", "DELETE", endpoint];
+		const result = await this.commandRunner("gh", args, { cwd: this.repository.root });
+		if (result.code === 0) return;
+		// GitHub returns 404 when the lock was already removed. Treat only that
+		// response as successful, and retain all permission/API failures.
+		if (/(?:^|\D)404(?:\D|$)|\bnot found\b/i.test(`${result.stderr}\n${result.stdout}`)) return;
+		throw new GitHubCommandError(args, result);
+	}
+
 	async pushBranch(worktree: string, branch: string, remote = "origin"): Promise<void> {
 		await this.repository.push(worktree, branch, remote);
 	}
@@ -161,5 +193,49 @@ export class GitHubController {
 	async linkStack(branches: readonly string[]): Promise<void> {
 		if (branches.length < 2) return;
 		await this.gh(["stack", "link", ...branches]);
+	}
+
+	/** Acquire the GitHub provider-side branch lock and verify its protected head. */
+	async acquireBranchLock(branch: string, expectedHeadSha: string): Promise<{ release: () => Promise<void> }> {
+		if (!/^[0-9a-f]{40,64}$/i.test(expectedHeadSha)) throw new Error("invalid expected branch head");
+		const endpoint = await this.branchLockEndpoint(branch);
+		const acquireArgs = ["api", "--method", "PUT", endpoint];
+		await this.gh(acquireArgs);
+		try {
+			const observed = await this.gh(["api", endpoint.replace(/\/lock$/, "")]);
+			const parsed: unknown = JSON.parse(observed.stdout);
+			const head =
+				parsed &&
+				typeof parsed === "object" &&
+				"commit" in parsed &&
+				parsed.commit &&
+				typeof parsed.commit === "object" &&
+				"sha" in parsed.commit
+					? parsed.commit.sha
+					: undefined;
+			if (typeof head !== "string" || head.toLowerCase() !== expectedHeadSha.toLowerCase())
+				throw new Error("provider branch head changed after readiness lock");
+		} catch (error) {
+			await this.deleteBranchLock(endpoint);
+			throw error;
+		}
+		let released = false;
+		let releaseInFlight: Promise<void> | undefined;
+		return {
+			release: async () => {
+				if (released) return;
+				if (!releaseInFlight) {
+					releaseInFlight = (async () => {
+						await this.deleteBranchLock(endpoint);
+						released = true;
+					})();
+				}
+				try {
+					await releaseInFlight;
+				} finally {
+					if (!released) releaseInFlight = undefined;
+				}
+			},
+		};
 	}
 }

@@ -62,6 +62,32 @@ test("creates deterministic Git worktrees and preserves dirty worktrees across r
 	}
 });
 
+test("imports only an exact worker commit into durable Git idempotently under a race", async () => {
+	const paths = await repositoryRoot();
+	try {
+		const repository = new GitRepository(paths.primary);
+		const baseSha = await repository.branchCommit("main");
+		const workerRepository = await repository.cloneForAttempt(join(paths.root, "attempt-git"));
+		const worker = await new GitWorktreeManager(workerRepository, join(paths.root, "attempt-worktrees")).ensure({
+			caseId: "import-case",
+			ordinal: 1,
+			owner: "worker",
+			baseRef: "main",
+		});
+		writeFileSync(join(worker.path, "worker.txt"), "worker output\n");
+		await git(["add", "worker.txt"], worker.path);
+		await git(["commit", "-m", "worker output"], worker.path);
+		const candidateSha = (await git(["rev-parse", "HEAD"], worker.path)).trim();
+		await Promise.all([
+			repository.importCommit(worker.path, "background/import-case/1", candidateSha, baseSha),
+			repository.importCommit(worker.path, "background/import-case/1", candidateSha, baseSha),
+		]);
+		assert.equal(await repository.branchCommit("background/import-case/1"), candidateSha);
+	} finally {
+		rmSync(paths.root, { recursive: true, force: true });
+	}
+});
+
 test("runs GitHub reads in the configured repository", async () => {
 	const paths = await repositoryRoot();
 	try {
@@ -209,6 +235,100 @@ test("requires a verified boundary and current PR head before marking ready", as
 				["pr", "view"],
 			],
 		);
+	} finally {
+		rmSync(paths.root, { recursive: true, force: true });
+	}
+});
+
+test("uses the GitHub branch lock API, verifies its head, and releases idempotently", async () => {
+	const paths = await repositoryRoot();
+	try {
+		const sha = "0123456789012345678901234567890123456789";
+		const calls: Array<{ executable: string; args: string[] }> = [];
+		const runner: CommandRunner = async (executable, args) => {
+			calls.push({ executable, args: [...args] });
+			if (args[0] === "repo") return { code: 0, stdout: "acme/widgets\n", stderr: "" };
+			if (args[0] === "api" && args[1] === "--method" && args[2] === "PUT")
+				return { code: 0, stdout: "", stderr: "" };
+			if (args[0] === "api" && args[1] === "--method" && args[2] === "DELETE")
+				return { code: 0, stdout: "", stderr: "" };
+			return { code: 0, stdout: JSON.stringify({ commit: { sha } }), stderr: "" };
+		};
+		const controller = new GitHubController(new GitRepository(paths.primary, runner));
+		const lock = await controller.acquireBranchLock("feature/review", sha);
+		await lock.release();
+		await lock.release();
+		const apiCalls = calls.filter((call) => call.args[0] === "api");
+		assert.deepEqual(
+			apiCalls.map((call) => call.args),
+			[
+				["api", "--method", "PUT", "repos/acme/widgets/branches/feature%2Freview/lock"],
+				["api", "repos/acme/widgets/branches/feature%2Freview"],
+				["api", "--method", "DELETE", "repos/acme/widgets/branches/feature%2Freview/lock"],
+			],
+		);
+		assert.equal(
+			calls.some((call) => call.executable === "git"),
+			false,
+		);
+	} finally {
+		rmSync(paths.root, { recursive: true, force: true });
+	}
+});
+
+test("releases a lock after head verification failure and accepts only DELETE 404 as already absent", async () => {
+	const paths = await repositoryRoot();
+	try {
+		const sha = "0123456789012345678901234567890123456789";
+		let deleteResult = { code: 0, stdout: "", stderr: "" };
+		const calls: string[][] = [];
+		const runner: CommandRunner = async (_executable, args) => {
+			calls.push([...args]);
+			if (args[0] === "repo") return { code: 0, stdout: "acme/widgets\n", stderr: "" };
+			if (args[2] === "PUT") return { code: 0, stdout: "", stderr: "" };
+			if (args[2] === "DELETE") return deleteResult;
+			return {
+				code: 0,
+				stdout: JSON.stringify({ commit: { sha: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" } }),
+				stderr: "",
+			};
+		};
+		const controller = new GitHubController(new GitRepository(paths.primary, runner));
+		await assert.rejects(controller.acquireBranchLock("feature/review", sha), /branch head changed/);
+		assert.equal(
+			calls.some((args) => args[2] === "DELETE"),
+			true,
+		);
+		const deniedCalls: string[][] = [];
+		const denied = new GitHubController(
+			new GitRepository(paths.primary, async (_executable, args) => {
+				deniedCalls.push([...args]);
+				if (args[0] === "repo") return { code: 0, stdout: "acme/widgets\n", stderr: "" };
+				return args[2] === "PUT"
+					? { code: 1, stdout: "", stderr: "HTTP 403: Resource not accessible" }
+					: { code: 0, stdout: JSON.stringify({ commit: { sha } }), stderr: "" };
+			}),
+		);
+		await assert.rejects(denied.acquireBranchLock("feature/review", sha), /403/);
+		assert.equal(
+			deniedCalls.some((args) => args[2] === "DELETE"),
+			false,
+		);
+
+		deleteResult = { code: 1, stdout: "", stderr: "HTTP 404: Not Found" };
+		const lock = await (async () => {
+			const verificationRunner: CommandRunner = async (_executable, args) => {
+				if (args[0] === "repo") return { code: 0, stdout: "acme/widgets\n", stderr: "" };
+				if (args[2] === "PUT") return { code: 0, stdout: "", stderr: "" };
+				if (args[2] === "DELETE") return deleteResult;
+				return { code: 0, stdout: JSON.stringify({ commit: { sha } }), stderr: "" };
+			};
+			return new GitHubController(new GitRepository(paths.primary, verificationRunner)).acquireBranchLock(
+				"feature/review",
+				sha,
+			);
+		})();
+		await lock.release();
 	} finally {
 		rmSync(paths.root, { recursive: true, force: true });
 	}

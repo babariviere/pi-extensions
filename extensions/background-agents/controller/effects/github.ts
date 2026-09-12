@@ -34,6 +34,8 @@ export interface GitHubEffectClient {
 	linkStack(branches: readonly string[]): Promise<void>;
 	isStackLinked(branches: readonly string[]): Promise<boolean>;
 	markReady(reference: number | string, boundary: VerificationBoundary): Promise<void>;
+	/** Provider-side lease for the PR branch. The lease is retained after ready. */
+	acquireBranchLock?(branch: string, expectedHeadSha: string): Promise<{ release: () => Promise<void> }>;
 }
 
 /** Adapter for the argv-only GitHub controller used by the repository layer. */
@@ -101,6 +103,10 @@ export class GitHubControllerEffectClient implements GitHubEffectClient {
 				ready.baseSha?.toLowerCase() !== boundary.expectedBaseSha.toLowerCase())
 		)
 			throw new Error("GitHub pull request SHA changed after marking ready");
+	}
+
+	acquireBranchLock(branch: string, expectedHeadSha: string): Promise<{ release: () => Promise<void> }> {
+		return this.github.acquireBranchLock(branch, expectedHeadSha);
 	}
 }
 
@@ -177,6 +183,7 @@ export function githubReadyOperationKey(
 /** Durable GitHub delivery effects. There is intentionally no merge operation. */
 export class GitHubEffects {
 	private readonly executor: ExternalEffectExecutor;
+	private readonly requireBranchLock: boolean;
 
 	constructor(
 		readonly store: EffectStore,
@@ -184,6 +191,7 @@ export class GitHubEffects {
 		options: EffectExecutorOptions,
 	) {
 		this.executor = new ExternalEffectExecutor(store, options);
+		this.requireBranchLock = options.requireBranchLock === true;
 	}
 
 	async pushBranch(input: PushBranchInput): Promise<PushBranchResult> {
@@ -301,6 +309,8 @@ export class GitHubEffects {
 		if (this.store.isEmergencyStop?.()) throw new Error("external mutations are disabled by emergency stop");
 		if (!input.manifestId || !input.verificationRunId)
 			throw new Error("ready-for-review requires a stored verification run");
+		if (this.requireBranchLock && !this.client.acquireBranchLock)
+			throw new Error("ready-for-review requires a provider branch lock");
 		const verification = this.store.getReadyVerification?.(input.manifestId, input.verificationRunId);
 		if (!verification) throw new Error("ready-for-review requires a current passing verification");
 		if (verification.candidateSha.toLowerCase() !== input.verifiedCommit.toLowerCase())
@@ -331,30 +341,41 @@ export class GitHubEffects {
 			intent: effectiveInput,
 			reconcile: async () => this.reconcileReady(effectiveInput),
 			perform: async () => {
-				const pullRequest = await this.client.getPullRequest(input.reference);
-				if (!pullRequest) throw new Error("GitHub pull request was not found");
-				if (pullRequest.headSha?.toLowerCase() !== input.verifiedCommit.toLowerCase())
-					return { status: "blocked", pullRequest };
-				if (pullRequest.baseSha?.toLowerCase() !== expectedBaseSha.toLowerCase())
-					return { status: "blocked", pullRequest };
-				if (!pullRequest.isDraft) return { status: "already-ready", pullRequest };
-				await this.client.markReady(input.reference, {
-					passed: true,
-					verifiedCommit: input.verifiedCommit,
-					expectedBaseSha,
-					requiredCiPassed: input.requiredCiPassed ?? true,
-					manifestId: input.manifestId,
-					verificationRunId: input.verificationRunId,
-					requiredChecks: input.requiredChecks,
-				});
-				const ready = await this.client.getPullRequest(input.reference);
-				if (
-					!ready ||
-					ready.headSha?.toLowerCase() !== input.verifiedCommit.toLowerCase() ||
-					ready.baseSha?.toLowerCase() !== expectedBaseSha.toLowerCase()
-				)
-					throw new Error("GitHub pull request SHA changed while marking ready");
-				return { status: "ready", pullRequest: ready };
+				const observed = await this.client.getPullRequest(input.reference);
+				if (!observed) throw new Error("GitHub pull request was not found");
+				const lock = this.client.acquireBranchLock
+					? await this.client.acquireBranchLock(observed.branch, input.verifiedCommit)
+					: undefined;
+				let retainLock = false;
+				try {
+					const pullRequest = await this.client.getPullRequest(input.reference);
+					if (!pullRequest) throw new Error("GitHub pull request was not found");
+					if (pullRequest.headSha?.toLowerCase() !== input.verifiedCommit.toLowerCase())
+						return { status: "blocked", pullRequest };
+					if (pullRequest.baseSha?.toLowerCase() !== expectedBaseSha.toLowerCase())
+						return { status: "blocked", pullRequest };
+					if (!pullRequest.isDraft) return { status: "already-ready", pullRequest };
+					await this.client.markReady(input.reference, {
+						passed: true,
+						verifiedCommit: input.verifiedCommit,
+						expectedBaseSha,
+						requiredCiPassed: input.requiredCiPassed ?? true,
+						manifestId: input.manifestId,
+						verificationRunId: input.verificationRunId,
+						requiredChecks: input.requiredChecks,
+					});
+					const ready = await this.client.getPullRequest(input.reference);
+					if (
+						!ready ||
+						ready.headSha?.toLowerCase() !== input.verifiedCommit.toLowerCase() ||
+						ready.baseSha?.toLowerCase() !== expectedBaseSha.toLowerCase()
+					)
+						throw new Error("GitHub pull request SHA changed while marking ready");
+					retainLock = true;
+					return { status: "ready", pullRequest: ready };
+				} finally {
+					if (lock && !retainLock) await lock.release();
+				}
 			},
 			remoteIdentifier: (value) => String(value.pullRequest.number),
 		});

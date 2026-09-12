@@ -112,10 +112,13 @@ export class JobScheduler {
 		const now = input.now ?? new Date();
 		const finishedAt = now.toISOString();
 		return this.database.withTransaction(() => {
-			const attempt = this.database.get<{ job_id: string; profile_id?: string; state: AttemptState }>(
-				"SELECT job_id, profile_id, state FROM attempts WHERE id = ?",
-				input.attemptId,
-			);
+			const attempt = this.database.get<{
+				job_id: string;
+				profile_id?: string;
+				state: AttemptState;
+				systemd_unit: string | null;
+				tab_id: string | null;
+			}>("SELECT job_id, profile_id, state, systemd_unit, tab_id FROM attempts WHERE id = ?", input.attemptId);
 			if (!attempt) throw new Error(`Unknown attempt: ${input.attemptId}`);
 			if (attempt.state !== "running") return false;
 			const lease = this.database.get<{ owner: string; expires_at: string }>(
@@ -131,6 +134,13 @@ export class JobScheduler {
 				input.attemptId,
 			);
 			if (changed.changes !== 1) return false;
+			this.database.createRuntimeCleanupIntents({
+				attemptId: input.attemptId,
+				unit: attempt.systemd_unit ?? undefined,
+				tabId: attempt.tab_id ?? undefined,
+				reason: "terminal attempt runtime cleanup",
+				now,
+			});
 			this.database.run(
 				"UPDATE jobs SET state = ?, claimed_by = NULL, claimed_at = NULL, updated_at = ? WHERE id = ? AND state = 'running'",
 				input.state,
@@ -163,6 +173,16 @@ export class JobScheduler {
 				timestamp,
 			);
 			for (const lease of expired) {
+				const changed = this.database.run(
+					"UPDATE attempts SET state = 'failed', failure = ?, finished_at = ? WHERE id = ? AND state = 'running'",
+					"lease expired",
+					timestamp,
+					lease.attempt_id,
+				);
+				if (changed.changes !== 1) {
+					this.database.run("DELETE FROM attempt_leases WHERE attempt_id = ?", lease.attempt_id);
+					continue;
+				}
 				this.database.createRuntimeCleanupIntents({
 					attemptId: lease.attempt_id,
 					unit: lease.systemd_unit ?? undefined,
@@ -170,12 +190,6 @@ export class JobScheduler {
 					reason: "expired lease cleanup before reconciliation",
 					now,
 				});
-				this.database.run(
-					"UPDATE attempts SET state = 'failed', failure = ?, finished_at = ? WHERE id = ? AND state = 'running'",
-					"lease expired",
-					timestamp,
-					lease.attempt_id,
-				);
 				this.database.run(
 					"UPDATE jobs SET state = 'queued', claimed_by = NULL, claimed_at = NULL, updated_at = ? WHERE id = ? AND state = 'running'",
 					timestamp,

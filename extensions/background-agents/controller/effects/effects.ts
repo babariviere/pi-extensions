@@ -38,6 +38,8 @@ export interface EffectExecutorOptions {
 	controls?: ExternalMutationControls;
 	expectedStopEpoch?: number;
 	isAuthorized?: () => boolean;
+	/** Require provider-side leases for final branch readiness mutations. */
+	requireBranchLock?: boolean;
 }
 
 function errorOutcome(error: unknown): { error: string } {

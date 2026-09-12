@@ -65,7 +65,7 @@ export function combinedRequiredChecks(globalChecks: readonly string[], reposito
 }
 
 /** Every controller-owned secret and control-plane path is denied to production attempt services. */
-export function verifierInaccessiblePaths(config: BackgroundAgentsConfig): string[] {
+export function verifierInaccessiblePaths(config: BackgroundAgentsConfig, allowedRepository?: string): string[] {
 	const paths = [
 		config.databasePath,
 		`${config.databasePath}-wal`,
@@ -76,6 +76,11 @@ export function verifierInaccessiblePaths(config: BackgroundAgentsConfig): strin
 		...config.profiles.flatMap((profile) => [profile.agentDir, ...profile.authFiles]),
 		...[config.sources.slack, config.sources.linear, config.sources.datadog].flatMap((source) =>
 			source.credentialPath ? [source.credentialPath] : [],
+		),
+		...config.repositories.flatMap((repository) =>
+			allowedRepository && resolve(repository.root) === resolve(allowedRepository)
+				? []
+				: [repository.root, repository.gitDir],
 		),
 	];
 	return [...new Set(paths.map((path) => resolve(path)))];
@@ -131,7 +136,9 @@ const role = process.argv[5];
 const args = process.argv.slice(6);
 let stdout = "";
 let stderr = "";
-const child = spawn("pi", args, { stdio: ["ignore", "pipe", "pipe"] });
+// systemd properties are not sufficient to clear arbitrary inherited names.
+// The actual model process is therefore always the child of env -i.
+const child = spawn("/usr/bin/env", ["-i", "HOME=" + (process.env.HOME || "/tmp"), "PATH=/usr/local/bin:/usr/bin:/bin", "TMPDIR=" + (process.env.TMPDIR || "/tmp"), "PI_CODING_AGENT_DIR=" + (process.env.PI_CODING_AGENT_DIR || ""), "PI_CODING_AGENT_SESSION_DIR=" + (process.env.PI_CODING_AGENT_SESSION_DIR || ""), "PI_BACKGROUND_AGENT_ATTEMPT=1", "pi", ...args], { stdio: ["ignore", "pipe", "pipe"] });
 child.stdout.on("data", chunk => { stdout += chunk.toString(); process.stdout.write(chunk); });
 child.stderr.on("data", chunk => { stderr += chunk.toString(); process.stderr.write(chunk); });
 child.once("error", error => { stderr += String(error); });
@@ -393,15 +400,24 @@ export class ProductionAttemptRunner {
 			const repository = repositoryConfig(this.options.config, database, job.case_id);
 			let worktreeDirectory = join(attemptRoot, job.case_id, `${claim.attemptId}-workspace`);
 			let branch: string | undefined;
+			let workerGitDirectory = repository?.gitDir;
 			let baseBranch = repository?.defaultBaseBranch ?? "main";
 			let baseRef = baseBranch;
 			let githubEffects: GitHubEffects | undefined;
 			if (repository) {
 				const git = (this.options.repositoryFactory ?? ((root) => new GitRepository(root)))(repository.root);
-				const manager = (this.options.worktreeFactory ?? ((repo, root) => new GitWorktreeManager(repo, root)))(
-					git,
+				let candidateGit = git;
+				let candidateRoot =
 					this.options.worktreeRoot ??
-						join(dirname(this.options.config.databasePath), "background-worktrees", repository.id),
+					join(dirname(this.options.config.databasePath), "background-worktrees", repository.id);
+				if (role === "worker" && !this.options.repositoryFactory && !this.options.worktreeFactory) {
+					candidateGit = await git.cloneForAttempt(join(attemptDirectory, "git"));
+					candidateRoot = join(attemptDirectory, "candidate");
+					workerGitDirectory = (await candidateGit.detailsOf()).gitDir;
+				}
+				const manager = (this.options.worktreeFactory ?? ((repo, root) => new GitWorktreeManager(repo, root)))(
+					candidateGit,
+					candidateRoot,
 				);
 				baseRef = (await awaitAuthorized(git.checked(["rev-parse", `${baseBranch}^{commit}`]))).trim();
 				if (role === "worker" && job.work_item_id) {
@@ -489,6 +505,7 @@ export class ProductionAttemptRunner {
 				if (client)
 					githubEffects = new GitHubEffects(database, client, {
 						owner: `background:${claim.attemptId}`,
+						requireBranchLock: !this.options.launch,
 						expectedStopEpoch: claim.stopEpoch,
 						isAuthorized: () => database.attemptMayPublish(claim.attemptId, claim.stopEpoch),
 					});
@@ -595,7 +612,7 @@ export class ProductionAttemptRunner {
 						attemptDirectory,
 						worktreeDirectory,
 						primaryCheckout: repository?.root ?? attemptDirectory,
-						gitDirectory: repository?.gitDir ?? attemptDirectory,
+						gitDirectory: workerGitDirectory ?? attemptDirectory,
 						context,
 						contextArtifact,
 						runtime,
@@ -607,7 +624,10 @@ export class ProductionAttemptRunner {
 								}
 							: this.options.config.systemd,
 						security: role === "verifier" ? "verifier" : "agent",
-						inaccessiblePaths: verifierInaccessiblePaths(this.options.config),
+						inaccessiblePaths: verifierInaccessiblePaths(
+							this.options.config,
+							role === "verifier" ? repository?.root : undefined,
+						),
 						model: claim.model,
 						prompt,
 						...(repository ? {} : { preflight: { platform: "linux", paths: [] } }),
@@ -634,12 +654,6 @@ export class ProductionAttemptRunner {
 					this.options.waitForUnit ?? ((unit, timeoutMs) => waitForTransientService(unit, { timeoutMs }))
 				)(launched.unit, this.options.config.systemd.maxRuntimeMs);
 			} finally {
-				database.createRuntimeCleanupIntents({
-					attemptId: claim.attemptId,
-					unit: launched.unit,
-					tabId: launched.tabId,
-					reason: "terminal attempt runtime cleanup",
-				});
 				if (completion?.state !== "timed-out") database.markRuntimeCleanupIntent("unit", launched.unit);
 				const herdr = this.options.herdr ?? defaultHerdr;
 				const closeTab =
@@ -960,6 +974,10 @@ export class ProductionAttemptRunner {
 				database.get<{ branch: string | null }>("SELECT branch FROM work_items WHERE id = ?", job.work_item_id)
 					?.branch ?? undefined;
 			if (!workItemBranch) throw new Error("worker branch is unavailable");
+			// The worker's repository is untrusted. Import only the exact validated
+			// commit, under the durable repository lock, before any remote delivery.
+			if (!this.options.launch)
+				await awaitAuthorized(git.importCommit(worktree, workItemBranch, commitSha, baseRef));
 			let createdPullRequestNumber: number | undefined;
 			if (githubEffects) {
 				await awaitAuthorized(

@@ -398,7 +398,8 @@ export class BackgroundAgentsController {
 		};
 		this.runtimeControls = options.runtimeControls ?? {
 			terminateSystemdUnit: (unit) => stopTransientService(unit),
-			isSystemdUnitStopped: async (unit) => ["inactive", "failed"].includes(await inspectTransientService(unit)),
+			isSystemdUnitStopped: async (unit) =>
+				["inactive", "failed", "not-found"].includes(await inspectTransientService(unit)),
 			closeTab: (tabId) => defaultHerdr.closeTab(tabId),
 			isTabClosed: (tabId) => defaultHerdr.isTabClosed(tabId),
 		};

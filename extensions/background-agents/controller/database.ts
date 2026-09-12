@@ -2793,6 +2793,12 @@ export class BackgroundAgentsDatabase {
 			if (lease) return null;
 			if (!this.database.prepare("SELECT id FROM recovery_checkpoints WHERE id = ?").get(checkpointId))
 				throw new Error(`Unknown checkpoint: ${checkpointId}`);
+			const changed = this.database
+				.prepare(
+					"UPDATE attempts SET state = 'failed', failure = ?, finished_at = ? WHERE id = ? AND state = 'running'",
+				)
+				.run("replaced during recovery", timestamp, attemptId);
+			if (changed.changes !== 1) return null;
 			this.createRuntimeCleanupIntents({
 				attemptId,
 				unit: attempt.systemd_unit == null ? undefined : rowString(attempt, "systemd_unit"),
@@ -2800,11 +2806,6 @@ export class BackgroundAgentsDatabase {
 				reason: "recovery cleanup before replacement",
 				now,
 			});
-			this.database
-				.prepare(
-					"UPDATE attempts SET state = 'failed', failure = ?, finished_at = ? WHERE id = ? AND state = 'running'",
-				)
-				.run("replaced during recovery", timestamp, attemptId);
 			this.database.prepare("DELETE FROM attempt_leases WHERE attempt_id = ?").run(attemptId);
 			this.database
 				.prepare(
@@ -2841,6 +2842,13 @@ export class BackgroundAgentsDatabase {
 				attemptId,
 			);
 			if (!attempt) return false;
+			const changed = this.run(
+				"UPDATE attempts SET state = 'needs-human', failure = ?, finished_at = ? WHERE id = ? AND state = 'running'",
+				reason,
+				timestamp,
+				attemptId,
+			);
+			if (changed.changes !== 1) return false;
 			this.createRuntimeCleanupIntents({
 				attemptId,
 				unit: attempt.systemd_unit ?? undefined,
@@ -2848,12 +2856,6 @@ export class BackgroundAgentsDatabase {
 				reason: "recovery cleanup before needs-human terminalization",
 				now,
 			});
-			this.run(
-				"UPDATE attempts SET state = 'needs-human', failure = ?, finished_at = ? WHERE id = ? AND state = 'running'",
-				reason,
-				timestamp,
-				attemptId,
-			);
 			this.run("DELETE FROM attempt_leases WHERE attempt_id = ?", attemptId);
 			this.run(
 				"UPDATE jobs SET state = 'needs-human', claimed_by = NULL, claimed_at = NULL, updated_at = ? WHERE id = ? AND state = 'running'",

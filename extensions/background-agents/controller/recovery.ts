@@ -6,7 +6,14 @@ import { quarantineWorktree } from "./git/worktree.ts";
 
 const execFileAsync = promisify(execFile);
 
-export type SystemdUnitState = "active" | "activating" | "deactivating" | "inactive" | "failed" | "unknown";
+export type SystemdUnitState =
+	| "active"
+	| "activating"
+	| "deactivating"
+	| "inactive"
+	| "failed"
+	| "not-found"
+	| "unknown";
 export type WorktreeState = "clean" | "dirty" | "missing" | "unknown";
 export type RecoveryAction = "running" | "replaced" | "needs-human";
 
@@ -48,12 +55,14 @@ const defaultSystemd: SystemdInspector = {
 		try {
 			const { stdout } = await execFileAsync(
 				"systemctl",
-				["--user", "show", unit, "--property=ActiveState", "--value"],
+				["--user", "show", unit, "--property=LoadState,ActiveState"],
 				{
 					shell: false,
 				},
 			);
-			const state = stdout.trim();
+			const values = Object.fromEntries(stdout.split("\n").map((line) => line.split("=", 2)));
+			if (values.LoadState === "not-found") return "not-found";
+			const state = values.ActiveState ?? stdout.trim();
 			if (["active", "activating", "deactivating", "inactive", "failed"].includes(state))
 				return state as SystemdUnitState;
 			return "unknown";
@@ -218,14 +227,6 @@ export class RecoveryCoordinator {
 				}
 			}
 		}
-		this.database.createRuntimeCleanupIntents({
-			attemptId,
-			...(attempt.systemd_unit ? { unit: attempt.systemd_unit } : {}),
-			...(attempt.tab_id ? { tabId: attempt.tab_id } : {}),
-			reason: "crash recovery cleanup before terminalization",
-			now: recoveryTime,
-		});
-
 		if (systemdState === "unknown" || worktreeState === "unknown")
 			return this.needsHuman(
 				attemptId,

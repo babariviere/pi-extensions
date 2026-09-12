@@ -110,6 +110,22 @@ describe("background-agents durable jobs", () => {
 		database.close();
 	});
 
+	test("does not create cleanup intents when an expired lease races with terminalization", () => {
+		const database = new BackgroundAgentsDatabase(databasePath());
+		const scheduler = new JobScheduler(database);
+		const caseId = database.createCase({ title: "Terminal race", source: "manual" });
+		const jobId = scheduler.queueJob({ caseId, role: "worker" });
+		const claim = scheduler.claim(jobId, "worker", 100, new Date("2026-01-01T00:00:00Z"))!;
+		database.run(
+			"UPDATE attempts SET state = 'succeeded', finished_at = ? WHERE id = ?",
+			"2026-01-01T00:00:00.050Z",
+			claim.attemptId,
+		);
+		assert.equal(scheduler.reconcileExpiredLeases(new Date("2026-01-01T00:00:00.100Z")), 1);
+		assert.deepEqual(database.listPendingRuntimeCleanupIntents(), []);
+		database.close();
+	});
+
 	test("pauses and resumes queued work without reviving an old attempt", () => {
 		const database = new BackgroundAgentsDatabase(databasePath());
 		const scheduler = new JobScheduler(database);

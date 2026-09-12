@@ -411,4 +411,86 @@ describe("durable external effects", () => {
 		assert.equal(readyCalls, 0);
 		database.close();
 	});
+
+	test("does not mark ready when a concurrent head change wins the readiness reread", async () => {
+		const database = new BackgroundAgentsDatabase(databasePath());
+		const sha = "0123456789012345678901234567890123456789";
+		const changedSha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+		const caseId = database.createCase({ title: "concurrent readiness", source: "manual" });
+		const manifestId = database.createEvidenceManifest({
+			caseId,
+			manifest: { version: 1, baseSha: sha, candidateSha: sha, commands: [], createdAt: new Date().toISOString() },
+		});
+		const verificationRunId = database.createVerificationRun({
+			manifestId,
+			report: {
+				verdict: "pass",
+				confidence: { score: 100, rationale: "verified", uncertainties: [] },
+				ciChecks: {},
+				rationale: "verified",
+				uncertainties: [],
+				replay: { commands: [] },
+			},
+		});
+		let head = sha;
+		let induceRace = true;
+		let releases = 0;
+		let readyCalls = 0;
+		const pullRequest = () => ({
+			number: 1,
+			url: "https://github.test/pr/1",
+			branch: "feature/concurrent",
+			base: "main",
+			baseSha: sha,
+			isDraft: true,
+			headSha: head,
+		});
+		const client: GitHubEffectClient = {
+			pushBranch: async () => undefined,
+			getBranchHead: async () => head,
+			findPullRequest: async () => pullRequest(),
+			createDraftPullRequest: async () => pullRequest(),
+			updatePullRequest: async () => undefined,
+			getPullRequest: async () => pullRequest(),
+			linkStack: async () => undefined,
+			isStackLinked: async () => false,
+			acquireBranchLock: async () => {
+				// Model the provider's deterministic concurrent mutation between the
+				// lock acquisition and the mandatory readiness reread.
+				if (induceRace) head = changedSha;
+				return { release: async () => void releases++ };
+			},
+			markReady: async () => void readyCalls++,
+		};
+		const result = await new GitHubEffects(database, client, {
+			owner: "concurrency",
+			requireBranchLock: true,
+		}).readyForReview({
+			reference: 1,
+			verifiedCommit: sha,
+			verificationPassed: true,
+			manifestId,
+			verificationRunId,
+			requiredChecks: [],
+		});
+		assert.equal(result.status, "blocked");
+		assert.equal(readyCalls, 0);
+		assert.equal(releases, 1);
+		induceRace = false;
+		head = sha;
+		const ready = await new GitHubEffects(database, client, {
+			owner: "retention",
+			requireBranchLock: true,
+		}).readyForReview({
+			reference: 2,
+			verifiedCommit: sha,
+			verificationPassed: true,
+			manifestId,
+			verificationRunId,
+			requiredChecks: [],
+		});
+		assert.equal(ready.status, "ready");
+		assert.equal(releases, 1);
+		database.close();
+	});
 });
