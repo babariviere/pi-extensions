@@ -343,6 +343,22 @@ function candidateStateIsQuestion(database: BackgroundAgentsDatabase, jobId: str
 	);
 }
 
+async function closeTabOrConfirmAbsence(controls: BackgroundRuntimeControls, tabId: string): Promise<void> {
+	try {
+		await controls.closeTab!(tabId);
+		return;
+	} catch (error) {
+		if (controls.isTabClosed) {
+			try {
+				if (await controls.isTabClosed(tabId)) return;
+			} catch {
+				// Preserve the close failure and leave the intent pending for retry.
+			}
+		}
+		throw error;
+	}
+}
+
 export class BackgroundAgentsController {
 	readonly database: BackgroundAgentsDatabase;
 	readonly config: BackgroundAgentsConfig;
@@ -572,11 +588,8 @@ export class BackgroundAgentsController {
 					if (!(await this.runtimeControls.isSystemdUnitStopped(intent.resourceId)))
 						throw new Error(`systemd unit remains active: ${intent.resourceId}`);
 				} else {
-					if (!this.runtimeControls.closeTab || !this.runtimeControls.isTabClosed)
-						throw new Error(`tab cleanup is unavailable: ${intent.resourceId}`);
-					await this.runtimeControls.closeTab(intent.resourceId);
-					if (!(await this.runtimeControls.isTabClosed(intent.resourceId)))
-						throw new Error(`tab remains active: ${intent.resourceId}`);
+					if (!this.runtimeControls.closeTab) throw new Error(`tab cleanup is unavailable: ${intent.resourceId}`);
+					await closeTabOrConfirmAbsence(this.runtimeControls, intent.resourceId);
 				}
 				this.database.markRuntimeCleanupIntent(
 					intent.kind,
@@ -650,11 +663,8 @@ export class BackgroundAgentsController {
 		if (attempt.tabId && !intent?.tabConfirmed) {
 			if (this.runtimeControls.closeTab) {
 				try {
-					await this.runtimeControls.closeTab(attempt.tabId);
-					if (!this.runtimeControls.isTabClosed) throw new Error("tab closure cannot be confirmed");
-					const closed = await this.runtimeControls.isTabClosed(attempt.tabId);
-					if (!closed) failures.push(`tab remains active: ${attempt.tabId}`);
-					else this.database.markUsageStopIntent(attempt.attemptId, { tabConfirmed: true });
+					await closeTabOrConfirmAbsence(this.runtimeControls, attempt.tabId);
+					this.database.markUsageStopIntent(attempt.attemptId, { tabConfirmed: true });
 				} catch (error) {
 					failures.push(`tab close: ${error instanceof Error ? error.message : String(error)}`);
 				}
@@ -865,11 +875,9 @@ export class BackgroundAgentsController {
 			if (attempt.tab_id && !runtimeConfirmed) {
 				if (this.runtimeControls.closeTab) {
 					try {
-						await this.runtimeControls.closeTab(attempt.tab_id);
-						if (!this.runtimeControls.isTabClosed) throw new Error("tab closure cannot be confirmed");
-						runtimeConfirmed = await this.runtimeControls.isTabClosed(attempt.tab_id);
-						if (!runtimeConfirmed) failures.push(`attempt ${attempt.id} tab remains active: ${attempt.tab_id}`);
-						else this.database.markEmergencyStopAttempt(attempt.id, { tabConfirmed: true });
+						await closeTabOrConfirmAbsence(this.runtimeControls, attempt.tab_id);
+						runtimeConfirmed = true;
+						this.database.markEmergencyStopAttempt(attempt.id, { tabConfirmed: true });
 					} catch (error) {
 						failures.push(`attempt ${attempt.id} tab: ${error instanceof Error ? error.message : String(error)}`);
 					}

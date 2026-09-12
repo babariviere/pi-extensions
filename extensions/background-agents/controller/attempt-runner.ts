@@ -13,7 +13,12 @@ import { backgroundBranch, GitWorktreeManager } from "./git/worktree.ts";
 import { GitHubDraftConflictError, GitHubEffects, type GitHubEffectClient } from "./effects/github.ts";
 import { BackgroundAgentsStateMachine } from "./state-machine.ts";
 import { buildContextManifest, persistContextManifest, type ContextManifest } from "./runtime/context.ts";
-import { launchAttemptThroughHerdr, type HerdrAttemptLaunchResult, type HerdrAttemptOptions } from "./runtime/herdr.ts";
+import {
+	launchAttemptThroughHerdr,
+	type HerdrAttemptHost,
+	type HerdrAttemptLaunchResult,
+	type HerdrAttemptOptions,
+} from "./runtime/herdr.ts";
 import { prepareRuntimeProfile, selectRuntimeProfile } from "./runtime/profiles.ts";
 import { waitForTransientService, type TransientServiceCompletion } from "./runtime/systemd.ts";
 import {
@@ -104,6 +109,9 @@ export interface ProductionAttemptRunnerOptions {
 	githubClient?: GitHubEffectClient;
 	githubClientFactory?: (repository: GitRepository) => GitHubEffectClient;
 	closeTab?: (tabId: string) => Promise<void>;
+	isTabClosed?: (tabId: string) => Promise<boolean>;
+	herdr?: HerdrAttemptHost;
+	preflight?: NonNullable<Parameters<typeof launchAttemptThroughHerdr>[1]>["preflight"];
 }
 
 const ROLE_ORDINAL: Record<AgentRole, number> = {
@@ -621,7 +629,7 @@ export class ProductionAttemptRunner {
 								}),
 						...(command ? { command, commandArgsPrefix } : {}),
 					},
-					this.options.launch ? {} : undefined,
+					this.options.launch ? {} : { herdr: this.options.herdr, preflight: this.options.preflight },
 				),
 			);
 			let completion: TransientServiceCompletion | undefined = undefined;
@@ -637,17 +645,34 @@ export class ProductionAttemptRunner {
 					reason: "terminal attempt runtime cleanup",
 				});
 				if (completion?.state !== "timed-out") database.markRuntimeCleanupIntent("unit", launched.unit);
-				const closeTab = this.options.closeTab ?? (!this.options.launch ? defaultHerdr.closeTab : undefined);
+				const herdr = this.options.herdr ?? defaultHerdr;
+				const closeTab =
+					this.options.closeTab ?? (!this.options.launch ? (tabId: string) => herdr.closeTab(tabId) : undefined);
+				const isTabClosed =
+					this.options.isTabClosed ??
+					(!this.options.launch && herdr.isTabClosed ? (tabId: string) => herdr.isTabClosed!(tabId) : undefined);
 				if (closeTab && launched.tabId) {
 					try {
 						await closeTab(launched.tabId);
 						database.markRuntimeCleanupIntent("tab", launched.tabId);
 					} catch (error) {
-						database.createRuntimeCleanupIntents({
-							attemptId: claim.attemptId,
-							tabId: launched.tabId,
-							reason: `attempt tab cleanup failed: ${error instanceof Error ? error.message : String(error)}`,
-						});
+						let absent = false;
+						if (isTabClosed) {
+							try {
+								absent = await isTabClosed(launched.tabId);
+							} catch {
+								// Keep the durable intent pending for controller recovery.
+							}
+						}
+						if (absent) {
+							database.markRuntimeCleanupIntent("tab", launched.tabId);
+						} else {
+							database.createRuntimeCleanupIntents({
+								attemptId: claim.attemptId,
+								tabId: launched.tabId,
+								reason: `attempt tab cleanup failed: ${error instanceof Error ? error.message : String(error)}`,
+							});
+						}
 					}
 				}
 			}

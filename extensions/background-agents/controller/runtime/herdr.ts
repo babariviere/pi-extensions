@@ -38,7 +38,22 @@ export interface HerdrAttemptHost {
 	waitForShellReady(paneId: string, timeoutMs: number, signal?: AbortSignal): Promise<{ ok: boolean; error?: string }>;
 	runCommand(paneId: string, argv: string[], signal?: AbortSignal): Promise<{ ok: boolean; error?: string }>;
 	closeTab(tabId: string): Promise<void>;
+	isTabClosed?(tabId: string): Promise<boolean>;
 	stopSystemdUnit?(unit: string): Promise<void>;
+}
+
+async function closeTabOrConfirmAbsence(host: HerdrAttemptHost, tabId: string): Promise<boolean> {
+	try {
+		await host.closeTab(tabId);
+		return true;
+	} catch {
+		if (!host.isTabClosed) return false;
+		try {
+			return await host.isTabClosed(tabId);
+		} catch {
+			return false;
+		}
+	}
 }
 
 async function cleanupLaunchResources(
@@ -54,10 +69,9 @@ async function cleanupLaunchResources(
 		reason: "attempt launch authorization was invalidated",
 	});
 	if (tabId) {
-		try {
-			await host.closeTab(tabId);
+		if (await closeTabOrConfirmAbsence(host, tabId)) {
 			options.database.markRuntimeCleanupIntent("tab", tabId);
-		} catch {
+		} else {
 			// The durable intent remains pending for controller recovery.
 		}
 	}

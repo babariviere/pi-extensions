@@ -67,9 +67,10 @@ export class HerdrClient {
 		return res.ok ? parseTab(res.result) : undefined;
 	}
 
-	/** Close a whole tab (and all of its panes) by id. Best-effort. */
+	/** Close a whole tab (and all of its panes) by id. */
 	async closeTab(tabId: string): Promise<void> {
-		await this.#transport.run(["tab", "close", tabId]);
+		const res = await this.#transport.run(["tab", "close", tabId]);
+		if (!res.ok) throw new Error(`Herdr tab close failed for ${tabId}: transport returned an unsuccessful result`);
 	}
 
 	/**

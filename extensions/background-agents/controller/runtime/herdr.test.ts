@@ -94,3 +94,73 @@ test("persists context and launch metadata while keeping secrets out of pane arg
 		rmSync(root, { recursive: true, force: true });
 	}
 });
+
+test("launch cleanup keeps a tab intent pending when close fails", async () => {
+	const root = mkdtempSync(join(tmpdir(), "background-runtime-herdr-cleanup-"));
+	const database = new BackgroundAgentsDatabase(":memory:");
+	try {
+		const primary = join(root, "primary");
+		const worktree = join(root, "worktree");
+		const attempt = join(root, "attempt");
+		mkdirSync(join(primary, ".git"), { recursive: true });
+		mkdirSync(worktree);
+		mkdirSync(attempt);
+		const config = normalizeBackgroundAgentsConfig({
+			profiles: [{ id: "p", provider: "anthropic", agentDir: root }],
+		});
+		const runtime = prepareRuntimeProfile(selectRuntimeProfile(config, "worker", { attemptDir: attempt }));
+		const caseId = database.createCase({ title: "launch cleanup", source: "manual" });
+		const jobId = database.createJob({ caseId, role: "worker" });
+		const claim = database.claimJob(jobId, "controller")!;
+		await assert.rejects(
+			launchAttemptThroughHerdr(
+				{
+					database,
+					attemptId: claim.attemptId,
+					caseId,
+					role: "worker",
+					attemptDirectory: attempt,
+					worktreeDirectory: worktree,
+					primaryCheckout: primary,
+					gitDirectory: join(primary, ".git"),
+					context: buildContextManifest({
+						attemptId: claim.attemptId,
+						caseId,
+						role: "worker",
+						context: { instruction: "work" },
+					}),
+					runtime,
+					rolePromptPath: join(root, "worker.md"),
+					limits: config.systemd,
+				},
+				{
+					preflight: async () => {},
+					herdr: {
+						createTab: async () => {
+							database.run("UPDATE attempts SET stop_epoch = stop_epoch + 1 WHERE id = ?", claim.attemptId);
+							return { tabId: "tab", rootPaneId: "pane" };
+						},
+						waitForShellReady: async () => ({ ok: true }),
+						runCommand: async () => ({ ok: true }),
+						closeTab: async () => {
+							throw new Error("close failed");
+						},
+					},
+				},
+			),
+		);
+		assert.deepEqual(
+			database
+				.listPendingRuntimeCleanupIntents()
+				.map((intent) => [intent.kind, intent.resourceId])
+				.sort((a, b) => a[0].localeCompare(b[0])),
+			[
+				["tab", "tab"],
+				["unit", `background-agent-${claim.attemptId}`],
+			],
+		);
+	} finally {
+		database.close();
+		rmSync(root, { recursive: true, force: true });
+	}
+});

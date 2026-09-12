@@ -51,6 +51,22 @@ test("runCommand quotes argv and never serializes an environment", async () => {
 	assert.deepEqual(calls[0], ["pane", "run", "wA:p1", "'systemd-run' '--unit=x' 'hello; echo bad'"]);
 });
 
+test("closeTab rejects an unsuccessful transport result without exposing its payload", async () => {
+	try {
+		await new HerdrClient(
+			scriptedTransport([{ ok: false, error: "authorization secret", stdout: "sensitive payload" }]).transport,
+		).closeTab("wA:t1");
+		assert.fail("closeTab should reject");
+	} catch (error) {
+		assert.match(String(error), /Herdr tab close failed/);
+		assert.doesNotMatch(String(error), /secret|sensitive/);
+	}
+});
+
+test("closeTab accepts a successful transport result", async () => {
+	await new HerdrClient(scriptedTransport([{ ok: true, result: {} }]).transport).closeTab("wA:t1");
+});
+
 test("runPi surfaces a pane-run failure", async () => {
 	const result = await new HerdrClient(scriptedTransport([{ ok: false, error: "pane unavailable" }]).transport).runPi(
 		"wA:p1",

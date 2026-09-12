@@ -19,6 +19,8 @@ import { BackgroundAgentsStateMachine } from "./state-machine.ts";
 import { JobScheduler } from "./jobs.ts";
 import { SpecificationWorkflow } from "./workflows/specification.ts";
 import { createEvidenceManifest } from "./verification/evidence.ts";
+import type { HerdrAttemptHost } from "./runtime/herdr.ts";
+import { herdr as defaultHerdr } from "../../spindle/agents/herdr-client.ts";
 
 const SHA = "0123456789012345678901234567890123456789";
 
@@ -307,6 +309,74 @@ test("production runner dispatches every role through its profile boundary", asy
 	}
 });
 
+test("production default Herdr cleanup preserves the client receiver", async () => {
+	const root = mkdtempSync(join(tmpdir(), "background-attempt-default-herdr-"));
+	const database = new BackgroundAgentsDatabase(":memory:");
+	let jobId = "";
+	let attemptId = "";
+	const herdr: HerdrAttemptHost = {
+		createTab: async () => ({ tabId: "tab", rootPaneId: "pane" }),
+		waitForShellReady: async () => ({ ok: true }),
+		runCommand: async (_pane, argv) => {
+			const resultPath = argv.find((arg) => arg.endsWith("/result.json"));
+			assert.ok(resultPath);
+			writeFileSync(
+				resultPath,
+				JSON.stringify({
+					version: 1,
+					attemptId,
+					jobId,
+					role: "classifier",
+					state: "succeeded",
+					output: outputFor("classifier"),
+				}),
+			);
+			return { ok: true };
+		},
+		closeTab: async function (this: HerdrAttemptHost) {
+			assert.equal(this, defaultHerdr);
+		},
+	};
+	const originalHerdr = {
+		createTab: defaultHerdr.createTab,
+		waitForShellReady: defaultHerdr.waitForShellReady,
+		runCommand: defaultHerdr.runCommand,
+		closeTab: defaultHerdr.closeTab,
+	};
+	Object.assign(defaultHerdr, herdr);
+	try {
+		const config = normalizeBackgroundAgentsConfig({
+			profiles: [{ id: "profile", provider: "anthropic", agentDir: root }],
+		});
+		const caseId = database.createCase({ title: "default Herdr", source: "manual" });
+		database.recordSourceEvent(
+			{
+				source: "manual",
+				sourceKey: "default-herdr-source",
+				receivedAt: new Date().toISOString(),
+				title: "bug",
+				body: "body",
+			},
+			{ caseId },
+		);
+		jobId = database.createJob({ caseId, role: "classifier" });
+		const claim = database.claimJob(jobId, "test")!;
+		attemptId = claim.attemptId;
+		const runner = new ProductionAttemptRunner({
+			config,
+			attemptRoot: join(root, "attempts"),
+			preflight: async () => {},
+			waitForUnit: async () => ({ state: "succeeded" }),
+		});
+		assert.equal((await runner.run(claim, database)).state, "succeeded");
+		assert.equal(database.listPendingRuntimeCleanupIntents().length, 0);
+	} finally {
+		Object.assign(defaultHerdr, originalHerdr);
+		database.close();
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
 test("invalid or missing result artifacts require human review", async () => {
 	const root = mkdtempSync(join(tmpdir(), "background-attempt-result-"));
 	const database = new BackgroundAgentsDatabase(":memory:");
@@ -349,6 +419,67 @@ test("invalid or missing result artifacts require human review", async () => {
 		assert.equal(result.state, "needs-human");
 		assert.match(result.failure ?? "", /result artifact/);
 		assert.equal(database.get("SELECT id FROM investigation_reports WHERE case_id = ?", caseId), undefined);
+	} finally {
+		database.close();
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("terminal cleanup leaves a failed tab close pending", async () => {
+	const root = mkdtempSync(join(tmpdir(), "background-attempt-terminal-cleanup-"));
+	const database = new BackgroundAgentsDatabase(":memory:");
+	try {
+		const config = normalizeBackgroundAgentsConfig({
+			profiles: [{ id: "profile", provider: "anthropic", agentDir: root }],
+		});
+		const caseId = database.createCase({ title: "terminal cleanup", source: "manual" });
+		database.recordSourceEvent(
+			{
+				source: "manual",
+				sourceKey: "terminal-cleanup-source",
+				receivedAt: new Date().toISOString(),
+				title: "bug",
+				body: "body",
+			},
+			{ caseId },
+		);
+		const jobId = database.createJob({ caseId, role: "classifier" });
+		const claim = database.claimJob(jobId, "test")!;
+		const runner = new ProductionAttemptRunner({
+			config,
+			attemptRoot: join(root, "attempts"),
+			launch: async (options) => {
+				writeFileSync(
+					String(options.context.context.resultPath),
+					JSON.stringify({
+						version: 1,
+						attemptId: options.attemptId,
+						jobId,
+						role: "classifier",
+						state: "succeeded",
+						output: outputFor("classifier"),
+					}),
+				);
+				return {
+					attemptId: options.attemptId,
+					unit: "unit",
+					tabId: "tab",
+					paneId: "pane",
+					contextPath: "context",
+					command: [],
+				};
+			},
+			waitForUnit: async () => ({ state: "succeeded" }),
+			closeTab: async () => {
+				throw new Error("close failed");
+			},
+			isTabClosed: async () => false,
+		});
+		assert.equal((await runner.run(claim, database)).state, "succeeded");
+		assert.deepEqual(
+			database.listPendingRuntimeCleanupIntents().map((intent) => intent.resourceId),
+			["tab"],
+		);
 	} finally {
 		database.close();
 		rmSync(root, { recursive: true, force: true });

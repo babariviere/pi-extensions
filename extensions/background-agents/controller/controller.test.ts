@@ -536,6 +536,34 @@ test("restores durable controls across controller restart and reconciles an emer
 	assert.equal(second.snapshot().emergencyStop, false);
 });
 
+test("runtime tab cleanup retries after a failed close", async () => {
+	const database = new BackgroundAgentsDatabase(":memory:");
+	databases.push(database);
+	let closeAttempts = 0;
+	const controllerOptions = {
+		database,
+		startSocket: false,
+		runtimeControls: {
+			terminateSystemdUnit: async () => {},
+			isSystemdUnitStopped: async () => true,
+			closeTab: async () => {
+				closeAttempts++;
+				if (closeAttempts === 1) throw new Error("temporary close failure");
+			},
+			isTabClosed: async () => false,
+		},
+	};
+	database.createRuntimeCleanupIntent({ tabId: "tab-retry", reason: "retry test" });
+	const controller = new BackgroundAgentsController(controllerOptions);
+	await controller.start();
+	assert.equal(database.listPendingRuntimeCleanupIntents().length, 1);
+	await controller.stop();
+	await controller.start();
+	assert.equal(closeAttempts, 2);
+	assert.equal(database.listPendingRuntimeCleanupIntents().length, 0);
+	await controller.stop();
+});
+
 test("emergency stop attempts every unit and pane, pauses jobs, reconciles every attempt, and aggregates failures", async () => {
 	const database = new BackgroundAgentsDatabase(":memory:");
 	databases.push(database);
