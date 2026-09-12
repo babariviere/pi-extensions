@@ -27,6 +27,20 @@ test("describe returns undefined for a tool that does not exist", async () => {
 	assert.equal(await provider().describe("nope", context), undefined);
 });
 
+test("Pi core overrides use their internal adapter without a web provider", async () => {
+	const readOverride = {
+		name: "read",
+		definition: { name: "read", description: "overridden read", parameters: { type: "object" } },
+		sourceInfo: { path: "/tool-substitute/index.ts", source: "extension", scope: "user", origin: "top-level" },
+	};
+	const catalog = {
+		get: (name: string) => (name === "read" ? readOverride : undefined),
+	} as any;
+	const descriptor = await new PiToolsProvider(process.cwd(), catalog).describe("read", context);
+	assert.equal(descriptor?.name, "read");
+	assert.equal(descriptor?.namespace, "extension-override");
+});
+
 test("invoke reports an unknown tool as unknown", async () => {
 	await assert.rejects(() => provider().invoke("nope", {}, context), /Unknown Pi tool: nope/);
 });

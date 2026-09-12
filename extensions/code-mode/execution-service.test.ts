@@ -118,6 +118,15 @@ test("discovery actions dispatch through the static host calls", async () => {
 	assert.deepEqual(value.called, { echoed: { via: "call" } });
 });
 
+test("generic dispatch cannot reach an unmapped captured sibling", async () => {
+	const service = serviceWith([makeProvider("web", { echo: () => ({}) })]);
+	for (const ref of ["web.web_search", "web.todo", "web.toString", "web.__proto__"]) {
+		const result = await execute(service, `return await tools.call({ ref: ${JSON.stringify(ref)}, args: {} });`);
+		assert.equal(result.success, false, ref);
+		assert.match(result.error ?? "", /Unknown Spindle action/);
+	}
+});
+
 test("discovery finds snake_case names through the web compatibility alias", async () => {
 	const service = serviceWith([makeProvider("web", { web_search: () => ({}) })]);
 	const result = await execute(
@@ -136,10 +145,35 @@ test("trusted custom provider namespaces remain available", async () => {
 	assert.equal(result.audits[0]?.ref, "custom.echo");
 });
 
+test("orchestration-only keeps trusted custom providers but hides full-code providers", async () => {
+	const custom = makeProvider("custom", { echo: (args) => ({ echoed: args }) });
+	const web = makeProvider("web", { echo: () => ({ shouldNotRun: true }) });
+	const fullOnly = { ...makeProvider("hidden", { echo: () => ({}) }), fullCodeOnly: true };
+	const service = serviceWith([web, custom, fullOnly], { fullCodeMode: false });
+	const customResult = await execute(service, "return await custom.echo({ x: 1 });");
+	assert.equal(customResult.success, true, customResult.error ?? "");
+	assert.deepEqual(customResult.value, { echoed: { x: 1 } });
+
+	for (const code of ["return await web.echo({});", "return await hidden.echo({});"]) {
+		const hidden = await execute(service, code);
+		assert.equal(hidden.success, false);
+		assert.ok(hidden.typeErrors && hidden.typeErrors.length > 0);
+	}
+});
+
 test("execution succeeds when optional web capture is not registered", async () => {
 	const result = await execute(serviceWith([]), "return 42;");
 	assert.equal(result.success, true, result.error ?? "");
 	assert.equal(result.value, 42);
+});
+
+test("an absent web capture does not leave a callable web declaration", async () => {
+	const result = await execute(
+		serviceWith([makeProvider("custom", { echo: () => ({}) })]),
+		"return await web.search({});",
+	);
+	assert.equal(result.success, false);
+	assert.ok(result.typeErrors && result.typeErrors.length > 0);
 });
 
 test("mapLimit bounds how many thunks run at once", async () => {

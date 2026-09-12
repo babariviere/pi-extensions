@@ -59,7 +59,8 @@ for (const { name, model, expected } of editGuidanceCases) {
 }
 
 test("full-code guidance bootstraps the skill without duplicating its workflow", () => {
-	assert.match(FULL_CODE_GUIDANCE, /TypeScript code mode and exclusive tool interface/);
+	assert.match(FULL_CODE_GUIDANCE, /Pi core tools and registered capabilities/);
+	assert.match(FULL_CODE_GUIDANCE, /Other extensions keep their native tools/);
 	assert.match(FULL_CODE_GUIDANCE, /do not use Python as a fallback/);
 	assert.match(FULL_CODE_GUIDANCE, /If the `code-mode` skill is available/);
 	assert.match(FULL_CODE_GUIDANCE, /SKILL\.md through `pi\.read` inside `code_mode`/);

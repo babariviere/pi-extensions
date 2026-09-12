@@ -1,14 +1,14 @@
-import { RichQuickJsRuntime } from "@babariviere/code-mode";
+import { PiQuickJsRuntime } from "@babariviere/code-mode/host-pi";
 import { piBashExitMetadata } from "../core/pi-bash-error.ts";
 import type {
-	SpindleSandboxOptions,
+	PiSandboxOptions as SpindleSandboxOptions,
 	SpindleSandboxResult,
 	SpindleHostCall,
 	SpindleSandboxTerminationReason,
-} from "@babariviere/code-mode";
-export { GUEST_SETUP } from "@babariviere/code-mode";
+} from "@babariviere/code-mode/host-pi";
+export { GUEST_SETUP } from "@babariviere/code-mode/host-pi";
 export type { SpindleSandboxOptions, SpindleSandboxResult, SpindleHostCall, SpindleSandboxTerminationReason };
-export class QuickJsRuntime extends RichQuickJsRuntime {
+export class QuickJsRuntime extends PiQuickJsRuntime {
 	async execute(
 		code: string,
 		hostCall: SpindleHostCall,

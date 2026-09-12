@@ -130,7 +130,11 @@ export class TranscriptAccumulator {
 		if (!id.startsWith("spindle_")) return undefined;
 		for (let index = this.#activeTools.length - 1; index >= 0; index--) {
 			const candidate = this.#activeTools[index];
-			if (candidate?.toolName === "code_mode" && candidate.status === "running") return candidate;
+			if (
+				(candidate?.toolName === "code_mode" || candidate?.toolName === "spindle_exec") &&
+				candidate.status === "running"
+			)
+				return candidate;
 		}
 		return undefined;
 	}

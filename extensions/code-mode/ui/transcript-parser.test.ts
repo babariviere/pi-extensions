@@ -99,3 +99,16 @@ test("a new turn does not inherit the previous turn's stream buffer", () => {
 	assert.equal(assistant[0].text, "one");
 	assert.equal(assistant[1].text, "two");
 });
+
+for (const toolName of ["code_mode", "spindle_exec"]) {
+	test(`restores nested calls beneath ${toolName} transcript entries`, () => {
+		const acc = new TranscriptAccumulator();
+		acc.append([
+			{ type: "tool_execution_start", toolCallId: "outer", toolName, args: {} },
+			{ type: "tool_execution_start", toolCallId: "spindle_nested", toolName: "read", args: { path: "a.ts" } },
+		]);
+		const nested = acc.entries.find((entry) => entry.id === "spindle_nested");
+		assert.equal(nested?.parentId, "outer");
+		assert.equal(nested?.depth, 1);
+	});
+}

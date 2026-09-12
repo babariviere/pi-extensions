@@ -1,25 +1,22 @@
+import { readFileSync, statSync } from "node:fs";
+import { isAbsolute, resolve } from "node:path";
 import {
+	type AgentToolResult,
 	type BashOperations,
-	type EditOperations,
 	createEditToolDefinition,
 	createFindToolDefinition,
 	createGrepToolDefinition,
 	createLsToolDefinition,
 	createReadToolDefinition,
-	type AgentToolResult,
+	type EditOperations,
 	type ExtensionRunner,
 	type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import { readFileSync, statSync } from "node:fs";
-import { isAbsolute, resolve } from "node:path";
-import { createApplyPatchToolDefinition } from "./apply-patch.ts";
-import { createSpindleBashToolDefinition } from "./spindle-bash-tool.ts";
-import { createSpindleExecToolDefinition } from "./code-mode-tool.ts";
 import { runAbortable, throwIfAborted } from "../async-settlement.ts";
-import { classifyPiBashError, piBashResultError } from "../core/pi-bash-error.ts";
-import { CapturedToolCatalog } from "../capture/catalog.ts";
-import { PI_CORE_TOOL_NAMES, type PiCoreToolName } from "../core/pi-tools.ts";
+import type { CapturedToolCatalog } from "../capture/catalog.ts";
 import { DEFAULT_SPINDLE_CONFIG } from "../config.ts";
+import { classifyPiBashError, piBashResultError } from "../core/pi-bash-error.ts";
+import { PI_CORE_TOOL_NAMES, type PiCoreToolName } from "../core/pi-tools.ts";
 import { expandSkillDirMarkersForRead } from "../core/skill-dir.ts";
 import type {
 	SpindleActionDescriptor,
@@ -29,7 +26,10 @@ import type {
 	SpindleProviderListRequest,
 } from "../protocol.ts";
 import { countContentLines } from "../ui/preview-lines.ts";
-import { CapturedToolsProvider } from "./captured-tools-provider.ts";
+import { createApplyPatchToolDefinition } from "./apply-patch.ts";
+import { CapturedToolOverrideAdapter } from "./captured-tools-provider.ts";
+import { createSpindleExecToolDefinition } from "./code-mode-tool.ts";
+import { createSpindleBashToolDefinition } from "./spindle-bash-tool.ts";
 import { createPreviewWriteToolDefinition, writeContentForPreview } from "./write-preview.ts";
 
 const MAX_RENDERER_ARGUMENT_CHARS = 200_000;
@@ -189,9 +189,10 @@ export interface PiToolsSandbox {
 export class PiToolsProvider implements SpindleProvider {
 	readonly name = "pi";
 	readonly description = "Pi's built-in coding tools";
+	readonly fullCodeOnly = true;
 	readonly #tools: Record<PiCoreToolName, ToolDefinition<any, any, any>>;
 	readonly #catalog: CapturedToolCatalog | undefined;
-	readonly #capturedTools: CapturedToolsProvider | undefined;
+	readonly #capturedTools: CapturedToolOverrideAdapter | undefined;
 	readonly #cwd: string;
 	readonly #readGuard: ((absolutePath: string) => void) | undefined;
 	/** Ceiling on a single `pi.read`; see `executor.readMaxBytes`. */
@@ -200,7 +201,7 @@ export class PiToolsProvider implements SpindleProvider {
 	constructor(
 		cwd: string,
 		catalog?: CapturedToolCatalog,
-		capturedTools?: CapturedToolsProvider,
+		capturedTools?: CapturedToolOverrideAdapter,
 		sandbox?: PiToolsSandbox,
 		limits?: { readMaxBytes?: number },
 	) {
@@ -227,7 +228,7 @@ export class PiToolsProvider implements SpindleProvider {
 			ls: createLsToolDefinition(cwd),
 		};
 		this.#catalog = catalog;
-		this.#capturedTools = capturedTools;
+		this.#capturedTools = capturedTools ?? (catalog ? new CapturedToolOverrideAdapter(catalog) : undefined);
 	}
 
 	async list(
@@ -249,15 +250,15 @@ export class PiToolsProvider implements SpindleProvider {
 	): Promise<SpindleActionDescriptor | undefined> {
 		if (!(actionName in this.#tools)) return undefined;
 		const name = actionName as PiCoreToolName;
-		const override = await this.#capturedTools?.describe(name, _context);
+		const override = this.#capturedTools?.describe(name);
 		if (override) return { ...override, namespace: "extension-override" };
 		const tool = this.#tools[name];
 		return this.#descriptor(name, tool);
 	}
 
 	prepareArguments(actionName: string, args: Record<string, unknown>): Record<string, unknown> {
-		if (this.#catalog?.get(actionName)) {
-			return this.#capturedTools!.prepareArguments(actionName, args);
+		if (this.#catalog?.get(actionName) && this.#capturedTools) {
+			return this.#capturedTools.prepareArguments(actionName, args);
 		}
 		if (!(actionName in this.#tools)) return args;
 		const prepare = this.#tools[actionName as PiCoreToolName].prepareArguments;
@@ -284,8 +285,8 @@ export class PiToolsProvider implements SpindleProvider {
 		// A captured extension override (e.g. an extension that registered a "read"
 		// tool) already replays the full event lifecycle itself via
 		// CapturedToolsProvider, so delegate to it unchanged.
-		if (this.#catalog?.get(name)) {
-			const result = await this.#capturedTools!.invoke(name, args, context);
+		if (this.#catalog?.get(name) && this.#capturedTools) {
+			const result = await this.#capturedTools.invoke(name, args, context);
 			this.#attachReadMedia(name, result, context);
 			this.#attachReadNote(name, result, context);
 			this.#attachPreview(name, result, args, context);
@@ -551,9 +552,7 @@ export class PiToolsProvider implements SpindleProvider {
 		const writeByteLength = writeInput !== undefined ? Buffer.byteLength(writeInput, "utf8") : undefined;
 		const writeLineCount = writeInput !== undefined ? countContentLines(writeInput) : undefined;
 		const hasWriteBefore =
-			name === "write" &&
-			detailRecord !== undefined &&
-			Object.prototype.hasOwnProperty.call(detailRecord, "codePreviewBeforeWrite");
+			name === "write" && detailRecord !== undefined && Object.hasOwn(detailRecord, "codePreviewBeforeWrite");
 		context.attachPreview?.({
 			result: normalizeResult(name, result),
 			...(bashCommand !== undefined ? { bashCommand } : {}),

@@ -1,7 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { Value } from "typebox/value";
 import { runAbortable, settleWithin } from "../async-settlement.ts";
-import { redactRecordedArgs } from "./arg-redaction.ts";
 import {
 	executionOutcomeFromError,
 	type SpindleExecutionTraceOperationHandle,
@@ -19,8 +18,9 @@ import {
 	type SpindleProvider,
 	type SpindleProviderListRequest,
 } from "../protocol.ts";
-import type { SpindleNestedToolResultProxy } from "./tool-result-proxy.ts";
 import { formatUnknownActionMessage, repairActionName } from "./action-repair.ts";
+import { redactRecordedArgs } from "./arg-redaction.ts";
+import type { SpindleNestedToolResultProxy } from "./tool-result-proxy.ts";
 
 export interface ResolvedSpindleAction extends SpindleActionDescriptor {
 	ref: string;
@@ -238,7 +238,10 @@ export class ActionRegistry {
 	constructor(readonly toolResultProxy?: SpindleNestedToolResultProxy) {}
 
 	register(provider: SpindleProvider, options: { overwrite?: boolean } = {}): void {
-		if (!providerNamePattern.test(provider.name)) {
+		if (
+			!providerNamePattern.test(provider.name) ||
+			["extensions", "tools", "process", "console", "print"].includes(provider.name)
+		) {
 			throw new Error(`Invalid Spindle provider name: ${provider.name}`);
 		}
 		if (this.#providers.has(provider.name) && !options.overwrite) {
@@ -249,6 +252,11 @@ export class ActionRegistry {
 
 	has(name: string): boolean {
 		return this.#providers.has(name);
+	}
+
+	/** Whether a provider is intentionally unavailable in orchestration-only mode. */
+	isFullCodeProvider(name: string): boolean {
+		return name === "pi" || name === "web" || this.#providers.get(name)?.fullCodeOnly === true;
 	}
 
 	unregister(name: string): SpindleProvider | undefined {

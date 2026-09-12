@@ -144,7 +144,7 @@ export class SpindleActivityStore {
 
 	start(id: string, display: SpindleRunDisplay = {}): SpindleActivityRun {
 		const now = Date.now();
-		const name = cleanText(display.name, MAX_NAME_CHARS) ?? "Spindle program";
+		const name = cleanText(display.name, MAX_NAME_CHARS) ?? "Code mode program";
 		const description = cleanText(display.description, MAX_DESCRIPTION_CHARS);
 		const run: SpindleActivityRun = {
 			id,
@@ -229,7 +229,7 @@ export class SpindleActivityStore {
 
 		run.currentPhaseId = phase.id;
 		run.updatedAt = now;
-		if (run.name === "Spindle program" && run.phases.length === 1) run.name = name;
+		if (run.name === "Code mode program" && run.phases.length === 1) run.name = name;
 		this.#emit();
 		return structuredClone(phase);
 	}

@@ -430,22 +430,26 @@ export const guestTypeDeclarations = (
 	dynamic?: SpindleDynamicGuestDeclarations,
 	providers: readonly string[] = [],
 ): string => {
+	const addCustomProviderDeclarations = (source: string): string => {
+		for (const provider of providers) {
+			if (
+				!["pi", "web", "mcp", "agents", "tools", "tau", "spindle"].includes(provider) &&
+				/^[a-z][a-z0-9_-]*$/.test(provider)
+			) {
+				source += `\ndeclare const ${provider}: Record<string, (args?: Record<string, unknown>) => Promise<unknown>>;\n`;
+			}
+		}
+		return source;
+	};
 	if (!fullCodeMode) {
-		return FULL_CODE_GLOBAL_DECLARATIONS.reduce(
+		const declarations = FULL_CODE_GLOBAL_DECLARATIONS.reduce(
 			(declarations, declaration) => declarations.replace(declaration, ""),
 			GUEST_TYPE_DECLARATIONS,
 		);
+		return addCustomProviderDeclarations(declarations);
 	}
 	let declarations = dynamic ? applyDynamicDeclarations(GUEST_TYPE_DECLARATIONS, dynamic) : GUEST_TYPE_DECLARATIONS;
 	if (providers.length > 0 && !providers.includes("web"))
 		declarations = declarations.replace("declare const web: WebApi;\n", "");
-	for (const provider of providers) {
-		if (
-			!["pi", "web", "mcp", "agents", "tools", "tau", "spindle"].includes(provider) &&
-			/^[a-z][a-z0-9_-]*$/.test(provider)
-		) {
-			declarations += `\ndeclare const ${provider}: Record<string, (args?: Record<string, unknown>) => Promise<unknown>>;\n`;
-		}
-	}
-	return declarations;
+	return addCustomProviderDeclarations(declarations);
 };

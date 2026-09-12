@@ -1,3 +1,10 @@
+import {
+	type SpindleSandboxResult,
+	type SpindleSandboxTerminationReason,
+	type SpindleTypeError,
+	typeCheckSpindleCode,
+} from "@babariviere/code-mode";
+import { PiQuickJsRuntime as QuickJsRuntime } from "@babariviere/code-mode/host-pi";
 import type { Usage } from "@earendil-works/pi-ai";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { SpindleActivityStore } from "./activity/store.ts";
@@ -14,6 +21,8 @@ import { redactRecordedArgs } from "./core/arg-redaction.ts";
 import { piBashExitMetadata } from "./core/pi-bash-error.ts";
 import { spindleProcessSnapshot } from "./env-snapshot.ts";
 import { fullCodeProvider, type HostCallContext, hostCallTable, type SpindleStateNote } from "./host-calls.ts";
+import { buildDynamicGuestDeclarations } from "./runtime/dynamic-guest-types.ts";
+import { guestTypeDeclarations } from "./runtime/guest-types.ts";
 import {
 	codeUsesOrchestration,
 	isAgentBudgetRef,
@@ -21,16 +30,7 @@ import {
 	isBlockingOrchestrationRef,
 	requestedBlockingTimeoutMs,
 } from "./runtime/orchestration.ts";
-import {
-	RichQuickJsRuntime as QuickJsRuntime,
-	type SpindleSandboxResult,
-	type SpindleSandboxTerminationReason,
-	type SpindleTypeError,
-	typeCheckSpindleCode,
-} from "@babariviere/code-mode";
 import { SpindleSessionStore, type SpindleSessionStoreKey } from "./session-store.ts";
-import { guestTypeDeclarations } from "./runtime/guest-types.ts";
-import { buildDynamicGuestDeclarations } from "./runtime/dynamic-guest-types.ts";
 
 // Slack added on top of a blocking host call's own timeout so the call fails
 // with its own error before the sandbox deadline expires.
@@ -141,7 +141,10 @@ export class SpindleExecutionService {
 			guestTypeDeclarations(
 				effectiveFullCodeMode,
 				buildDynamicGuestDeclarations(guestTypeSources),
-				effectiveFullCodeMode ? this.registry.providers().map((provider) => provider.name) : [],
+				this.registry
+					.providers()
+					.filter((provider) => effectiveFullCodeMode || !this.registry.isFullCodeProvider(provider.name))
+					.map((provider) => provider.name),
 			),
 		);
 		if (checked.errors.length > 0) {
@@ -182,7 +185,7 @@ export class SpindleExecutionService {
 		};
 		const guardFullCodeRef = (ref: string): void => {
 			if (effectiveFullCodeMode) return;
-			const provider = fullCodeProvider(ref);
+			const provider = fullCodeProvider(ref, (name) => this.registry.isFullCodeProvider(name));
 			if (!provider) return;
 			throw new Error(
 				`Spindle full code mode is disabled; call ${provider === "pi" ? "Pi core" : "registered extension"} tools directly outside code_mode`,
@@ -373,7 +376,10 @@ export class SpindleExecutionService {
 					...(options.payloads ? { payloads: options.payloads } : {}),
 					// Allowlisted env snapshot injected as the guest's `process` global.
 					process: spindleProcessSnapshot(options.context.cwd),
-					providers: this.registry.providers().map((provider) => provider.name),
+					providers: this.registry
+						.providers()
+						.filter((provider) => effectiveFullCodeMode || !this.registry.isFullCodeProvider(provider.name))
+						.map((provider) => provider.name),
 					hostErrorMetadata: (ref, error) => (ref === "pi.bash" ? piBashExitMetadata(error) : undefined),
 					...(options.signal ? { signal: options.signal } : {}),
 				},

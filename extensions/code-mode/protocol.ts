@@ -26,7 +26,7 @@ export const readSpindleToolResultProxyDetailsV1 = (value: unknown): SpindleTool
 	if (
 		record.kind !== SPINDLE_TOOL_RESULT_PROXY_KIND ||
 		typeof record.ref !== "string" ||
-		!Object.prototype.hasOwnProperty.call(record, "result")
+		!Object.hasOwn(record, "result")
 	) {
 		return undefined;
 	}
@@ -169,6 +169,12 @@ export interface SpindleInvocationContext {
 export interface SpindleProvider {
 	name: string;
 	description: string;
+	/**
+	 * Hide this provider from orchestration-only code. Built-in `pi` and `web`
+	 * providers are always full-code-only; trusted external providers opt in
+	 * explicitly instead of being blocked by a closed provider-name list.
+	 */
+	fullCodeOnly?: boolean;
 	list(request: SpindleProviderListRequest, context: SpindleInvocationContext): Promise<SpindleActionDescriptor[]>;
 	describe(actionName: string, context: SpindleInvocationContext): Promise<SpindleActionDescriptor | undefined>;
 	prepareArguments?(

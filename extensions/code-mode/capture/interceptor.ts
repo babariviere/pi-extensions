@@ -2,13 +2,13 @@ import { existsSync, readFileSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import {
-	ExtensionRunner as ImportedExtensionRunner,
 	type ExtensionRunner,
+	ExtensionRunner as ImportedExtensionRunner,
 	type RegisteredTool,
 	type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { DEFAULT_SPINDLE_CONFIG, type SpindleToolCaptureConfig } from "../config.ts";
-import { CapturedToolCatalog } from "./catalog.ts";
+import type { CapturedToolCatalog } from "./catalog.ts";
 
 type ToolCaptureListener = (tools: RegisteredTool[], runner: ExtensionRunner) => RegisteredTool[];
 
@@ -41,6 +41,28 @@ const clonePolicy = (config: SpindleToolCaptureConfig): SpindleToolCaptureConfig
 	hideFromModel: config.hideFromModel,
 	keepVisible: [...config.keepVisible],
 });
+
+/**
+ * Keep the native direct path for captured tools that were not explicitly
+ * selected as a capability. Capture records the complete sibling catalog, but
+ * model visibility hides only registered aliases and exact Pi core overrides.
+ */
+export const filterCapturedToolVisibility = (
+	tools: RegisteredTool[],
+	anchorSourcePath: string,
+	policy: SpindleToolCaptureConfig,
+	hiddenToolNames: readonly string[],
+): RegisteredTool[] => {
+	if (!policy.enabled || !policy.hideFromModel) return tools;
+	const keepVisible = new Set(policy.keepVisible);
+	const hidden = new Set(hiddenToolNames);
+	return tools.filter(
+		(tool) =>
+			tool.sourceInfo.path === anchorSourcePath ||
+			keepVisible.has(tool.definition.name) ||
+			!hidden.has(tool.definition.name),
+	);
+};
 
 type ExtensionRunnerConstructor = {
 	prototype: ExtensionRunner;
@@ -120,6 +142,7 @@ export const installRegisteredToolCapture = async (options: {
 	anchorDefinition: ToolDefinition<any, any, any>;
 	catalog: CapturedToolCatalog;
 	initialPolicy?: SpindleToolCaptureConfig;
+	hiddenToolNames?: readonly string[];
 }): Promise<RegisteredToolCaptureController> => {
 	const hubs = (await extensionRunnerConstructors()).map(captureHub);
 	const anchorToken = {};
@@ -142,12 +165,7 @@ export const installRegisteredToolCapture = async (options: {
 		if (!anchor) return tools;
 
 		options.catalog.replace(tools, runner, policy, anchor.sourceInfo.path);
-		if (!policy.enabled || !policy.hideFromModel) return tools;
-
-		const visible = new Set(policy.keepVisible);
-		return tools.filter(
-			(tool) => tool.sourceInfo.path === anchor.sourceInfo.path || visible.has(tool.definition.name),
-		);
+		return filterCapturedToolVisibility(tools, anchor.sourceInfo.path, policy, options.hiddenToolNames ?? []);
 	};
 
 	for (const hub of hubs) hub.listeners.add(listener);

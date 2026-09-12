@@ -89,9 +89,9 @@ export const createSpindleExecTool = (
 	decorateShell(
 		defineTool({
 			name: "code_mode",
-			label: "Spindle",
+			label: "Code mode",
 			description:
-				"This session's TypeScript code mode and, in full code mode, its exclusive tool interface. Execute type-checked TypeScript in isolated QuickJS to call explicitly registered `pi.*`, `web.search`, `web.fetch`, `mcp.*`, and `agents.*` capabilities. Do not use Python as an orchestration fallback.",
+				"Execute type-checked TypeScript in isolated QuickJS to call Pi core tools and explicitly registered capabilities, including `web.search`, `web.fetch`, `mcp.*`, and `agents.*`. Other extensions keep their native tools. Do not use Python as an orchestration fallback.",
 			promptSnippet: "Pi core tools, explicit web capabilities, MCP, and custom subagents",
 			promptGuidelines: [
 				"Batch independent operations in one `code_mode` program, not one call per tool; keep dependent/conditional steps sequential. Use `Promise.all` for a few independent calls; use `mapLimit(items, fn, N)` when fanning out over a wide list, because `Promise.all` receives promises that have already started and so cannot bound how many run at once. Return only the compact final value; intermediate results stay in the sandbox.",
@@ -122,7 +122,7 @@ export const createSpindleExecTool = (
 				agentBudget: Type.Optional(
 					Type.Number({
 						minimum: 1,
-						description: "Optional agent-call cap, bounded by Spindle configuration",
+						description: "Optional agent-call cap, bounded by code-mode configuration",
 					}),
 				),
 				timeoutMs: Type.Optional(
@@ -136,10 +136,10 @@ export const createSpindleExecTool = (
 					Type.Union([
 						Type.Object({
 							name: Type.Optional(
-								Type.String({ description: "Human-readable name for the Spindle activity widget" }),
+								Type.String({ description: "Human-readable name for the code-mode activity widget" }),
 							),
 							description: Type.Optional(
-								Type.String({ description: "Compact objective shown in the Spindle widget" }),
+								Type.String({ description: "Compact objective shown in the code-mode widget" }),
 							),
 						}),
 						Type.String({
@@ -317,7 +317,7 @@ export const createSpindleExecTool = (
 					if (audits.length === 0) {
 						return trackRows(
 							new Text(
-								theme.fg("warning", `◆ ${safeTerminalText(progress ?? "Running Spindle program…")}`),
+								theme.fg("warning", `◆ ${safeTerminalText(progress ?? "Running Code mode program…")}`),
 								0,
 								0,
 							),

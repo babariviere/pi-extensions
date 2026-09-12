@@ -149,7 +149,7 @@ export class SpindleWidget implements Component {
 			.filter((actor) => actor.worker && !isActiveStatus(actor.worker.status))
 			.map((actor) => ({ ...actor.worker!, name: actor.name }));
 		const nestedCalls = run?.calls.filter((call) => call.kind !== "agent" && call.kind !== "actor") ?? [];
-		const title = run?.name ?? "Spindle session";
+		const title = run?.name ?? "Code mode session";
 		const headerStatus =
 			run?.status ?? (activeAgents.length > 0 || activeActorWorkers.length > 0 ? "running" : "idle");
 		const parts: string[] = [];
@@ -178,7 +178,7 @@ export class SpindleWidget implements Component {
 		if (run) parts.push(formatDuration((run.finishedAt ?? snapshot.now) - run.startedAt));
 
 		const glyph = colorStatus(this.theme, headerStatus, statusGlyph(headerStatus));
-		const header = `${glyph} ${this.theme.fg("accent", "Spindle")} ${this.theme.fg(
+		const header = `${glyph} ${this.theme.fg("accent", "Code mode")} ${this.theme.fg(
 			"text",
 			safeText(title),
 		)}${parts.length > 0 ? this.theme.fg("dim", ` · ${parts.join(" · ")}`) : ""}`;

@@ -16,37 +16,39 @@ import { SANDBOX_STATE_EVENT, type SandboxStateEvent } from "./sandbox/protocol.
 const SANDBOX_STATUS_KEY = "spindle-sandbox";
 /** Footer key for the MCP connection indicator. */
 const MCP_STATUS_KEY = "spindle-mcp";
-import { loadCodePreviewSettings } from "./ui/code-preview.ts";
-import { type SpindleToolShellDecorator, withCodePreviewShell } from "./ui/code-preview-shell.ts";
+
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { cleanupOldRuns } from "./agents/paths.ts";
 import { registerTaskFileFlag, taskDeliveryFor } from "./agents/task-delivery.ts";
 import { CapturedToolCatalog } from "./capture/catalog.ts";
-import { authorizeMcpServer, logoutMcpServer } from "./mcp/auth-flow.ts";
-import { loadMcpServerConfig } from "./mcp/server-config.ts";
-import { formatMcpFooterStatus, formatMcpStatus, formatMcpTools, mcpFooterSummary } from "./mcp/status-report.ts";
 import { installRegisteredToolCapture } from "./capture/interceptor.ts";
+import { createSpindleExecTool } from "./code-mode-tool.ts";
 import { DEFAULT_SPINDLE_CONFIG, effectiveToolCaptureConfig } from "./config.ts";
-import { SpindleToolLifecycle, SpindleToolOwnership, ownsSpindleToolSource } from "./core/tool-ownership.ts";
+import { coreOverridePromptGuidance } from "./core/core-override-guidance.ts";
+import { PI_CORE_TOOL_NAMES } from "./core/pi-tools.ts";
 import { expandSkillDirMarkersForRead, expandSkillDirMarkersInSkillBlock } from "./core/skill-dir.ts";
 import { restoreSkillsForFullCodePrompt } from "./core/skill-prompt.ts";
 import { buildSkillReferenceGuidance } from "./core/skill-references.ts";
-import { coreOverridePromptGuidance } from "./core/core-override-guidance.ts";
-import { createSpindleExecTool } from "./code-mode-tool.ts";
-import { SpindleState } from "./spindle-state.ts";
+import { ownsSpindleToolSource, SpindleToolLifecycle, SpindleToolOwnership } from "./core/tool-ownership.ts";
+import { resolveSpindleEditProfile, type SpindleModelIdentity } from "./edit-profile.ts";
 import { piHostCompatibilityWarning } from "./host-compatibility.ts";
+import { authorizeMcpServer, logoutMcpServer } from "./mcp/auth-flow.ts";
+import { loadMcpServerConfig } from "./mcp/server-config.ts";
+import { formatMcpFooterStatus, formatMcpStatus, formatMcpTools, mcpFooterSummary } from "./mcp/status-report.ts";
 import { SPINDLE_PROVIDER_REGISTER_EVENT, type SpindleProviderRegistration } from "./protocol.ts";
+import { CAPTURED_WEB_ALIASES, SpindleState } from "./spindle-state.ts";
+import { loadCodePreviewSettings } from "./ui/code-preview.ts";
+import { type SpindleToolShellDecorator, withCodePreviewShell } from "./ui/code-preview-shell.ts";
 import { SpindleUiController } from "./ui/controller.ts";
 import { configureHighlighting } from "./ui/highlight.ts";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-import { resolveSpindleEditProfile, type SpindleModelIdentity } from "./edit-profile.ts";
 
 export { resolveSpindleEditProfile, type SpindleEditProfile, type SpindleModelIdentity } from "./edit-profile.ts";
 
 const SPINDLE_EXTENSION_ENTRY_PATH = path.resolve(fileURLToPath(import.meta.url));
 
 const FULL_CODE_GUIDANCE_PREFIX =
-	"`code_mode` is this session's TypeScript code mode and exclusive tool interface. Write TypeScript orchestration and call `pi.*`; do not use Python as a fallback.\n";
+	"Use `code_mode` for Pi core tools and registered capabilities. Other extensions keep their native tools. Write TypeScript orchestration; do not use Python as a fallback.\n";
 
 const FULL_CODE_GUIDANCE_SUFFIX =
 	" If the `code-mode` skill is available, load its listed SKILL.md through `pi.read` inside `code_mode` before other tool work, unless already loaded.";
@@ -68,7 +70,7 @@ const fullCodeGuidanceFor = (model: SpindleModelIdentity | undefined): string =>
 export const FULL_CODE_GUIDANCE = fullCodeGuidanceFor(undefined);
 
 const ORCHESTRATION_ONLY_GUIDANCE =
-	"Code mode is in orchestration-only mode. Pi core and explicitly registered web tools stay on their native direct execution path; inside `code_mode`, `pi.*` and `web.*` are unavailable. Use `mcp.*`, `agents.*`, `mapLimit`, `print`, `π` and `τ` only.";
+	"Code mode is in orchestration-only mode. Pi core and explicitly registered web tools stay on their native direct execution path; inside `code_mode`, `pi.*` and `web.*` are unavailable. Trusted custom providers remain available unless they are marked full-code-only. Use `mcp.*`, `agents.*`, trusted custom providers, `mapLimit`, `print`, `π` and `τ` only.";
 
 const registrationFrom = (value: unknown): SpindleProviderRegistration | undefined => {
 	if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
@@ -129,6 +131,7 @@ export default async function spindle(pi: ExtensionAPI): Promise<void> {
 		anchorDefinition: spindleTool,
 		catalog: capturedTools,
 		initialPolicy: inactiveCapturePolicy,
+		hiddenToolNames: [...Object.values(CAPTURED_WEB_ALIASES), ...PI_CORE_TOOL_NAMES],
 	});
 	pi.registerTool(spindleTool);
 
@@ -148,7 +151,7 @@ export default async function spindle(pi: ExtensionAPI): Promise<void> {
 			compatibilityWarningShown = true;
 			const warning = piHostCompatibilityWarning();
 			if (warning) {
-				console.warn(`[spindle] ${warning}`);
+				console.warn(`[code-mode] ${warning}`);
 				if (context.hasUI) context.ui.notify(warning, "warning");
 			}
 		}
@@ -158,7 +161,7 @@ export default async function spindle(pi: ExtensionAPI): Promise<void> {
 			configureHighlighting(codePreviewSettings.shikiTheme, codePreviewSettings.syntaxHighlighting);
 			Object.assign(spindleTool, createSpindleExecTool(state, codePreviewSettings, decorateShell));
 		} catch (error) {
-			console.warn("[spindle] Failed to refresh code preview settings.", error);
+			console.warn("[code-mode] Failed to refresh code preview settings.", error);
 		}
 		await state.initialize(context);
 		applySpindleMode();
@@ -243,7 +246,7 @@ export default async function spindle(pi: ExtensionAPI): Promise<void> {
 			if (!action || action === "status") {
 				const current = state.sandboxState();
 				const lines = [
-					`spindle sandbox: ${state.sandboxStatus()}`,
+					`code-mode sandbox: ${state.sandboxStatus()}`,
 					current ? `mode: ${current.mode} (source: ${current.source})` : "mode: unavailable",
 					`held by night run: ${state.sandboxHeldByNightRun() ? "yes" : "no"}`,
 					"",
@@ -255,7 +258,7 @@ export default async function spindle(pi: ExtensionAPI): Promise<void> {
 
 			if (!isSandboxMode(action)) {
 				context.ui.notify(
-					`spindle: unknown sandbox mode '${action}'. Use one of: ${SANDBOX_MODES.join(", ")}.`,
+					`code-mode: unknown sandbox mode '${action}'. Use one of: ${SANDBOX_MODES.join(", ")}.`,
 					"error",
 				);
 				return;
@@ -269,7 +272,7 @@ export default async function spindle(pi: ExtensionAPI): Promise<void> {
 				context,
 			);
 			if (!applied) {
-				context.ui.notify("spindle: no sandbox in this session (full code mode is off)", "warning");
+				context.ui.notify("code-mode: no sandbox in this session (full code mode is off)", "warning");
 				return;
 			}
 			renderSandboxStatus(context, applied);
@@ -323,7 +326,7 @@ export default async function spindle(pi: ExtensionAPI): Promise<void> {
 				}
 				if (subcommand === "connect") {
 					if (!serverName) {
-						context.ui.notify("spindle: /mcp connect <server>", "warning");
+						context.ui.notify("code-mode: /mcp connect <server>", "warning");
 						return;
 					}
 					const status = await hub.connect(serverName);
@@ -332,7 +335,7 @@ export default async function spindle(pi: ExtensionAPI): Promise<void> {
 				}
 				if (subcommand === "logout") {
 					if (!serverName) {
-						context.ui.notify("spindle: /mcp logout <server>", "warning");
+						context.ui.notify("code-mode: /mcp logout <server>", "warning");
 						return;
 					}
 					logoutMcpServer(serverName);
@@ -343,11 +346,11 @@ export default async function spindle(pi: ExtensionAPI): Promise<void> {
 					return;
 				}
 				context.ui.notify(
-					`spindle: unknown /mcp subcommand '${subcommand}'. Use status, tools, connect or logout.`,
+					`code-mode: unknown /mcp subcommand '${subcommand}'. Use status, tools, connect or logout.`,
 					"error",
 				);
 			} catch (error) {
-				context.ui.notify(`spindle: ${error instanceof Error ? error.message : String(error)}`, "error");
+				context.ui.notify(`code-mode: ${error instanceof Error ? error.message : String(error)}`, "error");
 			} finally {
 				renderMcpStatus(context);
 			}
@@ -366,8 +369,8 @@ export default async function spindle(pi: ExtensionAPI): Promise<void> {
 				const names = mcpServerNames(context.cwd);
 				context.ui.notify(
 					names.length > 0
-						? `spindle: /mcp-auth <server> — one of: ${names.join(", ")}`
-						: "spindle: no MCP server is configured",
+						? `code-mode: /mcp-auth <server> — one of: ${names.join(", ")}`
+						: "code-mode: no MCP server is configured",
 					"warning",
 				);
 				return;
@@ -386,7 +389,7 @@ export default async function spindle(pi: ExtensionAPI): Promise<void> {
 					"info",
 				);
 			} catch (error) {
-				context.ui.notify(`spindle: ${error instanceof Error ? error.message : String(error)}`, "error");
+				context.ui.notify(`code-mode: ${error instanceof Error ? error.message : String(error)}`, "error");
 			}
 		},
 	});

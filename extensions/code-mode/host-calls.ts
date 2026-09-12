@@ -38,11 +38,14 @@ export interface SpindleStateNote {
 	detail?: string;
 }
 
-/** The providers only reachable in full code mode. */
-export const fullCodeProvider = (value: string): "pi" | undefined => {
+/** Return the full-code-only provider named by a provider or action ref. */
+export const fullCodeProvider = (
+	value: string,
+	isFullCodeProvider: (name: string) => boolean = (name) => name === "pi" || name === "web",
+): string | undefined => {
 	const separator = value.indexOf(".");
 	const provider = separator > 0 ? value.slice(0, separator) : value;
-	return provider === "pi" ? provider : undefined;
+	return isFullCodeProvider(provider) ? provider : undefined;
 };
 
 /** Per-execution state and helpers a host-call handler runs against. */
@@ -89,7 +92,13 @@ export const HOST_CALLS: readonly HostCall[] = [
 		ref: "spindle.$providers",
 		handle: (args, ctx, signal) =>
 			ctx.traceAttempt("spindle.discovery.providers", args, signal, () =>
-				ctx.registry.providers().filter((provider) => ctx.fullCodeMode || !fullCodeProvider(provider.name)),
+				ctx.registry
+					.providers()
+					.filter(
+						(provider) =>
+							ctx.fullCodeMode ||
+							!fullCodeProvider(provider.name, ctx.registry.isFullCodeProvider.bind(ctx.registry)),
+					),
 			),
 	},
 	{
@@ -103,7 +112,8 @@ export const HOST_CALLS: readonly HostCall[] = [
 				return ctx.registry.catalog(ctx.registryContext(signal), {
 					...(provider ? { provider } : {}),
 					...(typeof args.limit === "number" ? { limit: args.limit } : {}),
-					includeProvider: (name) => ctx.fullCodeMode || !fullCodeProvider(name),
+					includeProvider: (name) =>
+						ctx.fullCodeMode || !fullCodeProvider(name, ctx.registry.isFullCodeProvider.bind(ctx.registry)),
 				});
 			}),
 	},
@@ -123,7 +133,11 @@ export const HOST_CALLS: readonly HostCall[] = [
 					},
 					ctx.registryContext(signal),
 				);
-				return actions.filter((action) => ctx.fullCodeMode || !fullCodeProvider(action.provider));
+				return actions.filter(
+					(action) =>
+						ctx.fullCodeMode ||
+						!fullCodeProvider(action.provider, ctx.registry.isFullCodeProvider.bind(ctx.registry)),
+				);
 			}),
 	},
 	{
@@ -135,7 +149,11 @@ export const HOST_CALLS: readonly HostCall[] = [
 					ctx.registryContext(signal),
 					typeof args.limit === "number" ? args.limit : undefined,
 				);
-				return actions.filter((action) => ctx.fullCodeMode || !fullCodeProvider(action.provider));
+				return actions.filter(
+					(action) =>
+						ctx.fullCodeMode ||
+						!fullCodeProvider(action.provider, ctx.registry.isFullCodeProvider.bind(ctx.registry)),
+				);
 			}),
 	},
 	{

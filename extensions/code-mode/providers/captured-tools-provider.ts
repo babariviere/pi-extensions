@@ -1,7 +1,7 @@
 import path from "node:path";
-import { runAbortable, throwIfAborted } from "../async-settlement.ts";
 import type { AgentToolResult, SourceInfo } from "@earendil-works/pi-coding-agent";
-import { CapturedToolCatalog, type CapturedToolEntry } from "../capture/catalog.ts";
+import { runAbortable, throwIfAborted } from "../async-settlement.ts";
+import type { CapturedToolCatalog, CapturedToolEntry } from "../capture/catalog.ts";
 import { assertMcpGatewayArguments, McpReadOnlyGate, mcpNamespaceProxyServer } from "../mcp/read-only-policy.ts";
 import type {
 	SpindleActionDescriptor,
@@ -17,6 +17,47 @@ export interface CapturedToolInvocationResult {
 	isError: boolean;
 	terminate?: boolean;
 	source: SourceInfo;
+}
+
+/**
+ * Internal adapter for exact-name Pi core overrides. This is deliberately not
+ * a SpindleProvider: only PiToolsProvider can reach it, while the public
+ * CapturedToolsProvider exposes the separately registered aliases below.
+ */
+export class CapturedToolOverrideAdapter {
+	readonly #scheduler = new CapturedToolScheduler();
+
+	constructor(
+		readonly catalog: CapturedToolCatalog,
+		readonly mcpReadOnlyGate: () => McpReadOnlyGate = () => McpReadOnlyGate.unrestricted(),
+	) {}
+
+	describe(sourceName: string): SpindleActionDescriptor | undefined {
+		const entry = this.catalog.get(sourceName);
+		return entry ? descriptorFrom(entry) : undefined;
+	}
+
+	prepareArguments(sourceName: string, args: Record<string, unknown>): Record<string, unknown> {
+		const prepare = this.catalog.require(sourceName).wrappedTool.prepareArguments;
+		if (!prepare) return args;
+		const prepared = prepare(args);
+		if (typeof prepared !== "object" || prepared === null || Array.isArray(prepared)) {
+			throw new Error(`Captured tool ${sourceName} prepared non-object arguments`);
+		}
+		return prepared as Record<string, unknown>;
+	}
+
+	async invoke(
+		sourceName: string,
+		args: Record<string, unknown>,
+		context: SpindleInvocationContext,
+	): Promise<CapturedToolInvocationResult> {
+		const entry = this.catalog.require(sourceName);
+		assertMcpReadOnlyFor(this.mcpReadOnlyGate, entry, args);
+		return this.#scheduler.run(entry.definition.executionMode, () =>
+			runAbortable(context.signal, () => invokeCaptured(entry, args, context)),
+		);
+	}
 }
 
 const textFromContent = (content: AgentToolResult<unknown>["content"]): string =>
@@ -80,12 +121,114 @@ class CapturedToolScheduler {
 	}
 }
 
+const assertMcpReadOnlyFor = (
+	gateFactory: () => McpReadOnlyGate,
+	entry: CapturedToolEntry,
+	args: Record<string, unknown>,
+): void => {
+	const fromAdapter = entry.name === "mcp" || entry.sourceInfo.path.includes("pi-mcp-adapter");
+	if (!fromAdapter) return;
+	const gate = gateFactory();
+	if (!gate.readOnly) return;
+	if (entry.name === "mcp") {
+		assertMcpGatewayArguments(gate, args);
+		return;
+	}
+	const proxied = mcpNamespaceProxyServer(entry.name);
+	if (proxied) {
+		assertMcpGatewayArguments(gate, args, proxied);
+		return;
+	}
+	gate.assert(entry.name);
+};
+
+const invokeCaptured = async (
+	entry: CapturedToolEntry,
+	args: Record<string, unknown>,
+	context: SpindleInvocationContext,
+): Promise<CapturedToolInvocationResult> => {
+	const { runner, wrappedTool } = entry;
+	const toolCallId = context.nestedToolCallId;
+	await runAbortable(context.signal, () =>
+		runner.emit({ type: "tool_execution_start", toolCallId, toolName: entry.name, args }),
+	);
+
+	let result: AgentToolResult<unknown>;
+	let isError = false;
+	let thrown: unknown;
+	let updateTail: Promise<void> = Promise.resolve();
+	try {
+		const preflight = await runAbortable(context.signal, () =>
+			runner.emitToolCall({ type: "tool_call", toolName: entry.name, toolCallId, input: args }),
+		);
+		context.updateArguments?.(args);
+		if (preflight?.block) throw new Error(preflight.reason || `Captured tool ${entry.name} was blocked`);
+		result = await runAbortable(context.signal, () =>
+			wrappedTool.execute(toolCallId, args, context.signal, (partialResult) => {
+				const progress = textFromContent(partialResult.content).trim();
+				if (progress) context.update(`${entry.name}: ${progress.slice(0, 500)}`);
+				updateTail = updateTail
+					.then(() =>
+						runAbortable(context.signal, () =>
+							runner.emit({
+								type: "tool_execution_update",
+								toolCallId,
+								toolName: entry.name,
+								args,
+								partialResult,
+							}),
+						),
+					)
+					.catch(() => undefined);
+			}),
+		);
+	} catch (error) {
+		thrown = error;
+		isError = true;
+		result = {
+			content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }],
+			details: { capturedToolError: true },
+		};
+	}
+
+	await updateTail;
+	throwIfAborted(context.signal);
+	const patch = await runAbortable(context.signal, () =>
+		runner.emitToolResult({
+			type: "tool_result",
+			toolName: entry.name,
+			toolCallId,
+			input: args,
+			content: result.content,
+			details: result.details,
+			isError,
+		}),
+	);
+	if (patch) {
+		result = {
+			...result,
+			content: patch.content ?? result.content,
+			...(patch.details !== undefined ? { details: patch.details } : {}),
+		};
+		isError = patch.isError ?? isError;
+	}
+
+	await runAbortable(context.signal, () =>
+		runner.emit({ type: "tool_execution_end", toolCallId, toolName: entry.name, result, isError }),
+	);
+	if (isError) {
+		const text = textFromContent(result.content).trim();
+		throw new Error(text || (thrown instanceof Error ? thrown.message : `Captured tool ${entry.name} failed`));
+	}
+	return asInvocationResult(entry, result, false);
+};
+
 export class CapturedToolsProvider implements SpindleProvider {
-	readonly name: string;
+	readonly name = "web";
 	readonly description: string;
 	readonly #aliases: Readonly<Record<string, string>>;
-
-	readonly #scheduler = new CapturedToolScheduler();
+	readonly fullCodeOnly = true;
+	readonly #adapter: CapturedToolOverrideAdapter;
 
 	constructor(
 		readonly catalog: CapturedToolCatalog,
@@ -97,19 +240,22 @@ export class CapturedToolsProvider implements SpindleProvider {
 		 * a captured MCP tool exposed through `web.*` would not.
 		 */
 		readonly mcpReadOnlyGate: () => McpReadOnlyGate = () => McpReadOnlyGate.unrestricted(),
-		options: { name?: string; description?: string; aliases?: Readonly<Record<string, string>> } = {},
+		options: { description?: string; aliases?: Readonly<Record<string, string>> } = {},
 	) {
-		this.name = options.name ?? "web";
 		this.description = options.description ?? "Explicitly registered web capabilities";
-		this.#aliases = options.aliases ?? {};
+		const aliases = Object.create(null) as Record<string, string>;
+		for (const [publicName, sourceName] of Object.entries(options.aliases ?? {})) {
+			if (typeof sourceName === "string" && sourceName.length > 0) aliases[publicName] = sourceName;
+		}
+		this.#aliases = aliases;
+		this.#adapter = new CapturedToolOverrideAdapter(catalog, mcpReadOnlyGate);
 	}
 
-	#sourceName(actionName: string): string {
-		return this.#aliases[actionName] ?? actionName;
+	#sourceName(actionName: string): string | undefined {
+		return Object.hasOwn(this.#aliases, actionName) ? this.#aliases[actionName] : undefined;
 	}
 	#publicName(sourceName: string): string | undefined {
-		const alias = Object.entries(this.#aliases).find(([, source]) => source === sourceName)?.[0];
-		return Object.keys(this.#aliases).length > 0 ? alias : sourceName;
+		return Object.entries(this.#aliases).find(([, source]) => source === sourceName)?.[0];
 	}
 
 	async list(
@@ -132,19 +278,16 @@ export class CapturedToolsProvider implements SpindleProvider {
 		actionName: string,
 		_context: SpindleInvocationContext,
 	): Promise<SpindleActionDescriptor | undefined> {
-		const entry = this.catalog.get(this.#sourceName(actionName));
-		if (!entry) return undefined;
-		return { ...descriptorFrom(entry), name: actionName };
+		const sourceName = this.#sourceName(actionName);
+		if (sourceName === undefined) return undefined;
+		const descriptor = this.#adapter.describe(sourceName);
+		return descriptor ? { ...descriptor, name: actionName } : undefined;
 	}
 
 	prepareArguments(actionName: string, args: Record<string, unknown>): Record<string, unknown> {
-		const prepare = this.catalog.require(this.#sourceName(actionName)).wrappedTool.prepareArguments;
-		if (!prepare) return args;
-		const prepared = prepare(args);
-		if (typeof prepared !== "object" || prepared === null || Array.isArray(prepared)) {
-			throw new Error(`Captured tool ${actionName} prepared non-object arguments`);
-		}
-		return prepared as Record<string, unknown>;
+		const sourceName = this.#sourceName(actionName);
+		if (sourceName === undefined) throw new Error(`Unknown captured extension tool: ${actionName}`);
+		return this.#adapter.prepareArguments(sourceName, args);
 	}
 
 	async invoke(
@@ -152,139 +295,8 @@ export class CapturedToolsProvider implements SpindleProvider {
 		args: Record<string, unknown>,
 		context: SpindleInvocationContext,
 	): Promise<CapturedToolInvocationResult> {
-		const entry = this.catalog.require(this.#sourceName(actionName));
-		this.#assertMcpReadOnly(entry, args);
-		return this.#scheduler.run(entry.definition.executionMode, () =>
-			runAbortable(context.signal, () => this.#invokeCaptured(entry, args, context)),
-		);
-	}
-
-	/**
-	 * Apply the read-only MCP policy to a captured tool that came from
-	 * pi-mcp-adapter. The gateway carries the target in its arguments; a direct
-	 * tool is itself the MCP tool name.
-	 */
-	#assertMcpReadOnly(entry: CapturedToolEntry, args: Record<string, unknown>): void {
-		const fromAdapter = entry.name === "mcp" || entry.sourceInfo.path.includes("pi-mcp-adapter");
-		if (!fromAdapter) return;
-		const gate = this.mcpReadOnlyGate();
-		if (!gate.readOnly) return;
-		if (entry.name === "mcp") {
-			assertMcpGatewayArguments(gate, args);
-			return;
-		}
-		// A namespace proxy (`mcp__slack`) is a gateway for one server: the tool it
-		// forwards to is in its arguments, and the server is in its own name.
-		const proxied = mcpNamespaceProxyServer(entry.name);
-		if (proxied) {
-			assertMcpGatewayArguments(gate, args, proxied);
-			return;
-		}
-		gate.assert(entry.name);
-	}
-
-	async #invokeCaptured(
-		entry: CapturedToolEntry,
-		args: Record<string, unknown>,
-		context: SpindleInvocationContext,
-	): Promise<CapturedToolInvocationResult> {
-		const { runner, wrappedTool } = entry;
-		const toolCallId = context.nestedToolCallId;
-		await runAbortable(context.signal, () =>
-			runner.emit({
-				type: "tool_execution_start",
-				toolCallId,
-				toolName: entry.name,
-				args,
-			}),
-		);
-
-		let result: AgentToolResult<unknown>;
-		let isError = false;
-		let thrown: unknown;
-		let updateTail: Promise<void> = Promise.resolve();
-		try {
-			const preflight = await runAbortable(context.signal, () =>
-				runner.emitToolCall({
-					type: "tool_call",
-					toolName: entry.name,
-					toolCallId,
-					input: args,
-				}),
-			);
-			context.updateArguments?.(args);
-			if (preflight?.block) {
-				throw new Error(preflight.reason || `Captured tool ${entry.name} was blocked`);
-			}
-			result = await runAbortable(context.signal, () =>
-				wrappedTool.execute(toolCallId, args, context.signal, (partialResult) => {
-					const progress = textFromContent(partialResult.content).trim();
-					if (progress) context.update(`${entry.name}: ${progress.slice(0, 500)}`);
-					updateTail = updateTail
-						.then(() =>
-							runAbortable(context.signal, () =>
-								runner.emit({
-									type: "tool_execution_update",
-									toolCallId,
-									toolName: entry.name,
-									args,
-									partialResult,
-								}),
-							),
-						)
-						.catch(() => undefined);
-				}),
-			);
-		} catch (error) {
-			thrown = error;
-			isError = true;
-			result = {
-				content: [
-					{
-						type: "text",
-						text: error instanceof Error ? error.message : String(error),
-					},
-				],
-				details: { capturedToolError: true },
-			};
-		}
-
-		await updateTail;
-		throwIfAborted(context.signal);
-		const patch = await runAbortable(context.signal, () =>
-			runner.emitToolResult({
-				type: "tool_result",
-				toolName: entry.name,
-				toolCallId,
-				input: args,
-				content: result.content,
-				details: result.details,
-				isError,
-			}),
-		);
-		if (patch) {
-			result = {
-				...result,
-				content: patch.content ?? result.content,
-				...(patch.details !== undefined ? { details: patch.details } : {}),
-			};
-			isError = patch.isError ?? isError;
-		}
-
-		await runAbortable(context.signal, () =>
-			runner.emit({
-				type: "tool_execution_end",
-				toolCallId,
-				toolName: entry.name,
-				result,
-				isError,
-			}),
-		);
-
-		if (isError) {
-			const text = textFromContent(result.content).trim();
-			throw new Error(text || (thrown instanceof Error ? thrown.message : `Captured tool ${entry.name} failed`));
-		}
-		return asInvocationResult(entry, result, false);
+		const sourceName = this.#sourceName(actionName);
+		if (sourceName === undefined) throw new Error(`Unknown captured extension tool: ${actionName}`);
+		return this.#adapter.invoke(sourceName, args, context);
 	}
 }

@@ -10,33 +10,32 @@
  * store and the subagent run registry.
  */
 
-import { getAgentDir, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { Model } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { type ExtensionContext, getAgentDir } from "@earendil-works/pi-coding-agent";
+import { applyNightRunEnv } from "../night-mode/night-run.ts";
+import { isUsagePacingEvent, USAGE_PACING_EVENT } from "../usage/protocol.ts";
 import { SpindleActivityStore } from "./activity/store.ts";
-import { CapturedToolCatalog } from "./capture/catalog.ts";
+import type { CapturedToolCatalog } from "./capture/catalog.ts";
 import { loadSpindleConfig, type SpindleConfig } from "./config.ts";
 import { ActionRegistry } from "./core/action-registry.ts";
 import { SpindleToolResultProxy } from "./core/tool-result-proxy.ts";
 import { SpindleExecutionService } from "./execution-service.ts";
-import { SpindleAgentRunRegistry } from "./providers/agent-run-monitor.ts";
-import { AgentRunBook, type AgentCompletionEvent } from "./providers/agent-run-book.ts";
-import { SpindleAgentsProvider, type SessionRef } from "./providers/agents-provider.ts";
-import { CapturedToolsProvider } from "./providers/captured-tools-provider.ts";
+import { McpClientHub } from "./mcp/client-hub.ts";
 import { activeNightMcpReadOnly } from "./mcp/night-bridge.ts";
 import { effectiveMcpReadOnlyConfig, McpReadOnlyGate } from "./mcp/read-only-policy.ts";
-import { McpClientHub } from "./mcp/client-hub.ts";
+import { SPINDLE_PROVIDER_DISCOVER_EVENT, type SpindleProvider, type SpindleProviderDiscovery } from "./protocol.ts";
+import { type AgentCompletionEvent, AgentRunBook } from "./providers/agent-run-book.ts";
+import { SpindleAgentRunRegistry } from "./providers/agent-run-monitor.ts";
+import { type SessionRef, SpindleAgentsProvider } from "./providers/agents-provider.ts";
+import { CapturedToolOverrideAdapter, CapturedToolsProvider } from "./providers/captured-tools-provider.ts";
 import { McpClientProvider } from "./providers/mcp-client-provider.ts";
 import { PiToolsProvider } from "./providers/pi-tools-provider.ts";
-import { SandboxController } from "./sandbox/controller.ts";
-import { SpindleSessionStore } from "./session-store.ts";
 import { agentSandboxFloor } from "./sandbox/agent-floor.ts";
+import { SandboxController } from "./sandbox/controller.ts";
 import { activeNightSandboxRequest } from "./sandbox/night-bridge.ts";
-import { runNightPreflight } from "./sandbox/preflight-bridge.ts";
-import { applyNightRunEnv } from "../night-mode/night-run.ts";
-import { isUsagePacingEvent, USAGE_PACING_EVENT } from "../usage/protocol.ts";
 import { policyEnvironment, resolveSandboxPolicy } from "./sandbox/policy.ts";
-import { effectiveSandbox } from "./sandbox/resolve.ts";
+import { runNightPreflight } from "./sandbox/preflight-bridge.ts";
 import {
 	parseSandboxRequestEvent,
 	SANDBOX_REQUEST_EVENT,
@@ -44,9 +43,11 @@ import {
 	type SandboxRequest,
 	type SandboxStateEvent,
 } from "./sandbox/protocol.ts";
-import { SPINDLE_PROVIDER_DISCOVER_EVENT, type SpindleProvider, type SpindleProviderDiscovery } from "./protocol.ts";
+import { effectiveSandbox } from "./sandbox/resolve.ts";
+import { SpindleSessionStore } from "./session-store.ts";
 
 const RESERVED_PROVIDER_NAMES = ["pi", "mcp", "agents", "web", "spindle"];
+export const CAPTURED_WEB_ALIASES = { search: "web_search", fetch: "fetch_content" } as const;
 
 /** How long session teardown waits for cancelled subagent children to die. */
 const AGENT_DRAIN_TIMEOUT_MS = 5_000;
@@ -181,11 +182,13 @@ export class SpindleState {
 			this.#sessionRef.sessionFile = undefined;
 		}
 		this.#registry = new ActionRegistry(new SpindleToolResultProxy(() => this.capturedTools.runner));
+		const capturedToolOverrides = this.#config.fullCodeMode
+			? new CapturedToolOverrideAdapter(this.capturedTools, () => this.#mcpReadOnlyGate())
+			: undefined;
 		const capturedToolsProvider =
 			this.#config.fullCodeMode && this.#config.capture.enabled
 				? new CapturedToolsProvider(this.capturedTools, () => this.#mcpReadOnlyGate(), {
-						name: "web",
-						aliases: { search: "web_search", fetch: "fetch_content" },
+						aliases: CAPTURED_WEB_ALIASES,
 					})
 				: undefined;
 		if (this.#config.fullCodeMode) {
@@ -195,7 +198,7 @@ export class SpindleState {
 				new PiToolsProvider(
 					context.cwd,
 					this.capturedTools,
-					capturedToolsProvider,
+					capturedToolOverrides,
 					{
 						bash: sandbox.bashOperations(),
 						wrapCommand: (command: string) => sandbox.wrapCommand(command),
