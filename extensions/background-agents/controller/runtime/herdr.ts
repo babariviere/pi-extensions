@@ -2,8 +2,8 @@ import { chmodSync, existsSync, mkdirSync, renameSync, writeFileSync } from "nod
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import type { HerdrTab } from "../../../spindle/agents/herdr-parse.ts";
-import { herdr as defaultHerdr, type HerdrClient } from "../../../spindle/agents/herdr-client.ts";
+import type { HerdrTab } from "../../../code-mode/agents/herdr-parse.ts";
+import { herdr as defaultHerdr, type HerdrClient } from "../../../code-mode/agents/herdr-client.ts";
 import type { BackgroundAgentsDatabase } from "../database.ts";
 import type { AgentRole } from "../../types.ts";
 import { persistContextManifest, type ContextManifest } from "./context.ts";

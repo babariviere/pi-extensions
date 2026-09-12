@@ -352,7 +352,7 @@ filesystem boundary entirely (a container can bind-mount `/`), and the backend
 is `sandbox-exec`, which Apple has deprecated (still true, and not a
 regression: every prior backend used it too). Enforcement is macOS-only, so a
 night run on Linux gets `bash` refusing to run rather than an OS sandbox; see
-`extensions/spindle/CONTEXT.md`.
+`extensions/code-mode/CONTEXT.md`.
 
 ## Read-only MCP
 

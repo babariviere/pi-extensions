@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import todosExtension from "./index.ts";
-import { assertReadAllowed, assertWriteAllowed, resolveSandboxPolicy } from "../spindle/sandbox/policy.ts";
+import { assertReadAllowed, assertWriteAllowed, resolveSandboxPolicy } from "../code-mode/sandbox/policy.ts";
 
 // The sandbox applies to a child agent's Pi tools and shell. Extension tools run
 // in Pi's trusted host process, so the todo tool keeps the sole write capability.

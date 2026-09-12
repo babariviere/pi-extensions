@@ -24,7 +24,7 @@ const ALLOW: PolicyOutcome = { block: false };
  * Refusing it would make refs unusable in full-code mode, where spindle is the
  * only path to the file tools.
  */
-const PASSTHROUGH_TOOLS = new Set(["spindle_exec"]);
+const PASSTHROUGH_TOOLS = new Set(["code_mode"]);
 
 function blockUnresolved(unresolved: string[], where: string): PolicyOutcome {
 	return {

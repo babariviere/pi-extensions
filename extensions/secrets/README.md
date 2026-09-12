@@ -21,7 +21,7 @@ References expand again on the way in:
 | `write` | `content` is expanded to real values |
 | `edit` | `oldText` and `newText` are expanded, so an edit matches what is actually on disk |
 | `bash` | rewritten to `${NAME}`, never to a value, because a value on a command line lands in the process table and the shell history. Refused inside single quotes, where the expansion would be literal text |
-| code tools (`spindle_exec`) | passed through untouched; the nested `write` it performs is hydrated on its own `tool_call` |
+| code tools (`code_mode`) | passed through untouched; the nested `write` it performs is hydrated on its own `tool_call` |
 | everything else | refused; a reference copied into a URL or an MCP argument is inert |
 
 This is what makes read-modify-write safe. Reading a `.env`, editing one line, and writing it back preserves every other secret in the file, because the model only ever handled references.

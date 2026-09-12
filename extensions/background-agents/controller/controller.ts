@@ -36,7 +36,7 @@ import { SpecificationWorkflow } from "./workflows/specification.ts";
 import { reproduceEvidenceOperation } from "./verification/reproduce.ts";
 import { BackgroundSocketServer } from "./socket-server.ts";
 import { inspectTransientService, stopTransientService } from "./runtime/systemd.ts";
-import { herdr as defaultHerdr } from "../../spindle/agents/herdr-client.ts";
+import { herdr as defaultHerdr } from "../../code-mode/agents/herdr-client.ts";
 import { readSecureCredentialText } from "./credentials.ts";
 
 export type FetchLike = (input: string | URL, init?: RequestInit) => Promise<Response>;

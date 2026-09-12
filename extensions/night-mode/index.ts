@@ -79,7 +79,7 @@ import {
 	windowStartingAt,
 } from "./night-mode.ts";
 import { clearActiveNightRun, readActiveNightRun, type NightSandboxRequest, writeActiveNightRun } from "./night-run.ts";
-import { SANDBOX_REQUEST_EVENT, type SandboxRequestEvent } from "../spindle/sandbox/protocol.ts";
+import { SANDBOX_REQUEST_EVENT, type SandboxRequestEvent } from "../code-mode/sandbox/protocol.ts";
 import { agentWorkspacesRoot } from "./agent-workspace.ts";
 import {
 	createRunSandbox,

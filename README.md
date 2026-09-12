@@ -21,7 +21,7 @@ directory, and `themes/*.json` files. The current inventory is:
 | `pr` | `/review-comments` hands selected unresolved review comments to the agent; `/autofix` watches PR CI and `/autofix-stop` stops it. |
 | `preview-system-prompt` | `/system-prompt` displays the assembled system prompt. |
 | `secrets` | `/secret-list`; injects `fnox` secrets into shell commands and replaces secret values in tool results with reversible references. |
-| `spindle` | `spindle_exec` runs bounded QuickJS programs; also provides `agents.*`, MCP tools, and `/sandbox`, `/mcp`, and `/mcp-auth` controls. |
+| `code-mode` | `code_mode` runs bounded QuickJS programs; also provides `agents.*`, MCP tools, and `/sandbox`, `/mcp`, and `/mcp-auth` controls. |
 | `taptap` | Requires two `Esc` presses within 600ms to cancel a running agent turn, while preserving pi's idle and completion behaviors. |
 | `todos` | `todo` manages file-backed todos and `/todos` provides the interactive manager. |
 | `tool-substitute` | Adds pi search-tool guidance and blocks Git writes inside jj repositories, converting simple safe Git operations where possible. |
@@ -31,10 +31,10 @@ directory, and `themes/*.json` files. The current inventory is:
 
 ### Skills
 
-The package currently includes one skill, `spindle-exec`, at
-[`skills/spindle-exec/SKILL.md`](skills/spindle-exec/SKILL.md), with references
+The package currently includes one skill, `code-mode`, at
+[`skills/code-mode/SKILL.md`](skills/code-mode/SKILL.md), with references
 for agents, the full API, and MCP at
-[`skills/spindle-exec/references/`](skills/spindle-exec/references/).
+[`skills/code-mode/references/`](skills/code-mode/references/).
 
 ### Themes
 
@@ -195,7 +195,7 @@ npm run fmt:check
 
 ```sh
 node --import tsx --test 'extensions/background-agents/**/*.test.ts'
-npm run spindle:evaluate -- extensions/spindle/evaluation/corpus.jsonl --baseline edit-first
+npm run code-mode:evaluate -- extensions/code-mode/evaluation/corpus.jsonl --baseline edit-first
 ```
 
 The CI workflow runs `npm ci`, `npm run typecheck`, and `npm test` on Node 24.
@@ -215,7 +215,7 @@ The CI workflow runs `npm ci`, `npm run typecheck`, and `npm test` on Node 24.
   caveats.
 - [Usage](extensions/usage/README.md), including Codex pacing semantics and
   persisted state.
-- [Spindle evaluation](extensions/spindle/evaluation/README.md), including the
+- [Spindle evaluation](extensions/code-mode/evaluation/README.md), including the
   JSONL format and experiment protocol.
-- [Spindle patch format](extensions/spindle/NATIVE_APPLY_PATCH.md).
+- [Spindle patch format](extensions/code-mode/NATIVE_APPLY_PATCH.md).
 - [pi documentation](https://github.com/earendil-works/pi).

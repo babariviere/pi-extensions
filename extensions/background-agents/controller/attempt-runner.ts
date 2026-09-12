@@ -41,7 +41,7 @@ import {
 import { createEvidenceManifest, formatEvidenceMarkdown } from "./verification/evidence.ts";
 import type { ReplayResult } from "./verification/reproduce.ts";
 import { verifyReplayAndGithub } from "./verification/verifier.ts";
-import { herdr as defaultHerdr } from "../../spindle/agents/herdr-client.ts";
+import { herdr as defaultHerdr } from "../../code-mode/agents/herdr-client.ts";
 
 const require = createRequire(import.meta.url);
 export const VERIFICATION_RESULT_VERSION = 1 as const;

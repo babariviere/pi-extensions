@@ -113,7 +113,7 @@ test("a tool call with no refs is untouched", () => {
 test("a code-passthrough tool is allowed, since its nested write is hydrated", () => {
 	const { registry, named } = setup();
 	const code = `await pi.write({ path: ".env", content: "T=${named.ref}" })`;
-	const call = event("spindle_exec", { code });
+	const call = event("code_mode", { code });
 	assert.equal(applySecretPolicy(call, registry).block, false);
 	assert.equal((call.input as { code: string }).code, code);
 });

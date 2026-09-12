@@ -20,7 +20,7 @@ import { JobScheduler } from "./jobs.ts";
 import { SpecificationWorkflow } from "./workflows/specification.ts";
 import { createEvidenceManifest } from "./verification/evidence.ts";
 import type { HerdrAttemptHost } from "./runtime/herdr.ts";
-import { herdr as defaultHerdr } from "../../spindle/agents/herdr-client.ts";
+import { herdr as defaultHerdr } from "../../code-mode/agents/herdr-client.ts";
 
 const SHA = "0123456789012345678901234567890123456789";
 

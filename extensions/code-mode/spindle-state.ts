@@ -1,0 +1,582 @@
+/**
+ * LOCAL REWRITE of the upstream state module (see CONTEXT.md's rename mapping
+ * for the upstream path).
+ *
+ * Upstream wired the actor manager, mesh store, lifecycle broker, control
+ * plane, participant directory, prewalk controller, schema controller, state
+ * store, compaction controller and its own agent manager. Spindle drops
+ * all of them: this holds the config, the action registry, the four providers
+ * (`pi`, explicit `web`, `mcp`, `agents`), the execution service, the activity
+ * store and the subagent run registry.
+ */
+
+import { getAgentDir, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { Model } from "@earendil-works/pi-ai";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { SpindleActivityStore } from "./activity/store.ts";
+import { CapturedToolCatalog } from "./capture/catalog.ts";
+import { loadSpindleConfig, type SpindleConfig } from "./config.ts";
+import { ActionRegistry } from "./core/action-registry.ts";
+import { SpindleToolResultProxy } from "./core/tool-result-proxy.ts";
+import { SpindleExecutionService } from "./execution-service.ts";
+import { SpindleAgentRunRegistry } from "./providers/agent-run-monitor.ts";
+import { AgentRunBook, type AgentCompletionEvent } from "./providers/agent-run-book.ts";
+import { SpindleAgentsProvider, type SessionRef } from "./providers/agents-provider.ts";
+import { CapturedToolsProvider } from "./providers/captured-tools-provider.ts";
+import { activeNightMcpReadOnly } from "./mcp/night-bridge.ts";
+import { effectiveMcpReadOnlyConfig, McpReadOnlyGate } from "./mcp/read-only-policy.ts";
+import { McpClientHub } from "./mcp/client-hub.ts";
+import { McpClientProvider } from "./providers/mcp-client-provider.ts";
+import { PiToolsProvider } from "./providers/pi-tools-provider.ts";
+import { SandboxController } from "./sandbox/controller.ts";
+import { SpindleSessionStore } from "./session-store.ts";
+import { agentSandboxFloor } from "./sandbox/agent-floor.ts";
+import { activeNightSandboxRequest } from "./sandbox/night-bridge.ts";
+import { runNightPreflight } from "./sandbox/preflight-bridge.ts";
+import { applyNightRunEnv } from "../night-mode/night-run.ts";
+import { isUsagePacingEvent, USAGE_PACING_EVENT } from "../usage/protocol.ts";
+import { policyEnvironment, resolveSandboxPolicy } from "./sandbox/policy.ts";
+import { effectiveSandbox } from "./sandbox/resolve.ts";
+import {
+	parseSandboxRequestEvent,
+	SANDBOX_REQUEST_EVENT,
+	SANDBOX_STATE_EVENT,
+	type SandboxRequest,
+	type SandboxStateEvent,
+} from "./sandbox/protocol.ts";
+import { SPINDLE_PROVIDER_DISCOVER_EVENT, type SpindleProvider, type SpindleProviderDiscovery } from "./protocol.ts";
+
+const RESERVED_PROVIDER_NAMES = ["pi", "mcp", "agents", "web", "spindle"];
+
+/** How long session teardown waits for cancelled subagent children to die. */
+const AGENT_DRAIN_TIMEOUT_MS = 5_000;
+
+export class SpindleState {
+	#registry: ActionRegistry | undefined;
+	#config: SpindleConfig | undefined;
+	#execution: SpindleExecutionService | undefined;
+	#cwd: string | undefined;
+	/** Filesystem guardrail for the mutating core tools; undefined until initialize(). */
+	#sandbox: SandboxController | undefined;
+	/** Spindle's own MCP client, created on first `mcp.*` use or first `/mcp` command. */
+	#mcpHub: McpClientHub | undefined;
+	#mcpStatusListener: (() => void) | undefined;
+	/** Unsubscribe for the mid-session sandbox request listener. */
+	#unsubscribeSandbox: (() => void) | undefined;
+	/** Invalidates deferred request work when this session starts tearing down. */
+	#sandboxGeneration = 0;
+	/** Request handlers are async even though the extension event bus is synchronous. */
+	readonly #pendingSandboxRequests = new Set<Promise<void>>();
+	/** Unsubscribe for the parent session's usage-pacing state. */
+	#unsubscribePacing: (() => void) | undefined;
+	/** Pacing is session state, seeded from the compatibility environment switch. */
+	#pacingDisabled = process.env.PI_USAGE_PACING === "off";
+	/**
+	 * Last sandbox request from `/sandbox` or the bus. Cleared by a revert, so a
+	 * request refused by an active night run does not resurface when the run ends.
+	 */
+	#sandboxRequest: SandboxRequest | undefined;
+	/**
+	 * Sandbox floor the parent imposed on this process via the agent's
+	 * `sandbox:` frontmatter. Set only when this pi process is a Spindle
+	 * subagent; undefined for a normal session.
+	 */
+	#agentSandbox: SandboxRequest | undefined;
+	readonly #externalProviders = new Map<string, SpindleProvider>();
+	readonly activity = new SpindleActivityStore();
+	readonly agentRuns = new SpindleAgentRunRegistry();
+	/**
+	 * Live subagent batches. Lives on the state (not the provider) because it
+	 * outlives a single `code_mode` program: a detached run is cancelled at
+	 * session teardown, and a result nobody claimed is injected back into this
+	 * session through the completion sink below.
+	 */
+	readonly agentRunBook = new AgentRunBook();
+	/**
+	 * The session's `τ` scratchpad. Lives here for the same reason the run book
+	 * does: it has to outlive a single `code_mode` program, so one program can
+	 * hand a large intermediate to the next without routing it through the
+	 * model's context. Reset on every session, never persisted to disk.
+	 */
+	readonly sessionStore = new SpindleSessionStore();
+	readonly #sessionRef: SessionRef = {
+		sessionId: undefined,
+		sessionFile: undefined,
+		cwd: process.cwd(),
+		projectTrusted: false,
+	};
+	#widgetDismissedAt = 0;
+
+	constructor(
+		readonly pi: ExtensionAPI,
+		readonly capturedTools: CapturedToolCatalog,
+	) {}
+
+	get initialized(): boolean {
+		return Boolean(this.#execution);
+	}
+
+	get widgetDismissedAt(): number {
+		return this.#widgetDismissedAt;
+	}
+
+	set widgetDismissedAt(value: number) {
+		this.#widgetDismissedAt = value;
+	}
+
+	get cwd(): string | undefined {
+		return this.#cwd;
+	}
+
+	/** The parent session the child agent runs are attributed to. */
+	get sessionRef(): SessionRef {
+		return this.#sessionRef;
+	}
+
+	get config(): SpindleConfig {
+		if (!this.#config) throw new Error("Spindle has not initialized");
+		return this.#config;
+	}
+
+	get registry(): ActionRegistry {
+		if (!this.#registry) throw new Error("Spindle has not initialized");
+		return this.#registry;
+	}
+
+	get execution(): SpindleExecutionService {
+		if (!this.#execution) throw new Error("Spindle has not initialized");
+		return this.#execution;
+	}
+
+	async initialize(context: ExtensionContext): Promise<void> {
+		await this.#closeInternal();
+		this.#pacingDisabled = process.env.PI_USAGE_PACING === "off";
+		this.#unsubscribePacing = this.pi.events.on(USAGE_PACING_EVENT, (payload) => {
+			if (isUsagePacingEvent(payload)) this.#pacingDisabled = payload.enforced === false;
+		});
+		this.activity.reset();
+		this.agentRuns.reset();
+		this.#cwd = context.cwd;
+		this.#agentSandbox = agentSandboxFloor();
+		// A new session must not inherit the previous one's children, nor its state.
+		this.agentRunBook.reset();
+		this.sessionStore.reset();
+		this.agentRunBook.setSink((event) => this.#announceAgentCompletion(event));
+		const projectTrusted = context.isProjectTrusted();
+		this.#config = loadSpindleConfig({
+			cwd: context.cwd,
+			agentDir: getAgentDir(),
+			projectTrusted,
+		});
+		this.#sessionRef.cwd = context.cwd;
+		this.#sessionRef.projectTrusted = projectTrusted;
+		try {
+			this.#sessionRef.sessionId = context.sessionManager.getSessionId() || undefined;
+		} catch {
+			this.#sessionRef.sessionId = undefined;
+		}
+		try {
+			this.#sessionRef.sessionFile = context.sessionManager.getSessionFile() || undefined;
+		} catch {
+			this.#sessionRef.sessionFile = undefined;
+		}
+		this.#registry = new ActionRegistry(new SpindleToolResultProxy(() => this.capturedTools.runner));
+		const capturedToolsProvider =
+			this.#config.fullCodeMode && this.#config.capture.enabled
+				? new CapturedToolsProvider(this.capturedTools, () => this.#mcpReadOnlyGate(), {
+						name: "web",
+						aliases: { search: "web_search", fetch: "fetch_content" },
+					})
+				: undefined;
+		if (this.#config.fullCodeMode) {
+			this.#sandbox = await this.#createSandbox(context);
+			const sandbox = this.#sandbox;
+			this.#registry.register(
+				new PiToolsProvider(
+					context.cwd,
+					this.capturedTools,
+					capturedToolsProvider,
+					{
+						bash: sandbox.bashOperations(),
+						wrapCommand: (command: string) => sandbox.wrapCommand(command),
+						wrapArgv: (argv: readonly string[]) => sandbox.wrapArgv(argv),
+						edit: sandbox.editOperations(),
+						writeGuard: sandbox.writeGuard(),
+						readGuard: sandbox.readGuard(),
+					},
+					{ readMaxBytes: this.#config.executor.readMaxBytes },
+				),
+			);
+		}
+		if (capturedToolsProvider) this.#registry.register(capturedToolsProvider);
+		// `mcp.*` is served by Spindle's own MCP client over ~/.pi/agent/mcp.json.
+		// The hub is built on first use so a session with no MCP program pays
+		// nothing and never touches the credential store.
+		this.#registry.register(
+			new McpClientProvider(
+				() => this.mcpClient(context.cwd),
+				() => this.#mcpReadOnlyGate(),
+			),
+		);
+		const availableModels: readonly Model<any>[] =
+			context.scopedModels.length > 0
+				? context.scopedModels.map((entry) => entry.model)
+				: await context.modelRegistry.getAvailable();
+		this.#registry.register(
+			new SpindleAgentsProvider(
+				() => this.#sessionRef,
+				this.agentRuns,
+				() => ({
+					timeoutMs: this.config.agents.timeoutMs,
+					waitMs: this.config.agents.waitMs,
+					parentProvider: context.model?.provider,
+					defaultModel:
+						this.config.agents.defaultModel ??
+						(context.model ? `${context.model.provider}/${context.model.id}` : undefined),
+					...(this.config.agents.defaultThinking ? { defaultThinking: this.config.agents.defaultThinking } : {}),
+					models: availableModels,
+					pacingDisabled: this.#pacingDisabled,
+				}),
+				this.agentRunBook,
+			),
+		);
+		for (const provider of this.#externalProviders.values()) {
+			this.#registry.register(provider);
+		}
+		this.#execution = new SpindleExecutionService(this.#registry, this.#config, this.activity, this.sessionStore);
+		const discovery: SpindleProviderDiscovery = {
+			version: 1,
+			register: (provider, options) => this.registerExternal(provider, options),
+		};
+		this.pi.events.emit(SPINDLE_PROVIDER_DISCOVER_EVENT, discovery);
+	}
+
+	async ensure(context: ExtensionContext): Promise<void> {
+		if (!this.initialized || this.#cwd !== context.cwd) await this.initialize(context);
+	}
+
+	reloadConfig(context: ExtensionContext): void {
+		if (!this.#config || !this.#cwd) return;
+		const next = loadSpindleConfig({
+			cwd: context.cwd,
+			agentDir: getAgentDir(),
+			projectTrusted: context.isProjectTrusted(),
+		});
+		deepAssign(this.#config as unknown as Record<string, unknown>, next as unknown as Record<string, unknown>);
+	}
+
+	registerExternal(provider: SpindleProvider, options: { overwrite?: boolean } = {}): void {
+		if (RESERVED_PROVIDER_NAMES.includes(provider.name)) {
+			throw new Error(`Reserved Spindle provider name: ${provider.name}`);
+		}
+		if (this.#externalProviders.has(provider.name) && !options.overwrite) {
+			throw new Error(`Spindle provider already registered: ${provider.name}`);
+		}
+		this.#externalProviders.set(provider.name, provider);
+		if (this.#registry) this.#registry.register(provider, options);
+	}
+
+	async shutdown(): Promise<void> {
+		// Invalidate session-bound callbacks before the slower child drain. A sandbox
+		// apply may have been awaiting OS setup when session replacement began.
+		await this.#closeInternal(false);
+		// Cancelling the parent cancels its children, and waits for them: the kill
+		// escalates SIGTERM -> SIGKILL on a timer, so exiting immediately would leave
+		// a child that ignores SIGTERM behind as an orphan.
+		this.agentRunBook.setSink(undefined);
+		await this.agentRunBook.drain(AGENT_DRAIN_TIMEOUT_MS);
+		await this.#registry?.close();
+		this.#registry = undefined;
+		this.#config = undefined;
+		this.#execution = undefined;
+		this.#cwd = undefined;
+		this.#agentSandbox = undefined;
+		this.activity.reset();
+		this.agentRuns.reset();
+		this.sessionStore.reset();
+		this.#widgetDismissedAt = 0;
+		this.#externalProviders.clear();
+	}
+
+	/**
+	 * Resolve the effective policy from `spindle.json`, the last request, and two
+	 * floors: an active night run, and the agent definition this process was
+	 * launched from (see `sandbox/resolve.ts`).
+	 *
+	 * The night policy is read from the handshake file rather than passed in, so a
+	 * subagent process (which never sees the parent's event bus) inherits it just
+	 * by starting up, and it survives a `/reload`. The agent floor arrives the
+	 * same way, on argv.
+	 */
+	#resolveSandbox(cwd: string) {
+		// Same reason, for the environment: a participant adopts the run's
+		// `XDG_CONFIG_HOME` and ledger store here, so every shell this process spawns
+		// inherits them. Without it a subagent that was not handed an environment
+		// runs `jj` against a config dir the sandbox refuses to write.
+		applyNightRunEnv({ sessionId: this.#sessionRef.sessionId, cwd });
+		const effective = effectiveSandbox({
+			settings: this.config.sandbox,
+			requested: this.#sandboxRequest,
+			// Session identity, so only participants of the run inherit its policy:
+			// the handshake file is global, and a session opened mid-run is a bystander.
+			night: activeNightSandboxRequest({ sessionId: this.#sessionRef.sessionId, cwd }),
+			// The parent's floor for this subagent, read from argv at initialize().
+			agent: this.#agentSandbox,
+		});
+		const policy = resolveSandboxPolicy(
+			{
+				mode: effective.mode,
+				allowWrite: effective.allowWrite,
+				...(effective.denyWrite.length ? { denyWrite: effective.denyWrite } : {}),
+				...(effective.denyRead.length ? { denyRead: effective.denyRead } : {}),
+			},
+			policyEnvironment(cwd),
+		);
+		return { policy, effective };
+	}
+
+	/**
+	 * Read-only MCP guardrail for this session: `spindle.json` plus the floor an
+	 * active night run imposes. Rebuilt per call, like `#resolveSandbox`, so a run
+	 * that starts mid-session (or a `/reload`) is picked up without touching the
+	 * providers, and so a subagent process inherits it just by starting up.
+	 */
+	#mcpReadOnlyGate(): McpReadOnlyGate {
+		const cwd = this.#cwd ?? this.#sessionRef.cwd;
+		const night = activeNightMcpReadOnly({ sessionId: this.#sessionRef.sessionId, cwd });
+		return McpReadOnlyGate.of(effectiveMcpReadOnlyConfig(this.config.mcp, night));
+	}
+
+	/**
+	 * Build the session's sandbox and subscribe to mid-session change requests.
+	 * Never throws itself: an enforcing mode whose OS sandbox could not be
+	 * brought up (unsupported platform, missing `sandbox-exec`, a rejected
+	 * profile) leaves `bash` refusing to run rather than running unsandboxed,
+	 * and the reason is surfaced to the user once, as an error.
+	 */
+	async #createSandbox(context: ExtensionContext): Promise<SandboxController> {
+		const { policy, effective } = this.#resolveSandbox(context.cwd);
+		const source = effective.source === "config" ? "config" : "request";
+		const controller = new SandboxController(policy, source);
+		const state = await controller.apply(policy, source);
+		if (state.enforcing && state.degradedReason) {
+			context.ui.notify(`spindle: ${controller.describe()}`, "error");
+		}
+		// A canonicalized root (e.g. a symlinked writable root or denyRead root)
+		// is not fatal, but an operator should still see it once, the same way a
+		// degraded sandbox is surfaced above.
+		if (state.warnings?.length) {
+			context.ui.notify(`spindle: ${state.warnings.join("; ")}`, "warning");
+		}
+		this.pi.events.emit(SANDBOX_STATE_EVENT, state);
+
+		// Another extension (night-mode) or the `/sandbox` command can change the
+		// mode for the rest of the session. The operations installed on the tools
+		// are late-bound, so the swap needs no re-registration.
+		this.#unsubscribeSandbox = this.pi.events.on(SANDBOX_REQUEST_EVENT, (payload) => {
+			const request = parseSandboxRequestEvent(payload);
+			if (!request) return;
+			this.#queueSandboxRequest(request.policy, request.reason, context);
+		});
+		return controller;
+	}
+
+	/**
+	 * Adopt a sandbox request. `null` reverts to `spindle.json`. An active night
+	 * run acts as a floor: a request that would loosen it is refused and reported,
+	 * so nothing can un-sandbox an unattended run mid-flight.
+	 *
+	 * Returns the resulting state, or undefined when there is no sandbox to change
+	 * (Spindle not in full code mode).
+	 */
+	async applySandboxRequest(
+		request: SandboxRequest | null,
+		reason: string | undefined,
+		context: ExtensionContext,
+	): Promise<SandboxStateEvent | undefined> {
+		const controller = this.#sandbox;
+		if (!controller) return undefined;
+		const generation = this.#sandboxGeneration;
+		this.#sandboxRequest = request ?? undefined;
+		const cwd = this.#cwd ?? context.cwd;
+		const { policy, effective } = this.#resolveSandbox(cwd);
+		const state = await controller.apply(policy, effective.source === "config" ? "config" : "request");
+		if (!this.#isCurrentSandbox(controller, generation)) return undefined;
+		this.pi.events.emit(SANDBOX_STATE_EVENT, state);
+		// The policy is now in force, so this is the first moment the run can measure
+		// what it actually allows. Fire-and-forget: a probe is diagnostics, and the
+		// run must not wait on `curl` and `ssh` timing out.
+		void runNightPreflight({
+			wrap: (command: string) => controller.wrapCommand(command),
+			sessionId: this.#sessionRef.sessionId,
+			cwd,
+		})
+			.then((path) => {
+				if (path && this.#isCurrentSandbox(controller, generation)) {
+					context.ui.notify(`spindle: sandbox capabilities probed, see ${path}`, "info");
+				}
+			})
+			.catch(() => {
+				// Diagnostics only: a failed probe must never fail the run.
+			});
+		if (effective.refused) {
+			const holder = effective.source === "agent" ? "this subagent's definition" : "an active night run";
+			context.ui.notify(
+				`spindle: '${effective.refused.asked}' refused, ${holder} holds the sandbox at ` +
+					`'${effective.refused.enforced}'. ${controller.describe()}`,
+				"warning",
+			);
+			return state;
+		}
+		const suffix = reason ? ` (${reason})` : "";
+		context.ui.notify(`spindle: ${controller.describe()}${suffix}`, "info");
+		return state;
+	}
+
+	/**
+	 * Spindle's MCP client, created on demand.
+	 *
+	 * Shared with the `/mcp` and `/mcp-auth` commands so a status read reflects
+	 * the connections this session actually holds, and so an authorization is
+	 * immediately visible to `mcp.*` without a reload.
+	 */
+	mcpClient(cwd: string): McpClientHub {
+		this.#mcpHub ??= new McpClientHub({ cwd, onStatusChange: () => this.#mcpStatusListener?.() });
+		return this.#mcpHub;
+	}
+
+	/**
+	 * Observe MCP connection changes (footer indicator).
+	 *
+	 * The hub is created on first use, so the listener is held here and read
+	 * through the closure above rather than passed at construction time.
+	 */
+	onMcpStatusChange(listener: (() => void) | undefined): void {
+		this.#mcpStatusListener = listener;
+	}
+
+	/** Current sandbox state, or undefined when there is no sandbox. */
+	sandboxState(): SandboxStateEvent | undefined {
+		return this.#sandbox?.state();
+	}
+
+	/** True while an active night run pins the sandbox. */
+	sandboxHeldByNightRun(): boolean {
+		return (
+			activeNightSandboxRequest({
+				sessionId: this.#sessionRef.sessionId,
+				cwd: this.#cwd ?? this.#sessionRef.cwd,
+			}) !== undefined
+		);
+	}
+
+	/** One-line sandbox status, for `/sandbox` output. */
+	sandboxStatus(): string {
+		return this.#sandbox ? this.#sandbox.describe() : "sandbox off (no enforcement)";
+	}
+
+	/**
+	 * Deliver a subagent result nobody was waiting for.
+	 *
+	 * A run whose wait window expired keeps going with no caller attached, so its
+	 * result would otherwise land nowhere. Injecting it as a follow-up message
+	 * wakes the parent with the outcome instead of requiring it to guess when to
+	 * poll. Best-effort: a host that refuses the injection must not break the run
+	 * book.
+	 */
+	#announceAgentCompletion(event: AgentCompletionEvent): void {
+		const elapsed = `${Math.round(event.elapsedMs / 1000)}s`;
+		const header = `Subagent batch ${event.runId} finished after ${elapsed} (${event.agents.join(", ")}).`;
+		const body = event.results
+			.map((result) => {
+				const status = result.ok ? "ok" : `failed${result.error ? `: ${result.error}` : ""}`;
+				const where = result.outputPath ? `\nresult file: ${result.outputPath}` : "";
+				return `## ${result.agent} (${status})${where}\n\n${result.output}`;
+			})
+			.join("\n\n");
+		try {
+			this.pi.sendMessage(
+				{
+					customType: "spindle.agent_result",
+					content: `${header}\n\n${body}`,
+					display: true,
+					// Outputs are already in `content`; the details carry the handles only,
+					// so an announcement is not persisted twice.
+					details: {
+						runId: event.runId,
+						agents: event.agents,
+						elapsedMs: event.elapsedMs,
+						runs: event.results.map((result) => ({
+							agent: result.agent,
+							ok: result.ok,
+							state: result.state,
+							...(result.outputPath ? { outputPath: result.outputPath } : {}),
+							...(result.error ? { error: result.error } : {}),
+						})),
+					},
+				},
+				{ deliverAs: "followUp", triggerTurn: true },
+			);
+		} catch {
+			// No session to deliver into (shutting down, or a host without injection).
+		}
+	}
+
+	#isCurrentSandbox(controller: SandboxController, generation: number): boolean {
+		return this.#sandbox === controller && this.#sandboxGeneration === generation;
+	}
+
+	#queueSandboxRequest(request: SandboxRequest | null, reason: string | undefined, context: ExtensionContext): void {
+		const generation = this.#sandboxGeneration;
+		let pending: Promise<void>;
+		pending = this.applySandboxRequest(request, reason, context)
+			.then(() => {})
+			.catch((error: unknown) => {
+				const message = error instanceof Error ? error.message : String(error);
+				if (generation !== this.#sandboxGeneration) {
+					console.warn(`[spindle] Sandbox request failed during session teardown: ${message}`);
+					return;
+				}
+				console.error(`[spindle] Failed to apply sandbox request: ${message}`);
+				context.ui.notify(`spindle: failed to apply sandbox request: ${message}`, "error");
+			})
+			.finally(() => this.#pendingSandboxRequests.delete(pending));
+		this.#pendingSandboxRequests.add(pending);
+	}
+
+	async #closeInternal(preserveExternalProviders = true): Promise<void> {
+		this.#sandboxGeneration++;
+		this.#unsubscribePacing?.();
+		this.#unsubscribePacing = undefined;
+		this.#unsubscribeSandbox?.();
+		this.#unsubscribeSandbox = undefined;
+		const sandbox = this.#sandbox;
+		this.#sandbox = undefined;
+		if (this.#pendingSandboxRequests.size) {
+			await Promise.all(this.#pendingSandboxRequests);
+		}
+		if (sandbox) await sandbox.dispose();
+		if (!this.#registry) return;
+		const preserve = preserveExternalProviders ? new Set(this.#externalProviders.keys()) : undefined;
+		await this.#registry.close(preserve);
+		this.#registry = undefined;
+		this.#execution = undefined;
+	}
+}
+
+const isPlainObject = (value: unknown): value is Record<string, unknown> =>
+	typeof value === "object" && value !== null && !Array.isArray(value);
+
+const deepAssign = (target: Record<string, unknown>, source: Record<string, unknown>): void => {
+	for (const key of Object.keys(target)) {
+		if (!(key in source)) delete target[key];
+	}
+	for (const [key, value] of Object.entries(source)) {
+		const targetValue = target[key];
+		if (isPlainObject(value) && isPlainObject(targetValue)) {
+			deepAssign(targetValue, value);
+		} else {
+			target[key] = value;
+		}
+	}
+};

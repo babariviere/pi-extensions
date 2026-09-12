@@ -1,0 +1,244 @@
+/**
+ * The host half of the guest/host call contract.
+ *
+ * Every `spindle.$*` ref the guest bridge can emit is answered by exactly one
+ * entry in `HOST_CALLS`: the ref name and the handler that runs it. The
+ * execution service dispatches through `hostCallTable` and nothing else. The
+ * guest half (who emits each ref) is the `GUEST_SETUP` string literal in
+ * `runtime/quickjs-runtime.ts`, and the declarations the guest type-checks
+ * against live in `runtime/guest-types.ts`; the three stay in lockstep, and
+ * `runtime/guest-host-refs.test.ts` guards the contract from the guest side.
+ *
+ * Handlers receive one `HostCallContext` per execution (registry, activity
+ * store, guards, trace) and the call's abort signal, so adding
+ * a host call means adding one entry here: no switch case to find, no parallel
+ * enumeration in the contract test to keep honest.
+ */
+
+import type { SpindleExecutionFailureStageV1 } from "./audit/trace.ts";
+import type { ActionRegistry } from "./core/action-registry.ts";
+import type { SpindleInvocationContext } from "./protocol.ts";
+import type { SpindleSessionStore } from "./session-store.ts";
+
+/**
+ * One τ operation, as reported to the live renderer.
+ *
+ * Deliberately not persisted: `preview` is the stored value, which the durable
+ * trace must not carry (audit/projection.ts is an allowlist, and the trace is
+ * the confidentiality boundary). It rides the partial-update channel the write
+ * previews already use, so a reloaded transcript keeps the key and the size from
+ * the trace and loses only the content.
+ */
+export interface SpindleStateNote {
+	ref: string;
+	key?: string;
+	/** Bounded slice of the stored JSON, for a set or a hit. */
+	preview?: string;
+	/** Outcome for an operation with no value to show ("not held", "cleared 2"). */
+	detail?: string;
+}
+
+/** The providers only reachable in full code mode. */
+export const fullCodeProvider = (value: string): "pi" | undefined => {
+	const separator = value.indexOf(".");
+	const provider = separator > 0 ? value.slice(0, separator) : value;
+	return provider === "pi" ? provider : undefined;
+};
+
+/** Per-execution state and helpers a host-call handler runs against. */
+export interface HostCallContext {
+	registry: ActionRegistry;
+	activity: import("./activity/store.ts").SpindleActivityStore | undefined;
+	parentToolCallId: string;
+	/** Effective full-code mode; gates pi/extensions visibility in discovery. */
+	fullCodeMode: boolean;
+	/** The registry-shaped invocation context (base context plus the call's signal). */
+	registryContext(signal: AbortSignal): SpindleInvocationContext & { signal: AbortSignal };
+	/** Progress line update (`spindle.$progress`). */
+	update(message: string): void;
+	/** Session-scoped scratchpad behind the guest's `τ` namespace. */
+	store: SpindleSessionStore;
+	/**
+	 * Report one τ operation for the live TUI row (see `SpindleStateNote`). The
+	 * value preview travels this way rather than through the durable trace, which
+	 * records the key and the size only.
+	 */
+	noteState(note: SpindleStateNote): void;
+	/** Refuse pi/extensions refs when full-code mode is off. */
+	guardFullCodeRef(ref: string): void;
+	/** Trace one host call through its stages. */
+	traceAttempt<T>(
+		traceRef: string,
+		args: Record<string, unknown>,
+		signal: AbortSignal,
+		run: (setStage: (stage: SpindleExecutionFailureStageV1) => void) => T | Promise<T>,
+	): Promise<T>;
+	/** Provider dispatch with guard/trace/audit (the `spindle.$call` path). */
+	invokeAction(ref: string, args: Record<string, unknown>, signal: AbortSignal): Promise<unknown>;
+}
+
+/** One guest/host call: the bridge ref it answers, and how to run it. */
+export interface HostCall {
+	/** The guest bridge ref this entry answers, e.g. "spindle.$call". */
+	ref: string;
+	handle(args: Record<string, unknown>, ctx: HostCallContext, signal: AbortSignal): Promise<unknown> | unknown;
+}
+
+export const HOST_CALLS: readonly HostCall[] = [
+	{
+		ref: "spindle.$providers",
+		handle: (args, ctx, signal) =>
+			ctx.traceAttempt("spindle.discovery.providers", args, signal, () =>
+				ctx.registry.providers().filter((provider) => ctx.fullCodeMode || !fullCodeProvider(provider.name)),
+			),
+	},
+	{
+		ref: "spindle.$catalog",
+		handle: (args, ctx, signal) =>
+			ctx.traceAttempt("spindle.discovery.catalog", args, signal, async (setStage) => {
+				const provider = typeof args.provider === "string" ? args.provider : undefined;
+				setStage("guard");
+				if (provider) ctx.guardFullCodeRef(`${provider}.*`);
+				setStage(provider && !ctx.registry.has(provider) ? "resolve" : "invoke");
+				return ctx.registry.catalog(ctx.registryContext(signal), {
+					...(provider ? { provider } : {}),
+					...(typeof args.limit === "number" ? { limit: args.limit } : {}),
+					includeProvider: (name) => ctx.fullCodeMode || !fullCodeProvider(name),
+				});
+			}),
+	},
+	{
+		ref: "spindle.$list",
+		handle: (args, ctx, signal) =>
+			ctx.traceAttempt("spindle.discovery.list", args, signal, async (setStage) => {
+				setStage("guard");
+				if (typeof args.provider === "string") ctx.guardFullCodeRef(`${args.provider}.*`);
+				setStage(typeof args.provider === "string" && !ctx.registry.has(args.provider) ? "resolve" : "invoke");
+				const actions = await ctx.registry.list(
+					{
+						...(typeof args.provider === "string" ? { provider: args.provider } : {}),
+						...(typeof args.namespace === "string" ? { namespace: args.namespace } : {}),
+						...(typeof args.query === "string" ? { query: args.query } : {}),
+						...(typeof args.limit === "number" ? { limit: args.limit } : {}),
+					},
+					ctx.registryContext(signal),
+				);
+				return actions.filter((action) => ctx.fullCodeMode || !fullCodeProvider(action.provider));
+			}),
+	},
+	{
+		ref: "spindle.$search",
+		handle: (args, ctx, signal) =>
+			ctx.traceAttempt("spindle.discovery.search", args, signal, async () => {
+				const actions = await ctx.registry.search(
+					String(args.query ?? ""),
+					ctx.registryContext(signal),
+					typeof args.limit === "number" ? args.limit : undefined,
+				);
+				return actions.filter((action) => ctx.fullCodeMode || !fullCodeProvider(action.provider));
+			}),
+	},
+	{
+		ref: "spindle.$describe",
+		handle: (args, ctx, signal) =>
+			ctx.traceAttempt("spindle.discovery.describe", args, signal, async (setStage) => {
+				const targetRef = String(args.ref ?? "");
+				setStage("guard");
+				ctx.guardFullCodeRef(targetRef);
+				setStage("resolve");
+				return ctx.registry.describe(targetRef, ctx.registryContext(signal));
+			}),
+	},
+	{
+		ref: "spindle.$call",
+		handle: (args, ctx, signal) => {
+			const callArgs =
+				typeof args.args === "object" && args.args !== null && !Array.isArray(args.args)
+					? (args.args as Record<string, unknown>)
+					: {};
+			const targetRef = String(args.ref ?? "");
+			return ctx.invokeAction(targetRef, callArgs, signal);
+		},
+	},
+	{
+		ref: "spindle.$progress",
+		handle: (args, ctx, signal) =>
+			ctx.traceAttempt("spindle.workflow.progress", args, signal, () =>
+				ctx.update(String(args.message ?? "Working")),
+			),
+	},
+	/*
+	 * The `τ` namespace: the session-scoped scratchpad (see session-store.ts).
+	 *
+	 * Five refs rather than a property-access proxy, because every one of these
+	 * can fail (a bad key, a non-serializable value, a budget) and a failable
+	 * operation must not read like an assignment. They are traced like any other
+	 * host call, so a program that overruns a limit says so in the transcript.
+	 */
+	{
+		ref: "spindle.$stateGet",
+		handle: (args, ctx, signal) =>
+			ctx.traceAttempt("spindle.state.get", { key: args.key }, signal, () => {
+				const read = ctx.store.get(args.key);
+				ctx.noteState({
+					ref: "spindle.state.get",
+					key: read.key,
+					...(read.found ? { preview: ctx.store.preview(read.key) } : { detail: "not held" }),
+				});
+				return read;
+			}),
+	},
+	{
+		ref: "spindle.$stateSet",
+		handle: (args, ctx, signal) =>
+			ctx.traceAttempt("spindle.state.set", { key: args.key }, signal, () => {
+				const write = ctx.store.set(args.key, args.value);
+				ctx.noteState({
+					ref: "spindle.state.set",
+					key: write.key,
+					...(ctx.store.preview(write.key) ? { preview: ctx.store.preview(write.key) } : {}),
+				});
+				return write;
+			}),
+	},
+	{
+		ref: "spindle.$stateKeys",
+		handle: (args, ctx, signal) =>
+			ctx.traceAttempt("spindle.state.keys", args, signal, () => {
+				const keys = ctx.store.keys();
+				ctx.noteState({
+					ref: "spindle.state.keys",
+					detail: keys.length > 0 ? ctx.store.describe() : "empty",
+				});
+				return keys;
+			}),
+	},
+	{
+		ref: "spindle.$stateDelete",
+		handle: (args, ctx, signal) =>
+			ctx.traceAttempt("spindle.state.delete", { key: args.key }, signal, () => {
+				const removed = ctx.store.delete(args.key);
+				ctx.noteState({
+					ref: "spindle.state.delete",
+					key: removed.key,
+					detail: removed.deleted ? "deleted" : "not held",
+				});
+				return removed;
+			}),
+	},
+	{
+		ref: "spindle.$stateClear",
+		handle: (args, ctx, signal) =>
+			ctx.traceAttempt("spindle.state.clear", args, signal, () => {
+				const cleared = ctx.store.clear();
+				ctx.noteState({
+					ref: "spindle.state.clear",
+					detail: `cleared ${cleared.cleared} ${cleared.cleared === 1 ? "key" : "keys"}`,
+				});
+				return cleared;
+			}),
+	},
+];
+
+/** The dispatch table: ref -> entry. The execution service consults only this. */
+export const hostCallTable: ReadonlyMap<string, HostCall> = new Map(HOST_CALLS.map((call) => [call.ref, call]));

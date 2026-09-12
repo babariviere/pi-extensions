@@ -40,7 +40,8 @@
     "shiki": "^4.3.1",
     "typescript": "^6.0.3",
     "ws": "^8.21.0",
-    "yaml": "^2.9.0"
+    "yaml": "^2.9.0",
+    "@babariviere/code-mode": "git+https://github.com/babariviere/code-mode.git#a51f2728dd395c4d8a4140a9072786c6e1003f04"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.13",
@@ -56,7 +57,7 @@
     "typebox": "*"
   },
   "scripts": {
-    "spindle:evaluate": "tsx extensions/spindle/evaluation/cli.ts",
+    "code-mode:evaluate": "tsx extensions/code-mode/evaluation/cli.ts",
     "test": "node --import tsx --test 'extensions/**/*.test.ts'",
     "typecheck": "tsgo -p tsconfig.json",
     "fmt": "biome format --write .",
