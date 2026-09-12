@@ -82,7 +82,7 @@ export class BackgroundDashboard implements Component {
 		this.container.addChild(this.body);
 		this.container.addChild(
 			new Text(
-				theme.fg("dim", "tab/shift-tab views  j/k select  w approve item  r refresh  R reproduce  esc close"),
+				theme.fg("dim", "tab/shift-tab views  j/k select  w approve exact item  r refresh  R reproduce  esc close"),
 				1,
 				0,
 			),

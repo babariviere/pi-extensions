@@ -28,7 +28,7 @@ export const CASE_TRANSITIONS: Readonly<Record<CaseState, readonly CaseState[]>>
 		"blocked",
 		"cancelled",
 	],
-	"paused-usage": ["implementation", "verification", "retry", "cancelled"],
+	"paused-usage": ["specification", "implementation", "verification", "retry", "cancelled"],
 	blocked: ["retry", "paused", "cancelled"],
 	retry: ["investigating", "specification", "implementation", "verification", "paused", "cancelled"],
 	handled: [],
@@ -182,6 +182,8 @@ export class BackgroundAgentsStateMachine {
 		const id = nonEmpty(caseId, "caseId");
 		const current = this.database.get<{ state: CaseState }>("SELECT state FROM cases WHERE id = ?", id);
 		if (!current) throw new Error(`Unknown case: ${id}`);
+		if (["paused", "paused-usage", "retry"].includes(current.state) && this.database.hasPendingUsageStop(id))
+			throw new Error(`Case ${id} cannot resume while a usage stop is pending`);
 		if (current.state !== "paused" && current.state !== "paused-usage" && current.state !== "retry") {
 			throw new Error(`Case ${id} is not resumable from ${current.state}`);
 		}

@@ -110,10 +110,12 @@ describe("background-agents lifecycle state machine", () => {
 		assert.equal(machine.pauseCase(caseId, "operator"), "paused");
 		assert.equal(machine.resumeCase(caseId, "operator"), "investigating");
 		database.transitionCase(caseId, "specification", "test");
+		assert.equal(machine.pauseCase(caseId, "system", undefined, true), "paused-usage");
+		assert.equal(machine.resumeCase(caseId, "operator"), "specification");
 		database.transitionCase(caseId, "awaiting-approval", "test");
 		database.transitionCase(caseId, "implementation", "test");
 		assert.equal(machine.pauseCase(caseId, "system", undefined, true), "paused-usage");
-		assert.equal(machine.resumeCase(caseId, "operator"), "implementation");
+		assert.equal(machine.resumeCase(caseId, "operator", undefined, "implementation"), "implementation");
 		machine.retryCase(caseId, "system");
 		assert.equal(machine.resumeCase(caseId, "operator"), "implementation");
 		machine.cancelCase(caseId, "operator");

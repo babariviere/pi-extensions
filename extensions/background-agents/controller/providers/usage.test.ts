@@ -13,14 +13,15 @@ const directories: string[] = [];
 function setup() {
 	const directory = mkdtempSync(join(tmpdir(), "background-agents-usage-"));
 	directories.push(directory);
-	const database = new BackgroundAgentsDatabase(join(directory, "controller.sqlite"));
+	const path = join(directory, "controller.sqlite");
+	const database = new BackgroundAgentsDatabase(path);
 	const config = normalizeBackgroundAgentsConfig({
 		profiles: [
 			{ id: "claude-work", provider: "anthropic", agentDir: directory, allowedModels: ["claude"] },
 			{ id: "openai-work", provider: "openai", agentDir: directory, allowedModels: ["codex"] },
 		],
 	});
-	return { database, config };
+	return { database, config, path };
 }
 
 afterEach(() => {
@@ -134,5 +135,50 @@ describe("profile usage control", () => {
 			"running",
 		);
 		database.close();
+	});
+
+	test("persists usage stop handles across restart and blocks resume until termination is confirmed", () => {
+		const { database, config, path } = setup();
+		const caseId = database.createCase({ title: "stop intent", source: "manual" });
+		database.upsertProviderProfileState({ profileId: config.profiles[0]!.id });
+		const jobId = database.createJob({ caseId, role: "worker" });
+		const claim = database.claimJob(jobId, "controller", 1000, new Date(), {
+			profileId: config.profiles[0]!.id,
+			model: "claude",
+		})!;
+		database.run(
+			"UPDATE attempts SET systemd_unit = ?, pane_id = ? WHERE id = ?",
+			"usage-unit",
+			"usage-pane",
+			claim.attemptId,
+		);
+		database.pauseJobForUsage(claim.attemptId, "quota exhausted");
+		assert.deepEqual(
+			database.listPendingUsageStopIntents().map((intent) => ({
+				attemptId: intent.attemptId,
+				jobId: intent.jobId,
+				profileId: intent.profileId,
+				systemdUnit: intent.systemdUnit,
+				paneId: intent.paneId,
+				status: intent.status,
+			})),
+			[
+				{
+					attemptId: claim.attemptId,
+					jobId,
+					profileId: config.profiles[0]!.id,
+					systemdUnit: "usage-unit",
+					paneId: "usage-pane",
+					status: "pending",
+				},
+			],
+		);
+		database.close();
+		const reopened = new BackgroundAgentsDatabase(path);
+		assert.equal(reopened.listPendingUsageStopIntents()[0]?.attemptId, claim.attemptId);
+		assert.throws(() => reopened.resumeUsageJobs(caseId), /usage stop is pending/);
+		reopened.markUsageStopIntent(claim.attemptId, { systemdConfirmed: true, paneConfirmed: true });
+		assert.equal(reopened.listPendingUsageStopIntents().length, 0);
+		reopened.close();
 	});
 });

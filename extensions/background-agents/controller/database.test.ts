@@ -197,4 +197,21 @@ describe("background-agents SQLite ownership", () => {
 		reopened.setEmergencyStop(false, "operator");
 		reopened.close();
 	});
+
+	test("rolls back a publication set invalidated between authorization checks", () => {
+		const database = new BackgroundAgentsDatabase(":memory:");
+		const caseId = database.createCase({ title: "publication race", source: "manual" });
+		const jobId = database.createJob({ caseId, role: "investigator" });
+		const claim = database.claimJob(jobId, "runner")!;
+		assert.throws(
+			() =>
+				database.withAttemptPublication(claim.attemptId, claim.stopEpoch, () => {
+					database.run("UPDATE attempts SET publish_invalidated = 1 WHERE id = ?", claim.attemptId);
+					database.createArtifact({ caseId, attemptId: claim.attemptId, kind: "stale-output" });
+				}),
+			/invalidated/,
+		);
+		assert.equal(database.get<{ count: number }>("SELECT count(*) AS count FROM artifacts")?.count, 0);
+		database.close();
+	});
 });

@@ -266,6 +266,7 @@ export interface BackgroundRuntimeControls {
 	terminateSystemdUnit(unit: string): Promise<void>;
 	isSystemdUnitStopped(unit: string): Promise<boolean>;
 	closePane?(paneId: string): Promise<void>;
+	isPaneStopped?(paneId: string): Promise<boolean>;
 }
 export interface BackgroundControllerOptions {
 	config?: BackgroundAgentsConfig;
@@ -526,6 +527,35 @@ export class BackgroundAgentsController {
 		} catch {
 			/* unavailable profiles remain unavailable */
 		}
+		await this.reconcileUsageStopIntents();
+	}
+	private async reconcileUsageStopIntents(): Promise<void> {
+		for (const intent of this.database.listPendingUsageStopIntents()) {
+			const attempt = this.database.get<{ case_id: string; role: AgentRole }>(
+				"SELECT case_id, role FROM attempts WHERE id = ?",
+				intent.attemptId,
+			);
+			if (!attempt) {
+				this.database.markUsageStopIntent(intent.attemptId, { systemdConfirmed: true, paneConfirmed: true });
+				continue;
+			}
+			try {
+				await this.reconcileUsageAttempt(
+					{
+						attemptId: intent.attemptId,
+						jobId: intent.jobId,
+						caseId: attempt.case_id,
+						role: attempt.role,
+						...(intent.systemdUnit ? { systemdUnit: intent.systemdUnit } : {}),
+						...(intent.paneId ? { paneId: intent.paneId } : {}),
+					},
+					intent.reason,
+					this.options.clock?.() ?? new Date(),
+				);
+			} catch {
+				// Keep the intent pending so the next usage or recovery tick retries it.
+			}
+		}
 	}
 	private async reconcileUsageAttempt(
 		attempt: {
@@ -541,17 +571,26 @@ export class BackgroundAgentsController {
 		now: Date,
 	): Promise<void> {
 		const failures: string[] = [];
+		const intent = this.database.listPendingUsageStopIntents().find((item) => item.attemptId === attempt.attemptId);
 		if (attempt.systemdUnit)
 			try {
-				await this.runtimeControls.terminateSystemdUnit(attempt.systemdUnit);
-				if (!(await this.runtimeControls.isSystemdUnitStopped(attempt.systemdUnit)))
-					failures.push(`systemd unit remains active: ${attempt.systemdUnit}`);
+				if (!intent?.systemdConfirmed) {
+					await this.runtimeControls.terminateSystemdUnit(attempt.systemdUnit);
+					if (!(await this.runtimeControls.isSystemdUnitStopped(attempt.systemdUnit)))
+						failures.push(`systemd unit remains active: ${attempt.systemdUnit}`);
+					else this.database.markUsageStopIntent(attempt.attemptId, { systemdConfirmed: true });
+				}
 			} catch (error) {
 				failures.push(`systemd stop: ${error instanceof Error ? error.message : String(error)}`);
 			}
-		if (attempt.paneId && this.runtimeControls.closePane)
+		if (attempt.paneId && this.runtimeControls.closePane && !intent?.paneConfirmed)
 			try {
 				await this.runtimeControls.closePane(attempt.paneId);
+				const stopped = this.runtimeControls.isPaneStopped
+					? await this.runtimeControls.isPaneStopped(attempt.paneId)
+					: true;
+				if (!stopped) failures.push(`pane remains active: ${attempt.paneId}`);
+				else this.database.markUsageStopIntent(attempt.attemptId, { paneConfirmed: true });
 			} catch (error) {
 				failures.push(`pane close: ${error instanceof Error ? error.message : String(error)}`);
 			}
@@ -653,7 +692,14 @@ export class BackgroundAgentsController {
 					repository &&
 					!(claimedRole === "investigator" && candidateStateIsQuestion(this.database, claim.jobId))
 				)
-					await this.linearEffects.startWork({ issue, phase, owner: this.owner, stopEpoch: claim.stopEpoch });
+					await this.linearEffects.startWork({
+						issue,
+						phase,
+						owner: this.owner,
+						stopEpoch: claim.stopEpoch,
+						isAuthorized: () => this.database.attemptMayPublish(claim.attemptId, claim.stopEpoch),
+					});
+				this.database.assertAttemptMayPublish(claim.attemptId, claim.stopEpoch);
 			}
 			const result = await this.options.attemptRunner.run(claim, this.database);
 			await finish(result);
@@ -750,6 +796,7 @@ export class BackgroundAgentsController {
 			this.jobs.renewLease(attempt.id, this.owner);
 	}
 	private async recoveryTick(): Promise<void> {
+		await this.reconcileUsageStopIntents();
 		for (const attempt of this.database.all<{ id: string }>("SELECT id FROM attempts WHERE state = 'running'")) {
 			try {
 				await this.recovery.reconcileAttempt(attempt.id);
@@ -1275,6 +1322,8 @@ export class BackgroundAgentsController {
 					this.database.get<{ state: string }>("SELECT state FROM cases WHERE id = ?", caseId)?.state ===
 					"paused-usage"
 				) {
+					if (this.database.hasPendingUsageStop(caseId))
+						throw new Error(`Case ${caseId} cannot resume while a usage stop is pending`);
 					const resumed = this.providerScheduler.resumeAfterUsageCase(
 						caseId,
 						this.options.clock?.() ?? new Date(),

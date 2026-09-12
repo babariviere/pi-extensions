@@ -219,7 +219,12 @@ describe("background-agent workflows", () => {
 			database
 				.all<{ work_item_id: string }>("SELECT work_item_id FROM jobs WHERE role = 'worker' ORDER BY created_at")
 				.map((row) => row.work_item_id),
-			[second.orderedWorkItems[0]],
+			[],
+		);
+		workflow.approveWorkItem(caseId, second.orderedWorkItems[0]!, second.version, "operator");
+		assert.equal(
+			database.get<{ count: number }>("SELECT count(*) AS count FROM jobs WHERE role = 'worker'")?.count,
+			1,
 		);
 		database.close();
 	});
@@ -244,7 +249,7 @@ describe("background-agent workflows", () => {
 		workflow.approve(caseId, specification.version, [], "operator", specification.orderedWorkItems);
 		assert.equal(
 			database.get<{ count: number }>("SELECT count(*) AS count FROM jobs WHERE role = 'worker'")?.count,
-			1,
+			0,
 		);
 		assert.throws(
 			() => workflow.approveWorkItem(caseId, specification.orderedWorkItems[1]!, specification.version, "operator"),
@@ -253,8 +258,15 @@ describe("background-agent workflows", () => {
 		workflow.queueNextWorker(caseId);
 		assert.equal(
 			database.get<{ count: number }>("SELECT count(*) AS count FROM jobs WHERE role = 'worker'")?.count,
-			1,
+			0,
 		);
+		const firstApproval = workflow.approveWorkItem(
+			caseId,
+			specification.orderedWorkItems[0]!,
+			specification.version,
+			"operator",
+		);
+		assert.ok(firstApproval.approvalId);
 		const machine = new BackgroundAgentsStateMachine(database);
 		machine.transitionWorkItem(specification.orderedWorkItems[0]!, "implementation", "worker");
 		machine.transitionWorkItem(specification.orderedWorkItems[0]!, "verification", "worker");
@@ -266,7 +278,7 @@ describe("background-agent workflows", () => {
 			"operator",
 		);
 		assert.ok(approval.approvalId);
-		assert.equal(database.get<{ count: number }>("SELECT count(*) AS count FROM work_item_approvals")?.count, 1);
+		assert.equal(database.get<{ count: number }>("SELECT count(*) AS count FROM work_item_approvals")?.count, 2);
 		assert.equal(
 			database.get<{ count: number }>(
 				"SELECT count(*) AS count FROM jobs WHERE work_item_id = ?",

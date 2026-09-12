@@ -37,6 +37,7 @@ export interface EffectExecutorOptions {
 	now?: () => Date;
 	controls?: ExternalMutationControls;
 	expectedStopEpoch?: number;
+	isAuthorized?: () => boolean;
 }
 
 function errorOutcome(error: unknown): { error: string } {
@@ -56,6 +57,7 @@ export class ExternalEffectExecutor {
 	}
 
 	async execute<T>(operation: EffectOperation<T>): Promise<T> {
+		this.assertAuthorized();
 		this.store.ensureEffect(operation);
 		const beforeClaim = this.store.getEffect(operation.operationKey);
 		if (!beforeClaim) throw new Error("Effect intent disappeared: " + operation.operationKey);
@@ -76,6 +78,7 @@ export class ExternalEffectExecutor {
 		try {
 			if (beforeClaim.reconciliationState === "unknown") {
 				const reconciled = await operation.reconcile(beforeClaim);
+				this.assertAuthorized();
 				if (reconciled.found) {
 					this.store.completeEffect(
 						operation.operationKey,
@@ -87,18 +90,9 @@ export class ExternalEffectExecutor {
 				}
 			}
 
-			if (
-				this.options.expectedStopEpoch !== undefined &&
-				this.store.getEmergencyStopEpoch?.() !== this.options.expectedStopEpoch
-			)
-				throw new Error("effect was invalidated by emergency stop");
-			if (this.stopped()) throw new Error("external mutations are disabled by emergency stop");
+			this.assertAuthorized();
 			const value = await operation.perform();
-			if (
-				this.options.expectedStopEpoch !== undefined &&
-				this.store.getEmergencyStopEpoch?.() !== this.options.expectedStopEpoch
-			)
-				throw new Error("effect was invalidated by emergency stop");
+			this.assertAuthorized();
 			this.store.completeEffect(
 				operation.operationKey,
 				this.options.owner,
@@ -118,6 +112,17 @@ export class ExternalEffectExecutor {
 
 	private stopped(): boolean {
 		return this.options.controls?.isStopped() ?? this.store.isEmergencyStop?.() ?? false;
+	}
+
+	private assertAuthorized(): void {
+		if (
+			this.options.expectedStopEpoch !== undefined &&
+			this.store.getEmergencyStopEpoch?.() !== this.options.expectedStopEpoch
+		)
+			throw new Error("effect was invalidated by emergency stop");
+		if (this.options.isAuthorized && !this.options.isAuthorized())
+			throw new Error("effect was invalidated before publication");
+		if (this.stopped()) throw new Error("external mutations are disabled by emergency stop");
 	}
 
 	private decode<T>(operation: EffectOperation<T>, outcome: unknown): T {

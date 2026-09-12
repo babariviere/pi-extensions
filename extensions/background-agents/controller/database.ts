@@ -63,7 +63,7 @@ const CASE_TRANSITIONS: Record<CaseState, readonly CaseState[]> = {
 		"blocked",
 		"cancelled",
 	],
-	"paused-usage": ["implementation", "verification", "retry", "cancelled"],
+	"paused-usage": ["specification", "implementation", "verification", "retry", "cancelled"],
 	blocked: ["retry", "paused", "cancelled"],
 	retry: ["investigating", "specification", "implementation", "verification", "paused", "cancelled"],
 	handled: [],
@@ -188,6 +188,24 @@ export interface JobClaim {
 	profileId?: string;
 	model?: string;
 	stopEpoch: number;
+}
+
+export type UsageStopStatus = "pending" | "systemd-confirmed" | "pane-confirmed" | "complete";
+
+export interface UsageStopIntent {
+	id: string;
+	attemptId: string;
+	jobId: string;
+	caseId: string;
+	profileId?: string;
+	systemdUnit?: string;
+	paneId?: string;
+	status: UsageStopStatus;
+	systemdConfirmed: boolean;
+	paneConfirmed: boolean;
+	reason: string;
+	createdAt: string;
+	updatedAt: string;
 }
 
 export interface ProviderProfileStateInput {
@@ -677,11 +695,6 @@ export class BackgroundAgentsDatabase {
 			return false;
 		if (job.rollout_mode === "autonomous-pr") return true;
 		if (job.rollout_mode !== "supervised") return false;
-		const first = this.get<{ ordinal: number }>(
-			"SELECT min(ordinal) AS ordinal FROM work_items WHERE spec_version_id = ?",
-			current.id,
-		);
-		if (job.ordinal === first?.ordinal) return true;
 		return Boolean(
 			this.get(
 				"SELECT id FROM work_item_approvals WHERE case_id = ? AND work_item_id = ? AND spec_version = ? AND decision = 'approved'",
@@ -690,6 +703,19 @@ export class BackgroundAgentsDatabase {
 				current.version,
 			),
 		);
+	}
+
+	assertAttemptMayPublish(attemptId: string, stopEpoch: number): void {
+		if (!this.attemptMayPublish(attemptId, stopEpoch)) throw new Error("attempt was invalidated before publication");
+	}
+
+	withAttemptPublication<T>(attemptId: string, stopEpoch: number, callback: () => T): T {
+		return this.withTransaction(() => {
+			this.assertAttemptMayPublish(attemptId, stopEpoch);
+			const result = callback();
+			this.assertAttemptMayPublish(attemptId, stopEpoch);
+			return result;
+		});
 	}
 
 	/** Pause only jobs captured by an emergency-stop activation. */
@@ -813,7 +839,7 @@ export class BackgroundAgentsDatabase {
 	}
 
 	withTransaction<T>(callback: () => T): T {
-		if (this.database.isTransaction) throw new Error("A database transaction is already active");
+		if (this.database.isTransaction) return callback();
 		this.database.exec("BEGIN IMMEDIATE");
 		try {
 			const result = callback();
@@ -1483,8 +1509,13 @@ export class BackgroundAgentsDatabase {
 				case_id: string;
 				profile_id: string | null;
 				role: AgentRole;
+				systemd_unit: string | null;
+				pane_id: string | null;
 				state: string;
-			}>("SELECT job_id, case_id, profile_id, role, state FROM attempts WHERE id = ?", attemptId);
+			}>(
+				"SELECT job_id, case_id, profile_id, role, systemd_unit, pane_id, state FROM attempts WHERE id = ?",
+				attemptId,
+			);
 			if (!attempt || attempt.state !== "running" || attempt.role === "verifier") return false;
 			this.run(
 				"UPDATE attempts SET state = 'paused', publish_invalidated = 1, failure = ?, finished_at = ? WHERE id = ? AND state = 'running'",
@@ -1499,6 +1530,24 @@ export class BackgroundAgentsDatabase {
 				attemptId,
 				attempt.profile_id,
 				requiredString(reason, "reason"),
+				pausedAt,
+			);
+			const systemdConfirmed = attempt.systemd_unit == null ? 1 : 0;
+			const paneConfirmed = attempt.pane_id == null ? 1 : 0;
+			this.run(
+				"INSERT INTO usage_stop_intents (id, attempt_id, job_id, case_id, profile_id, systemd_unit, pane_id, status, systemd_confirmed, pane_confirmed, reason, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+				randomUUID(),
+				attemptId,
+				attempt.job_id,
+				attempt.case_id,
+				attempt.profile_id,
+				attempt.systemd_unit,
+				attempt.pane_id,
+				systemdConfirmed && paneConfirmed ? "complete" : "pending",
+				systemdConfirmed,
+				paneConfirmed,
+				requiredString(reason, "reason"),
+				pausedAt,
 				pausedAt,
 			);
 			this.run(
@@ -1521,6 +1570,62 @@ export class BackgroundAgentsDatabase {
 		});
 	}
 
+	listPendingUsageStopIntents(): UsageStopIntent[] {
+		return this.all<Row>(
+			"SELECT id, attempt_id, job_id, case_id, profile_id, systemd_unit, pane_id, status, systemd_confirmed, pane_confirmed, reason, created_at, updated_at FROM usage_stop_intents WHERE status <> 'complete' ORDER BY created_at, id",
+		).map((row) => ({
+			id: rowString(row, "id"),
+			attemptId: rowString(row, "attempt_id"),
+			jobId: rowString(row, "job_id"),
+			caseId: rowString(row, "case_id"),
+			...(row.profile_id == null ? {} : { profileId: rowString(row, "profile_id") }),
+			...(row.systemd_unit == null ? {} : { systemdUnit: rowString(row, "systemd_unit") }),
+			...(row.pane_id == null ? {} : { paneId: rowString(row, "pane_id") }),
+			status: rowString(row, "status") as UsageStopStatus,
+			systemdConfirmed: Number(row.systemd_confirmed) === 1,
+			paneConfirmed: Number(row.pane_confirmed) === 1,
+			reason: rowString(row, "reason"),
+			createdAt: rowString(row, "created_at"),
+			updatedAt: rowString(row, "updated_at"),
+		}));
+	}
+
+	markUsageStopIntent(
+		attemptId: string,
+		status: { systemdConfirmed?: boolean; paneConfirmed?: boolean },
+		now = new Date(),
+	): void {
+		this.withTransaction(() => {
+			const current = this.get<{ systemd_confirmed: number; pane_confirmed: number }>(
+				"SELECT systemd_confirmed, pane_confirmed FROM usage_stop_intents WHERE attempt_id = ? AND status <> 'complete'",
+				attemptId,
+			);
+			if (!current) return;
+			const systemdConfirmed = status.systemdConfirmed ?? Number(current.systemd_confirmed) === 1;
+			const paneConfirmed = status.paneConfirmed ?? Number(current.pane_confirmed) === 1;
+			this.run(
+				"UPDATE usage_stop_intents SET status = ?, systemd_confirmed = ?, pane_confirmed = ?, updated_at = ? WHERE attempt_id = ? AND status <> 'complete'",
+				systemdConfirmed && paneConfirmed
+					? "complete"
+					: systemdConfirmed
+						? "systemd-confirmed"
+						: paneConfirmed
+							? "pane-confirmed"
+							: "pending",
+				systemdConfirmed ? 1 : 0,
+				paneConfirmed ? 1 : 0,
+				utcTimestamp(now, "now"),
+				attemptId,
+			);
+		});
+	}
+
+	hasPendingUsageStop(caseId: string): boolean {
+		return Boolean(
+			this.get("SELECT id FROM usage_stop_intents WHERE case_id = ? AND status <> 'complete' LIMIT 1", caseId),
+		);
+	}
+
 	usagePausedJobs(caseId: string): Array<{ jobId: string; attemptId: string; role: AgentRole }> {
 		return this.all<{ job_id: string; attempt_id: string; role: AgentRole }>(
 			"SELECT u.job_id, u.attempt_id, j.role FROM usage_paused_jobs u JOIN jobs j ON j.id = u.job_id WHERE j.case_id = ? AND u.resumed_at IS NULL ORDER BY u.paused_at, u.job_id",
@@ -1531,6 +1636,8 @@ export class BackgroundAgentsDatabase {
 	resumeUsageJobs(caseId: string, now = new Date()): number {
 		const resumedAt = utcTimestamp(now, "now");
 		return this.withTransaction(() => {
+			if (this.hasPendingUsageStop(caseId))
+				throw new Error(`Case ${caseId} cannot resume while a usage stop is pending`);
 			const jobs = this.usagePausedJobs(caseId);
 			let resumed = 0;
 			for (const job of jobs) {

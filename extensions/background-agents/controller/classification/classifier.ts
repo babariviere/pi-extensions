@@ -54,6 +54,7 @@ export interface ClassifierOptions {
 	policyScope?: string;
 	exampleLimit?: number;
 	relatedCaseLimit?: number;
+	isAuthorized?: () => boolean;
 }
 
 export interface ClassificationResult {
@@ -264,6 +265,8 @@ export class Classifier {
 			modelVersion: this.options.modelVersion,
 			influentialExamples: examples.map((example) => example.id),
 		};
+		if (this.options.isAuthorized && !this.options.isAuthorized())
+			throw new Error("attempt was invalidated before classification publication");
 		const classificationId = this.options.database.insertClassification(caseId, classification);
 		return { classificationId, classification, relatedCases, request };
 	}

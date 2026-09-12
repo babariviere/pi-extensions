@@ -191,7 +191,7 @@ Dashboard keys:
 
 - `Tab`/right and `Shift-Tab`/left change views. `1` through `12` select the corresponding view.
 - `j`/down and `k`/up select a case or attempt. `r` refreshes.
-- `w` approves the selected case's next queued specification work item in supervised mode.
+- `w` approves the selected case's exact next queued specification work item in supervised mode. Specification approval freezes the ordered specification but queues no worker; approve item #1 explicitly before approving later items.
 - `R` starts evidence reproduction for the selected case. `Enter` resumes it.
 - `A` approves a specification, `q` approves a supervised quick-fix proposal, `f` requests changes, `c` reclassifies, `h` marks handled, `n` rejects, and `x`/`X` cancels.
 - In Rollout, `o` selects `observe`, `s` selects `supervised`, and `p` selects `autonomous-pr`.
@@ -199,7 +199,7 @@ Dashboard keys:
 
 ## Rollout
 
-`observe` ingests, deduplicates, classifies, correlates, learns from feedback, and produces private question briefs without code writes or external mutations. `supervised` runs investigators and planners but requires operator approval before each worker. `autonomous-pr` lets admitted quick fixes proceed through independent verification and ready-for-review PR creation. Specifications still require exact-version approval and merges remain human-only.
+`observe` ingests, deduplicates, classifies, correlates, learns from feedback, and produces private question briefs without code writes or external mutations. `supervised` runs investigators and planners but requires an exact work-item approval before every worker, including ordinal one. Exact specification approval freezes the ordered specification and queues no worker. `autonomous-pr` lets admitted quick fixes proceed through independent verification and ready-for-review PR creation. Specifications still require exact-version approval and merges remain human-only.
 
 Start with `observe` for manual and Linear, then add Slack and Datadog. Promote only selected sources or repositories through the dashboard. A downgrade blocks new work. Emergency stop pauses or cancels active attempts and disables external mutations. Do not use an automatic success threshold for promotion.
 

@@ -33,6 +33,7 @@ export interface LinearStartInput {
 	phase: LinearWorkPhase;
 	owner?: string;
 	stopEpoch?: number;
+	isAuthorized?: () => boolean;
 }
 
 export interface LinearStartResult {
@@ -96,6 +97,7 @@ export class LinearEffects {
 				: new ExternalEffectExecutor(this.store, {
 						owner: input.owner ?? "linear",
 						expectedStopEpoch: input.stopEpoch,
+						isAuthorized: input.isAuthorized,
 					});
 		return executor.execute<LinearStartResult>({
 			operationKey,

@@ -82,6 +82,59 @@ test("usage refresh pauses an active run even when runtime termination fails", a
 		database.get<{ worktree: string }>("SELECT worktree FROM attempts WHERE id = ?", attempt.attemptId)?.worktree,
 		"/preserved/worktree",
 	);
+	assert.equal(database.listPendingUsageStopIntents().length, 1);
+});
+
+test("recovery retries persisted usage stops after the attempt and job are paused", async () => {
+	const database = new BackgroundAgentsDatabase(":memory:");
+	databases.push(database);
+	const config = normalizeBackgroundAgentsConfig({
+		profiles: [{ id: "retry-profile", provider: "anthropic", agentDir: process.cwd(), allowedModels: ["model"] }],
+	});
+	const caseId = database.createCase({ title: "retry usage stop", source: "manual" });
+	database.transitionCase(caseId, "classified", "test");
+	database.run("UPDATE cases SET state = 'implementation' WHERE id = ?", caseId);
+	database.upsertProviderProfileState({ profileId: "retry-profile" });
+	const jobId = database.createJob({ caseId, role: "worker" });
+	const claim = database.claimJob(jobId, "controller", 60_000, new Date(), {
+		profileId: "retry-profile",
+		model: "model",
+	})!;
+	database.run(
+		"UPDATE attempts SET systemd_unit = ?, pane_id = ? WHERE id = ?",
+		"retry-unit",
+		"retry-pane",
+		claim.attemptId,
+	);
+	database.pauseJobForUsage(claim.attemptId, "quota exhausted");
+	let stops = 0;
+	const controller = new BackgroundAgentsController({
+		database,
+		config,
+		startSocket: false,
+		runtimeControls: {
+			terminateSystemdUnit: async () => {
+				stops += 1;
+				if (stops === 1) throw new Error("transient stop failure");
+			},
+			isSystemdUnitStopped: async () => true,
+			closePane: async () => undefined,
+		},
+	});
+	const recoveryTick = () => (controller as unknown as { recoveryTick(): Promise<void> }).recoveryTick();
+	const refused = await controller.handle({
+		version: 1,
+		id: "resume-pending",
+		type: "case.action",
+		caseId,
+		action: "resume",
+	});
+	assert.equal(refused.ok, false);
+	assert.match((refused as { error?: { message?: string } }).error?.message ?? "", /usage stop is pending/);
+	await recoveryTick();
+	assert.equal(database.listPendingUsageStopIntents()[0]?.status, "pane-confirmed");
+	await recoveryTick();
+	assert.equal(database.listPendingUsageStopIntents().length, 0);
 });
 
 test("supervised intake queues classification before investigation", async () => {

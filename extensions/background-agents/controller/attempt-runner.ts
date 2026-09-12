@@ -365,8 +365,14 @@ export class ProductionAttemptRunner {
 		const attemptDirectory = join(attemptRoot, job.case_id, claim.attemptId);
 		const resultPath = join(attemptDirectory, ATTEMPT_RESULT_FILE);
 		try {
-			if (!database.attemptMayPublish(claim.attemptId, claim.stopEpoch))
-				throw new Error("attempt was invalidated by emergency stop");
+			const assertAuthorized = (): void => database.assertAttemptMayPublish(claim.attemptId, claim.stopEpoch);
+			const awaitAuthorized = async <T>(operation: Promise<T>): Promise<T> => {
+				assertAuthorized();
+				const value = await operation;
+				assertAuthorized();
+				return value;
+			};
+			assertAuthorized();
 			mkdirSync(attemptDirectory, { recursive: true, mode: 0o700 });
 			const questionLimits = {
 				maxTimeMs: this.options.config.question.maxRuntimeMs,
@@ -387,7 +393,7 @@ export class ProductionAttemptRunner {
 					this.options.worktreeRoot ??
 						join(dirname(this.options.config.databasePath), "background-worktrees", repository.id),
 				);
-				baseRef = (await git.checked(["rev-parse", `${baseBranch}^{commit}`])).trim();
+				baseRef = (await awaitAuthorized(git.checked(["rev-parse", `${baseBranch}^{commit}`]))).trim();
 				if (role === "worker" && job.work_item_id) {
 					const parent = database.get<{ ordinal: number; branch: string | null; state: string }>(
 						"SELECT parent.ordinal, parent.branch, parent.state FROM work_items item JOIN work_items parent ON parent.id = item.parent_id WHERE item.id = ?",
@@ -396,7 +402,7 @@ export class ProductionAttemptRunner {
 					if (parent) {
 						if (parent.state !== "verified") throw new Error("worker parent work item is not verified");
 						baseBranch = parent.branch ?? backgroundBranch(job.case_id, parent.ordinal);
-						baseRef = (await git.checked(["rev-parse", `${baseBranch}^{commit}`])).trim();
+						baseRef = (await awaitAuthorized(git.checked(["rev-parse", `${baseBranch}^{commit}`]))).trim();
 					}
 				}
 				if (role === "verifier") {
@@ -432,12 +438,14 @@ export class ProductionAttemptRunner {
 							)
 						: ROLE_ORDINAL[role];
 					if (!Number.isSafeInteger(ordinal) || ordinal <= 0) throw new Error("work item ordinal is invalid");
-					const ensured = await manager.ensure({
-						caseId: job.case_id,
-						ordinal: ordinal + (role === "worker" ? 0 : ROLE_ORDINAL[role]),
-						owner: claim.attemptId,
-						baseRef,
-					});
+					const ensured = await awaitAuthorized(
+						manager.ensure({
+							caseId: job.case_id,
+							ordinal: ordinal + (role === "worker" ? 0 : ROLE_ORDINAL[role]),
+							owner: claim.attemptId,
+							baseRef,
+						}),
+					);
 					worktreeDirectory = ensured.path;
 					branch = ensured.branch;
 					database.run(
@@ -472,6 +480,7 @@ export class ProductionAttemptRunner {
 					githubEffects = new GitHubEffects(database, client, {
 						owner: `background:${claim.attemptId}`,
 						expectedStopEpoch: claim.stopEpoch,
+						isAuthorized: () => database.attemptMayPublish(claim.attemptId, claim.stopEpoch),
 					});
 			} else {
 				if (role === "worker" || role === "verifier") throw new Error(`${role} requires a configured repository`);
@@ -532,14 +541,16 @@ export class ProductionAttemptRunner {
 							job.work_item_id,
 						)
 					: undefined;
-				await writeFile(
-					verifierInputPath,
-					JSON.stringify({
-						manifest,
-						version: VERIFICATION_RESULT_VERSION,
-						prNumber: pullRequest?.pull_request,
-					}) + "\\n",
-					{ mode: 0o600 },
+				await awaitAuthorized(
+					writeFile(
+						verifierInputPath,
+						JSON.stringify({
+							manifest,
+							version: VERIFICATION_RESULT_VERSION,
+							prNumber: pullRequest?.pull_request,
+						}) + "\\n",
+						{ mode: 0o600 },
+					),
 				);
 				const loader = require.resolve("tsx/esm");
 				const verifierModule = fileURLToPath(new URL("./verification/verifier.ts", import.meta.url));
@@ -564,61 +575,62 @@ export class ProductionAttemptRunner {
 				writeFileSync(wrapperPath, WRAPPER, { mode: 0o700 });
 				chmodSync(wrapperPath, 0o700);
 			}
-			const launched = await launch(
-				{
-					database,
-					attemptId: claim.attemptId,
-					caseId: job.case_id,
-					role,
-					attemptDirectory,
-					worktreeDirectory,
-					primaryCheckout: repository?.root ?? attemptDirectory,
-					gitDirectory: repository?.gitDir ?? attemptDirectory,
-					context,
-					contextArtifact,
-					runtime,
-					rolePromptPath,
-					limits: questionAnalysis
-						? {
-								...this.options.config.systemd,
-								maxRuntimeMs: Math.min(this.options.config.systemd.maxRuntimeMs, questionLimits.maxTimeMs),
-							}
-						: this.options.config.systemd,
-					security: role === "verifier" ? "verifier" : "agent",
-					...(role === "verifier"
-						? {
-								inaccessiblePaths: verifierInaccessiblePaths(this.options.config),
-							}
-						: {}),
-					model: claim.model,
-					prompt,
-					...(repository ? {} : { preflight: { platform: "linux", paths: [] } }),
-					...(this.options.launch
-						? {}
-						: {
-								command: process.execPath,
-								commandArgsPrefix: [
-									join(attemptDirectory, "runner.mjs"),
-									resultPath,
-									claim.attemptId,
-									claim.jobId,
-									role,
-								],
-							}),
-					...(command ? { command, commandArgsPrefix } : {}),
-				},
-				this.options.launch ? {} : undefined,
+			const launched = await awaitAuthorized(
+				launch(
+					{
+						database,
+						attemptId: claim.attemptId,
+						caseId: job.case_id,
+						role,
+						attemptDirectory,
+						worktreeDirectory,
+						primaryCheckout: repository?.root ?? attemptDirectory,
+						gitDirectory: repository?.gitDir ?? attemptDirectory,
+						context,
+						contextArtifact,
+						runtime,
+						rolePromptPath,
+						limits: questionAnalysis
+							? {
+									...this.options.config.systemd,
+									maxRuntimeMs: Math.min(this.options.config.systemd.maxRuntimeMs, questionLimits.maxTimeMs),
+								}
+							: this.options.config.systemd,
+						security: role === "verifier" ? "verifier" : "agent",
+						...(role === "verifier"
+							? {
+									inaccessiblePaths: verifierInaccessiblePaths(this.options.config),
+								}
+							: {}),
+						model: claim.model,
+						prompt,
+						...(repository ? {} : { preflight: { platform: "linux", paths: [] } }),
+						...(this.options.launch
+							? {}
+							: {
+									command: process.execPath,
+									commandArgsPrefix: [
+										join(attemptDirectory, "runner.mjs"),
+										resultPath,
+										claim.attemptId,
+										claim.jobId,
+										role,
+									],
+								}),
+						...(command ? { command, commandArgsPrefix } : {}),
+					},
+					this.options.launch ? {} : undefined,
+				),
 			);
 			const completion = await (
 				this.options.waitForUnit ?? ((unit, timeoutMs) => waitForTransientService(unit, { timeoutMs }))
 			)(launched.unit, this.options.config.systemd.maxRuntimeMs);
+			assertAuthorized();
 			if (completion.state !== "succeeded")
 				return { state: "failed", failure: completion.reason ?? "attempt unit failed" };
-			if (!database.attemptMayPublish(claim.attemptId, claim.stopEpoch))
-				throw new Error("attempt was invalidated by emergency stop");
 			let rawArtifact: unknown;
 			try {
-				rawArtifact = JSON.parse(await readFile(resultPath, "utf8"));
+				rawArtifact = JSON.parse(await awaitAuthorized(readFile(resultPath, "utf8")));
 			} catch {
 				throw new Error("attempt result artifact is missing or invalid");
 			}
@@ -626,7 +638,7 @@ export class ProductionAttemptRunner {
 			let verificationReport: unknown;
 			if (role === "verifier") {
 				try {
-					const stored = JSON.parse(await readFile(verificationPath, "utf8")) as {
+					const stored = JSON.parse(await awaitAuthorized(readFile(verificationPath, "utf8"))) as {
 						version?: number;
 						report?: unknown;
 						replay?: ReplayResult;
@@ -640,32 +652,35 @@ export class ProductionAttemptRunner {
 							? combinedRequiredChecks(this.options.config.ci.requiredChecks, repository.requiredChecks)
 							: [];
 						let poll = 0;
-						verificationReport = await verifyReplayAndGithub({
-							manifest: database.getEvidenceManifest(job.manifest_id ?? "")!,
-							replay: stored.replay,
-							prNumber: job.work_item_id
-								? (database.get<{ pull_request: number | null }>(
-										"SELECT pull_request FROM work_items WHERE id = ?",
-										job.work_item_id,
-									)?.pull_request ?? undefined)
-								: undefined,
-							requiredChecks,
-							repository: repository.root,
-							maxWaitMs: this.options.config.ci.maxWaitMs,
-							onCiResult: async (result) => {
-								const path = join(attemptDirectory, `ci-poll-${++poll}.json`);
-								const bytes = Buffer.from(`${JSON.stringify(result)}\n`);
-								await writeFile(path, bytes, { mode: 0o600 });
-								database.createArtifact({
-									caseId: job.case_id,
-									attemptId: claim.attemptId,
-									kind: "verification-ci-poll",
-									path,
-									hash: createHash("sha256").update(bytes).digest("hex"),
-									metadata: { poll },
-								});
-							},
-						});
+						verificationReport = await awaitAuthorized(
+							verifyReplayAndGithub({
+								manifest: database.getEvidenceManifest(job.manifest_id ?? "")!,
+								replay: stored.replay,
+								prNumber: job.work_item_id
+									? (database.get<{ pull_request: number | null }>(
+											"SELECT pull_request FROM work_items WHERE id = ?",
+											job.work_item_id,
+										)?.pull_request ?? undefined)
+									: undefined,
+								requiredChecks,
+								repository: repository.root,
+								maxWaitMs: this.options.config.ci.maxWaitMs,
+								onCiResult: async (result) => {
+									const path = join(attemptDirectory, `ci-poll-${++poll}.json`);
+									const bytes = Buffer.from(`${JSON.stringify(result)}\n`);
+									await awaitAuthorized(writeFile(path, bytes, { mode: 0o600 }));
+									assertAuthorized();
+									database.createArtifact({
+										caseId: job.case_id,
+										attemptId: claim.attemptId,
+										kind: "verification-ci-poll",
+										path,
+										hash: createHash("sha256").update(bytes).digest("hex"),
+										metadata: { poll },
+									});
+								},
+							}),
+						);
 					}
 				} catch (error) {
 					if (!this.options.launch)
@@ -689,13 +704,14 @@ export class ProductionAttemptRunner {
 					};
 				}
 			}
+			assertAuthorized();
 			database.createArtifact({
 				caseId: job.case_id,
 				attemptId: claim.attemptId,
 				kind: "attempt-result",
 				path: resultPath,
 				hash: createHash("sha256")
-					.update(await readFile(resultPath))
+					.update(await awaitAuthorized(readFile(resultPath)))
 					.digest("hex"),
 				metadata: { version: artifact.version, role },
 			});
@@ -751,6 +767,15 @@ export class ProductionAttemptRunner {
 		githubEffects?: GitHubEffects,
 		requiredChecks: readonly string[] = [],
 	): Promise<void> {
+		const assertAuthorized = (): void => database.assertAttemptMayPublish(claim.attemptId, claim.stopEpoch);
+		const awaitAuthorized = async <T>(operation: Promise<T>): Promise<T> => {
+			assertAuthorized();
+			const value = await operation;
+			assertAuthorized();
+			return value;
+		};
+		const publish = <T>(callback: () => T): T =>
+			database.withAttemptPublication(claim.attemptId, claim.stopEpoch, callback);
 		const questionLimits = {
 			maxTimeMs: this.options.config.question.maxRuntimeMs,
 			maxAttempts: this.options.config.question.maxAttempts,
@@ -766,28 +791,33 @@ export class ProductionAttemptRunner {
 				policyScope: this.options.config.classifier.policyScope,
 				exampleLimit: this.options.config.classifier.exampleLimit,
 				relatedCaseLimit: this.options.config.classifier.relatedCaseLimit,
+				isAuthorized: () => database.attemptMayPublish(claim.attemptId, claim.stopEpoch),
 			});
-			const result = await classifier.classify(job.case_id, event);
+			const classified = await awaitAuthorized(classifier.classify(job.case_id, event));
+			assertAuthorized();
 			const state = database.get<{ state: string }>("SELECT state FROM cases WHERE id = ?", job.case_id)?.state;
-			if (state === "intake") database.transitionCase(job.case_id, "classified", "classifier", "input classified");
+			if (state === "intake")
+				publish(() => database.transitionCase(job.case_id, "classified", "classifier", "input classified"));
 			const rollout = database.get<{ rollout_mode: "observe" | "supervised" | "autonomous-pr" }>(
 				"SELECT rollout_mode FROM cases WHERE id = ?",
 				job.case_id,
 			)?.rollout_mode;
 			if (rollout === "observe") return;
-			if (result.classification.inputKind === "question") {
-				new QuestionWorkflow(database).start(job.case_id, event.body, questionLimits);
-			} else if (result.classification.disposition === "actionable") {
+			if (classified.classification.inputKind === "question") {
+				publish(() => new QuestionWorkflow(database).start(job.case_id, event.body, questionLimits));
+			} else if (classified.classification.disposition === "actionable") {
 				const current = database.get<{ state: string }>("SELECT state FROM cases WHERE id = ?", job.case_id)?.state;
 				if (current === "classified")
-					database.transitionCase(job.case_id, "investigating", "classifier", "investigation queued");
+					publish(() =>
+						database.transitionCase(job.case_id, "investigating", "classifier", "investigation queued"),
+					);
 				if (
 					!database.get(
 						"SELECT id FROM jobs WHERE case_id = ? AND role = 'investigator' AND state IN ('queued', 'running')",
 						job.case_id,
 					)
 				)
-					database.createJob({ caseId: job.case_id, role: "investigator" });
+					publish(() => database.createJob({ caseId: job.case_id, role: "investigator" }));
 			}
 			return;
 		}
@@ -795,24 +825,26 @@ export class ProductionAttemptRunner {
 			const caseState = database.get<{ state: string }>("SELECT state FROM cases WHERE id = ?", job.case_id)?.state;
 			if (caseState === "question-analysis") {
 				const event = latestEvent(database, job.case_id);
-				new QuestionWorkflow(database).record(
-					job.case_id,
-					event.body,
-					output as unknown as PrivateQuestionBrief,
-					questionLimits,
-					claim.attemptId,
+				publish(() =>
+					new QuestionWorkflow(database).record(
+						job.case_id,
+						event.body,
+						output as unknown as PrivateQuestionBrief,
+						questionLimits,
+						claim.attemptId,
+					),
 				);
 				return;
 			}
 			const investigation = output as unknown as InvestigationOutput;
-			new InvestigationWorkflow(database).record(job.case_id, investigation, claim.attemptId);
+			publish(() => new InvestigationWorkflow(database).record(job.case_id, investigation, claim.attemptId));
 			if (investigation.autonomy === "quick-fix-candidate") {
 				const rollout = database.get<{ rollout_mode: "observe" | "supervised" | "autonomous-pr" }>(
 					"SELECT rollout_mode FROM cases WHERE id = ?",
 					job.case_id,
 				)?.rollout_mode;
 				if (!rollout) throw new Error("case rollout mode is unavailable");
-				new QuickFixWorkflow(database).admit(job.case_id, investigation, rollout);
+				publish(() => new QuickFixWorkflow(database).admit(job.case_id, investigation, rollout));
 			} else if (investigation.autonomy === "spec-required") {
 				const repository = database.get<{ repository: string | null }>(
 					"SELECT repository FROM cases WHERE id = ?",
@@ -823,24 +855,31 @@ export class ProductionAttemptRunner {
 						database.get<{ state: string }>("SELECT state FROM cases WHERE id = ?", job.case_id)?.state ===
 						"investigating"
 					)
-						database.transitionCase(
-							job.case_id,
-							"blocked",
-							"controller",
-							"specification requires a mapped repository",
+						publish(() =>
+							database.transitionCase(
+								job.case_id,
+								"blocked",
+								"controller",
+								"specification requires a mapped repository",
+							),
 						);
-				} else new SpecificationWorkflow(database).start(job.case_id);
+				} else publish(() => new SpecificationWorkflow(database).start(job.case_id));
 			}
 			return;
 		}
 		if (job.role === "spec-planner") {
-			new SpecificationWorkflow(database).recordPlannerResult(job.case_id, output as unknown as SpecificationDraft);
+			publish(() =>
+				new SpecificationWorkflow(database).recordPlannerResult(
+					job.case_id,
+					output as unknown as SpecificationDraft,
+				),
+			);
 			return;
 		}
 		if (job.role === "worker") {
 			if (!repository || !job.work_item_id) throw new Error("worker output has no repository or work item");
 			const git = (this.options.repositoryFactory ?? ((root) => new GitRepository(root)))(repository);
-			const commitSha = (await git.checked(["rev-parse", "HEAD"], worktree)).trim();
+			const commitSha = (await awaitAuthorized(git.checked(["rev-parse", "HEAD"], worktree))).trim();
 			if (output.commitSha !== commitSha)
 				throw new Error("worker commitSha does not match discovered worktree HEAD");
 			const input = requiredObject(output.evidenceManifest, "evidenceManifest") as unknown as Parameters<
@@ -854,86 +893,92 @@ export class ProductionAttemptRunner {
 				candidateSha: commitSha,
 			});
 			const manifestPath = join(attemptDirectory, "evidence-manifest.json");
-			await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
-			const manifestBytes = await readFile(manifestPath);
-			database.createArtifact({
-				caseId: job.case_id,
-				attemptId: claim.attemptId,
-				kind: "evidence-manifest",
-				path: manifestPath,
-				hash: createHash("sha256").update(manifestBytes).digest("hex"),
-				metadata: { version: manifest.version },
-			});
-			const manifestId = database.createEvidenceManifest({ caseId: job.case_id, manifest });
-			const workItemBranch = database.get<{ branch: string | null }>(
-				"SELECT branch FROM work_items WHERE id = ?",
-				job.work_item_id,
-			)?.branch;
+			await awaitAuthorized(writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 }));
+			const manifestBytes = await awaitAuthorized(readFile(manifestPath));
+			assertAuthorized();
+			const workItemBranch =
+				database.get<{ branch: string | null }>("SELECT branch FROM work_items WHERE id = ?", job.work_item_id)
+					?.branch ?? undefined;
 			if (!workItemBranch) throw new Error("worker branch is unavailable");
-			database.run(
-				"UPDATE work_items SET branch = ?, worktree = ?, updated_at = ? WHERE id = ?",
-				workItemBranch,
-				worktree,
-				new Date().toISOString(),
-				job.work_item_id,
-			);
+			let createdPullRequestNumber: number | undefined;
 			if (githubEffects) {
-				await githubEffects.pushBranch({ worktree, branch: workItemBranch, remote, expectedHeadSha: commitSha });
+				await awaitAuthorized(
+					githubEffects.pushBranch({ worktree, branch: workItemBranch, remote, expectedHeadSha: commitSha }),
+				);
 				const title = database.get<{ title: string }>(
 					"SELECT title FROM work_items WHERE id = ?",
 					job.work_item_id,
 				)?.title;
 				if (!title) throw new Error("worker work item title is unavailable");
 				const body = formatEvidenceMarkdown(manifest);
-				const pullRequest = await githubEffects.createDraftPullRequest({
-					worktree,
-					branch: workItemBranch,
-					base: baseBranch,
-					baseSha: baseRef,
-					title,
-					body,
-				});
+				const pullRequest = await awaitAuthorized(
+					githubEffects.createDraftPullRequest({
+						worktree,
+						branch: workItemBranch,
+						base: baseBranch,
+						baseSha: baseRef,
+						title,
+						body,
+					}),
+				);
+				createdPullRequestNumber = pullRequest.number;
 				if (pullRequest.base !== baseBranch)
 					throw new Error("GitHub pull request base does not match controller assignment");
 				if (pullRequest.baseSha && pullRequest.baseSha.toLowerCase() !== baseRef.toLowerCase())
 					throw new Error("GitHub pull request base SHA does not match controller assignment");
+				await awaitAuthorized(githubEffects.updatePullRequest(pullRequest.number, { title, body }));
+			}
+			let manifestId = "";
+			publish(() => {
+				const artifactId = database.createArtifact({
+					caseId: job.case_id,
+					attemptId: claim.attemptId,
+					kind: "evidence-manifest",
+					path: manifestPath,
+					hash: createHash("sha256").update(manifestBytes).digest("hex"),
+					metadata: { version: manifest.version },
+				});
+				void artifactId;
+				manifestId = database.createEvidenceManifest({ caseId: job.case_id, manifest });
 				database.run(
 					"UPDATE work_items SET branch = ?, worktree = ?, pull_request = ?, updated_at = ? WHERE id = ?",
 					workItemBranch,
 					worktree,
-					pullRequest.number,
+					createdPullRequestNumber ?? null,
 					new Date().toISOString(),
 					job.work_item_id,
 				);
-				await githubEffects.updatePullRequest(pullRequest.number, { title, body });
-			}
-			const machine = new BackgroundAgentsStateMachine(database);
-			const state = database.get<{ state: string }>(
-				"SELECT state FROM work_items WHERE id = ?",
-				job.work_item_id,
-			)?.state;
-			if (state === "queued")
-				machine.transitionWorkItem(job.work_item_id, "implementation", "worker", "worker started");
-			if (state === "queued" || state === "implementation")
-				machine.transitionWorkItem(job.work_item_id, "verification", "worker", "worker completed");
-			const caseState = database.get<{ state: string }>("SELECT state FROM cases WHERE id = ?", job.case_id)?.state;
-			if (caseState === "implementation")
-				database.transitionCase(job.case_id, "verification", "worker", "worker completed");
-			if (
-				!database.get(
-					"SELECT id FROM jobs WHERE case_id = ? AND work_item_id = ? AND role = 'verifier' AND state IN ('queued', 'running')",
+				const machine = new BackgroundAgentsStateMachine(database);
+				const state = database.get<{ state: string }>(
+					"SELECT state FROM work_items WHERE id = ?",
+					job.work_item_id!,
+				)?.state;
+				if (state === "queued")
+					machine.transitionWorkItem(job.work_item_id!, "implementation", "worker", "worker started");
+				if (state === "queued" || state === "implementation")
+					machine.transitionWorkItem(job.work_item_id!, "verification", "worker", "worker completed");
+				const caseState = database.get<{ state: string }>(
+					"SELECT state FROM cases WHERE id = ?",
 					job.case_id,
-					job.work_item_id,
+				)?.state;
+				if (caseState === "implementation")
+					database.transitionCase(job.case_id, "verification", "worker", "worker completed");
+				if (
+					!database.get(
+						"SELECT id FROM jobs WHERE case_id = ? AND work_item_id = ? AND role = 'verifier' AND state IN ('queued', 'running')",
+						job.case_id,
+						job.work_item_id,
+					)
 				)
-			)
-				database.createJob({
-					caseId: job.case_id,
-					workItemId: job.work_item_id,
-					role: "verifier",
-					manifestId,
-					expectedBaseSha: manifest.baseSha,
-					expectedCandidateSha: manifest.candidateSha,
-				});
+					database.createJob({
+						caseId: job.case_id,
+						workItemId: job.work_item_id!,
+						role: "verifier",
+						manifestId,
+						expectedBaseSha: manifest.baseSha,
+						expectedCandidateSha: manifest.candidateSha,
+					});
+			});
 			return;
 		}
 		if (job.role === "verifier") {
@@ -955,11 +1000,13 @@ export class ProductionAttemptRunner {
 			const report = verificationReport as Awaited<ReturnType<typeof verifyReplayAndGithub>>;
 			if (!report || !["pass", "fail", "needs-human"].includes(report.verdict))
 				throw new Error("verifier result is missing or invalid");
-			const verificationRunId = database.createVerificationRun({
-				manifestId: row.id,
-				report,
-				resultVersion: VERIFICATION_RESULT_VERSION,
-			});
+			const verificationRunId = publish(() =>
+				database.createVerificationRun({
+					manifestId: row.id,
+					report,
+					resultVersion: VERIFICATION_RESULT_VERSION,
+				}),
+			);
 			if (report.verdict === "pass") {
 				if (
 					githubEffects &&
@@ -974,29 +1021,33 @@ export class ProductionAttemptRunner {
 						job.work_item_id,
 					);
 					if (!pullRequest?.pull_request) throw new Error("verified work item has no pull request");
-					const ready = await githubEffects.readyForReview({
-						reference: pullRequest.pull_request,
-						verifiedCommit: manifest.candidateSha,
-						expectedBaseSha: manifest.baseSha,
-						verificationPassed: true,
-						requiredCiPassed: report.ci.allRequiredPassed,
-						manifestId: row.id,
-						verificationRunId,
-						requiredChecks,
-					});
+					const ready = await awaitAuthorized(
+						githubEffects.readyForReview({
+							reference: pullRequest.pull_request,
+							verifiedCommit: manifest.candidateSha,
+							expectedBaseSha: manifest.baseSha,
+							verificationPassed: true,
+							requiredCiPassed: report.ci.allRequiredPassed,
+							manifestId: row.id,
+							verificationRunId,
+							requiredChecks,
+						}),
+					);
 					if (ready.status === "blocked") throw new Error("pull request head changed before readiness");
 				}
-				if (job.work_item_id)
-					if (
-						database.get<{ state: string }>("SELECT state FROM work_items WHERE id = ?", job.work_item_id)
-							?.state === "verification"
-					)
-						new BackgroundAgentsStateMachine(database).transitionWorkItem(
-							job.work_item_id,
-							"verified",
-							"verifier",
-							"independent verification passed",
-						);
+				publish(() => {
+					if (job.work_item_id)
+						if (
+							database.get<{ state: string }>("SELECT state FROM work_items WHERE id = ?", job.work_item_id)
+								?.state === "verification"
+						)
+							new BackgroundAgentsStateMachine(database).transitionWorkItem(
+								job.work_item_id,
+								"verified",
+								"verifier",
+								"independent verification passed",
+							);
+				});
 				if (githubEffects) {
 					const branches = database
 						.all<{ branch: string }>(
@@ -1004,21 +1055,31 @@ export class ProductionAttemptRunner {
 							job.case_id,
 						)
 						.map((item) => item.branch);
-					await githubEffects.linkStack(branches);
+					await awaitAuthorized(githubEffects.linkStack(branches));
 				}
-				new SpecificationWorkflow(database).queueNextWorker(job.case_id);
-				const state = database.get<{ state: string }>("SELECT state FROM cases WHERE id = ?", job.case_id)?.state;
-				if (state === "verification")
-					database.transitionCase(
+				publish(() => {
+					new SpecificationWorkflow(database).queueNextWorker(job.case_id);
+					const state = database.get<{ state: string }>(
+						"SELECT state FROM cases WHERE id = ?",
 						job.case_id,
-						"pull-request-review",
-						"verifier",
-						"independent verification passed",
-					);
+					)?.state;
+					if (state === "verification")
+						database.transitionCase(
+							job.case_id,
+							"pull-request-review",
+							"verifier",
+							"independent verification passed",
+						);
+				});
 			} else if (report.verdict === "fail") {
-				const state = database.get<{ state: string }>("SELECT state FROM cases WHERE id = ?", job.case_id)?.state;
-				if (state === "verification")
-					database.transitionCase(job.case_id, "blocked", "verifier", "independent verification failed");
+				publish(() => {
+					const state = database.get<{ state: string }>(
+						"SELECT state FROM cases WHERE id = ?",
+						job.case_id,
+					)?.state;
+					if (state === "verification")
+						database.transitionCase(job.case_id, "blocked", "verifier", "independent verification failed");
+				});
 			}
 		}
 	}

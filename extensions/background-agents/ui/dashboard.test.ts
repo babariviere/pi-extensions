@@ -97,6 +97,7 @@ test("renders every operator view with provenance, evidence, and artifact refere
 	const evidence = buildDashboardViewLines(snapshot, "evidence").join("\n");
 	assert.match(evidence, /Manifest manifest-1/);
 	assert.match(buildDashboardViewLines(snapshot, "attempt").join("\n"), /Artifact references/);
+	assert.match(buildDashboardViewLines(snapshot, "specification").join("\n"), /exact next work item/);
 });
 
 test("refreshes through the client, renders narrow terminals, and reproduces evidence", async () => {

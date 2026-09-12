@@ -191,7 +191,11 @@ export class SpecificationWorkflow {
 			orderedWorkItems: orderedWorkItems ?? latest.orderedWorkItems,
 		};
 		const result = this.stateMachine.approveSpecification(caseId, specVersion, permissions, actor, options);
-		this.queueNextWorker(caseId);
+		if (
+			this.database.get<{ rollout_mode: string }>("SELECT rollout_mode FROM cases WHERE id = ?", caseId)
+				?.rollout_mode !== "supervised"
+		)
+			this.queueNextWorker(caseId);
 		return result;
 	}
 
@@ -239,7 +243,6 @@ export class SpecificationWorkflow {
 			if (previous.some((state) => state !== "verified")) return undefined;
 			if (
 				rollout.rollout_mode === "supervised" &&
-				index > 0 &&
 				!this.database.get(
 					"SELECT a.id FROM work_item_approvals a JOIN spec_versions s ON s.id = (SELECT id FROM spec_versions WHERE case_id = ? ORDER BY version DESC LIMIT 1) AND s.version = a.spec_version WHERE a.work_item_id = ? AND a.case_id = ? AND a.decision = 'approved' LIMIT 1",
 					caseId,
