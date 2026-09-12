@@ -145,6 +145,19 @@ function normalizeCollection(profile: ProviderProfile, value: UsageCollection, n
 export interface ProfileUsageControllerOptions {
 	collector?: ProfileUsageCollector | ((profile: ProviderProfile, now: Date) => Promise<UsageCollection>);
 	clock?: UsageClock;
+	reconcileAttempt?: (
+		attempt: {
+			attemptId: string;
+			jobId: string;
+			caseId: string;
+			role: AgentRole;
+			systemdUnit?: string;
+			paneId?: string;
+			worktree?: string;
+		},
+		reason: string,
+		now: Date,
+	) => Promise<void> | void;
 }
 
 /** Owns profile-scoped quota observations used by the controller scheduler. */
@@ -152,6 +165,7 @@ export class ProfileUsageController {
 	private readonly states = new Map<string, ProfileUsageState>();
 	private readonly collector: ProfileUsageCollector;
 	private readonly clock: UsageClock;
+	private readonly reconcileAttempt: ProfileUsageControllerOptions["reconcileAttempt"];
 
 	constructor(
 		private readonly database: BackgroundAgentsDatabase,
@@ -159,6 +173,7 @@ export class ProfileUsageController {
 		options: ProfileUsageControllerOptions = {},
 	) {
 		this.clock = options.clock ?? (() => new Date());
+		this.reconcileAttempt = options.reconcileAttempt;
 		this.collector =
 			typeof options.collector === "function"
 				? { collect: options.collector }
@@ -202,6 +217,47 @@ export class ProfileUsageController {
 				observedAt: state.observedAt,
 				metadata: { usedPercent: window.usedPercent, resetsAt: window.resetsAt, available: state.available },
 			});
+		}
+		const blocked =
+			!state.available ||
+			!this.isFresh(profile, now) ||
+			(state.remaining !== undefined && state.remaining <= profile.interactiveReserve) ||
+			state.windows.some((window) => window.usedPercent >= 100);
+		if (blocked && this.reconcileAttempt) {
+			const attempts = this.database.all<{
+				id: string;
+				job_id: string;
+				case_id: string;
+				role: AgentRole;
+				systemd_unit: string | null;
+				pane_id: string | null;
+				worktree: string | null;
+			}>(
+				"SELECT id, job_id, case_id, role, systemd_unit, pane_id, worktree FROM attempts WHERE profile_id = ? AND state = 'running' AND role IN ('spec-planner', 'worker')",
+				profileId,
+			);
+			const reason =
+				state.error ?? (!state.available ? "provider usage unavailable" : "provider usage exhausted or stale");
+			for (const attempt of attempts) {
+				if (!this.database.pauseJobForUsage(attempt.id, reason, now)) continue;
+				try {
+					await this.reconcileAttempt(
+						{
+							attemptId: attempt.id,
+							jobId: attempt.job_id,
+							caseId: attempt.case_id,
+							role: attempt.role,
+							...(attempt.systemd_unit ? { systemdUnit: attempt.systemd_unit } : {}),
+							...(attempt.pane_id ? { paneId: attempt.pane_id } : {}),
+							...(attempt.worktree ? { worktree: attempt.worktree } : {}),
+						},
+						reason,
+						now,
+					);
+				} catch {
+					// A failed runtime stop must not prevent durable usage pausing.
+				}
+			}
 		}
 		return state;
 	}

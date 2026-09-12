@@ -10,11 +10,11 @@ export const CASE_TRANSITIONS: Readonly<Record<CaseState, readonly CaseState[]>>
 	classified: ["investigating", "question-analysis", "specification", "blocked", "paused", "cancelled"],
 	investigating: ["question-analysis", "specification", "awaiting-approval", "paused", "cancelled"],
 	"question-analysis": ["investigating", "handled", "paused", "cancelled"],
-	specification: ["awaiting-approval", "paused", "cancelled"],
+	specification: ["awaiting-approval", "paused", "paused-usage", "cancelled"],
 	"awaiting-approval": ["specification", "implementation", "paused", "cancelled"],
 	implementation: ["verification", "retry", "blocked", "paused", "paused-usage", "cancelled"],
 	verification: ["pull-request-review", "handled", "retry", "blocked", "paused", "paused-usage", "cancelled"],
-	"pull-request-review": ["handled", "retry", "blocked", "paused", "cancelled"],
+	"pull-request-review": ["handled", "retry", "blocked", "paused", "paused-usage", "cancelled"],
 	paused: [
 		"classified",
 		"investigating",

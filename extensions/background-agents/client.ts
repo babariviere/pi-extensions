@@ -153,6 +153,17 @@ export class BackgroundClient {
 		});
 	}
 
+	async approveWorkItem(caseId: string, workItemId: string, specVersion: number): Promise<unknown> {
+		return this.request({
+			version: BACKGROUND_AGENTS_PROTOCOL_VERSION,
+			id: requestId(),
+			type: "work-item.approve",
+			caseId,
+			workItemId,
+			specVersion,
+		});
+	}
+
 	async correctClassification(caseId: string, classification: Classification): Promise<unknown> {
 		return this.request({
 			version: BACKGROUND_AGENTS_PROTOCOL_VERSION,

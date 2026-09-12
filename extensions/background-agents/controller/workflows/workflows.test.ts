@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { afterEach, describe, test } from "node:test";
 import assert from "node:assert/strict";
 import { BackgroundAgentsDatabase } from "../database.ts";
+import { BackgroundAgentsStateMachine } from "../state-machine.ts";
 import { approveMemoryEntry, createMemoryEntry } from "../classification/memory.ts";
 import {
 	buildInvestigationContext,
@@ -146,6 +147,7 @@ describe("background-agent workflows", () => {
 	test("specification versions and feedback are durable, and approval freezes hash, permissions, and order", () => {
 		const database = new BackgroundAgentsDatabase(databasePath());
 		const caseId = classified(database, "specification");
+		database.run("UPDATE cases SET rollout_mode = 'supervised' WHERE id = ?", caseId);
 		const workflow = new SpecificationWorkflow(database);
 		const started = workflow.start(caseId);
 		const first = workflow.recordPlannerResult(caseId, {
@@ -218,6 +220,63 @@ describe("background-agent workflows", () => {
 				.all<{ work_item_id: string }>("SELECT work_item_id FROM jobs WHERE role = 'worker' ORDER BY created_at")
 				.map((row) => row.work_item_id),
 			[second.orderedWorkItems[0]],
+		);
+		database.close();
+	});
+
+	test("supervised stacks require durable exact-item approval after parent verification", () => {
+		const database = new BackgroundAgentsDatabase(databasePath());
+		const caseId = classified(database, "supervised stack");
+		database.run("UPDATE cases SET rollout_mode = 'supervised' WHERE id = ?", caseId);
+		const workflow = new SpecificationWorkflow(database);
+		workflow.start(caseId);
+		const specification = workflow.recordPlannerResult(caseId, {
+			specification: { goal: "stack" },
+			decisions: [],
+			unresolvedQuestions: [],
+			permissions: [],
+			plannerSummary: "stack",
+			decomposition: [
+				{ order: 1, title: "first", scope: "first", acceptanceCriteria: ["first passes"] },
+				{ order: 2, title: "second", scope: "second", acceptanceCriteria: ["second passes"] },
+			],
+		});
+		workflow.approve(caseId, specification.version, [], "operator", specification.orderedWorkItems);
+		assert.equal(
+			database.get<{ count: number }>("SELECT count(*) AS count FROM jobs WHERE role = 'worker'")?.count,
+			1,
+		);
+		assert.throws(
+			() => workflow.approveWorkItem(caseId, specification.orderedWorkItems[1]!, specification.version, "operator"),
+			/out of order|Parent work item/,
+		);
+		workflow.queueNextWorker(caseId);
+		assert.equal(
+			database.get<{ count: number }>("SELECT count(*) AS count FROM jobs WHERE role = 'worker'")?.count,
+			1,
+		);
+		const machine = new BackgroundAgentsStateMachine(database);
+		machine.transitionWorkItem(specification.orderedWorkItems[0]!, "implementation", "worker");
+		machine.transitionWorkItem(specification.orderedWorkItems[0]!, "verification", "worker");
+		machine.transitionWorkItem(specification.orderedWorkItems[0]!, "verified", "verifier");
+		const approval = workflow.approveWorkItem(
+			caseId,
+			specification.orderedWorkItems[1]!,
+			specification.version,
+			"operator",
+		);
+		assert.ok(approval.approvalId);
+		assert.equal(database.get<{ count: number }>("SELECT count(*) AS count FROM work_item_approvals")?.count, 1);
+		assert.equal(
+			database.get<{ count: number }>(
+				"SELECT count(*) AS count FROM jobs WHERE work_item_id = ?",
+				specification.orderedWorkItems[1],
+			)?.count,
+			1,
+		);
+		assert.throws(
+			() => workflow.approveWorkItem(caseId, specification.orderedWorkItems[1]!, specification.version, "operator"),
+			/already running|approved/,
 		);
 		database.close();
 	});

@@ -45,11 +45,11 @@ const CASE_TRANSITIONS: Record<CaseState, readonly CaseState[]> = {
 	classified: ["investigating", "question-analysis", "specification", "blocked", "paused", "cancelled"],
 	investigating: ["question-analysis", "specification", "awaiting-approval", "paused", "cancelled"],
 	"question-analysis": ["investigating", "handled", "paused", "cancelled"],
-	specification: ["awaiting-approval", "paused", "cancelled"],
+	specification: ["awaiting-approval", "paused", "paused-usage", "cancelled"],
 	"awaiting-approval": ["specification", "implementation", "paused", "cancelled"],
 	implementation: ["verification", "retry", "blocked", "paused", "paused-usage", "cancelled"],
 	verification: ["pull-request-review", "handled", "retry", "blocked", "paused", "paused-usage", "cancelled"],
-	"pull-request-review": ["handled", "retry", "blocked", "paused", "cancelled"],
+	"pull-request-review": ["handled", "retry", "blocked", "paused", "paused-usage", "cancelled"],
 	paused: [
 		"classified",
 		"investigating",
@@ -353,6 +353,23 @@ export interface StoredSpecificationApproval {
 	createdAt: string;
 }
 
+export interface WorkItemApprovalInput {
+	caseId: string;
+	workItemId: string;
+	specVersion: number;
+	actor: string;
+}
+
+export interface StoredWorkItemApproval {
+	id: string;
+	caseId: string;
+	workItemId: string;
+	specVersion: number;
+	decision: "approved" | "rejected";
+	actor: string;
+	createdAt: string;
+}
+
 export interface InvestigationReportInput {
 	caseId: string;
 	attemptId?: string;
@@ -616,8 +633,14 @@ export class BackgroundAgentsDatabase {
 
 	/** An attempt may publish only if it was not invalidated by a stop epoch. */
 	attemptMayPublish(attemptId: string, stopEpoch: number): boolean {
-		const row = this.get<{ attempt_epoch: number; current_epoch: number; emergency_stop: number; state: string }>(
-			"SELECT a.stop_epoch AS attempt_epoch, c.stop_epoch AS current_epoch, c.emergency_stop, a.state FROM attempts a CROSS JOIN controller_control_state c WHERE a.id = ?",
+		const row = this.get<{
+			attempt_epoch: number;
+			current_epoch: number;
+			emergency_stop: number;
+			publish_invalidated: number;
+			state: string;
+		}>(
+			"SELECT a.stop_epoch AS attempt_epoch, c.stop_epoch AS current_epoch, c.emergency_stop, a.publish_invalidated, a.state FROM attempts a CROSS JOIN controller_control_state c WHERE a.id = ?",
 			attemptId,
 		);
 		return Boolean(
@@ -625,7 +648,47 @@ export class BackgroundAgentsDatabase {
 				row.state === "running" &&
 				Number(row.attempt_epoch) === stopEpoch &&
 				Number(row.current_epoch) === stopEpoch &&
+				Number(row.publish_invalidated) === 0 &&
 				Number(row.emergency_stop) === 0,
+		);
+	}
+
+	/** Workers for a materialized specification obey the durable rollout and approval gates. */
+	workerDispatchAllowed(jobId: string): boolean {
+		const job = this.get<{
+			case_id: string;
+			work_item_id: string | null;
+			rollout_mode: RolloutMode;
+			item_spec_version_id: string | null;
+			item_state: string | null;
+			ordinal: number | null;
+		}>(
+			"SELECT j.case_id, j.work_item_id, c.rollout_mode, wi.spec_version_id AS item_spec_version_id, wi.state AS item_state, wi.ordinal FROM jobs j JOIN cases c ON c.id = j.case_id LEFT JOIN work_items wi ON wi.id = j.work_item_id WHERE j.id = ? AND j.role = 'worker'",
+			jobId,
+		);
+		if (!job || !job.work_item_id || !job.item_spec_version_id) return true;
+		if (job.item_state === "cancelled" || job.item_state === "verified") return false;
+		const current = this.get<{ id: string; version: number }>(
+			"SELECT id, version FROM spec_versions WHERE case_id = ? ORDER BY version DESC LIMIT 1",
+			job.case_id,
+		);
+		if (!current || current.id !== job.item_spec_version_id) return false;
+		if (!this.get("SELECT id FROM approvals WHERE spec_version_id = ? AND decision = 'approved'", current.id))
+			return false;
+		if (job.rollout_mode === "autonomous-pr") return true;
+		if (job.rollout_mode !== "supervised") return false;
+		const first = this.get<{ ordinal: number }>(
+			"SELECT min(ordinal) AS ordinal FROM work_items WHERE spec_version_id = ?",
+			current.id,
+		);
+		if (job.ordinal === first?.ordinal) return true;
+		return Boolean(
+			this.get(
+				"SELECT id FROM work_item_approvals WHERE case_id = ? AND work_item_id = ? AND spec_version = ? AND decision = 'approved'",
+				job.case_id,
+				job.work_item_id,
+				current.version,
+			),
 		);
 	}
 
@@ -1409,6 +1472,197 @@ export class BackgroundAgentsDatabase {
 			utcTimestamp(updatedAt, "updatedAt"),
 			profileId,
 		);
+	}
+
+	/** Persist a usage pause while retaining the attempt's worktree and generation. */
+	pauseJobForUsage(attemptId: string, reason: string, now = new Date()): boolean {
+		const pausedAt = utcTimestamp(now, "now");
+		return this.withTransaction(() => {
+			const attempt = this.get<{
+				job_id: string;
+				case_id: string;
+				profile_id: string | null;
+				role: AgentRole;
+				state: string;
+			}>("SELECT job_id, case_id, profile_id, role, state FROM attempts WHERE id = ?", attemptId);
+			if (!attempt || attempt.state !== "running" || attempt.role === "verifier") return false;
+			this.run(
+				"UPDATE attempts SET state = 'paused', publish_invalidated = 1, failure = ?, finished_at = ? WHERE id = ? AND state = 'running'",
+				requiredString(reason, "reason"),
+				pausedAt,
+				attemptId,
+			);
+			this.run("DELETE FROM attempt_leases WHERE attempt_id = ?", attemptId);
+			this.run(
+				"INSERT INTO usage_paused_jobs (job_id, attempt_id, profile_id, reason, paused_at) VALUES (?, ?, ?, ?, ?)",
+				attempt.job_id,
+				attemptId,
+				attempt.profile_id,
+				requiredString(reason, "reason"),
+				pausedAt,
+			);
+			this.run(
+				"UPDATE jobs SET state = 'paused', claimed_by = NULL, claimed_at = NULL, updated_at = ? WHERE id = ? AND state = 'running'",
+				pausedAt,
+				attempt.job_id,
+			);
+			const caseRow = this.get<{ state: CaseState }>("SELECT state FROM cases WHERE id = ?", attempt.case_id);
+			if (caseRow && caseRow.state !== "paused-usage" && CASE_TRANSITIONS[caseRow.state].includes("paused-usage")) {
+				this.run(
+					"UPDATE cases SET state = 'paused-usage', updated_at = ? WHERE id = ? AND state = ?",
+					pausedAt,
+					attempt.case_id,
+					caseRow.state,
+				);
+				this.appendEvent(attempt.case_id, caseRow.state, "paused-usage", "usage-controller", reason, { attemptId });
+			}
+			if (attempt.profile_id) this.refreshProviderProfileActivity(attempt.profile_id, now);
+			return true;
+		});
+	}
+
+	usagePausedJobs(caseId: string): Array<{ jobId: string; attemptId: string; role: AgentRole }> {
+		return this.all<{ job_id: string; attempt_id: string; role: AgentRole }>(
+			"SELECT u.job_id, u.attempt_id, j.role FROM usage_paused_jobs u JOIN jobs j ON j.id = u.job_id WHERE j.case_id = ? AND u.resumed_at IS NULL ORDER BY u.paused_at, u.job_id",
+			caseId,
+		).map((row) => ({ jobId: row.job_id, attemptId: row.attempt_id, role: row.role }));
+	}
+
+	resumeUsageJobs(caseId: string, now = new Date()): number {
+		const resumedAt = utcTimestamp(now, "now");
+		return this.withTransaction(() => {
+			const jobs = this.usagePausedJobs(caseId);
+			let resumed = 0;
+			for (const job of jobs) {
+				const changed = this.run(
+					"UPDATE jobs SET state = 'queued', claimed_by = NULL, claimed_at = NULL, updated_at = ? WHERE id = ? AND state = 'paused'",
+					resumedAt,
+					job.jobId,
+				);
+				if (changed.changes === 1) {
+					this.run(
+						"UPDATE usage_paused_jobs SET resumed_at = ? WHERE job_id = ? AND resumed_at IS NULL",
+						resumedAt,
+						job.jobId,
+					);
+					const previous = this.get<{ generation: number }>(
+						"SELECT coalesce(max(generation), 0) AS generation FROM attempts WHERE job_id = ?",
+						job.jobId,
+					);
+					const jobDetails = this.get<{ case_id: string; role: AgentRole }>(
+						"SELECT case_id, role FROM jobs WHERE id = ?",
+						job.jobId,
+					);
+					if (!jobDetails) throw new Error(`Unknown usage-paused job: ${job.jobId}`);
+					this.run(
+						"INSERT INTO attempts (id, job_id, case_id, role, generation, state) VALUES (?, ?, ?, ?, ?, 'queued')",
+						randomUUID(),
+						job.jobId,
+						jobDetails.case_id,
+						jobDetails.role,
+						Number(previous?.generation ?? 0) + 1,
+					);
+					resumed += 1;
+				}
+			}
+			return resumed;
+		});
+	}
+
+	createWorkItemApproval(input: WorkItemApprovalInput): { approvalId: string; jobId: string } {
+		const caseId = requiredString(input.caseId, "caseId");
+		const workItemId = requiredString(input.workItemId, "workItemId");
+		const actor = requiredString(input.actor, "actor");
+		if (/^(agent|system|model|classifier)(:|$)/i.test(actor))
+			throw new Error("Work-item approval requires an explicit human actor");
+		if (!Number.isSafeInteger(input.specVersion) || input.specVersion <= 0)
+			throw new Error("specVersion must be a positive integer");
+		const approvalId = randomUUID();
+		const jobId = randomUUID();
+		this.withTransaction(() => {
+			const current = this.get<{ id: string; version: number }>(
+				"SELECT id, version FROM spec_versions WHERE case_id = ? ORDER BY version DESC LIMIT 1",
+				caseId,
+			);
+			if (!current || current.version !== input.specVersion)
+				throw new Error(`Work-item approval is stale for ${caseId}`);
+			const item = this.get<{
+				case_id: string;
+				id: string;
+				spec_version_id: string | null;
+				ordinal: number;
+				state: string;
+				parent_id: string | null;
+			}>("SELECT case_id, id, spec_version_id, ordinal, state, parent_id FROM work_items WHERE id = ?", workItemId);
+			if (!item || item.case_id !== caseId || item.spec_version_id !== current.id)
+				throw new Error(`Unknown work item for specification: ${workItemId}`);
+			if (item.state === "cancelled") throw new Error(`Work item is cancelled: ${workItemId}`);
+			if (item.state !== "queued") throw new Error(`Work item is already running or complete: ${workItemId}`);
+			const ordered = this.get<{ ordered_work_items: string }>(
+				"SELECT ordered_work_items FROM spec_versions WHERE id = ?",
+				current.id,
+			);
+			let ids: unknown;
+			try {
+				ids = JSON.parse(ordered?.ordered_work_items ?? "[]");
+			} catch {
+				throw new Error("stored specification order is invalid");
+			}
+			if (!Array.isArray(ids) || ids.some((id) => typeof id !== "string"))
+				throw new Error("stored specification order is invalid");
+			const orderedIds = ids as string[];
+			const index = orderedIds.indexOf(workItemId);
+			if (index < 0) throw new Error(`Work-item approval is out of order: ${workItemId}`);
+			for (let previousIndex = 0; previousIndex < index; previousIndex += 1) {
+				const previous = this.get<{ state: string }>(
+					"SELECT state FROM work_items WHERE id = ?",
+					orderedIds[previousIndex],
+				);
+				if (!previous || previous.state !== "verified")
+					throw new Error(`Parent work item is not verified before ${workItemId}`);
+			}
+			if (item.parent_id) {
+				const parent = this.get<{ state: string }>("SELECT state FROM work_items WHERE id = ?", item.parent_id);
+				if (parent?.state !== "verified") throw new Error(`Parent work item is not verified before ${workItemId}`);
+			}
+			const caseState = this.get<{ state: string; rollout_mode: RolloutMode }>(
+				"SELECT state, rollout_mode FROM cases WHERE id = ?",
+				caseId,
+			);
+			if (!caseState || caseState.rollout_mode !== "supervised")
+				throw new Error("work-item approval is available only in supervised mode");
+			if (["cancelled", "handled"].includes(caseState.state))
+				throw new Error(`Case ${caseId} is cancelled or complete`);
+			if (!this.get("SELECT id FROM approvals WHERE spec_version_id = ? AND decision = 'approved'", current.id))
+				throw new Error(`Specification ${input.specVersion} is not approved`);
+			if (
+				this.database
+					.prepare("SELECT id FROM jobs WHERE work_item_id = ? AND role = 'worker' AND state <> 'cancelled'")
+					.get(workItemId)
+			)
+				throw new Error(`Work item is already running or approved: ${workItemId}`);
+			this.run(
+				"INSERT INTO work_item_approvals (id, case_id, work_item_id, spec_version, decision, actor) VALUES (?, ?, ?, ?, 'approved', ?)",
+				approvalId,
+				caseId,
+				workItemId,
+				input.specVersion,
+				actor,
+			);
+			this.run(
+				"INSERT INTO jobs (id, case_id, work_item_id, role) VALUES (?, ?, ?, 'worker')",
+				jobId,
+				caseId,
+				workItemId,
+			);
+			this.recordOperatorEventInTransaction(
+				"work-item.approved",
+				actor,
+				{ caseId, workItemId, specVersion: input.specVersion },
+				new Date().toISOString(),
+			);
+		});
+		return { approvalId, jobId };
 	}
 
 	recordUsageSnapshot(input: UsageSnapshotInput): void {

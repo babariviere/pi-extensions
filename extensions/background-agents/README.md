@@ -169,7 +169,7 @@ Pi commands:
 | `/background open <caseId>` | Open a selected case. |
 | `/background resume <caseId>` | Record resume for the case and open it. |
 
-The socket is newline-delimited JSON using protocol `background-agents.v1`. Requests have `version: 1` and a unique `id`. Supported request types are `dashboard.get`; `case.submit` with `source`, `title`, `body`, and optional `repository`; `case.action` with `caseId`, `action`, and optional `comment`; `spec.feedback`; `spec.approve` with `specVersion` and `permissions`; `classifier.correct`; `rollout.set` with `scope`, `value`, and a source or repository target when applicable; `emergency.stop` with `enabled`; `pane.focus` with `paneId`; and `evidence.reproduce` with `caseId` and `manifestId`. Case actions are `approve-specification`, `request-changes`, `resume`, `reclassify`, `cancel`, `mark-handled`, and `reject`. Responses echo `version` and `id` and contain either `ok: true, result` or `ok: false, error`.
+The socket is newline-delimited JSON using protocol `background-agents.v1`. Requests have `version: 1` and a unique `id`. Supported request types are `dashboard.get`; `case.submit` with `source`, `title`, `body`, and optional `repository`; `case.action` with `caseId`, `action`, and optional `comment`; `spec.feedback`; `spec.approve` with `specVersion` and `permissions`; `work-item.approve` with `caseId`, `workItemId`, and the exact `specVersion`; `classifier.correct`; `rollout.set` with `scope`, `value`, and a source or repository target when applicable; `emergency.stop` with `enabled`; `pane.focus` with `paneId`; and `evidence.reproduce` with `caseId` and `manifestId`. Case actions are `approve-specification`, `request-changes`, `resume`, `reclassify`, `cancel`, `mark-handled`, and `reject`. Responses echo `version` and `id` and contain either `ok: true, result` or `ok: false, error`.
 
 For a dependency-free socket probe, this exact Node command requests a dashboard snapshot:
 
@@ -191,6 +191,7 @@ Dashboard keys:
 
 - `Tab`/right and `Shift-Tab`/left change views. `1` through `12` select the corresponding view.
 - `j`/down and `k`/up select a case or attempt. `r` refreshes.
+- `w` approves the selected case's next queued specification work item in supervised mode.
 - `R` starts evidence reproduction for the selected case. `Enter` resumes it.
 - `A` approves a specification, `q` approves a supervised quick-fix proposal, `f` requests changes, `c` reclassifies, `h` marks handled, `n` rejects, and `x`/`X` cancels.
 - In Rollout, `o` selects `observe`, `s` selects `supervised`, and `p` selects `autonomous-pr`.

@@ -80,6 +80,11 @@ export class JobScheduler {
 		assignment?: { profileId?: string; model?: string },
 	): JobClaim | null {
 		if (this.emergencyStop) return null;
+		if (
+			this.database.get<{ role: string }>("SELECT role FROM jobs WHERE id = ?", jobId)?.role === "worker" &&
+			!this.database.workerDispatchAllowed(jobId)
+		)
+			return null;
 		const candidate = this.database.get<{ id: string }>(
 			`SELECT j.id
 			 FROM jobs j
@@ -215,37 +220,15 @@ export class JobScheduler {
 
 	/** Stop a model run without reviving or replacing the running attempt. */
 	pauseAttemptForUsage(attemptId: string, reason = "provider usage unavailable", now = new Date()): boolean {
-		const timestamp = now.toISOString();
-		return this.database.withTransaction(() => {
-			const attempt = this.database.get<{ job_id: string; profile_id?: string }>(
-				"SELECT job_id, profile_id FROM attempts WHERE id = ? AND state = 'running'",
-				attemptId,
-			);
-			if (!attempt) return false;
-			this.database.run(
-				"UPDATE attempts SET state = 'paused', failure = ?, finished_at = ? WHERE id = ? AND state = 'running'",
-				reason,
-				timestamp,
-				attemptId,
-			);
-			this.database.run("DELETE FROM attempt_leases WHERE attempt_id = ?", attemptId);
-			if (attempt.profile_id) this.database.refreshProviderProfileActivity(attempt.profile_id, now);
-			this.database.run(
-				"UPDATE jobs SET state = 'paused', claimed_by = NULL, claimed_at = NULL, updated_at = ? WHERE id = ? AND state = 'running'",
-				timestamp,
-				attempt.job_id,
-			);
-			return true;
-		});
+		if (this.database.get<{ role: string }>("SELECT role FROM attempts WHERE id = ?", attemptId)?.role === "verifier")
+			return false;
+		return this.database.pauseJobForUsage(attemptId, reason, now);
 	}
 
 	resumeUsageJob(jobId: string): boolean {
-		const changed = this.database.run(
-			"UPDATE jobs SET state = 'queued', claimed_by = NULL, claimed_at = NULL, updated_at = ? WHERE id = ? AND state = 'paused'",
-			new Date().toISOString(),
-			jobId,
-		);
-		return changed.changes === 1;
+		const job = this.database.get<{ case_id: string }>("SELECT case_id FROM jobs WHERE id = ?", jobId);
+		if (!job) return false;
+		return this.database.resumeUsageJobs(job.case_id) > 0;
 	}
 
 	cancelCaseJobs(caseId: string): number {

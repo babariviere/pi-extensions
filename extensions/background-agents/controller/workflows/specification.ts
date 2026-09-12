@@ -195,10 +195,25 @@ export class SpecificationWorkflow {
 		return result;
 	}
 
+	approveWorkItem(
+		caseId: string,
+		workItemId: string,
+		specVersion: number,
+		actor: string,
+	): { approvalId: string; jobId: string } {
+		return this.database.createWorkItemApproval({ caseId, workItemId, specVersion, actor });
+	}
+
 	/** Queue exactly the next approved item after every earlier item is verified. */
 	queueNextWorker(caseId: string): string | undefined {
+		const rollout = this.database.get<{ rollout_mode: string }>(
+			"SELECT rollout_mode FROM cases WHERE id = ?",
+			caseId,
+		);
+		if (!rollout || rollout.rollout_mode === "observe") return undefined;
 		const approval = this.database.get<{ ordered_work_items: string | null }>(
-			"SELECT a.ordered_work_items FROM approvals a JOIN spec_versions s ON s.id = a.spec_version_id WHERE s.case_id = ? AND a.decision = 'approved' ORDER BY a.created_at DESC, a.id DESC LIMIT 1",
+			"SELECT a.ordered_work_items FROM approvals a JOIN spec_versions s ON s.id = a.spec_version_id WHERE s.case_id = ? AND s.version = (SELECT max(version) FROM spec_versions WHERE case_id = ?) AND a.decision = 'approved' ORDER BY a.created_at DESC, a.id DESC LIMIT 1",
+			caseId,
 			caseId,
 		);
 		if (!approval?.ordered_work_items) return undefined;
@@ -222,6 +237,17 @@ export class SpecificationWorkflow {
 				.slice(0, index)
 				.map((id) => this.database.get<{ state: string }>("SELECT state FROM work_items WHERE id = ?", id)?.state);
 			if (previous.some((state) => state !== "verified")) return undefined;
+			if (
+				rollout.rollout_mode === "supervised" &&
+				index > 0 &&
+				!this.database.get(
+					"SELECT a.id FROM work_item_approvals a JOIN spec_versions s ON s.id = (SELECT id FROM spec_versions WHERE case_id = ? ORDER BY version DESC LIMIT 1) AND s.version = a.spec_version WHERE a.work_item_id = ? AND a.case_id = ? AND a.decision = 'approved' LIMIT 1",
+					caseId,
+					workItemId,
+					caseId,
+				)
+			)
+				return undefined;
 			if (
 				this.database.get(
 					"SELECT id FROM jobs WHERE case_id = ? AND work_item_id = ? AND role = 'worker'",

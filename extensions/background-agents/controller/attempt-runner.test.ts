@@ -526,6 +526,7 @@ test("delivers an approved two-item stack through durable GitHub effects", async
 		const machine = new BackgroundAgentsStateMachine(database);
 		database.transitionCase(caseId, "classified", "test");
 		database.transitionCase(caseId, "specification", "test");
+		database.run("UPDATE cases SET rollout_mode = 'autonomous-pr' WHERE id = ?", caseId);
 		const specification = new SpecificationWorkflow(database);
 		specification.recordPlannerResult(caseId, {
 			specification: {},

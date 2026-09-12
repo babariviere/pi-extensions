@@ -135,6 +135,11 @@ export class ProviderScheduler {
 	claim(jobId: string, owner: string, leaseMs = this.defaultLeaseMs, now = nowFrom(this.clock)): JobClaim | null {
 		if (this.emergencyStop) return null;
 		if (!this.questionAttemptAvailable(jobId)) return null;
+		if (
+			this.database.get<{ role: string }>("SELECT role FROM jobs WHERE id = ?", jobId)?.role === "worker" &&
+			!this.database.workerDispatchAllowed(jobId)
+		)
+			return null;
 		const selection = this.selectProfile(jobId, now);
 		if (!selection) return null;
 		const claim = this.jobs.claim(jobId, owner, leaseMs, now, {
@@ -171,6 +176,17 @@ export class ProviderScheduler {
 
 	resumeAfterUsage(jobId: string): boolean {
 		return this.jobs.resumeUsageJob(jobId);
+	}
+
+	/** Resume only usage-paused jobs after every one has a fresh schedulable profile. */
+	resumeAfterUsageCase(caseId: string, now = nowFrom(this.clock)): number {
+		const paused = this.database.usagePausedJobs(caseId);
+		if (paused.length === 0) throw new Error(`Case ${caseId} has no jobs paused by usage`);
+		for (const job of paused) {
+			if (!this.selectProfile(job.jobId, now))
+				throw new Error(`No fresh schedulable provider profile for ${job.jobId}`);
+		}
+		return this.database.resumeUsageJobs(caseId, now);
 	}
 }
 

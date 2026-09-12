@@ -33,6 +33,57 @@ test("controller persists manual intake and queues durable classification in obs
 	assert.equal(database.get<{ role: string }>("SELECT role FROM jobs")?.role, "classifier");
 });
 
+test("usage refresh pauses an active run even when runtime termination fails", async () => {
+	const database = new BackgroundAgentsDatabase(":memory:");
+	databases.push(database);
+	const config = normalizeBackgroundAgentsConfig({
+		profiles: [{ id: "usage-profile", provider: "anthropic", agentDir: process.cwd(), allowedModels: ["model"] }],
+	});
+	const caseId = database.createCase({ title: "usage termination", source: "manual" });
+	database.transitionCase(caseId, "classified", "test");
+	database.run("UPDATE cases SET state = 'implementation' WHERE id = ?", caseId);
+	database.upsertProviderProfileState({ profileId: "usage-profile" });
+	const jobId = database.createJob({ caseId, role: "worker" });
+	const attempt = database.claimJob(jobId, "controller", 60_000, new Date(), {
+		profileId: "usage-profile",
+		model: "model",
+	});
+	assert.ok(attempt);
+	database.run(
+		"UPDATE attempts SET systemd_unit = ?, pane_id = ?, worktree = ? WHERE id = ?",
+		"usage-unit",
+		"usage-pane",
+		"/preserved/worktree",
+		attempt.attemptId,
+	);
+	const controller = new BackgroundAgentsController({
+		database,
+		config,
+		startSocket: false,
+		runtimeControls: {
+			terminateSystemdUnit: async () => {
+				throw new Error("termination failed");
+			},
+			isSystemdUnitStopped: async () => false,
+			closePane: async () => {
+				throw new Error("pane close failed");
+			},
+		},
+	});
+	await controller.start();
+	await controller.stop();
+	assert.equal(
+		database.get<{ state: string }>("SELECT state FROM attempts WHERE id = ?", attempt.attemptId)?.state,
+		"paused",
+	);
+	assert.equal(database.get<{ state: string }>("SELECT state FROM jobs WHERE id = ?", jobId)?.state, "paused");
+	assert.equal(database.get<{ state: string }>("SELECT state FROM cases WHERE id = ?", caseId)?.state, "paused-usage");
+	assert.equal(
+		database.get<{ worktree: string }>("SELECT worktree FROM attempts WHERE id = ?", attempt.attemptId)?.worktree,
+		"/preserved/worktree",
+	);
+});
+
 test("supervised intake queues classification before investigation", async () => {
 	const database = new BackgroundAgentsDatabase(":memory:");
 	databases.push(database);

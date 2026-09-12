@@ -7,6 +7,7 @@ import { buildDashboardViewLines, DASHBOARD_VIEWS, nextDashboardView, type Dashb
 export interface DashboardClient {
 	getDashboard(): Promise<DashboardSnapshot>;
 	action(caseId: string, action: CaseAction): Promise<unknown>;
+	approveWorkItem?(caseId: string, workItemId: string, specVersion: number): Promise<unknown>;
 	reproduce(caseId: string, manifestId: string): Promise<unknown>;
 	setRollout?(value: RolloutMode, source?: BackgroundSource, repository?: string): Promise<unknown>;
 	setEmergencyStop?(enabled: boolean): Promise<unknown>;
@@ -80,7 +81,11 @@ export class BackgroundDashboard implements Component {
 		this.container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
 		this.container.addChild(this.body);
 		this.container.addChild(
-			new Text(theme.fg("dim", "tab/shift-tab views  j/k select  r refresh  R reproduce  esc close"), 1, 0),
+			new Text(
+				theme.fg("dim", "tab/shift-tab views  j/k select  w approve item  r refresh  R reproduce  esc close"),
+				1,
+				0,
+			),
 		);
 		this.container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
 		if (options.initialSnapshot === undefined) void this.refresh();
@@ -149,6 +154,10 @@ export class BackgroundDashboard implements Component {
 		}
 		if (data === "q") {
 			void this.caseAction("approve-quick-fix");
+			return;
+		}
+		if (data === "w") {
+			void this.approveWorkItem();
 			return;
 		}
 		if (data === "f") {
@@ -245,6 +254,24 @@ export class BackgroundDashboard implements Component {
 		if (!caseId) return;
 		try {
 			await this.options.client.action(caseId, action);
+			await this.refresh();
+		} catch (error) {
+			this.errorMessage = error instanceof Error ? error.message : String(error);
+			this.tui.requestRender();
+		}
+	}
+
+	private async approveWorkItem(): Promise<void> {
+		const caseId = this.selectedCaseId();
+		const item = this.snapshot.workItems
+			.filter((workItem) => workItem.caseId === caseId && workItem.state === "queued")
+			.sort((left, right) => left.ordinal - right.ordinal)[0];
+		const spec = this.snapshot.specifications
+			.filter((specification) => specification.caseId === caseId)
+			.sort((left, right) => right.version - left.version)[0];
+		if (!caseId || !item || !spec || !this.options.client.approveWorkItem) return;
+		try {
+			await this.options.client.approveWorkItem(caseId, item.id, spec.version);
 			await this.refresh();
 		} catch (error) {
 			this.errorMessage = error instanceof Error ? error.message : String(error);

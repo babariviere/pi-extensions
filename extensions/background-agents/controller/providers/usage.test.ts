@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { afterEach, describe, test } from "node:test";
 import { normalizeBackgroundAgentsConfig } from "../../config.ts";
 import { BackgroundAgentsDatabase } from "../database.ts";
+import { JobScheduler } from "../jobs.ts";
 import { ProfileUsageController } from "./usage.ts";
 
 const directories: string[] = [];
@@ -82,6 +83,56 @@ describe("profile usage control", () => {
 		});
 		await usage.refresh();
 		assert.equal(usage.canSchedule(profile, "worker"), false);
+		database.close();
+	});
+
+	test("reconciles exhausted model attempts durably across refresh restart and preserves verifiers", async () => {
+		const { database, config } = setup();
+		const now = new Date("2026-01-01T00:00:00Z");
+		const caseId = database.createCase({ title: "usage pause", source: "manual" });
+		database.upsertProviderProfileState({ profileId: config.profiles[0]!.id });
+		const workerJob = database.createJob({ caseId, role: "worker" });
+		const worker = database.claimJob(workerJob, "controller", 1000, now, {
+			profileId: config.profiles[0]!.id,
+			model: "claude",
+		})!;
+		let reconciled = 0;
+		const collector = async (profile: (typeof config.profiles)[number]) => ({
+			profileId: profile.id,
+			provider: profile.provider,
+			windows: [{ label: "Week", usedPercent: 100 }],
+			available: false,
+			error: "quota exhausted",
+		});
+		const usage = new ProfileUsageController(database, config.profiles, {
+			collector,
+			reconcileAttempt: async (attempt, reason, observedAt) => {
+				reconciled += 1;
+				new JobScheduler(database).pauseAttemptForUsage(attempt.attemptId, reason, observedAt);
+			},
+		});
+		await usage.refresh(now);
+		assert.equal(reconciled, 1);
+		assert.equal(
+			database.get<{ state: string }>("SELECT state FROM attempts WHERE id = ?", worker.attemptId)?.state,
+			"paused",
+		);
+		assert.equal(database.get<{ count: number }>("SELECT count(*) AS count FROM usage_paused_jobs")?.count, 1);
+		assert.equal(database.attemptMayPublish(worker.attemptId, worker.stopEpoch), false);
+		const verifierJob = database.createJob({ caseId, role: "verifier" });
+		const verifier = database.claimJob(verifierJob, "controller", 1000, now, { profileId: config.profiles[0]!.id })!;
+		const restarted = new ProfileUsageController(database, config.profiles, {
+			collector,
+			reconcileAttempt: async () => {
+				reconciled += 1;
+			},
+		});
+		await restarted.refresh(now);
+		assert.equal(reconciled, 1);
+		assert.equal(
+			database.get<{ state: string }>("SELECT state FROM attempts WHERE id = ?", verifier.attemptId)?.state,
+			"running",
+		);
 		database.close();
 	});
 });

@@ -423,6 +423,9 @@ export class BackgroundAgentsController {
 		this.jobs = new JobScheduler(this.database, { emergencyStop: durableControls.emergencyStop });
 		this.providerScheduler = new ProviderScheduler(this.database, this.config, {
 			emergencyStop: durableControls.emergencyStop,
+			usageOptions: {
+				reconcileAttempt: (attempt, reason, now) => this.reconcileUsageAttempt(attempt, reason, now),
+			},
 		});
 		this.recovery = options.recovery ?? new RecoveryCoordinator(this.database, { owner: this.owner });
 		this.stateMachine = new BackgroundAgentsStateMachine(this.database);
@@ -523,6 +526,57 @@ export class BackgroundAgentsController {
 		} catch {
 			/* unavailable profiles remain unavailable */
 		}
+	}
+	private async reconcileUsageAttempt(
+		attempt: {
+			attemptId: string;
+			jobId: string;
+			caseId: string;
+			role: AgentRole;
+			systemdUnit?: string;
+			paneId?: string;
+			worktree?: string;
+		},
+		reason: string,
+		now: Date,
+	): Promise<void> {
+		const failures: string[] = [];
+		if (attempt.systemdUnit)
+			try {
+				await this.runtimeControls.terminateSystemdUnit(attempt.systemdUnit);
+				if (!(await this.runtimeControls.isSystemdUnitStopped(attempt.systemdUnit)))
+					failures.push(`systemd unit remains active: ${attempt.systemdUnit}`);
+			} catch (error) {
+				failures.push(`systemd stop: ${error instanceof Error ? error.message : String(error)}`);
+			}
+		if (attempt.paneId && this.runtimeControls.closePane)
+			try {
+				await this.runtimeControls.closePane(attempt.paneId);
+			} catch (error) {
+				failures.push(`pane close: ${error instanceof Error ? error.message : String(error)}`);
+			}
+		const state = this.database.get<{ state: string }>("SELECT state FROM cases WHERE id = ?", attempt.caseId)?.state;
+		if (state !== "paused-usage") {
+			try {
+				this.stateMachine.pauseCase(attempt.caseId, this.operator, reason, true);
+			} catch (error) {
+				failures.push(`case pause: ${error instanceof Error ? error.message : String(error)}`);
+			}
+		}
+		this.database.recordOperatorEvent(
+			"usage-attempt-reconciled",
+			this.operator,
+			{
+				attemptId: attempt.attemptId,
+				jobId: attempt.jobId,
+				caseId: attempt.caseId,
+				role: attempt.role,
+				reason,
+				worktree: attempt.worktree,
+				failures,
+			},
+			now,
+		);
 	}
 	private async pollSources(sourceName?: BackgroundSource): Promise<void> {
 		for (const source of this.sourceAdapters)
@@ -907,6 +961,21 @@ export class BackgroundAgentsController {
 					updatedAt: dashboardText(row.updated_at, 40),
 				})),
 		);
+		const workItemApprovals = dashboardRows(
+			this.database
+				.all<Record<string, unknown>>(
+					"SELECT id, case_id, work_item_id, spec_version, decision, actor, created_at FROM work_item_approvals ORDER BY created_at DESC, id DESC",
+				)
+				.map((row) => ({
+					id: dashboardText(row.id, 120),
+					caseId: dashboardText(row.case_id, 120),
+					workItemId: dashboardText(row.work_item_id, 120),
+					specVersion: Number(row.spec_version),
+					decision: row.decision as "approved" | "rejected",
+					actor: dashboardText(row.actor, 120),
+					createdAt: dashboardText(row.created_at, 40),
+				})),
+		);
 		const feedback = dashboardRows(
 			this.database
 				.all<Record<string, unknown>>(
@@ -1093,6 +1162,7 @@ export class BackgroundAgentsController {
 			memory,
 			specifications,
 			approvals,
+			workItemApprovals,
 			quickFixProposals,
 			feedback,
 			questionBriefs,
@@ -1145,6 +1215,14 @@ export class BackgroundAgentsController {
 						this.operator,
 					);
 					break;
+				case "work-item.approve":
+					result = this.specifications.approveWorkItem(
+						request.caseId,
+						request.workItemId,
+						request.specVersion,
+						this.operator,
+					);
+					break;
 				case "classifier.correct":
 					result = recordOperatorFeedback(this.database, {
 						caseId: request.caseId,
@@ -1193,6 +1271,17 @@ export class BackgroundAgentsController {
 	private caseAction(caseId: string, action: CaseAction, comment?: string): unknown {
 		switch (action) {
 			case "resume":
+				if (
+					this.database.get<{ state: string }>("SELECT state FROM cases WHERE id = ?", caseId)?.state ===
+					"paused-usage"
+				) {
+					const resumed = this.providerScheduler.resumeAfterUsageCase(
+						caseId,
+						this.options.clock?.() ?? new Date(),
+					);
+					const state = this.stateMachine.resumeCase(caseId, this.operator, comment);
+					return { accepted: true, state, resumedJobs: resumed };
+				}
 				return this.stateMachine.resumeCase(caseId, this.operator, comment);
 			case "cancel":
 				this.stateMachine.cancelCase(caseId, this.operator, comment);

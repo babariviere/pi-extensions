@@ -83,7 +83,11 @@ export function buildDashboardViewLines(
 					);
 			for (const approval of snapshot.approvals.filter((item) => item.caseId === currentCase?.id))
 				lines.push(`Approval v${approval.specVersion}: ${approval.decision} by ${approval.actor}`);
-			lines.push("Actions: a approve, f feedback, r resume");
+			for (const approval of snapshot.workItemApprovals?.filter((item) => item.caseId === currentCase?.id) ?? [])
+				lines.push(
+					`Item approval ${approval.workItemId} v${approval.specVersion}: ${approval.decision} by ${approval.actor}`,
+				);
+			lines.push("Actions: a approve specification, w approve next item, f feedback, r resume");
 			break;
 		case "question":
 			lines.push(`Case: ${value(currentCase?.id)}`);

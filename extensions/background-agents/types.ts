@@ -332,6 +332,17 @@ export interface DashboardApproval {
 	createdAt: string;
 }
 
+export interface DashboardWorkItemApproval {
+	id: string;
+	caseId: string;
+	workItemId: string;
+	workItemOrdinal?: number;
+	specVersion: number;
+	decision: "approved" | "rejected";
+	actor: string;
+	createdAt: string;
+}
+
 export interface DashboardQuickFixProposal {
 	id: string;
 	caseId: string;
@@ -468,6 +479,7 @@ export interface DashboardSnapshot {
 	memory: DashboardMemory[];
 	specifications: DashboardSpecification[];
 	approvals: DashboardApproval[];
+	workItemApprovals?: DashboardWorkItemApproval[];
 	quickFixProposals?: DashboardQuickFixProposal[];
 	feedback: DashboardFeedback[];
 	questionBriefs: DashboardQuestionBrief[];

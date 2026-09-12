@@ -18,6 +18,7 @@ export type BackgroundRequest =
 	| { version: 1; id: string; type: "case.action"; caseId: string; action: CaseAction; comment?: string }
 	| { version: 1; id: string; type: "spec.feedback"; caseId: string; feedback: string }
 	| { version: 1; id: string; type: "spec.approve"; caseId: string; specVersion: number; permissions: string[] }
+	| { version: 1; id: string; type: "work-item.approve"; caseId: string; workItemId: string; specVersion: number }
 	| {
 			version: 1;
 			id: string;
@@ -98,6 +99,12 @@ export function validateBackgroundRequest(value: unknown): string | undefined {
 				request.permissions.every((item) => text(item, "permission") === undefined)
 				? undefined
 				: "permissions must be an array of non-empty strings";
+		case "work-item.approve":
+			if (requiredFields(request, ["caseId", "workItemId"]))
+				return requiredFields(request, ["caseId", "workItemId"]);
+			return Number.isSafeInteger(request.specVersion) && Number(request.specVersion) > 0
+				? undefined
+				: "specVersion must be a positive integer";
 		case "classifier.correct": {
 			if (requiredFields(request, ["caseId"])) return requiredFields(request, ["caseId"]);
 			if (!request.classification || typeof request.classification !== "object")

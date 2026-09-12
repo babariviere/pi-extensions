@@ -26,3 +26,30 @@ test("evidence reproduction accepts only a durable manifest id", () => {
 		/manifestId/,
 	);
 });
+
+test("work-item approval requires a case, exact item, and specification version", () => {
+	assert.equal(
+		validateBackgroundRequest({
+			version: 1,
+			id: "approve-item",
+			type: "work-item.approve",
+			caseId: "case-1",
+			workItemId: "item-1",
+			specVersion: 2,
+		}),
+		undefined,
+	);
+	assert.match(
+		String(
+			validateBackgroundRequest({
+				version: 1,
+				id: "approve-item",
+				type: "work-item.approve",
+				caseId: "case-1",
+				workItemId: "item-1",
+				specVersion: 0,
+			}),
+		),
+		/specVersion/,
+	);
+});
