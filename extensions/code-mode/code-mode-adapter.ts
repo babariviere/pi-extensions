@@ -40,7 +40,7 @@ export const createInteractiveCodeModeRegistry = async (
 						: provider === "web" || provider === "mcp"
 							? "external"
 							: "none",
-				capabilities: [`${provider}.${action.namespace ?? "use"}`],
+				capabilities: [`${provider}.use`],
 				execute: (input, context) => options.invoke(action.ref, input as Record<string, unknown>, context.signal),
 			});
 		}
