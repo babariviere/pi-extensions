@@ -1,6 +1,7 @@
-import { copyFileSync, chmodSync, lstatSync, mkdirSync } from "node:fs";
+import { closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, writeSync } from "node:fs";
 import { basename, isAbsolute, join, resolve } from "node:path";
 import type { AgentRole, BackgroundAgentsConfig, ProviderProfile } from "../../types.ts";
+import { readSecureCredential } from "../credentials.ts";
 
 export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
 
@@ -99,28 +100,60 @@ export interface PreparedRuntimeProfile extends SelectedRuntimeProfile {
 	credentialFiles: string[];
 }
 
+function privateDirectory(path: string, field: string): void {
+	let existed = true;
+	try {
+		const current = lstatSync(path);
+		if (current.isSymbolicLink() || !current.isDirectory())
+			throw new Error(`${field} must be a non-symlink directory`);
+		if (current.uid !== process.getuid?.()) throw new Error(`${field} must be owned by the controller user`);
+		if ((current.mode & 0o777) !== 0o700) throw new Error(`${field} must have exact owner-only mode 0700`);
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+		existed = false;
+	}
+	if (!existed) mkdirSync(path, { recursive: true, mode: 0o700 });
+	const current = lstatSync(path);
+	if (current.isSymbolicLink() || !current.isDirectory()) throw new Error(`${field} must be a non-symlink directory`);
+	if (current.uid !== process.getuid?.()) throw new Error(`${field} must be owned by the controller user`);
+	if ((current.mode & 0o777) !== 0o700) throw new Error(`${field} must have exact owner-only mode 0700`);
+}
+
+function copyCredential(sourcePath: string, destination: string, ownerUid: number | undefined): void {
+	const bytes = readSecureCredential(sourcePath, ownerUid);
+	let descriptor: number | undefined;
+	try {
+		descriptor = openSync(
+			destination,
+			constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
+			0o600,
+		);
+		let offset = 0;
+		while (offset < bytes.length) offset += writeSync(descriptor, bytes, offset, bytes.length - offset);
+		const stat = fstatSync(descriptor);
+		if (!stat.isFile() || stat.uid !== ownerUid || (stat.mode & 0o777) !== 0o600)
+			throw new Error(`staged credential is not a secure regular file: ${destination}`);
+	} finally {
+		if (descriptor !== undefined) closeSync(descriptor);
+	}
+}
+
 /** Copy only explicitly configured credentials into the attempt-owned profile. */
 export function prepareRuntimeProfile(
 	selected: SelectedRuntimeProfile,
 	options: { copyCredentials?: boolean } = {},
 ): PreparedRuntimeProfile {
-	mkdirSync(selected.agentDir, { recursive: true, mode: 0o700 });
-	mkdirSync(selected.sessionDir, { recursive: true, mode: 0o700 });
-	chmodSync(selected.agentDir, 0o700);
-	chmodSync(selected.sessionDir, 0o700);
+	privateDirectory(selected.agentDir, "isolated agent directory");
+	privateDirectory(selected.sessionDir, "session directory");
 	const credentialFiles: string[] = [];
 	const names = new Set<string>();
 	for (const source of options.copyCredentials === false ? [] : selected.profile.authFiles) {
 		const sourcePath = requiredPath(source, "credential file");
-		const stat = lstatSync(sourcePath);
-		if (!stat.isFile()) throw new Error(`credential file is not a regular file: ${sourcePath}`);
-		if ((stat.mode & 0o077) !== 0) throw new Error(`credential file is too permissive: ${sourcePath}`);
 		const name = basename(sourcePath);
 		if (names.has(name)) throw new Error(`credential files have duplicate name: ${name}`);
 		names.add(name);
 		const destination = join(selected.agentDir, name);
-		copyFileSync(sourcePath, destination);
-		chmodSync(destination, 0o600);
+		copyCredential(sourcePath, destination, process.getuid?.());
 		credentialFiles.push(destination);
 	}
 	return {

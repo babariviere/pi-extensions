@@ -18,13 +18,28 @@ export async function runBackgroundAgentsController(configPath?: string): Promis
 	const stop = async () => {
 		if (stopping) return stopping;
 		stopping = (async () => {
-			await controller.stop();
-			controller.database.close();
+			try {
+				await controller.stop();
+			} finally {
+				controller.database.close();
+			}
 		})();
 		return stopping;
 	};
-	process.once("SIGINT", () => void stop().then(() => process.exit(0)));
-	process.once("SIGTERM", () => void stop().then(() => process.exit(0)));
+	process.once(
+		"SIGINT",
+		() =>
+			void stop()
+				.then(() => process.exit(0))
+				.catch(() => process.exit(1)),
+	);
+	process.once(
+		"SIGTERM",
+		() =>
+			void stop()
+				.then(() => process.exit(0))
+				.catch(() => process.exit(1)),
+	);
 	await controller.start();
 	return controller;
 }

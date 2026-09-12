@@ -36,6 +36,7 @@ import {
 import { createEvidenceManifest, formatEvidenceMarkdown } from "./verification/evidence.ts";
 import type { ReplayResult } from "./verification/reproduce.ts";
 import { verifyReplayAndGithub } from "./verification/verifier.ts";
+import { herdr as defaultHerdr } from "../../spindle/agents/herdr-client.ts";
 
 const require = createRequire(import.meta.url);
 export const VERIFICATION_RESULT_VERSION = 1 as const;
@@ -102,6 +103,7 @@ export interface ProductionAttemptRunnerOptions {
 	/** Injected for tests; production supplies the argv-only GitHub adapter from the controller entrypoint. */
 	githubClient?: GitHubEffectClient;
 	githubClientFactory?: (repository: GitRepository) => GitHubEffectClient;
+	closeTab?: (tabId: string) => Promise<void>;
 }
 
 const ROLE_ORDINAL: Record<AgentRole, number> = {
@@ -622,9 +624,34 @@ export class ProductionAttemptRunner {
 					this.options.launch ? {} : undefined,
 				),
 			);
-			const completion = await (
-				this.options.waitForUnit ?? ((unit, timeoutMs) => waitForTransientService(unit, { timeoutMs }))
-			)(launched.unit, this.options.config.systemd.maxRuntimeMs);
+			let completion: TransientServiceCompletion | undefined = undefined;
+			try {
+				completion = await (
+					this.options.waitForUnit ?? ((unit, timeoutMs) => waitForTransientService(unit, { timeoutMs }))
+				)(launched.unit, this.options.config.systemd.maxRuntimeMs);
+			} finally {
+				database.createRuntimeCleanupIntents({
+					attemptId: claim.attemptId,
+					unit: launched.unit,
+					tabId: launched.tabId,
+					reason: "terminal attempt runtime cleanup",
+				});
+				if (completion?.state !== "timed-out") database.markRuntimeCleanupIntent("unit", launched.unit);
+				const closeTab = this.options.closeTab ?? (!this.options.launch ? defaultHerdr.closeTab : undefined);
+				if (closeTab && launched.tabId) {
+					try {
+						await closeTab(launched.tabId);
+						database.markRuntimeCleanupIntent("tab", launched.tabId);
+					} catch (error) {
+						database.createRuntimeCleanupIntents({
+							attemptId: claim.attemptId,
+							tabId: launched.tabId,
+							reason: `attempt tab cleanup failed: ${error instanceof Error ? error.message : String(error)}`,
+						});
+					}
+				}
+			}
+			if (!completion) throw new Error("attempt unit completion was unavailable");
 			assertAuthorized();
 			if (completion.state !== "succeeded")
 				return { state: "failed", failure: completion.reason ?? "attempt unit failed" };
@@ -865,6 +892,17 @@ export class ProductionAttemptRunner {
 							),
 						);
 				} else publish(() => new SpecificationWorkflow(database).start(job.case_id));
+			} else if (investigation.autonomy === "needs-human") {
+				const state = database.get<{ state: string }>("SELECT state FROM cases WHERE id = ?", job.case_id)?.state;
+				if (state === "investigating")
+					publish(() =>
+						database.transitionCase(
+							job.case_id,
+							"blocked",
+							"controller",
+							"investigator autonomy requires human review",
+						),
+					);
 			}
 			return;
 		}

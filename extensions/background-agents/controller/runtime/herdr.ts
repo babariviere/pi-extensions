@@ -38,6 +38,37 @@ export interface HerdrAttemptHost {
 	waitForShellReady(paneId: string, timeoutMs: number, signal?: AbortSignal): Promise<{ ok: boolean; error?: string }>;
 	runCommand(paneId: string, argv: string[], signal?: AbortSignal): Promise<{ ok: boolean; error?: string }>;
 	closeTab(tabId: string): Promise<void>;
+	stopSystemdUnit?(unit: string): Promise<void>;
+}
+
+async function cleanupLaunchResources(
+	options: HerdrAttemptOptions,
+	host: HerdrAttemptHost,
+	unit: string,
+	tabId?: string,
+): Promise<void> {
+	options.database.createRuntimeCleanupIntents({
+		attemptId: options.attemptId,
+		unit,
+		...(tabId ? { tabId } : {}),
+		reason: "attempt launch authorization was invalidated",
+	});
+	if (tabId) {
+		try {
+			await host.closeTab(tabId);
+			options.database.markRuntimeCleanupIntent("tab", tabId);
+		} catch {
+			// The durable intent remains pending for controller recovery.
+		}
+	}
+	if (host.stopSystemdUnit) {
+		try {
+			await host.stopSystemdUnit(unit);
+			options.database.markRuntimeCleanupIntent("unit", unit);
+		} catch {
+			// The durable intent remains pending for controller recovery.
+		}
+	}
 }
 
 export interface HerdrAttemptLaunchResult {
@@ -154,11 +185,23 @@ export async function launchAttemptThroughHerdr(
 		credentialFiles: [...runtime.credentialFiles, ...(options.preflight?.credentialFiles ?? [])],
 	});
 	const host = dependencies.herdr ?? (defaultHerdr as unknown as HerdrAttemptHost);
-	const tab = await host.createTab(
-		`background ${options.caseId} ${options.role}`,
-		undefined,
-		options.worktreeDirectory,
-	);
+	if (
+		!options.database.attemptMayPublish(
+			options.attemptId,
+			options.database.get<{ stop_epoch: number }>("SELECT stop_epoch FROM attempts WHERE id = ?", options.attemptId)
+				?.stop_epoch ?? -1,
+		)
+	) {
+		await cleanupLaunchResources(options, host, unit);
+		throw new Error("attempt launch authorization was invalidated before tab creation");
+	}
+	let tab: HerdrTab | undefined;
+	try {
+		tab = await host.createTab(`background ${options.caseId} ${options.role}`, undefined, options.worktreeDirectory);
+	} catch (error) {
+		await cleanupLaunchResources(options, host, unit);
+		throw error;
+	}
 	if (!tab?.tabId) throw new Error("Herdr did not return a tab");
 	options.database.run(
 		"UPDATE attempts SET systemd_unit = ?, tab_id = ?, worktree = ? WHERE id = ?",
@@ -168,7 +211,7 @@ export async function launchAttemptThroughHerdr(
 		options.attemptId,
 	);
 	if (!tab.rootPaneId) {
-		await host.closeTab(tab.tabId);
+		await cleanupLaunchResources(options, host, unit, tab.tabId);
 		throw new Error("Herdr did not return a root pane");
 	}
 	options.database.run(
@@ -181,12 +224,22 @@ export async function launchAttemptThroughHerdr(
 	);
 	const ready = await host.waitForShellReady(tab.rootPaneId, dependencies.readyTimeoutMs ?? 10_000);
 	if (!ready.ok) {
-		await host.closeTab(tab.tabId);
+		await cleanupLaunchResources(options, host, unit, tab.tabId);
 		throw new Error(`Herdr pane is not ready: ${ready.error ?? "unknown error"}`);
+	}
+	if (
+		!options.database.attemptMayPublish(
+			options.attemptId,
+			options.database.get<{ stop_epoch: number }>("SELECT stop_epoch FROM attempts WHERE id = ?", options.attemptId)
+				?.stop_epoch ?? -1,
+		)
+	) {
+		await cleanupLaunchResources(options, host, unit, tab.tabId);
+		throw new Error("attempt launch authorization was invalidated before systemd launch");
 	}
 	const launched = await host.runCommand(tab.rootPaneId, command);
 	if (!launched.ok) {
-		await host.closeTab(tab.tabId);
+		await cleanupLaunchResources(options, host, unit, tab.tabId);
 		throw new Error(`systemd service launch failed: ${launched.error ?? "unknown error"}`);
 	}
 	return {

@@ -1,10 +1,10 @@
-import { lstatSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import type { CredentialFileStats, CredentialStat } from "../../config.ts";
+import type { CredentialStat } from "../../config.ts";
 import type { BackgroundAgentsDatabase } from "../database.ts";
 import type { AgentRole, ProviderProfile } from "../../types.ts";
 import { fetchUsageSnapshot, isOAuthToken } from "../../../usage/source.ts";
 import type { RateWindow, UsageProvider, UsageSnapshot } from "../../../usage/protocol.ts";
+import { readSecureCredentialText } from "../credentials.ts";
 
 export interface ProfileUsageSnapshot {
 	profileId: string;
@@ -44,24 +44,9 @@ function clockNow(clock: UsageClock): Date {
 }
 
 export interface ProfileCredentialReadOptions {
+	/** Retained for source compatibility. Secure reads never use path-based stat results. */
 	stat?: CredentialStat;
 	ownerUid?: number;
-}
-
-function secureCredential(
-	path: string,
-	stat: CredentialStat,
-	ownerUid: number | undefined,
-): CredentialFileStats | undefined {
-	if (ownerUid === undefined) return undefined;
-	try {
-		const value = stat(path);
-		if (value.isSymbolicLink() || !value.isFile() || value.uid !== ownerUid || (value.mode & 0o077) !== 0)
-			return undefined;
-		return value;
-	} catch {
-		return undefined;
-	}
 }
 
 /** Read only the selected profile's credential files. Values never enter durable state. */
@@ -69,25 +54,11 @@ export function loadProfileSubscriptionToken(
 	profile: ProviderProfile,
 	options: ProfileCredentialReadOptions = {},
 ): string | undefined {
-	const stat = options.stat ?? lstatSync;
 	const ownerUid = options.ownerUid ?? process.getuid?.();
-	try {
-		const agentDir = stat(profile.agentDir);
-		if (
-			agentDir.isSymbolicLink() ||
-			!agentDir.isDirectory?.() ||
-			agentDir.uid !== ownerUid ||
-			(agentDir.mode & 0o077) !== 0
-		)
-			return undefined;
-	} catch {
-		return undefined;
-	}
 	const paths = [...profile.authFiles, join(profile.agentDir, "auth.json")];
 	for (const path of paths) {
-		if (!secureCredential(path, stat, ownerUid)) continue;
 		try {
-			const value = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+			const value = JSON.parse(readSecureCredentialText(path, ownerUid)) as Record<string, unknown>;
 			const anthropic = value.anthropic as Record<string, unknown> | undefined;
 			const openai = value["openai-codex"] as Record<string, unknown> | undefined;
 			const tokens = value.tokens as Record<string, unknown> | undefined;
@@ -204,11 +175,7 @@ export class ProfileUsageController {
 		this.collector =
 			typeof options.collector === "function"
 				? { collect: options.collector }
-				: (options.collector ??
-					new DefaultProfileUsageCollector({
-						stat: options.credentialStat,
-						ownerUid: options.credentialOwnerUid,
-					}));
+				: (options.collector ?? new DefaultProfileUsageCollector({ ownerUid: options.credentialOwnerUid }));
 		for (const profile of profiles)
 			database.upsertProviderProfileState({
 				profileId: profile.id,

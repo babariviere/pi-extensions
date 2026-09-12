@@ -1,4 +1,3 @@
-import { readFileSync } from "node:fs";
 import type {
 	AgentRole,
 	AttemptState,
@@ -38,6 +37,7 @@ import { reproduceEvidenceOperation } from "./verification/reproduce.ts";
 import { BackgroundSocketServer } from "./socket-server.ts";
 import { inspectTransientService, stopTransientService } from "./runtime/systemd.ts";
 import { herdr as defaultHerdr } from "../../spindle/agents/herdr-client.ts";
+import { readSecureCredentialText } from "./credentials.ts";
 
 export type FetchLike = (input: string | URL, init?: RequestInit) => Promise<Response>;
 
@@ -104,7 +104,7 @@ function dashboardRows<T>(rows: T[]): T[] {
 function credentialObject(path: string | undefined): Record<string, unknown> {
 	if (!path) throw new Error("a credential file reference is required");
 	try {
-		const value: unknown = JSON.parse(readFileSync(path, "utf8"));
+		const value: unknown = JSON.parse(readSecureCredentialText(path));
 		if (typeof value === "string") return { token: value };
 		if (!value || typeof value !== "object" || Array.isArray(value))
 			throw new Error("credential file must contain an object");
@@ -528,12 +528,31 @@ export class BackgroundAgentsController {
 	async stop(): Promise<void> {
 		if (!this.started || this.stopping) return;
 		this.stopping = true;
+		const failures: string[] = [];
 		for (const timer of this.timers.splice(0)) clearInterval(timer);
-		for (const source of this.sourceAdapters) if (source.stop) await source.stop();
-		await this.socket?.stop();
+		try {
+			if (!this.providerScheduler.emergencyStop) this.providerScheduler.setEmergencyStop(true, this.operator);
+			failures.push(...(await this.reconcileEmergencyStopAttempts()));
+			failures.push(...(await this.reconcileRuntimeCleanupIntents()));
+		} catch (error) {
+			failures.push(`runtime shutdown: ${error instanceof Error ? error.message : String(error)}`);
+		}
+		for (const source of this.sourceAdapters)
+			if (source.stop)
+				try {
+					await source.stop();
+				} catch (error) {
+					failures.push(`source shutdown: ${error instanceof Error ? error.message : String(error)}`);
+				}
+		try {
+			await this.socket?.stop();
+		} catch (error) {
+			failures.push(`socket shutdown: ${error instanceof Error ? error.message : String(error)}`);
+		}
 		this.socket = undefined;
 		this.started = false;
 		this.stopping = false;
+		if (failures.length > 0) throw new Error(`Controller shutdown completed with failures: ${failures.join("; ")}`);
 	}
 	private async refreshUsage(): Promise<void> {
 		try {
@@ -542,6 +561,35 @@ export class BackgroundAgentsController {
 			/* unavailable profiles remain unavailable */
 		}
 		await this.reconcileUsageStopIntents();
+		await this.reconcileRuntimeCleanupIntents();
+	}
+	private async reconcileRuntimeCleanupIntents(): Promise<string[]> {
+		const failures: string[] = [];
+		for (const intent of this.database.listPendingRuntimeCleanupIntents()) {
+			try {
+				if (intent.kind === "unit") {
+					await this.runtimeControls.terminateSystemdUnit(intent.resourceId);
+					if (!(await this.runtimeControls.isSystemdUnitStopped(intent.resourceId)))
+						throw new Error(`systemd unit remains active: ${intent.resourceId}`);
+				} else {
+					if (!this.runtimeControls.closeTab || !this.runtimeControls.isTabClosed)
+						throw new Error(`tab cleanup is unavailable: ${intent.resourceId}`);
+					await this.runtimeControls.closeTab(intent.resourceId);
+					if (!(await this.runtimeControls.isTabClosed(intent.resourceId)))
+						throw new Error(`tab remains active: ${intent.resourceId}`);
+				}
+				this.database.markRuntimeCleanupIntent(
+					intent.kind,
+					intent.resourceId,
+					this.options.clock?.() ?? new Date(),
+				);
+			} catch (error) {
+				failures.push(
+					`${intent.kind} cleanup ${intent.resourceId}: ${error instanceof Error ? error.message : String(error)}`,
+				);
+			}
+		}
+		return failures;
 	}
 	private async reconcileUsageStopIntents(): Promise<void> {
 		for (const intent of this.database.listPendingUsageStopIntents()) {
@@ -865,6 +913,7 @@ export class BackgroundAgentsController {
 	}
 	private async recoveryTick(): Promise<void> {
 		await this.reconcileUsageStopIntents();
+		await this.reconcileRuntimeCleanupIntents();
 		if (this.providerScheduler.emergencyStop) await this.reconcileEmergencyStopAttempts();
 		for (const attempt of this.database.all<{ id: string }>("SELECT id FROM attempts WHERE state = 'running'")) {
 			try {

@@ -105,6 +105,17 @@ export function jsonBoundary(value: unknown, field: string): string {
 	return encoded;
 }
 
+export interface RuntimeCleanupIntent {
+	id: string;
+	attemptId?: string;
+	kind: "unit" | "tab";
+	resourceId: string;
+	reason: string;
+	status: "pending" | "complete";
+	createdAt: string;
+	updatedAt: string;
+}
+
 function requiredString(value: unknown, field: string): string {
 	if (typeof value !== "string" || value.trim() === "") throw new Error(`${field} must be a non-empty string`);
 	return value.trim();
@@ -505,6 +516,66 @@ export class BackgroundAgentsDatabase {
 
 	close(): void {
 		if (this.database.isOpen) this.database.close();
+	}
+
+	createRuntimeCleanupIntents(input: {
+		attemptId?: string;
+		unit?: string;
+		tabId?: string;
+		reason: string;
+		now?: Date;
+	}): void {
+		const now = utcTimestamp(input.now, "now");
+		this.withTransaction(() => {
+			for (const [kind, resourceId] of [
+				["unit", input.unit],
+				["tab", input.tabId],
+			] as const) {
+				if (!resourceId) continue;
+				this.run(
+					"INSERT INTO runtime_cleanup_intents (id, attempt_id, kind, resource_id, reason, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?) ON CONFLICT(attempt_id, kind, resource_id) DO UPDATE SET reason = excluded.reason, status = 'pending', updated_at = excluded.updated_at",
+					randomUUID(),
+					input.attemptId ?? null,
+					kind,
+					resourceId,
+					requiredString(input.reason, "reason"),
+					now,
+					now,
+				);
+			}
+		});
+	}
+
+	createRuntimeCleanupIntent(input: Parameters<BackgroundAgentsDatabase["createRuntimeCleanupIntents"]>[0]): void {
+		this.createRuntimeCleanupIntents(input);
+	}
+
+	listPendingRuntimeCleanupIntents(): RuntimeCleanupIntent[] {
+		return this.all<Row>(
+			"SELECT id, attempt_id, kind, resource_id, reason, status, created_at, updated_at FROM runtime_cleanup_intents WHERE status = 'pending' ORDER BY created_at, id",
+		).map((row) => ({
+			id: rowString(row, "id"),
+			...(row.attempt_id == null ? {} : { attemptId: rowString(row, "attempt_id") }),
+			kind: rowString(row, "kind") as "unit" | "tab",
+			resourceId: rowString(row, "resource_id"),
+			reason: rowString(row, "reason"),
+			status: rowString(row, "status") as "pending" | "complete",
+			createdAt: rowString(row, "created_at"),
+			updatedAt: rowString(row, "updated_at"),
+		}));
+	}
+
+	listPendingRuntimeCleanup(): RuntimeCleanupIntent[] {
+		return this.listPendingRuntimeCleanupIntents();
+	}
+
+	markRuntimeCleanupIntent(kind: "unit" | "tab", resourceId: string, now = new Date()): void {
+		this.run(
+			"UPDATE runtime_cleanup_intents SET status = 'complete', updated_at = ? WHERE kind = ? AND resource_id = ? AND status = 'pending'",
+			utcTimestamp(now, "now"),
+			kind,
+			requiredString(resourceId, "resourceId"),
+		);
 	}
 
 	exec(sql: string): void {

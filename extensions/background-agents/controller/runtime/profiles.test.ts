@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { test } from "node:test";
@@ -37,6 +37,29 @@ test("selects a role-safe isolated profile and stages credentials without return
 			() => selectRuntimeProfile(config, "investigator", { attemptDir: join(root, "attempt"), tools: ["bash"] }),
 			/not tool-capable/,
 		);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("rejects permissive profile directories and existing destination symlinks", () => {
+	const root = mkdtempSync(join(tmpdir(), "background-runtime-profile-secure-"));
+	try {
+		const source = join(root, "auth.json");
+		writeFileSync(source, '{"token":"secret"}');
+		chmodSync(source, 0o600);
+		const config = normalizeBackgroundAgentsConfig({
+			profiles: [{ id: "p", provider: "openai", agentDir: root, authFiles: [source], allowedModels: ["model"] }],
+		});
+		const attempt = join(root, "attempt");
+		const selected = selectRuntimeProfile(config, "worker", { attemptDir: attempt });
+		mkdirSync(selected.agentDir, { recursive: true, mode: 0o700 });
+		chmodSync(selected.agentDir, 0o755);
+		assert.throws(() => prepareRuntimeProfile(selected), /0700/);
+		chmodSync(selected.agentDir, 0o700);
+		mkdirSync(selected.sessionDir, { recursive: true, mode: 0o700 });
+		symlinkSync(source, join(selected.agentDir, "auth.json"));
+		assert.throws(() => prepareRuntimeProfile(selected), /EEXIST|secure/);
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}

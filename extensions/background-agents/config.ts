@@ -234,6 +234,8 @@ function validateCredentialPath(path: string, field: string, ownerUid: number | 
 	if (ownerUid === undefined) throw new Error(`${field} owner cannot be verified: ${path}`);
 	if (stats.uid !== ownerUid) throw new Error(`${field} must be owned by the controller user: ${path}`);
 	if ((stats.mode & 0o077) !== 0) throw new Error(`${field} must not be group- or world-accessible: ${path}`);
+	if ((stats.mode & 0o777) !== 0o400 && (stats.mode & 0o777) !== 0o600)
+		throw new Error(`${field} must use owner-only non-executable mode 0400 or 0600: ${path}`);
 }
 
 function validateProfileAgentDirectory(
@@ -253,6 +255,7 @@ function validateProfileAgentDirectory(
 	if (ownerUid === undefined) throw new Error(`${field} owner cannot be verified: ${path}`);
 	if (stats.uid !== ownerUid) throw new Error(`${field} must be owned by the controller user: ${path}`);
 	if ((stats.mode & 0o077) !== 0) throw new Error(`${field} must not be group- or world-accessible: ${path}`);
+	if ((stats.mode & 0o777) !== 0o700) throw new Error(`${field} must use exact owner-only mode 0700: ${path}`);
 }
 
 function validateConfig(
