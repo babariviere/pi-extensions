@@ -4,7 +4,7 @@ Use this reference for API signatures and runtime behavior. For MCP or subagent 
 
 One type-checked TS program in a fresh isolated QuickJS sandbox. Only the `return` value reaches the model; `print()`/`console.log` go to the activity widget. `π` is not a tool.
 
-Available globals: `pi`, `extensions`, and `tools` (full code mode only), `mcp`, `agents`, `mapLimit`, `print`, `console`, `π`, `τ`, `process`, the timer family (`setTimeout` / `clearTimeout` / `setInterval` / `clearInterval`), and the host APIs listed below. Nothing else exists: there is no `memory`, `schema`, `compact`, `mesh`, `council`, `rlm`, `agent()`, `budget`, or `workflow` (and no bare `parallel` / `pipeline` / `phase` / `log` aliases).
+Available globals: `pi`, explicit `web`, and `tools` (full code mode only), `mcp`, `agents`, `mapLimit`, `print`, `console`, `π`, `τ`, `process`, the timer family (`setTimeout` / `clearTimeout` / `setInterval` / `clearInterval`), and the host APIs listed below. Nothing else exists: there is no `memory`, `schema`, `compact`, `mesh`, `council`, `rlm`, `agent()`, `budget`, or `workflow` (and no bare `parallel` / `pipeline` / `phase` / `log` aliases).
 
 The language level is ES2025: `Object.groupBy`, `Map.groupBy`, `Promise.withResolvers`, `Promise.try`, the `Set` combinators (`union`, `intersection`, `difference`, `isSubsetOf`), the iterator helpers (`values().map(...).toArray()`), `RegExp.escape`, `Array.prototype.toSorted`/`with`/`toSpliced`, `Float16Array` and `Error.isError` are all available and typed. `Array.fromAsync`, `JSON.rawJSON`, `Symbol.dispose` and `Temporal` are not.
 
@@ -23,7 +23,7 @@ These are polyfilled, and injected only when your program mentions them by name 
 | `queueMicrotask` | |
 | `performance.now` | milliseconds since program start, wall clock, not monotonic |
 
-There is deliberately no `fetch`, no `crypto.subtle` and no `WebAssembly`: the audited host-call table (`pi.*`, `extensions.*`, `mcp.*`) is meant to be the only route out of the sandbox. For network access use a `pi.bash` command or an MCP tool.
+There is deliberately no `fetch`, no `crypto.subtle` and no `WebAssembly`: the audited host-call table (`pi.*`, `web.*`, `mcp.*`) is meant to be the only route out of the sandbox. For network access use an explicit `web.*` capability or an MCP tool.
 
 `Intl` and `Atomics` do not exist, and TypeScript's `lib.es5` declares both, so they type-check and then fail at runtime. Both now fail with a `NotSupportedError` naming the property rather than an undefined-property `TypeError`.
 
@@ -128,22 +128,22 @@ return index.filter((entry) => entry.path.endsWith(".ts")).length;
 ```
 
 
-## `extensions` — tools registered by sibling extensions (full code mode only)
+## `web` — explicitly registered web capabilities (full code mode only)
 
-`extensions.<tool>(args)` resolves to `{content:Array<{type,text?,...}>,text:string,details?,isError:boolean,terminate?,source:{path,source,scope,origin,baseDir?}}`. Read `.text` for the output. In full code mode these tools are hidden from the model's direct tool list, so `extensions.*` is the only way to reach them.
+Only `web.search(args)` and `web.fetch(args)` are registered by this extension. They are available when capture is enabled, and are absent otherwise. Captured sibling tools are never exposed through a generic namespace. Discover their schemas with `tools.describe` or `tools.search` before calling them.
 
 ## `tools` — cross-provider discovery + generic dispatch (full code mode only)
 
-`tools` owns no tools; it is a top-level global that enumerates and invokes actions across every provider (pi, extensions, mcp, agents). Use it to discover names/schemas at runtime, then call them on their own namespace. Search accepts natural-language terms for snake_case names, so `tools.search({ query: "web search" })` finds `web_search`. For recovery only, `extensions.tools` aliases this discovery API. Prefer `tools.*` in new code.
+`tools` owns no tools; it is a top-level global that enumerates and invokes actions across every registered provider (pi, web, mcp, agents and trusted custom providers). Use it to discover names and schemas at runtime, then call them on their own namespace. Search accepts natural-language terms for snake_case names, so `tools.search({ query: "web search" })` finds `web.search`. No sibling-tool compatibility alias exists.
 
 - `tools.providers()` → `[{name, description}]` for every registered provider.
-- `tools.list({provider?, namespace?, query?, limit?})` → `SpindleAction[]` (`ref, provider, name, description, inputSchema, namespace?`). No args lists everything, including captured `extensions.*` tools that are hidden from the direct tool list.
+- `tools.list({provider?, namespace?, query?, limit?})` → `SpindleAction[]` (`ref, provider, name, description, inputSchema, namespace?`). No args lists the currently registered providers.
 - `tools.catalog({provider?, limit?})` → provider/action head tree (navigation metadata).
 - `tools.search({query, limit?})` → ranked `SpindleAction[]`.
 - `tools.describe({ref})` → one action's full descriptor; read `inputSchema` before calling.
-- `tools.call({ref, args?})` → invoke a ref computed at runtime (same path as `extensions.<tool>()`/`pi.<tool>()`). Prefer direct property calls for statically known tools.
+- `tools.call({ref, args?})` → invoke a ref computed at runtime (same path as `web.*`, `pi.*`, or `mcp.*`). Prefer direct property calls for statically known tools.
 
-Refs are namespaced (`extensions.<tool>`, `pi.grep`, `mcp.<server>.<tool>`). Calling a core-tool name on `tools` (e.g. `tools.read(...)`) throws with a hint to use `pi.read(...)`.
+Refs are namespaced (`web.search`, `web.fetch`, `pi.grep`, `mcp.<server>.<tool>`). Calling a core-tool name on `tools` (e.g. `tools.read(...)`) throws with a hint to use `pi.read(...)`).
 
 ## `mcp` tools
 

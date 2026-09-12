@@ -13,7 +13,7 @@
  * recovered from the child transcript by the parent (see `run.ts`
  * `readLastAssistantText`). This is more reliable than a `submit_result` tool
  * the agent must remember to call, especially in full code mode where such a
- * tool is captured and hidden behind the `extensions.*` namespace.
+ * tool is captured and exposed only through explicitly registered providers.
  */
 
 import { type ExtensionAPI } from "@earendil-works/pi-coding-agent";

@@ -87,7 +87,7 @@ export function outputPathFor(cwd: string, runDirDefault: string, override?: str
  * A run's result is its final assistant message, read from the child pi session
  * transcript. This is the primary (and only) result channel: agents reliably
  * end a turn with a final message, whereas a dedicated submit tool is easy to
- * forget and, in full code mode, is hidden behind the `extensions.*` namespace.
+ * forget and, in full code mode, is hidden behind the explicit provider namespace.
  * Returns the concatenated text of the last assistant message that had any text
  * (tool-only final turns fall back to the previous text turn), or undefined
  * when the transcript is unreadable or has no assistant text.

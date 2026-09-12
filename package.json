@@ -41,7 +41,7 @@
     "typescript": "^6.0.3",
     "ws": "^8.21.0",
     "yaml": "^2.9.0",
-    "@babariviere/code-mode": "git+https://github.com/babariviere/code-mode.git#a51f2728dd395c4d8a4140a9072786c6e1003f04"
+    "@babariviere/code-mode": "git+https://github.com/babariviere/code-mode.git#580945c0feb2e9129b7caec5f137680fb54ceaef"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.13",
