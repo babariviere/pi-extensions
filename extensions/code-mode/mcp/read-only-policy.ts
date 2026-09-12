@@ -8,7 +8,7 @@
  * enforcement, applied at the only two places an MCP tool call can leave the
  * sandbox (`providers/mcp-client-provider.ts` for `mcp.*`, and
  * `providers/captured-tools-provider.ts` for a pi-mcp-adapter gateway or direct
- * tool reached as `extensions.*` when that extension is also installed).
+ * tool reached through the explicit `web.*` provider).
  *
  * Classification never asks the model at call time. It is decided, in order, by:
  *

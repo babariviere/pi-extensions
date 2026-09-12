@@ -361,15 +361,6 @@ export class ActionRegistry {
 	 */
 	async guestTypeSources(context: SpindleInvocationContext): Promise<SpindleGuestTypeSources> {
 		const sources: SpindleGuestTypeSources = {};
-		const extensions = this.#providers.get("extensions");
-		if (extensions) {
-			const descriptors = await extensions.list({ limit: 1_000 }, context);
-			const extensionTools = descriptors.map((descriptor) => ({
-				name: descriptor.name,
-				inputSchema: descriptor.inputSchema,
-			}));
-			if (extensionTools.length > 0) sources.extensionTools = extensionTools;
-		}
 		// The MCP section is optional and independent: an MCP provider that cannot
 		// supply schemas, or a cache miss, must leave the loose declarations rather
 		// than fail the execution or provoke a connect.

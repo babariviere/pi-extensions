@@ -106,7 +106,6 @@ export interface SpindleNamedActionTypeSource {
  * been listed contributes nothing and keeps the loose declarations.
  */
 export interface SpindleGuestTypeSources {
-	extensionTools?: SpindleNamedActionTypeSource[];
 	mcpServers?: SpindleMcpServerTypeSource[];
 }
 
@@ -133,7 +132,6 @@ export const isMcpTypeSourceProvider = (value: unknown): value is SpindleMcpType
  * Values are full replacement text (helper interfaces + declare).
  */
 export interface SpindleDynamicGuestDeclarations {
-	extensions?: string;
 	mcp?: string;
 }
 

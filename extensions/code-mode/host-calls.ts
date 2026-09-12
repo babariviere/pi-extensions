@@ -50,7 +50,7 @@ export interface HostCallContext {
 	registry: ActionRegistry;
 	activity: import("./activity/store.ts").SpindleActivityStore | undefined;
 	parentToolCallId: string;
-	/** Effective full-code mode; gates pi/extensions visibility in discovery. */
+	/** Effective full-code mode; gates Pi core visibility in discovery. */
 	fullCodeMode: boolean;
 	/** The registry-shaped invocation context (base context plus the call's signal). */
 	registryContext(signal: AbortSignal): SpindleInvocationContext & { signal: AbortSignal };
@@ -64,7 +64,7 @@ export interface HostCallContext {
 	 * records the key and the size only.
 	 */
 	noteState(note: SpindleStateNote): void;
-	/** Refuse pi/extensions refs when full-code mode is off. */
+	/** Refuse Pi core refs when full-code mode is off. */
 	guardFullCodeRef(ref: string): void;
 	/** Trace one host call through its stages. */
 	traceAttempt<T>(

@@ -1,7 +1,7 @@
 /**
  * PORTED (and trimmed) from upstream `src/runtime/dynamic-guest-types.ts`.
  *
- * Renders guest .d.ts fragments for the dynamic call surface (`extensions.<tool>`)
+ * Renders guest .d.ts fragments for the dynamic call surface (explicit provider tools)
  * from live provider descriptors, closing the type-check gap that surface had as
  * a `Record<string, callable>`: argument-shape mistakes surfaced only at dispatch
  * time. The generated surface stays advisory — the registry still validates every
@@ -27,6 +27,7 @@ const MAX_UNION_MEMBERS = 12;
 const MAX_SCHEMA_SOURCE_CHARS = 4_096;
 const MAX_MEMBER_TYPE_CHARS = 2_500;
 const MAX_SECTION_CHARS = 60_000;
+const MAX_MCP_TOOLS = 512;
 const MAX_EXTENSION_TOOLS = 256;
 
 const IDENTIFIER = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
@@ -174,28 +175,6 @@ const renderMemberBlock = (
 	return { lines, dropped };
 };
 
-const renderExtensionsDeclaration = (sources: SpindleNamedActionTypeSource[]): string => {
-	const budget: RenderBudget = { chars: MAX_SECTION_CHARS };
-	const memberBlock = renderMemberBlock(sources, "Promise<SpindleCapturedToolResult>", MAX_EXTENSION_TOOLS, budget);
-	if (memberBlock.lines.length === 0) return "";
-	const note =
-		memberBlock.dropped > 0
-			? `// Omitted ${memberBlock.dropped} tool(s) from this surface; those calls\n// compile as the loose fallback would and still validate at dispatch.\n`
-			: "";
-	return (
-		"// Generated from the captured extension tool catalog for this execution:\n" +
-		"// known tools carry their schemas so argument-shape mistakes fail the type\n" +
-		"// gate before the sandbox runs. Anything absent compiles as the loose\n" +
-		"// declaration would and is validated by the registry at dispatch.\n" +
-		note +
-		`interface SpindleExtensionsApiDynamic {\n  /** Compatibility alias for the top-level discovery API. */\n  tools: SpindleToolsApi;\n${memberBlock.lines.join("\n")}\n}\n` +
-		"declare const extensions: SpindleExtensionsApiDynamic;\n"
-	);
-};
-
-/** Cap across every server, so a chatty catalog cannot blow up the declarations. */
-const MAX_MCP_TOOLS = 512;
-
 /**
  * The generated `mcp` surface is a tool MAP indexed by server and tool name,
  * not a list of overloads.
@@ -295,10 +274,6 @@ const renderMcpDeclaration = (servers: SpindleMcpServerTypeSource[]): string => 
  */
 export const buildDynamicGuestDeclarations = (sources: SpindleGuestTypeSources): SpindleDynamicGuestDeclarations => {
 	const dynamic: SpindleDynamicGuestDeclarations = {};
-	if (sources.extensionTools && sources.extensionTools.length > 0) {
-		const extensions = renderExtensionsDeclaration(sources.extensionTools);
-		if (extensions) dynamic.extensions = extensions;
-	}
 	if (sources.mcpServers && sources.mcpServers.length > 0) {
 		const mcp = renderMcpDeclaration(sources.mcpServers);
 		if (mcp) dynamic.mcp = mcp;

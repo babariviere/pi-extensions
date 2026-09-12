@@ -21,7 +21,7 @@ export interface SpindleNestedToolResultProxy {
 	proxy(request: SpindleToolResultProxyRequest): Promise<unknown>;
 }
 
-const nativeLifecycleProviders = new Set(["pi", "extensions"]);
+const nativeLifecycleProviders = new Set(["pi", "web", "extensions"]);
 
 const textFromContent = (content: ToolContent): string =>
 	content

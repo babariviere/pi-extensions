@@ -93,8 +93,8 @@ export class CapturedToolsProvider implements SpindleProvider {
 		 * Read-only MCP guardrail. Captured tools are the second way an MCP call can
 		 * leave the sandbox: pi-mcp-adapter registers its `mcp` gateway (and any
 		 * `directTools`) as ordinary pi tools, which show up here as
-		 * `extensions.*`. Without this check `mcp.call` would be guarded and
-		 * `extensions.mcp` would not.
+		 * the explicit `web.*` provider. Without this check `mcp.call` would be guarded and
+		 * a captured MCP tool exposed through `web.*` would not.
 		 */
 		readonly mcpReadOnlyGate: () => McpReadOnlyGate = () => McpReadOnlyGate.unrestricted(),
 		options: { name?: string; description?: string; aliases?: Readonly<Record<string, string>> } = {},

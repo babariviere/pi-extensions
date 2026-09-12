@@ -25,21 +25,6 @@ interface ErrorConstructor {
 }
 type JsonPrimitive = string | number | boolean | null;
 type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
-interface SpindleCapturedToolResult {
-  content: Array<{ type: string; text?: string; [key: string]: unknown }>;
-  text: string;
-  details?: unknown;
-  isError: boolean;
-  terminate?: boolean;
-  source: { path: string; source: string; scope: string; origin: string; baseDir?: string };
-}
-interface SpindleCapturedTool {
-  (args?: Record<string, unknown>): Promise<SpindleCapturedToolResult>;
-}
-type SpindleExtensionsApi = Record<string, SpindleCapturedTool> & {
-  /** Compatibility alias for the top-level discovery API. */
-  tools: SpindleToolsApi;
-};
 interface SpindleAction {
   ref: string;
   provider: string;
@@ -76,10 +61,9 @@ interface SpindleCapabilityCatalog {
   complete: boolean;
   reasons: string[];
 }
-// tools is discovery + generic dispatch across every provider (pi, extensions,
-// mcp, agents). It owns no tools: use it to enumerate/describe actions or call
-// a ref computed at runtime. Direct named calls stay on their own namespace
-// (extensions.<tool>(), pi.<tool>(), mcp.<server>.<tool>()).
+// tools is discovery + generic dispatch across every registered provider
+// (pi, web, mcp, agents). It owns no tools: use it to enumerate, describe, or
+// call a ref computed at runtime. Direct named calls stay on their namespace.
 interface SpindleToolsApi {
   providers(): Promise<Array<{ name: string; description: string }>>;
   catalog(args?: { provider?: string; limit?: number }): Promise<SpindleCapabilityCatalog>;
@@ -122,6 +106,11 @@ type SpindleCommandOptions = {
   env?: Record<string, string>;
   stdin?: string;
 };
+interface WebApi {
+  search(args?: Record<string, unknown>): Promise<unknown>;
+  fetch(args?: Record<string, unknown>): Promise<unknown>;
+}
+declare const web: WebApi;
 interface PiToolsApi {
   read(args: string | { path: string; offset?: number; limit?: number; start?: number; max?: number } | { file: string; offset?: number; limit?: number; start?: number; max?: number }): Promise<string>;
   bash(args: string | (({ command: string } | { cmd: string } | { shell: string }) & SpindleCommandOptions)): Promise<{ ok: true; output: string; details: unknown } | { ok: false; output: string; details: null; exitCode: number; error: string }>;
@@ -258,7 +247,6 @@ type SpindleMcpApi = {
   describe(args: string | { tool: string }): Promise<unknown>;
 };
 declare const pi: PiToolsApi;
-declare const extensions: SpindleExtensionsApi;
 declare const tools: SpindleToolsApi;
 declare const agents: SpindleAgentsApi;
 declare const mcp: SpindleMcpApi;
@@ -319,7 +307,7 @@ declare function queueMicrotask(callback: () => void): void;
 // race: the runtime tags the call, and an abort sends a cancel back through the
 // bridge, so the in-flight host work is really aborted. Accepted by pi.bash,
 // agents.run/runAll/start/wait, mapLimit, and any open-record namespace
-// (extensions.*, mcp.*, tools.call). The remaining pi.* core tools are local
+// (registered providers, mcp.*, tools.call). The remaining pi.* core tools are local
 // filesystem operations that finish too fast to be worth cancelling and do not
 // declare it.
 interface SpindleAbortEvent {
@@ -415,11 +403,10 @@ declare function clearInterval(handle: number): void;
 
 const FULL_CODE_GLOBAL_DECLARATIONS = [
 	"declare const pi: PiToolsApi;\n",
-	"declare const extensions: SpindleExtensionsApi;\n",
+	"declare const web: WebApi;\n",
 	"declare const tools: SpindleToolsApi;\n",
 ];
 
-const EXTENSIONS_LOOSE_DECLARATION = "declare const extensions: SpindleExtensionsApi;\n";
 const MCP_LOOSE_DECLARATION = "declare const mcp: SpindleMcpApi;\n";
 
 const terminatedDeclaration = (block: string): string => (block.endsWith("\n") ? block : `${block}\n`);
@@ -432,21 +419,33 @@ const terminatedDeclaration = (block: string): string => (block.endsWith("\n") ?
  */
 const applyDynamicDeclarations = (declarations: string, dynamic: SpindleDynamicGuestDeclarations): string => {
 	let applied = declarations;
-	if (dynamic.extensions && applied.includes(EXTENSIONS_LOOSE_DECLARATION)) {
-		applied = applied.replace(EXTENSIONS_LOOSE_DECLARATION, terminatedDeclaration(dynamic.extensions));
-	}
 	if (dynamic.mcp && applied.includes(MCP_LOOSE_DECLARATION)) {
 		applied = applied.replace(MCP_LOOSE_DECLARATION, terminatedDeclaration(dynamic.mcp));
 	}
 	return applied;
 };
 
-export const guestTypeDeclarations = (fullCodeMode: boolean, dynamic?: SpindleDynamicGuestDeclarations): string => {
+export const guestTypeDeclarations = (
+	fullCodeMode: boolean,
+	dynamic?: SpindleDynamicGuestDeclarations,
+	providers: readonly string[] = [],
+): string => {
 	if (!fullCodeMode) {
 		return FULL_CODE_GLOBAL_DECLARATIONS.reduce(
 			(declarations, declaration) => declarations.replace(declaration, ""),
 			GUEST_TYPE_DECLARATIONS,
 		);
 	}
-	return dynamic ? applyDynamicDeclarations(GUEST_TYPE_DECLARATIONS, dynamic) : GUEST_TYPE_DECLARATIONS;
+	let declarations = dynamic ? applyDynamicDeclarations(GUEST_TYPE_DECLARATIONS, dynamic) : GUEST_TYPE_DECLARATIONS;
+	if (providers.length > 0 && !providers.includes("web"))
+		declarations = declarations.replace("declare const web: WebApi;\n", "");
+	for (const provider of providers) {
+		if (
+			!["pi", "web", "mcp", "agents", "tools", "tau", "spindle"].includes(provider) &&
+			/^[a-z][a-z0-9_-]*$/.test(provider)
+		) {
+			declarations += `\ndeclare const ${provider}: Record<string, (args?: Record<string, unknown>) => Promise<unknown>>;\n`;
+		}
+	}
+	return declarations;
 };

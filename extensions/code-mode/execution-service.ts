@@ -11,6 +11,7 @@ import {
 import { MAX_AGENT_TIMEOUT_MS, MIN_AGENT_TIMEOUT_MS, type SpindleConfig } from "./config.ts";
 import type { ActionRegistry, SpindleCallAudit, SpindleRegistryActivityEvent } from "./core/action-registry.ts";
 import { redactRecordedArgs } from "./core/arg-redaction.ts";
+import { piBashExitMetadata } from "./core/pi-bash-error.ts";
 import { spindleProcessSnapshot } from "./env-snapshot.ts";
 import { fullCodeProvider, type HostCallContext, hostCallTable, type SpindleStateNote } from "./host-calls.ts";
 import {
@@ -20,37 +21,16 @@ import {
 	isBlockingOrchestrationRef,
 	requestedBlockingTimeoutMs,
 } from "./runtime/orchestration.ts";
-import type {
-	QuickJsRuntime,
-	SpindleSandboxResult,
-	SpindleSandboxTerminationReason,
-} from "./runtime/quickjs-runtime.ts";
-import type { SpindleTypeError } from "./runtime/type-checker.ts";
+import {
+	RichQuickJsRuntime as QuickJsRuntime,
+	type SpindleSandboxResult,
+	type SpindleSandboxTerminationReason,
+	type SpindleTypeError,
+	typeCheckSpindleCode,
+} from "@babariviere/code-mode";
 import { SpindleSessionStore, type SpindleSessionStoreKey } from "./session-store.ts";
-import { CodeModeExecutor } from "@babariviere/code-mode/packages/core/index.ts";
-import { createInteractiveCodeModeRegistry } from "./code-mode-adapter.ts";
-
-let runtimeDependencies:
-	| Promise<{
-			QuickJsRuntime: typeof import("./runtime/quickjs-runtime.ts").QuickJsRuntime;
-			typeCheckSpindleCode: typeof import("./runtime/type-checker.ts").typeCheckSpindleCode;
-			guestTypeDeclarations: typeof import("./runtime/guest-types.ts").guestTypeDeclarations;
-			buildDynamicGuestDeclarations: typeof import("./runtime/dynamic-guest-types.ts").buildDynamicGuestDeclarations;
-	  }>
-	| undefined;
-
-const loadRuntimeDependencies = () =>
-	(runtimeDependencies ??= Promise.all([
-		import("./runtime/quickjs-runtime.ts"),
-		import("./runtime/type-checker.ts"),
-		import("./runtime/guest-types.ts"),
-		import("./runtime/dynamic-guest-types.ts"),
-	]).then(([quickjs, checker, guest, dynamicGuest]) => ({
-		QuickJsRuntime: quickjs.QuickJsRuntime,
-		typeCheckSpindleCode: checker.typeCheckSpindleCode,
-		guestTypeDeclarations: guest.guestTypeDeclarations,
-		buildDynamicGuestDeclarations: dynamicGuest.buildDynamicGuestDeclarations,
-	})));
+import { guestTypeDeclarations } from "./runtime/guest-types.ts";
+import { buildDynamicGuestDeclarations } from "./runtime/dynamic-guest-types.ts";
 
 // Slack added on top of a blocking host call's own timeout so the call fails
 // with its own error before the sandbox deadline expires.
@@ -68,6 +48,8 @@ const executionOutcomeFromTermination = (
 			return "timed_out";
 		case "runtime_error":
 			return "failed";
+		default:
+			throw new Error(`Unknown sandbox termination reason: ${reason satisfies never}`);
 	}
 };
 
@@ -132,14 +114,12 @@ export class SpindleExecutionService {
 	) {}
 
 	async execute(options: SpindleExecutionOptions): Promise<SpindleExecutionResult> {
-		return this.#executeWithCodeMode(options);
 		/* istanbul ignore next: retained as the compatibility reference during migration. */
 		const startedAt = performance.now();
 		const traceRecorder = new SpindleExecutionTraceRecorder();
 		this.activity?.start(options.parentToolCallId, options.display);
-		const dependencies = await loadRuntimeDependencies();
 		const effectiveFullCodeMode = this.config.fullCodeMode;
-		// Schema-typed `extensions.*` declarations for this execution. Best effort:
+		// Schema-typed MCP declarations for this execution. Best effort:
 		// a provider that cannot describe itself leaves the loose declarations.
 		let guestTypeSources = {};
 		if (effectiveFullCodeMode) {
@@ -156,11 +136,12 @@ export class SpindleExecutionService {
 				guestTypeSources = {};
 			}
 		}
-		const checked = dependencies.typeCheckSpindleCode(
+		const checked = typeCheckSpindleCode(
 			options.code,
-			dependencies.guestTypeDeclarations(
+			guestTypeDeclarations(
 				effectiveFullCodeMode,
-				dependencies.buildDynamicGuestDeclarations(guestTypeSources),
+				buildDynamicGuestDeclarations(guestTypeSources),
+				effectiveFullCodeMode ? this.registry.providers().map((provider) => provider.name) : [],
 			),
 		);
 		if (checked.errors.length > 0) {
@@ -372,7 +353,7 @@ export class SpindleExecutionService {
 		};
 		let sandboxResult: SpindleSandboxResult;
 		try {
-			const runtime = (this.#runtime ??= new dependencies!.QuickJsRuntime());
+			const runtime = (this.#runtime ??= new QuickJsRuntime());
 			sandboxResult = await runtime.execute(
 				options.code,
 				async (ref, args, runtimeSignal) => {
@@ -392,6 +373,8 @@ export class SpindleExecutionService {
 					...(options.payloads ? { payloads: options.payloads } : {}),
 					// Allowlisted env snapshot injected as the guest's `process` global.
 					process: spindleProcessSnapshot(options.context.cwd),
+					providers: this.registry.providers().map((provider) => provider.name),
+					hostErrorMetadata: (ref, error) => (ref === "pi.bash" ? piBashExitMetadata(error) : undefined),
 					...(options.signal ? { signal: options.signal } : {}),
 				},
 			);
@@ -419,115 +402,5 @@ export class SpindleExecutionService {
 			...(stateNotes.length > 0 ? { stateNotes } : {}),
 			...(stateNotes.length > 0 && this.store.size > 0 ? { stateKeys: this.store.keys() } : {}),
 		};
-	}
-
-	async #executeWithCodeMode(options: SpindleExecutionOptions): Promise<SpindleExecutionResult> {
-		const startedAt = performance.now();
-		const audits: SpindleCallAudit[] = [];
-		const phases: string[] = [];
-		const stateNotes: SpindleStateNote[] = [];
-		const traceRecorder = new SpindleExecutionTraceRecorder();
-		this.activity?.start(options.parentToolCallId, options.display);
-		const baseContext = {
-			cwd: options.context.cwd,
-			signal: options.signal,
-			parentToolCallId: options.parentToolCallId,
-			nestedToolCallId: `${options.parentToolCallId}_metadata`,
-			extensionContext: options.context,
-			update: (message: string) =>
-				options.onPartial({
-					audits: audits.slice(),
-					phases: phases.slice(),
-					progress: message,
-					stateNotes: stateNotes.slice(),
-				}),
-		};
-		try {
-			const providers = this.config.fullCodeMode ? ["pi", "mcp", "agents", "web"] : ["mcp", "agents"];
-			const registry = await createInteractiveCodeModeRegistry({
-				actionRegistry: this.registry,
-				context: baseContext,
-				store: this.store,
-				providers,
-				noteState: (note) => {
-					stateNotes.push(note);
-					options.onPartial({ audits: audits.slice(), phases: phases.slice(), stateNotes: stateNotes.slice() });
-				},
-				invoke: (ref, input, signal) => {
-					const traceOperation = traceRecorder.issueCall(ref, redactRecordedArgs(ref, input));
-					return this.registry.invoke(ref, input, {
-						...baseContext,
-						signal,
-						audits,
-						maxResultChars: this.config.executor.maxNestedResultChars,
-						traceOperation,
-						observeInvocation: (event) => {
-							if (event.type === "call_end")
-								options.onPartial({
-									audits: audits.slice(),
-									phases: phases.slice(),
-									stateNotes: stateNotes.slice(),
-								});
-						},
-					});
-				},
-			});
-			const executor = new CodeModeExecutor({
-				registry,
-				defaults: {
-					timeoutMs: this.config.executor.timeoutMs,
-					maxToolCalls: this.config.agents.maxPerExecution,
-					maxOutputChars: this.config.executor.maxOutputChars,
-					maxToolOutputChars: this.config.executor.maxNestedResultChars,
-					memoryLimitBytes: this.config.executor.memoryLimitBytes,
-				},
-				onProgress: (event) =>
-					options.onPartial({
-						audits: audits.slice(),
-						phases: phases.slice(),
-						progress: event.type === "log" ? event.message : event.type,
-						stateNotes: stateNotes.slice(),
-					}),
-			});
-			const result = await executor.execute({
-				code: options.code,
-				...(options.payloads ? { payloads: options.payloads } : {}),
-				...(options.signal ? { signal: options.signal } : {}),
-				...(options.requestedTimeoutMs
-					? { limits: { timeoutMs: Math.min(options.requestedTimeoutMs, this.config.executor.maxTimeoutMs) } }
-					: {}),
-				invocationId: options.parentToolCallId,
-				resultFormat: this.config.executor.resultFormat,
-			});
-			const error = result.error?.message;
-			this.activity?.finish(options.parentToolCallId, result.ok, error);
-			return {
-				success: result.ok,
-				value: result.value,
-				logs: [...result.logs],
-				audits,
-				phases,
-				trace: traceRecorder.seal(result.ok ? "succeeded" : "failed", phases, error),
-				elapsedMs: performance.now() - startedAt,
-				...(error ? { error } : {}),
-				...(stateNotes.length > 0 ? { stateNotes } : {}),
-				...(stateNotes.length > 0 && this.store.size > 0 ? { stateKeys: this.store.keys() } : {}),
-			};
-		} catch (error) {
-			const message = error instanceof Error ? error.message : String(error);
-			this.activity?.finish(options.parentToolCallId, false, message);
-			return {
-				success: false,
-				value: undefined,
-				logs: [],
-				audits,
-				phases,
-				trace: traceRecorder.seal("failed", phases, message),
-				elapsedMs: performance.now() - startedAt,
-				error: message,
-			};
-		} finally {
-			await this.registry.endInvocation(options.parentToolCallId);
-		}
 	}
 }
