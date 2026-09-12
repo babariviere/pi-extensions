@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { BackgroundAgentsDatabase, StoredSpecificationVersion } from "../database.ts";
 import { BackgroundAgentsStateMachine, type ApprovalResult } from "../state-machine.ts";
+import type { SpecificationWorkItem } from "../../types.ts";
 
 export interface SpecificationDraft {
 	specification: unknown;
@@ -8,6 +9,7 @@ export interface SpecificationDraft {
 	unresolvedQuestions: unknown[];
 	permissions: string[];
 	plannerSummary: string;
+	decomposition: SpecificationWorkItem[];
 }
 
 export interface PlannerContext {
@@ -26,6 +28,35 @@ export interface SpecificationFeedbackResult {
 	jobId: string;
 	attemptId: string;
 	context: PlannerContext;
+}
+
+export function validateSpecificationDecomposition(value: unknown): SpecificationWorkItem[] {
+	if (!Array.isArray(value) || value.length === 0) throw new Error("decomposition must be a non-empty array");
+	return value.map((item, index) => {
+		if (!item || typeof item !== "object" || Array.isArray(item))
+			throw new Error(`decomposition item ${index + 1} must be an object`);
+		const record = item as Record<string, unknown>;
+		const fields = Object.keys(record).sort();
+		if (fields.join(",") !== "acceptanceCriteria,order,scope,title")
+			throw new Error(`decomposition item ${index + 1} has an invalid shape`);
+		if (record.order !== index + 1) throw new Error("decomposition order must be contiguous and explicit");
+		if (typeof record.title !== "string" || !record.title.trim())
+			throw new Error(`decomposition item ${index + 1} title must be non-empty`);
+		if (typeof record.scope !== "string" || !record.scope.trim())
+			throw new Error(`decomposition item ${index + 1} scope must be non-empty`);
+		if (
+			!Array.isArray(record.acceptanceCriteria) ||
+			record.acceptanceCriteria.length === 0 ||
+			record.acceptanceCriteria.some((criterion) => typeof criterion !== "string" || !criterion.trim())
+		)
+			throw new Error(`decomposition item ${index + 1} acceptanceCriteria must be non-empty strings`);
+		return {
+			order: index + 1,
+			title: record.title.trim(),
+			scope: record.scope.trim(),
+			acceptanceCriteria: (record.acceptanceCriteria as string[]).map((criterion) => criterion.trim()),
+		};
+	});
 }
 
 function canonical(value: unknown): string {
@@ -51,6 +82,7 @@ export function specificationMaterialHash(draft: SpecificationDraft): string {
 				unresolvedQuestions: draft.unresolvedQuestions,
 				permissions: draft.permissions,
 				plannerSummary: draft.plannerSummary,
+				decomposition: draft.decomposition,
 			}),
 		)
 		.digest("hex");
@@ -104,8 +136,9 @@ export class SpecificationWorkflow {
 		if (state !== "investigating" && state !== "classified" && state !== "retry" && state !== "specification")
 			throw new Error(`Case ${caseId} cannot record a specification from ${state ?? "unknown"}`);
 		if (!draft.plannerSummary.trim()) throw new Error("plannerSummary must be non-empty");
-		const materialHash = specificationMaterialHash(draft);
-		const version = this.database.createSpecificationVersion({ ...draft, caseId, materialHash });
+		const decomposition = validateSpecificationDecomposition(draft.decomposition);
+		const materialHash = specificationMaterialHash({ ...draft, decomposition });
+		const version = this.database.createSpecificationVersion({ ...draft, decomposition, caseId, materialHash });
 		if (state === "investigating" || state === "classified" || state === "retry") {
 			this.database.transitionCase(caseId, "specification", "spec-planner", "specification recorded");
 			this.database.transitionCase(caseId, "specification", "spec-planner", "specification awaiting approval", {
@@ -155,7 +188,7 @@ export class SpecificationWorkflow {
 			throw new Error(`Specification version ${specVersion} is not current`);
 		const options = {
 			materialHash: latest.materialHash,
-			...(orderedWorkItems === undefined ? {} : { orderedWorkItems }),
+			orderedWorkItems: orderedWorkItems ?? latest.orderedWorkItems,
 		};
 		const result = this.stateMachine.approveSpecification(caseId, specVersion, permissions, actor, options);
 		this.queueNextWorker(caseId);
@@ -179,8 +212,12 @@ export class SpecificationWorkflow {
 		}
 		for (let index = 0; index < ordered.length; index += 1) {
 			const workItemId = ordered[index];
-			const item = this.database.get<{ state: string }>("SELECT state FROM work_items WHERE id = ?", workItemId);
+			const item = this.database.get<{ state: string; parent_id: string | null }>(
+				"SELECT state, parent_id FROM work_items WHERE id = ?",
+				workItemId,
+			);
 			if (!item || item.state !== "queued") continue;
+			if (index === 0 ? item.parent_id !== null : item.parent_id !== ordered[index - 1]) return undefined;
 			const previous = ordered
 				.slice(0, index)
 				.map((id) => this.database.get<{ state: string }>("SELECT state FROM work_items WHERE id = ?", id)?.state);

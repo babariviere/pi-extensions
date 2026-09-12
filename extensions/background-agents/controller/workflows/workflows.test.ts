@@ -4,7 +4,6 @@ import { tmpdir } from "node:os";
 import { afterEach, describe, test } from "node:test";
 import assert from "node:assert/strict";
 import { BackgroundAgentsDatabase } from "../database.ts";
-import { BackgroundAgentsStateMachine } from "../state-machine.ts";
 import { approveMemoryEntry, createMemoryEntry } from "../classification/memory.ts";
 import { buildInvestigationContext, retrieveFullCase, InvestigationWorkflow } from "./investigation.ts";
 import { buildQuestionContext, QuestionWorkflow } from "./question.ts";
@@ -101,13 +100,20 @@ describe("background-agent workflows", () => {
 			unresolvedQuestions: ["Which timeout?"],
 			permissions: ["repository.read"],
 			plannerSummary: "Initial plan",
+			decomposition: [
+				{ order: 1, title: "Implement fix", scope: "bounded fix", acceptanceCriteria: ["fix passes"] },
+			],
 		});
 		assert.equal(first.version, 1);
-		const item = new BackgroundAgentsStateMachine(database).createWorkItem({
-			caseId,
-			ordinal: 1,
-			title: "Implement fix",
-		});
+		assert.equal(first.decomposition.length, 1);
+		assert.equal(first.orderedWorkItems.length, 1);
+		assert.equal(
+			database.get<{ parent_id: string | null; spec_version_id: string }>(
+				"SELECT parent_id, spec_version_id FROM work_items WHERE id = ?",
+				first.orderedWorkItems[0],
+			)?.parent_id,
+			null,
+		);
 		const feedback = workflow.recordHumanFeedback(caseId, 1, "Use the shared timeout", "operator");
 		assert.notEqual(feedback.attemptId, started.attemptId);
 		assert.equal(feedback.context.latest?.version, 1);
@@ -123,9 +129,23 @@ describe("background-agent workflows", () => {
 			unresolvedQuestions: [],
 			permissions: ["repository.read", "repository.test"],
 			plannerSummary: "Updated plan",
+			decomposition: [
+				{
+					order: 1,
+					title: "Implement timeout fix",
+					scope: "bounded timeout change",
+					acceptanceCriteria: ["shared timeout is used"],
+				},
+			],
 		});
 		assert.equal(second.version, 2);
-		const approval = workflow.approve(caseId, 2, ["repository.read", "repository.test"], "operator", [item]);
+		const approval = workflow.approve(
+			caseId,
+			2,
+			["repository.read", "repository.test"],
+			"operator",
+			second.orderedWorkItems,
+		);
 		const stored = database.get<{
 			material_hash: string;
 			spec_version: number;
@@ -138,7 +158,13 @@ describe("background-agent workflows", () => {
 		assert.equal(stored?.material_hash, second.materialHash);
 		assert.equal(stored?.spec_version, 2);
 		assert.deepEqual(JSON.parse(stored?.frozen_permissions ?? "[]"), ["repository.read", "repository.test"]);
-		assert.deepEqual(JSON.parse(stored?.ordered_work_items ?? "[]"), [item]);
+		assert.deepEqual(JSON.parse(stored?.ordered_work_items ?? "[]"), second.orderedWorkItems);
+		assert.deepEqual(
+			database
+				.all<{ work_item_id: string }>("SELECT work_item_id FROM jobs WHERE role = 'worker' ORDER BY created_at")
+				.map((row) => row.work_item_id),
+			[second.orderedWorkItems[0]],
+		);
 		database.close();
 	});
 });

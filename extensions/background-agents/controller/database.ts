@@ -11,6 +11,7 @@ import type {
 	MemoryEntry,
 	RolloutMode,
 	SourceEvent,
+	SpecificationWorkItem,
 	EvidenceManifest,
 	VerificationRun,
 	Confidence,
@@ -309,6 +310,7 @@ export interface SpecificationVersionInput {
 	unresolvedQuestions?: unknown[];
 	permissions?: unknown;
 	plannerSummary?: string;
+	decomposition: SpecificationWorkItem[];
 	materialHash: string;
 }
 
@@ -320,6 +322,8 @@ export interface StoredSpecificationVersion {
 	decisions: unknown[];
 	unresolvedQuestions: unknown[];
 	permissions: unknown;
+	decomposition: SpecificationWorkItem[];
+	orderedWorkItems: string[];
 	plannerSummary?: string;
 	materialHash: string;
 	createdAt: string;
@@ -1647,10 +1651,11 @@ export class BackgroundAgentsDatabase {
 		const decisions = input.decisions ?? [];
 		const unresolvedQuestions = input.unresolvedQuestions ?? [];
 		const permissions = input.permissions ?? [];
+		const orderedWorkItems = input.decomposition.map(() => randomUUID());
 		this.withTransaction(() => {
 			this.database
 				.prepare(
-					"INSERT INTO spec_versions (id, case_id, version, specification, decisions, unresolved_questions, permissions, material_hash, planner_summary, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+					"INSERT INTO spec_versions (id, case_id, version, specification, decisions, unresolved_questions, permissions, material_hash, planner_summary, decomposition, ordered_work_items, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
 				)
 				.run(
 					id,
@@ -1662,8 +1667,35 @@ export class BackgroundAgentsDatabase {
 					jsonBoundary(permissions, "permissions"),
 					materialHash,
 					input.plannerSummary ?? null,
+					jsonBoundary(input.decomposition, "decomposition"),
+					jsonBoundary(orderedWorkItems, "orderedWorkItems"),
 					createdAt,
 				);
+			let parentId: string | null = null;
+			const ordinalBase = Number(
+				(
+					this.database
+						.prepare("SELECT coalesce(max(ordinal), 0) AS ordinal FROM work_items WHERE case_id = ?")
+						.get(caseId) as Row
+				).ordinal,
+			);
+			for (const [index, item] of input.decomposition.entries()) {
+				this.database
+					.prepare(
+						"INSERT INTO work_items (id, case_id, spec_version_id, ordinal, parent_id, title, scope, acceptance_criteria) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+					)
+					.run(
+						orderedWorkItems[index],
+						caseId,
+						id,
+						ordinalBase + item.order,
+						parentId,
+						item.title,
+						item.scope,
+						jsonBoundary(item.acceptanceCriteria, "acceptanceCriteria"),
+					);
+				parentId = orderedWorkItems[index] ?? null;
+			}
 		});
 		return {
 			id,
@@ -1673,6 +1705,8 @@ export class BackgroundAgentsDatabase {
 			decisions,
 			unresolvedQuestions,
 			permissions,
+			decomposition: input.decomposition,
+			orderedWorkItems,
 			...(input.plannerSummary === undefined ? {} : { plannerSummary: input.plannerSummary }),
 			materialHash,
 			createdAt,
@@ -1682,7 +1716,7 @@ export class BackgroundAgentsDatabase {
 	getLatestSpecification(caseId: string): StoredSpecificationVersion | undefined {
 		const row = this.database
 			.prepare(
-				"SELECT id, case_id, version, specification, decisions, unresolved_questions, permissions, material_hash, planner_summary, created_at FROM spec_versions WHERE case_id = ? ORDER BY version DESC LIMIT 1",
+				"SELECT id, case_id, version, specification, decisions, unresolved_questions, permissions, material_hash, planner_summary, decomposition, ordered_work_items, created_at FROM spec_versions WHERE case_id = ? ORDER BY version DESC LIMIT 1",
 			)
 			.get(requiredString(caseId, "caseId")) as Row | undefined;
 		return row ? this.readSpecification(row) : undefined;
@@ -1691,7 +1725,7 @@ export class BackgroundAgentsDatabase {
 	getSpecification(caseId: string, version: number): StoredSpecificationVersion | undefined {
 		const row = this.database
 			.prepare(
-				"SELECT id, case_id, version, specification, decisions, unresolved_questions, permissions, material_hash, planner_summary, created_at FROM spec_versions WHERE case_id = ? AND version = ?",
+				"SELECT id, case_id, version, specification, decisions, unresolved_questions, permissions, material_hash, planner_summary, decomposition, ordered_work_items, created_at FROM spec_versions WHERE case_id = ? AND version = ?",
 			)
 			.get(requiredString(caseId, "caseId"), version) as Row | undefined;
 		return row ? this.readSpecification(row) : undefined;
@@ -1713,6 +1747,8 @@ export class BackgroundAgentsDatabase {
 			decisions: parse("decisions") as unknown[],
 			unresolvedQuestions: parse("unresolved_questions") as unknown[],
 			permissions: parse("permissions"),
+			decomposition: parse("decomposition") as SpecificationWorkItem[],
+			orderedWorkItems: parse("ordered_work_items") as string[],
 			materialHash: rowString(row, "material_hash"),
 			...(row.planner_summary == null ? {} : { plannerSummary: rowString(row, "planner_summary") }),
 			createdAt: rowString(row, "created_at"),

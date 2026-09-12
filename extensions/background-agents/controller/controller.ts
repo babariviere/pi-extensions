@@ -81,6 +81,21 @@ function dashboardList(value: unknown): string[] {
 		.slice(0, 20)
 		.map((item) => dashboardText(typeof item === "string" ? item : dashboardJsonText(item), 240));
 }
+function dashboardDecomposition(value: unknown): DashboardSnapshot["specifications"][number]["decomposition"] {
+	if (!Array.isArray(value)) return [];
+	return value.slice(0, 20).flatMap((item) => {
+		if (!item || typeof item !== "object" || Array.isArray(item)) return [];
+		const record = item as Record<string, unknown>;
+		return [
+			{
+				order: Number(record.order),
+				title: dashboardText(record.title),
+				scope: dashboardText(record.scope),
+				acceptanceCriteria: dashboardList(record.acceptanceCriteria),
+			},
+		];
+	});
+}
 function dashboardRows<T>(rows: T[]): T[] {
 	return rows.slice(0, DASHBOARD_LIMIT);
 }
@@ -745,7 +760,7 @@ export class BackgroundAgentsController {
 		const workItems = dashboardRows(
 			this.database
 				.all<Record<string, unknown>>(
-					"SELECT id, case_id, ordinal, parent_id, title, branch, pull_request, state, created_at, updated_at FROM work_items ORDER BY case_id, ordinal",
+					"SELECT id, case_id, ordinal, parent_id, title, scope, acceptance_criteria, branch, pull_request, state, created_at, updated_at FROM work_items ORDER BY case_id, ordinal",
 				)
 				.map((row) => ({
 					id: dashboardText(row.id, 120),
@@ -753,6 +768,8 @@ export class BackgroundAgentsController {
 					ordinal: Number(row.ordinal),
 					...(row.parent_id == null ? {} : { parentId: dashboardText(row.parent_id, 120) }),
 					title: dashboardText(row.title),
+					...(row.scope == null ? {} : { scope: dashboardText(row.scope) }),
+					acceptanceCriteria: dashboardList(parseDashboardJson(row, "acceptance_criteria", [])),
 					...(row.branch == null ? {} : { branch: dashboardText(row.branch, 240) }),
 					...(row.pull_request == null ? {} : { pullRequest: Number(row.pull_request) }),
 					state: dashboardText(row.state, 40),
@@ -826,7 +843,7 @@ export class BackgroundAgentsController {
 			})),
 		);
 		const specRows = this.database.all<Record<string, unknown>>(
-			"SELECT id, case_id, version, specification, decisions, unresolved_questions, permissions, material_hash, planner_summary, created_at FROM spec_versions ORDER BY created_at DESC, version DESC",
+			"SELECT id, case_id, version, specification, decisions, unresolved_questions, permissions, material_hash, planner_summary, decomposition, created_at FROM spec_versions ORDER BY created_at DESC, version DESC",
 		);
 		const specifications = dashboardRows(
 			specRows.map((row) => ({
@@ -840,6 +857,7 @@ export class BackgroundAgentsController {
 				decisions: dashboardList(parseDashboardJson(row, "decisions", [])),
 				unresolvedQuestions: dashboardList(parseDashboardJson(row, "unresolved_questions", [])),
 				permissions: dashboardList(parseDashboardJson(row, "permissions", [])),
+				decomposition: dashboardDecomposition(parseDashboardJson(row, "decomposition", [])),
 				materialHash: dashboardText(row.material_hash, 160),
 				createdAt: dashboardText(row.created_at, 40),
 			})),

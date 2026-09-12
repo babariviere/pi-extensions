@@ -89,6 +89,10 @@ export interface SpecificationApprovalOptions {
 	orderedWorkItems?: string[];
 }
 
+function sameStrings(left: readonly string[], right: readonly string[]): boolean {
+	return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
 function nonEmpty(value: string, field: string): string {
 	if (typeof value !== "string" || value.trim() === "") throw new Error(`${field} must be a non-empty string`);
 	return value.trim();
@@ -260,8 +264,13 @@ export class BackgroundAgentsStateMachine {
 		const state = this.database.get<{ state: CaseState }>("SELECT state FROM cases WHERE id = ?", id);
 		if (!state) throw new Error(`Unknown case: ${id}`);
 		if (state.state !== "awaiting-approval") throw new Error(`Case ${id} is not awaiting specification approval`);
-		const latest = this.database.get<{ id: string; version: number }>(
-			"SELECT id, version FROM spec_versions WHERE case_id = ? ORDER BY version DESC LIMIT 1",
+		const latest = this.database.get<{
+			id: string;
+			version: number;
+			ordered_work_items: string;
+			decomposition: string;
+		}>(
+			"SELECT id, version, ordered_work_items, decomposition FROM spec_versions WHERE case_id = ? ORDER BY version DESC LIMIT 1",
 			id,
 		);
 		if (!latest || latest.version !== specVersion) {
@@ -275,11 +284,53 @@ export class BackgroundAgentsStateMachine {
 				?.material_hash;
 		if (!materialHash || (options.materialHash !== undefined && options.materialHash !== materialHash))
 			throw new SpecificationMaterialMismatchError(id);
-		const orderedWorkItems =
-			options.orderedWorkItems ??
-			this.database
-				.all<{ id: string }>("SELECT id FROM work_items WHERE case_id = ? ORDER BY ordinal ASC", id)
-				.map((row) => row.id);
+		let orderedWorkItems: string[] = [];
+		if (decision === "approved") {
+			if (!options.orderedWorkItems) throw new Error("orderedWorkItems are required for specification approval");
+			let storedOrder: unknown;
+			try {
+				storedOrder = JSON.parse(latest.ordered_work_items);
+			} catch {
+				throw new Error("stored specification decomposition order is invalid");
+			}
+			if (
+				!Array.isArray(storedOrder) ||
+				storedOrder.length === 0 ||
+				storedOrder.some((item) => typeof item !== "string") ||
+				!sameStrings(options.orderedWorkItems, storedOrder)
+			)
+				throw new Error("orderedWorkItems do not match the current specification decomposition");
+			orderedWorkItems = options.orderedWorkItems;
+			let decomposition: unknown;
+			try {
+				decomposition = JSON.parse(latest.decomposition);
+			} catch {
+				throw new Error("stored specification decomposition is invalid");
+			}
+			if (!Array.isArray(decomposition) || decomposition.length !== orderedWorkItems.length)
+				throw new Error("specification decomposition is empty or mismatched");
+			for (let index = 0; index < orderedWorkItems.length; index += 1) {
+				const item = this.database.get<{
+					case_id: string;
+					spec_version_id: string | null;
+					ordinal: number;
+					parent_id: string | null;
+					state: string;
+				}>(
+					"SELECT case_id, spec_version_id, ordinal, parent_id, state FROM work_items WHERE id = ?",
+					orderedWorkItems[index],
+				);
+				if (
+					!item ||
+					item.case_id !== id ||
+					item.spec_version_id !== latest.id ||
+					(index === 0 ? item.parent_id !== null : item.parent_id !== orderedWorkItems[index - 1])
+				)
+					throw new Error("orderedWorkItems do not form the current linear decomposition");
+			}
+		} else {
+			orderedWorkItems = options.orderedWorkItems ?? [];
+		}
 		const approvalId = this.database.recordSpecificationApproval({
 			caseId: id,
 			specVersion,

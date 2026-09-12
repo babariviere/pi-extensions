@@ -32,6 +32,13 @@ export type CaseAction =
 	| "reject";
 
 export type AgentRole = "classifier" | "investigator" | "spec-planner" | "worker" | "verifier";
+
+export interface SpecificationWorkItem {
+	order: number;
+	title: string;
+	scope: string;
+	acceptanceCriteria: string[];
+}
 export type AttemptState = "queued" | "running" | "succeeded" | "failed" | "cancelled" | "paused" | "needs-human";
 export type VerificationVerdict = "pass" | "fail" | "needs-human";
 export type RolloutMode = "observe" | "supervised" | "autonomous-pr";
@@ -259,6 +266,8 @@ export interface DashboardWorkItem {
 	ordinal: number;
 	parentId?: string;
 	title: string;
+	scope?: string;
+	acceptanceCriteria?: string[];
 	branch?: string;
 	pullRequest?: number;
 	state: string;
@@ -306,6 +315,7 @@ export interface DashboardSpecification {
 	decisions: string[];
 	unresolvedQuestions: string[];
 	permissions: string[];
+	decomposition: SpecificationWorkItem[];
 	materialHash: string;
 	createdAt: string;
 }

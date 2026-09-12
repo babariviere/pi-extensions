@@ -48,6 +48,14 @@ function outputFor(role: string): Record<string, unknown> {
 			unresolvedQuestions: [],
 			permissions: [],
 			plannerSummary: "plan",
+			decomposition: [
+				{
+					order: 1,
+					title: "Implement plan",
+					scope: "bounded implementation",
+					acceptanceCriteria: ["the plan is implemented"],
+				},
+			],
 		};
 	if (role === "worker")
 		return {
@@ -160,7 +168,6 @@ test("production runner dispatches every role through its profile boundary", asy
 				);
 			let workItemId: string | undefined;
 			if (role === "worker" || role === "verifier") {
-				workItemId = machine.createWorkItem({ caseId, ordinal: 1, title: role });
 				const specification = new SpecificationWorkflow(database);
 				specification.recordPlannerResult(caseId, {
 					specification: {},
@@ -168,7 +175,17 @@ test("production runner dispatches every role through its profile boundary", asy
 					unresolvedQuestions: [],
 					permissions: [],
 					plannerSummary: "test",
+					decomposition: [
+						{
+							order: 1,
+							title: "Implement test",
+							scope: "bounded test implementation",
+							acceptanceCriteria: ["the test behavior passes"],
+						},
+					],
 				});
+				workItemId = specification.context(caseId).latest?.orderedWorkItems[0];
+				if (!workItemId) throw new Error("planner did not create a work item");
 				specification.approve(caseId, 1, [], "operator", [workItemId]);
 				if (role === "verifier") database.transitionCase(caseId, "verification", "test");
 				if (role === "verifier") {
@@ -458,8 +475,6 @@ test("delivers an approved two-item stack through durable GitHub effects", async
 	try {
 		const caseId = database.createCase({ id: "case-stack", title: "stack", source: "manual", repository: "repo" });
 		const machine = new BackgroundAgentsStateMachine(database);
-		const first = machine.createWorkItem({ caseId, ordinal: 1, title: "bottom" });
-		const second = machine.createWorkItem({ caseId, ordinal: 2, parentId: first, title: "top" });
 		database.transitionCase(caseId, "classified", "test");
 		database.transitionCase(caseId, "specification", "test");
 		const specification = new SpecificationWorkflow(database);
@@ -469,7 +484,14 @@ test("delivers an approved two-item stack through durable GitHub effects", async
 			unresolvedQuestions: [],
 			permissions: [],
 			plannerSummary: "stack",
+			decomposition: [
+				{ order: 1, title: "Bottom change", scope: "bottom bounded change", acceptanceCriteria: ["bottom passes"] },
+				{ order: 2, title: "Top change", scope: "top bounded change", acceptanceCriteria: ["top passes"] },
+			],
 		});
+		const first = specification.context(caseId).latest?.orderedWorkItems[0];
+		const second = specification.context(caseId).latest?.orderedWorkItems[1];
+		if (!first || !second) throw new Error("planner did not create the work-item chain");
 		specification.approve(caseId, 1, [], "operator", [first, second]);
 		const execute = async (jobId: string) => {
 			const claim = database.claimJob(jobId, "test");

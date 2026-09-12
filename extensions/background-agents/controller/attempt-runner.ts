@@ -27,7 +27,11 @@ import {
 	QuestionWorkflow,
 	type PrivateQuestionBrief,
 } from "./workflows/question.ts";
-import { SpecificationWorkflow, type SpecificationDraft } from "./workflows/specification.ts";
+import {
+	SpecificationWorkflow,
+	validateSpecificationDecomposition,
+	type SpecificationDraft,
+} from "./workflows/specification.ts";
 import { createEvidenceManifest, formatEvidenceMarkdown } from "./verification/evidence.ts";
 import type { ReplayResult } from "./verification/reproduce.ts";
 import { verifyReplayAndGithub } from "./verification/verifier.ts";
@@ -172,6 +176,7 @@ function validateRoleOutput(role: AgentRole, value: unknown, questionAnalysis = 
 		requiredList(output.unresolvedQuestions, "unresolvedQuestions");
 		requiredList(output.permissions, "permissions");
 		if (!("specification" in output)) throw new Error("specification is required");
+		validateSpecificationDecomposition(output.decomposition);
 	}
 	if (role === "worker") {
 		requiredText(output.commitSha, "worker commitSha");
@@ -291,6 +296,7 @@ function attemptContext(
 		),
 		workItem,
 		latestSpecification: database.getLatestSpecification(row.case_id),
+		decomposition: database.getLatestSpecification(row.case_id)?.decomposition ?? [],
 		...recoveryContext,
 		...base,
 	};

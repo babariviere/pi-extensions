@@ -28,13 +28,26 @@ function awaitingApproval(database: BackgroundAgentsDatabase): string {
 
 function addSpec(database: BackgroundAgentsDatabase, caseId: string, version: number): string {
 	const id = `spec-${version}`;
+	const itemId = `item-${version}`;
 	database.run(
-		"INSERT INTO spec_versions (id, case_id, version, specification, material_hash) VALUES (?, ?, ?, ?, ?)",
+		"INSERT INTO spec_versions (id, case_id, version, specification, material_hash, decomposition, ordered_work_items) VALUES (?, ?, ?, ?, ?, ?, ?)",
 		id,
 		caseId,
 		version,
 		JSON.stringify({ version }),
 		`hash-${version}`,
+		JSON.stringify([{ order: 1, title: `item ${version}`, scope: "bounded", acceptanceCriteria: ["passes"] }]),
+		JSON.stringify([itemId]),
+	);
+	database.run(
+		"INSERT INTO work_items (id, case_id, spec_version_id, ordinal, title, scope, acceptance_criteria) VALUES (?, ?, ?, ?, ?, ?, ?)",
+		itemId,
+		caseId,
+		id,
+		version,
+		`item ${version}`,
+		"bounded",
+		JSON.stringify(["passes"]),
 	);
 	return id;
 }
@@ -65,11 +78,14 @@ describe("background-agents lifecycle state machine", () => {
 		addSpec(database, caseId, 1);
 		addSpec(database, caseId, 2);
 		assert.throws(
-			() => machine.approveSpecification(caseId, 1, ["repository.read"], "operator"),
+			() =>
+				machine.approveSpecification(caseId, 1, ["repository.read"], "operator", { orderedWorkItems: ["item-1"] }),
 			SpecificationVersionMismatchError,
 		);
 		assert.equal(database.get<{ count: number }>("SELECT count(*) AS count FROM approvals")?.count, 0);
-		const result = machine.approveSpecification(caseId, 2, ["repository.read"], "operator");
+		const result = machine.approveSpecification(caseId, 2, ["repository.read"], "operator", {
+			orderedWorkItems: ["item-2"],
+		});
 		assert.equal(result.specVersion, 2);
 		assert.equal(
 			database.get<{ state: string }>("SELECT state FROM cases WHERE id = ?", caseId)?.state,
