@@ -1,13 +1,6 @@
----
-name: spindle-exec
-description: >-
-  Reference for `spindle_exec` TypeScript programs: Pi core tool signatures,
-  extension/MCP/subagent namespaces, `mapLimit` fan-out, named payloads, return
-  shapes, and error recovery. Load before the first `spindle_exec` call or after an
-  argument-shape error.
----
+# spindle_exec core reference
 
-# spindle_exec — core reference
+Use this reference for API signatures and runtime behavior. For MCP or subagent calls, see [MCP](mcp.md) or [subagents](agents.md).
 
 One type-checked TS program in a fresh isolated QuickJS sandbox. Only the `return` value reaches the model; `print()`/`console.log` go to the activity widget. `π` is not a tool.
 
@@ -51,6 +44,23 @@ There is deliberately no `fetch`, no `crypto.subtle` and no `WebAssembly`: the a
 | `ls` | `path?` \| `{path?,limit?}` | `string` |
 | `edit` | `{path,edits:[{oldText,newText}]}` \| `{path,oldText,newText}` \| `(path, oldText, newText)` | `{ok,output,details}` |
 | `write` | `{path,content}` \| `(path, content)` | `{ok,output,details}` |
+| `applyPatch` | `{patch}` (V4A patch text) | `{ok,output,details}` |
+
+### File editing
+
+Use `pi.edit({ path, edits: [{ oldText, newText }] })` for exact replacements, `pi.write({ path, content })` for complete files, or `pi.applyPatch({ patch: π.patch })` for V4A patches. The session guidance selects the preferred tool for the active model; all three remain available in full code mode.
+
+Put V4A and other multiline content in `payloads`. If `pi.edit` misses, reread the affected range and retry against its current text.
+
+```ts
+// payloads: { oldText: "...", newText: "..." }
+return await pi.edit({
+  path: "src/example.ts",
+  edits: [{ oldText: π.oldText, newText: π.newText }],
+});
+```
+
+### Tool behavior and argument aliases
 
 `bash` rejects on an ordinary nonzero exit; pass `settle:true` to get `{ok:false,output,details:null,exitCode,error}` instead of a rejection. Timeout, cancellation, approval, security, and spawn failures still reject. Other Pi core tool errors reject normally.
 
@@ -66,9 +76,7 @@ Aliases (normalized to canonical before the host validates args): `cmd`/`shell`/
 
 Env values and stdin are redacted from recorded surfaces (audits, previews, session files); the live command still receives them.
 
-When a program needs a string containing literal `${...}` (shell snippets, tool arguments, or grep patterns), do not use a TypeScript template literal: TypeScript will interpolate it. Use a plain quoted string or pass the content through the `payloads` parameter and read it from `π.key`.
-
-### Awkward payloads — always use `payloads`/`π`
+### Payloads
 
 MUST pass through `payloads` and read as `π.key`, never inline in `code`: multi-line file content (writes, edits, heredocs), JSON blobs, long prose (agent prompts, task text), and strings with literal `${...}`.
 
@@ -84,35 +92,7 @@ const prompt = `Objective:\n\n${π.task}`;
 
 Short single-line literals with no `${...}` are fine inline.
 
-### Large documents — write in chunks
-
-A payload big enough to be a document (a design note, a report section, a generated file over roughly 400 lines) is
-safer written in pieces than in one call: one oversized `payloads` value has taken a subagent down mid-write and left
-a half-file behind, with nothing in the transcript saying which half. Split the content into `π.part1`, `π.part2`,
-… and append:
-
-```ts
-await pi.write({ path: out, content: π.part1 });
-for (const part of [π.part2, π.part3]) await pi.bash({ cmd: `cat >> ${out}`, stdin: part });
-return (await pi.bash({ cmd: `wc -l ${out}` })).output;  // check the whole thing landed
-```
-
-Return a size or line count afterwards, so a truncated write is visible in the result instead of being discovered by
-the next reader.
-
-### Fetch in the parent, analyse in a child — hand over a manifest
-
-When a program pulls data down (an API dump, a log export, a set of transcripts) for a subagent to analyse, do not
-paste the data into the task: write the files, then write a manifest next to them and pass the manifest's path. A
-manifest is a small JSON or markdown file listing, per artefact, its absolute path, what it contains, its size and
-the command that produced it. The child reads the manifest first and opens only what it needs — the alternative is a
-task message the size of the dump, or a child guessing which of 40 files matters.
-
-```ts
-const manifest = items.map((item) => ({ path: item.path, rows: item.rows, source: item.command }));
-await pi.write({ path: `${dir}/manifest.json`, content: JSON.stringify(manifest, null, 2) });
-await agents.run({ task: `Analyse the dump described by ${dir}/manifest.json. Read it first.` });
-```
+For documents too large for one reliable tool call, use smaller writes or edits through `pi.write`, `pi.edit`, or `pi.applyPatch`, and check the resulting file for truncation.
 
 ## `τ` — session scratchpad shared across calls
 
@@ -165,29 +145,23 @@ return index.filter((entry) => entry.path.endsWith(".ts")).length;
 
 Refs are namespaced (`extensions.<tool>`, `pi.grep`, `mcp.<server>.<tool>`). Calling a core-tool name on `tools` (e.g. `tools.read(...)`) throws with a hint to use `pi.read(...)`.
 
-## `mcp` — MCP tools through pi-mcp-adapter
+## `mcp` tools
 
-Spindle does not embed an MCP client; `mcp.*` forwards to the `mcp` gateway tool registered by the sibling `pi-mcp-adapter` extension, so `~/.pi/agent/mcp.json`, stored credentials, and per-server/per-tool disable rules all apply unchanged. See `/Users/babariviere/src/github.com/babariviere/pi-extensions/skills/spindle-exec/references/mcp.md`.
+Spindle's in-process MCP client connects configured servers lazily. `mcp.list`, `mcp.search`, and `mcp.describe` use config and cached schemas; `mcp.connect` refreshes a server's tools. See [MCP](mcp.md) for discovery, calls, and authorization.
 
 ## `agents` — custom markdown subagents
 
-`agents.list()` / `agents.run({agent, task})` / `agents.runAll({tasks})` / `agents.start({agent, task})` / `agents.wait({runId})` / `agents.status()` / `agents.cancel({runId})`. These run agent definitions discovered on disk (`~/.pi/agent/agents/**`, `<cwd>/.pi/agents/**`) as child Pi sessions. `run`/`runAll` block for a bounded wait window: a result with `state: "running"` means the child is still working, keep its `runId` and resume with `agents.wait` (or let the finished result arrive as a follow-up message). See `/Users/babariviere/src/github.com/babariviere/pi-extensions/skills/spindle-exec/references/agents.md`.
+`agents.list()` / `agents.run({agent, task})` / `agents.runAll({tasks})` / `agents.start({agent, task})` / `agents.wait({runId})` / `agents.status()` / `agents.cancel({runId})`. These run agent definitions discovered on disk (`~/.pi/agent/agents/**`, `<cwd>/.pi/agents/**`) as child Pi sessions. `run`/`runAll` block for a bounded wait window: a result with `state: "running"` means the child is still working, keep its `runId` and resume with `agents.wait` (or let the finished result arrive as a follow-up message). See [subagents](agents.md).
 
 ## `mapLimit` — bounded-concurrency fan-out
 
-Reach for it when the work scales, not just for long programs. Triggers: fanning out over many items (roughly >10), or needing a concurrency cap so you don't hammer the host.
+Use it when work needs a concurrency cap, such as a large batch of file reads or API calls.
 
 - `mapLimit(items, mapper, concurrency?)` or `mapLimit(thunks, concurrency?)` → results in input order.
 - Prefer it over `Promise.all` when the set is large or you want to cap concurrency (e.g. 200 files, 8 at a time). `Promise.all` receives promises that have already started, so it cannot bound how many run at once.
 - Concurrency is unbounded when omitted; pass a number or `{ concurrency }`.
-- `Promise.all` is instrumented: called with 4 or more entries it reports per-item progress to the activity widget. Use it for a handful of independent calls.
-
-There is no `workflow` namespace, no `pipeline` helper, no `phase`/`log` aliases, no `workflow.agent()`, and no token budget. For staged transforms, chain `mapLimit` calls or write a plain loop; for subagents use `agents.run(...)` directly.
+- Use `Promise.all` for a handful of independent calls that do not need a concurrency cap.
 
 ## Error recovery: read the error, fix the shape, retry
 
 The type checker runs before execution, so a shape mistake never executes. Read the line-numbered error and match the declared signature; do not guess. Common mistakes: calling a core tool bare (`grep(...)` → `pi.grep(...)`); 2 positional args on `read`/`bash`/`ls` (use an options object — positional is supported only for `grep`/`find`/`write`/`edit`).
-
-## Batching
-
-Batch independent operations in one program; keep dependent or conditional steps sequential. Use `Promise.all` for a few independent calls and `mapLimit(items, fn, N)` when fanning out over many items or capping concurrency. Return only the compact final value: intermediate results stay in the sandbox and never enter the transcript.

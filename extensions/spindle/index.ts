@@ -46,10 +46,10 @@ export { resolveSpindleEditProfile, type SpindleEditProfile, type SpindleModelId
 const SPINDLE_EXTENSION_ENTRY_PATH = path.resolve(fileURLToPath(import.meta.url));
 
 const FULL_CODE_GUIDANCE_PREFIX =
-	"`spindle_exec` is this session's TypeScript code mode and exclusive tool interface. Write TypeScript orchestration and call `pi.*`; do not use Python as a fallback. Search with `pi.find`, `pi.grep`, or `pi.ls` before reading. Read targeted ranges and avoid large generated, vendored, log, and lock files. Return compact results.\n";
+	"`spindle_exec` is this session's TypeScript code mode and exclusive tool interface. Write TypeScript orchestration and call `pi.*`; do not use Python as a fallback.\n";
 
 const FULL_CODE_GUIDANCE_SUFFIX =
-	" File changes use `pi.edit({ path, edits: [{ oldText, newText }] })`, `pi.write`, or `pi.applyPatch({ patch: π.patch })`. Put V4A and other multiline content in `payloads`. If `pi.edit` misses, reread and retry. Never manually edit through Python, shell text utilities, or redirection; formatters, generators, migrations, builds, and tests are allowed.";
+	" If the `spindle-exec` skill is available, load its listed SKILL.md through `pi.read` inside `spindle_exec` before other tool work, unless already loaded.";
 
 export const resolveSpindleEditGuidance = (model: SpindleModelIdentity | undefined): string => {
 	const profile = resolveSpindleEditProfile(model);

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import { FULL_CODE_GUIDANCE, resolveSpindleEditGuidance, type SpindleModelIdentity } from "./index.ts";
 
@@ -57,16 +58,32 @@ for (const { name, model, expected } of editGuidanceCases) {
 	});
 }
 
-test("full-code guidance identifies concise TypeScript code mode constraints", () => {
+test("full-code guidance bootstraps the skill without duplicating its workflow", () => {
 	assert.match(FULL_CODE_GUIDANCE, /TypeScript code mode and exclusive tool interface/);
 	assert.match(FULL_CODE_GUIDANCE, /do not use Python as a fallback/);
-	assert.match(
-		FULL_CODE_GUIDANCE,
-		/File changes use `pi\.edit\(\{ path, edits: \[\{ oldText, newText \}\] \}\)`, `pi\.write`, or `pi\.applyPatch\(\{ patch: π\.patch \}\)`\./,
-	);
-	assert.match(FULL_CODE_GUIDANCE, /Put V4A and other multiline content in `payloads`\./);
-	assert.match(FULL_CODE_GUIDANCE, /If `pi\.edit` misses, reread and retry\./);
-	assert.match(FULL_CODE_GUIDANCE, /Never manually edit through Python, shell text utilities, or redirection/);
-	assert.match(FULL_CODE_GUIDANCE, /formatters, generators, migrations, builds, and tests are allowed/);
-	assert.ok(Buffer.byteLength(FULL_CODE_GUIDANCE, "utf8") <= 1_000);
+	assert.match(FULL_CODE_GUIDANCE, /If the `spindle-exec` skill is available/);
+	assert.match(FULL_CODE_GUIDANCE, /SKILL\.md through `pi\.read` inside `spindle_exec`/);
+	assert.match(FULL_CODE_GUIDANCE, /before other tool work, unless already loaded/);
+	assert.ok(FULL_CODE_GUIDANCE.includes(resolveSpindleEditGuidance(undefined)));
+	assert.doesNotMatch(FULL_CODE_GUIDANCE, /Search with|Read targeted|File changes use|payloads|reread and retry/);
+	assert.ok(Buffer.byteLength(FULL_CODE_GUIDANCE, "utf8") <= 500);
+});
+
+test("the bundled skill owns static file guidance and portable reference links", () => {
+	const skillUrl = new URL("../../skills/spindle-exec/SKILL.md", import.meta.url);
+	const skill = readFileSync(skillUrl, "utf8");
+	const reference = readFileSync(new URL("references/full-reference.md", skillUrl), "utf8");
+	assert.match(skill, /pi\.find.*pi\.grep.*pi\.ls/);
+	assert.match(skill, /pi\.read\(\{ path, offset, limit \}\)/);
+	assert.match(skill, /Never manually edit through Python, shell text utilities, or redirection/);
+	assert.match(skill, /formatters, generators, migrations, builds, and tests are allowed/);
+	assert.match(reference, /pi\.edit\(\{ path, edits: \[\{ oldText, newText \}\] \}\)/);
+	assert.match(reference, /pi\.applyPatch\(\{ patch: π\.patch \}\)/);
+	assert.match(reference, /Put V4A and other multiline content in `payloads`/);
+	assert.match(reference, /If `pi\.edit` misses, reread/);
+	assert.doesNotMatch(reference, /^---\nname:/);
+	for (const [, link] of skill.matchAll(/\]\((references\/[^)]+)\)/g)) {
+		const target = new URL(link, skillUrl);
+		assert.ok(readFileSync(target, "utf8").length > 0, link);
+	}
 });

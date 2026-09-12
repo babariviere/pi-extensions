@@ -44,8 +44,12 @@ canonical name is used in the tool schema and every prompt surface.
 
 Full-code prompt guidance identifies `spindle_exec` as the session's TypeScript
 code mode and exclusive tool interface, explicitly ruling out Python as an
-orchestration fallback. The guidance is capped by a regression test at 1,000
-UTF-8 bytes so this framing does not turn into a second tool manual. It keeps
+orchestration fallback. The bootstrap is capped by a regression test at 500
+UTF-8 bytes and points to the available `spindle-exec` skill through `pi.read`,
+without requiring repeated reads once loaded. Static search/read practices,
+edit syntax, payload handling, and recovery live in
+[`skills/spindle-exec`](../../skills/spindle-exec/SKILL.md), whose references
+load only as needed. The runtime keeps
 `pi.edit`, `pi.write`, and `pi.applyPatch` available inside the same sandbox,
 but changes their recommended order for the active model. For OpenAI, GPT, and
 Codex identities, it prefers `pi.applyPatch`, with `pi.edit` and `pi.write` as
@@ -59,10 +63,12 @@ without changing tool registration or sandbox policy.
 
 V4A patches are passed through a `payloads` entry and invoked as
 `pi.applyPatch({ patch: π.patch })`; patch text is not embedded in guest code or
-retained by the durable audit projection. Every profile keeps the canonical edit
+retained by the durable audit projection. The skill keeps the canonical edit
 shape and reread-on-failure recovery, prohibits manual editing through shell
 utilities or redirection, and explicitly allows project automation such as
-formatters, generators, migrations, builds, and tests.
+formatters, generators, migrations, builds, and tests. Model-specific edit
+preferences, orchestration-only mode guidance, and compatible core override
+instructions remain runtime-owned.
 
 Final `spindle_exec` details also carry optional versioned `editMetrics`. New
 executions derive it deterministically from the already-projected durable trace,
@@ -181,8 +187,9 @@ Globals inside `spindle_exec`:
   no tokens, and it forced 2769 / 2739 / 2353 into the advisory set in
   `type-checker.ts`, which silently gave up type-level typo detection on every
   `pi.*` argument. The single model-facing statement of the return-shape rule
-  and the one taught spelling per tool lives in `FULL_CODE_GUIDANCE` in
-  `index.ts`. Keep the declarations wide and the guidance narrow.
+  and the one taught spelling per tool lives in `skills/spindle-exec`, loaded
+  through the bootstrap in `index.ts`. Keep the declarations wide and the
+  guidance narrow.
 - `process` — minimal shim built from `env-snapshot.ts`: allowlisted `process.env` (HOME, USER, LOGNAME, SHELL, PWD, PATH, LANG, LC_*, TERM, TMPDIR, XDG_*), `process.platform` / `process.arch`, `process.cwd()`. No secret ever enters the guest.
 - `print`, `console`, `π` (named payloads from the `payloads` argument), `setTimeout` / `setInterval` / `clearTimeout` / `clearInterval`
 - `τ` — the session-scoped scratchpad (`session-store.ts`), reached through five

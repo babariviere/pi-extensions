@@ -1,6 +1,6 @@
-# `agents` reference — custom markdown subagents
+# `agents` reference
 
-Spindle's `agents.*` namespace runs **custom agent definitions discovered on disk**, each as a child `pi` session. It is not a general agent runtime: no actors, no recursion, no handoff. What exists is a small run book: launch a batch, wait for it with a bounded window, poll or cancel it by `runId`.
+Spindle's `agents.*` namespace runs **custom agent definitions discovered on disk**, each as a child `pi` session. Discover definitions with `agents.list()`, and use `agents.models()` when selecting a model override. A `running` result is pending work, not a failure.
 
 Agent definitions are markdown files with YAML frontmatter, discovered from:
 
@@ -105,7 +105,7 @@ return await agents.runAll({
 });
 ```
 
-When several parallel tasks share one `output` path, each run's destination gets a distinct `-<index>` suffix so they do not clobber each other. A single run keeps its `output` verbatim, so stable destinations like `.pi/goal/plan.md` still work.
+When several parallel tasks share one `output` path, each run's destination gets a distinct `-<index>` suffix so they do not clobber each other. A single run keeps its `output` verbatim. Use task-scoped paths, such as `.pi/goal/<slug>/review.md`, to avoid overwriting another task's artifacts.
 
 All runs launched by one call share a single `runId`, and `agents.wait` on it settles when the whole batch settles.
 
@@ -114,8 +114,8 @@ All runs launched by one call share a single `runId`, and `agents.wait` on it se
 Launches without blocking and resolves to `{ runId, agents, state: "running" }`. Use it to fan work out and do something else in the same program:
 
 ```ts
-const { runId } = await agents.start({ agent: "worker", task: "Implement the plan in .pi/goal/plan.md" });
-await pi.bash({ command: "go build ./..." });
+const { runId } = await agents.start({ agent: "reviewer", task: "Review the current diff. Do not edit files." });
+await pi.bash({ command: "npm run typecheck" });
 const settled = await agents.wait({ runId, waitMs: 300_000 });
 return settled.state === "running" ? { pending: runId } : settled.results;
 ```
@@ -163,7 +163,21 @@ When a batch settles and nobody is waiting on it (its window expired, or it was 
 
 An agent definition's `tools:` frontmatter restricts what that agent may call. The child `pi` process always keeps `spindle_exec` regardless of the list, because it is the child's only tool path in full code mode. The declared list is enforced one level down instead, inside the child's sandbox: disallowed tools are removed from the declared `pi.*` schema, hidden from listings, and rejected at the `pi.*` / `extensions.*` boundary with an explicit "not in this agent's tool allowlist" error.
 
-`mcp.*`, `agents.*` and `workflow.*` are not covered by `tools:`.
+`mcp.*` and `agents.*` are not covered by `tools:`.
+
+## Large inputs
+
+For data-heavy analysis, give the child file paths instead of embedding the data in its task. A manifest can identify each file's absolute path, contents, size, and source command so the child can choose what to read. Put the manifest and output alongside the task's other artifacts.
+
+```ts
+// payloads: { task: "Analyze the files listed in the task manifest and report concrete findings." }
+return await agents.run({
+  agent: "reviewer", // choose a name returned by agents.list()
+  task: π.task,
+  reads: [".pi/goal/analyze-export/manifest.json"],
+  output: ".pi/goal/analyze-export/review.md",
+});
+```
 
 ## Execution backend and progress
 

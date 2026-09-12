@@ -1,43 +1,36 @@
-# `mcp` reference — bridge to pi-mcp-adapter
+# `mcp` reference
 
-Spindle does not embed an MCP client. `mcp.*` forwards every call to the single `mcp` gateway tool registered by the sibling **`pi-mcp-adapter`** extension. Consequences:
+Spindle serves `mcp.*` through its own in-process client. It uses `mcp.json` configuration and stored credentials compatible with pi-mcp-adapter; that extension is not required.
 
-- `~/.pi/agent/mcp.json`, stored OAuth/keyring credentials, and per-server / per-tool disable rules apply unchanged — spindle has no MCP config of its own.
-- **Nothing is pre-fetched.** `pi-mcp-adapter` connects servers lazily, so spindle never enumerates tools at sandbox setup. Listing every server's tools eagerly would force every server to connect and could trigger interactive OAuth flows. Discovery is therefore explicit: you call `mcp.list()` / `mcp.search()` / `mcp.describe()` when you actually need it.
-- If `pi-mcp-adapter` is not loaded, the `mcp` namespace still exists (so a program type-checks), and the first call throws an actionable error inside the sandbox. Spindle never fails to start because MCP is unavailable.
+## Discovery
+
+| Call | Purpose |
+|------|---------|
+| `mcp.list()` or `mcp.list({ server })` | Server status from config and cache, without connecting |
+| `mcp.search(query)` or `mcp.search({ query, server?, regex?, includeSchemas? })` | Find tools in the schema cache |
+| `mcp.describe({ tool, server? })` | Read a cached tool's description and input schema |
+| `mcp.connect(server)` | Connect or reconnect one configured server and refresh its schemas |
+
+Discovery does not connect servers automatically. If a configured server has no cached tools, connect that server, then search or describe the needed tool. An empty cache does not mean the service has no tools.
 
 ## Call a tool
 
-```ts
-const result = await mcp.call("context7", "resolve_library_id", { libraryName: "react" });
-```
-
-Sugar — `mcp.<server>.<tool>(args)` is exactly `mcp.call(server, tool, args)`:
+Use the discovered tool name and input schema:
 
 ```ts
-return await mcp.context7.resolve_library_id({ libraryName: "react" });
+return await mcp.call("my-server", "my-tool", { q: "x" });
 ```
 
-The object form is available for names computed at runtime, and `server` may be omitted when the tool name is already unambiguous to the adapter:
+The property form `mcp.<server>.<tool>(args)` calls the same tool. The object form supports computed names; omit `server` only when the tool name is unambiguous:
 
 ```ts
 return await mcp.call({ server: "my-server", tool: "weird-tool-name", args: { q: "x" } });
 ```
 
-## Discovery
+Tool calls connect lazily and return `{ text: string, content: unknown[], structuredContent: unknown }`. Tool errors reject with their text. Management calls return status, metadata, or connection results instead of this tool-result envelope.
 
-| Call | Gateway parameters | Purpose |
-|------|--------------------|---------|
-| `mcp.list()` | `{}` | Server status view from the adapter (does not force a connect) |
-| `mcp.list({ server })` | `{ server }` | Status for one server |
-| `mcp.search(query)` or `mcp.search({ query, server?, regex?, includeSchemas? })` | `{ search, server?, regex?, includeSchemas? }` | Find tools by query |
-| `mcp.describe(tool)` or `mcp.describe({ tool })` | `{ describe }` | One tool's description and input schema |
-| `mcp.call(server, tool, args)` | `{ server, tool, args }` | Invoke a tool |
+## Authorization and policy
 
-## Result shape
+Configured tool filters and Spindle's MCP read-only policy apply to calls. Stored tokens can refresh headlessly. If authorization requires user consent, ask the user to run `/mcp-auth <server>`; the tool cannot open a consent flow on the user's behalf.
 
-Tool results are normalized to `{ text: string, content: unknown[], structuredContent: unknown }`. A gateway error becomes a thrown exception inside the sandbox, carrying the gateway's text.
-
-## Not available
-
-There is no `mcp.servers()`, `mcp.reload()`, or `mcp.register()`. Those were upstream server-management operations; server registration and reconnection are owned by `pi-mcp-adapter` and its own UI.
+Use `/mcp` for status, `/mcp connect <server>` to refresh schemas, and `/mcp logout <server>` to clear stored credentials. There is no `mcp.servers()`, `mcp.reload()`, or `mcp.register()` API.
