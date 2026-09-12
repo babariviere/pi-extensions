@@ -30,6 +30,13 @@ describe("background-agents durable jobs", () => {
 		assert.equal(first?.jobId, "high");
 		scheduler.setEmergencyStop(true);
 		assert.equal(scheduler.claimNext("worker", 1000), null);
+		assert.equal(
+			scheduler.finishAttempt(
+				{ attemptId: first!.attemptId, state: "failed", now: new Date("2026-01-01T00:00:00.500Z") },
+				"worker",
+			),
+			true,
+		);
 		scheduler.setEmergencyStop(false);
 		assert.equal(scheduler.claimNext("worker", 1000, new Date("2026-01-01T00:00:00Z"))?.jobId, "low");
 		database.close();

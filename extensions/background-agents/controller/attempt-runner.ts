@@ -57,6 +57,23 @@ export function combinedRequiredChecks(globalChecks: readonly string[], reposito
 	return [...new Set([...globalChecks, ...repositoryChecks])];
 }
 
+/** Every controller-owned secret and control-plane path is denied to verifier services. */
+export function verifierInaccessiblePaths(config: BackgroundAgentsConfig): string[] {
+	const paths = [
+		config.databasePath,
+		`${config.databasePath}-wal`,
+		`${config.databasePath}-shm`,
+		`${config.databasePath}-journal`,
+		config.socket.path,
+		config.backup.directory,
+		...config.profiles.flatMap((profile) => [profile.agentDir, ...profile.authFiles]),
+		...[config.sources.slack, config.sources.linear, config.sources.datadog].flatMap((source) =>
+			source.credentialPath ? [source.credentialPath] : [],
+		),
+	];
+	return [...new Set(paths.map((path) => resolve(path)))];
+}
+
 export const ATTEMPT_RESULT_VERSION = 1 as const;
 export const ATTEMPT_RESULT_FILE = "result.json";
 
@@ -342,6 +359,8 @@ export class ProductionAttemptRunner {
 		const attemptDirectory = join(attemptRoot, job.case_id, claim.attemptId);
 		const resultPath = join(attemptDirectory, ATTEMPT_RESULT_FILE);
 		try {
+			if (!database.attemptMayPublish(claim.attemptId, claim.stopEpoch))
+				throw new Error("attempt was invalidated by emergency stop");
 			mkdirSync(attemptDirectory, { recursive: true, mode: 0o700 });
 			const questionLimits = {
 				maxTimeMs: this.options.config.question.maxRuntimeMs,
@@ -443,7 +462,11 @@ export class ProductionAttemptRunner {
 					if (!pullRequest?.pull_request) throw new Error("verifier job is not bound to a pull request");
 				}
 				const client = this.options.githubClientFactory?.(git) ?? this.options.githubClient;
-				if (client) githubEffects = new GitHubEffects(database, client, { owner: `background:${claim.attemptId}` });
+				if (client)
+					githubEffects = new GitHubEffects(database, client, {
+						owner: `background:${claim.attemptId}`,
+						expectedStopEpoch: claim.stopEpoch,
+					});
 			} else {
 				if (role === "worker" || role === "verifier") throw new Error(`${role} requires a configured repository`);
 				mkdirSync(worktreeDirectory, { recursive: true, mode: 0o700 });
@@ -558,11 +581,7 @@ export class ProductionAttemptRunner {
 					security: role === "verifier" ? "verifier" : "agent",
 					...(role === "verifier"
 						? {
-								inaccessiblePaths: [
-									this.options.config.socket.path,
-									...(selected.profile.authFiles ?? []),
-									selected.profile.agentDir,
-								],
+								inaccessiblePaths: verifierInaccessiblePaths(this.options.config),
 							}
 						: {}),
 					model: claim.model,
@@ -589,6 +608,8 @@ export class ProductionAttemptRunner {
 			)(launched.unit, this.options.config.systemd.maxRuntimeMs);
 			if (completion.state !== "succeeded")
 				return { state: "failed", failure: completion.reason ?? "attempt unit failed" };
+			if (!database.attemptMayPublish(claim.attemptId, claim.stopEpoch))
+				throw new Error("attempt was invalidated by emergency stop");
 			let rawArtifact: unknown;
 			try {
 				rawArtifact = JSON.parse(await readFile(resultPath, "utf8"));
@@ -831,6 +852,7 @@ export class ProductionAttemptRunner {
 					worktree,
 					branch: workItemBranch,
 					base: baseBranch,
+					baseSha: baseRef,
 					title,
 					body,
 				});
@@ -918,6 +940,7 @@ export class ProductionAttemptRunner {
 					const ready = await githubEffects.readyForReview({
 						reference: pullRequest.pull_request,
 						verifiedCommit: manifest.candidateSha,
+						expectedBaseSha: manifest.baseSha,
 						verificationPassed: true,
 						requiredCiPassed: report.ci.allRequiredPassed,
 						manifestId: row.id,

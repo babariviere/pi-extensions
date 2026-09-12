@@ -114,6 +114,7 @@ export async function checkRequiredCi(
 export interface CiVerifierOptions {
 	reference: number | string;
 	candidateSha: string;
+	expectedBaseSha: string;
 	requiredChecks: readonly string[];
 	runner: ReplayProcessRunner;
 	cwd: string;
@@ -145,6 +146,16 @@ export async function verifyPullRequestCi(options: CiVerifierOptions): Promise<C
 				polls,
 			};
 		}
+		if (identity.baseSha?.toLowerCase() !== options.expectedBaseSha.toLowerCase()) {
+			return {
+				checks: {},
+				results: [],
+				allRequiredPassed: false,
+				missing: [],
+				uncertainties: ["pull request base SHA does not match manifest base"],
+				polls,
+			};
+		}
 		latest = await checkRequiredCi(options.reference, options.requiredChecks, options.runner, options.cwd);
 		const currentIdentity = await pullRequestIdentity(options.reference, options.runner, options.cwd);
 		if (currentIdentity.headSha !== options.candidateSha.toLowerCase()) {
@@ -154,6 +165,16 @@ export async function verifyPullRequestCi(options: CiVerifierOptions): Promise<C
 				allRequiredPassed: false,
 				missing: [],
 				uncertainties: ["pull request head SHA changed during CI verification"],
+				polls,
+			};
+		}
+		if (currentIdentity.baseSha?.toLowerCase() !== options.expectedBaseSha.toLowerCase()) {
+			return {
+				checks: {},
+				results: [],
+				allRequiredPassed: false,
+				missing: [],
+				uncertainties: ["pull request base SHA changed during CI verification"],
 				polls,
 			};
 		}

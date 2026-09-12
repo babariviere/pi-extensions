@@ -87,10 +87,20 @@ export class GitHubControllerEffectClient implements GitHubEffectClient {
 		if (!pullRequest) throw new Error("GitHub pull request was not found");
 		if (pullRequest.headSha?.toLowerCase() !== verifiedCommit.toLowerCase())
 			throw new Error("GitHub pull request head does not match verified commit");
+		if (boundary.expectedBaseSha && pullRequest.baseSha?.toLowerCase() !== boundary.expectedBaseSha.toLowerCase())
+			throw new Error("GitHub pull request base SHA does not match verified base");
 		const result = await this.github.repository.runner("gh", ["pr", "ready", String(reference)], {
 			cwd: this.github.repository.root,
 		});
 		if (result.code !== 0) throw new Error(result.stderr.trim() || "gh pr ready failed");
+		const ready = await this.github.getPullRequest(reference);
+		if (
+			!ready ||
+			ready.headSha?.toLowerCase() !== verifiedCommit.toLowerCase() ||
+			(boundary.expectedBaseSha !== undefined &&
+				ready.baseSha?.toLowerCase() !== boundary.expectedBaseSha.toLowerCase())
+		)
+			throw new Error("GitHub pull request SHA changed after marking ready");
 	}
 }
 
@@ -114,6 +124,7 @@ export interface DraftPullRequestResult {
 export interface ReadyForReviewInput {
 	reference: number | string;
 	verifiedCommit: string;
+	expectedBaseSha?: string;
 	verificationPassed: boolean;
 	requiredCiPassed?: boolean;
 	manifestId?: string;
@@ -155,8 +166,9 @@ export function githubReadyOperationKey(
 	verifiedCommit: string,
 	verificationRunId = "verification-required",
 	requiredChecks: readonly string[] = [],
+	expectedBaseSha?: string,
 ): string {
-	return `github:pr:ready:${reference}:${verifiedCommit}:${verificationRunId}:${requiredChecks.join(",")}`;
+	return `github:pr:ready:${reference}:${verifiedCommit}:${expectedBaseSha ?? "base-required"}:${verificationRunId}:${requiredChecks.join(",")}`;
 }
 
 /** Durable GitHub delivery effects. There is intentionally no merge operation. */
@@ -290,40 +302,55 @@ export class GitHubEffects {
 		if (!verification) throw new Error("ready-for-review requires a current passing verification");
 		if (verification.candidateSha.toLowerCase() !== input.verifiedCommit.toLowerCase())
 			throw new Error("verified commit does not match the verification manifest candidate");
+		if (input.expectedBaseSha && verification.baseSha.toLowerCase() !== input.expectedBaseSha.toLowerCase())
+			throw new Error("verified base does not match the verification manifest base");
+		const expectedBaseSha = input.expectedBaseSha ?? verification.baseSha;
+		const effectiveInput: ReadyForReviewInput = { ...input, expectedBaseSha };
 		for (const check of input.requiredChecks ?? [])
 			if (verification.ciChecks[check] !== "pass") throw new Error(`required CI check has not passed: ${check}`);
 		const current = await this.client.getPullRequest(input.reference);
 		if (!current) throw new Error("GitHub pull request was not found");
 		if (current.headSha?.toLowerCase() !== input.verifiedCommit.toLowerCase())
 			return { status: "blocked", pullRequest: current };
+		if (current.baseSha?.toLowerCase() !== expectedBaseSha.toLowerCase())
+			return { status: "blocked", pullRequest: current };
 		const operationKey = githubReadyOperationKey(
 			input.reference,
 			input.verifiedCommit,
 			input.verificationRunId,
 			input.requiredChecks,
+			expectedBaseSha,
 		);
 		return this.executor.execute<ReadyForReviewResult>({
 			operationKey,
 			provider: "github",
 			action: "ready-for-review",
-			intent: input,
-			reconcile: async () => this.reconcileReady(input),
+			intent: effectiveInput,
+			reconcile: async () => this.reconcileReady(effectiveInput),
 			perform: async () => {
 				const pullRequest = await this.client.getPullRequest(input.reference);
 				if (!pullRequest) throw new Error("GitHub pull request was not found");
-				if (pullRequest.headSha !== input.verifiedCommit) return { status: "blocked", pullRequest };
+				if (pullRequest.headSha?.toLowerCase() !== input.verifiedCommit.toLowerCase())
+					return { status: "blocked", pullRequest };
+				if (pullRequest.baseSha?.toLowerCase() !== expectedBaseSha.toLowerCase())
+					return { status: "blocked", pullRequest };
 				if (!pullRequest.isDraft) return { status: "already-ready", pullRequest };
 				await this.client.markReady(input.reference, {
 					passed: true,
 					verifiedCommit: input.verifiedCommit,
+					expectedBaseSha,
 					requiredCiPassed: input.requiredCiPassed ?? true,
 					manifestId: input.manifestId,
 					verificationRunId: input.verificationRunId,
 					requiredChecks: input.requiredChecks,
 				});
 				const ready = await this.client.getPullRequest(input.reference);
-				if (!ready || ready.headSha !== input.verifiedCommit)
-					throw new Error("GitHub pull request head changed while marking ready");
+				if (
+					!ready ||
+					ready.headSha?.toLowerCase() !== input.verifiedCommit.toLowerCase() ||
+					ready.baseSha?.toLowerCase() !== expectedBaseSha.toLowerCase()
+				)
+					throw new Error("GitHub pull request SHA changed while marking ready");
 				return { status: "ready", pullRequest: ready };
 			},
 			remoteIdentifier: (value) => String(value.pullRequest.number),
@@ -335,6 +362,7 @@ export class GitHubEffects {
 		return this.readyForReview({
 			reference,
 			verifiedCommit: boundary.verifiedCommit,
+			expectedBaseSha: boundary.expectedBaseSha,
 			verificationPassed: boundary.passed,
 			requiredCiPassed: boundary.requiredCiPassed,
 			manifestId: boundary.manifestId,
@@ -346,7 +374,9 @@ export class GitHubEffects {
 	private async reconcileReady(input: ReadyForReviewInput): Promise<EffectReconciliation<ReadyForReviewResult>> {
 		const pullRequest = await this.client.getPullRequest(input.reference);
 		if (!pullRequest) return { found: false };
-		if (pullRequest.headSha !== input.verifiedCommit)
+		if (pullRequest.headSha?.toLowerCase() !== input.verifiedCommit.toLowerCase())
+			return { found: true, value: { status: "blocked", pullRequest } };
+		if (input.expectedBaseSha && pullRequest.baseSha?.toLowerCase() !== input.expectedBaseSha.toLowerCase())
 			return { found: true, value: { status: "blocked", pullRequest } };
 		if (!pullRequest.isDraft) return { found: true, value: { status: "already-ready", pullRequest } };
 		return { found: false };

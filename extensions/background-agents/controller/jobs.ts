@@ -133,6 +133,12 @@ export class JobScheduler {
 				attempt.job_id,
 			);
 			this.database.run("DELETE FROM attempt_leases WHERE attempt_id = ?", input.attemptId);
+			this.database.run(
+				"UPDATE emergency_stop_attempts SET systemd_confirmed = 1, reconciled = 1, updated_at = ? WHERE attempt_id = ? AND systemd_confirmed = 0 AND (SELECT systemd_unit FROM attempts WHERE id = ?) IS NULL",
+				finishedAt,
+				input.attemptId,
+				input.attemptId,
+			);
 			if (attempt.profile_id) this.database.refreshProviderProfileActivity(attempt.profile_id, now);
 			return true;
 		});

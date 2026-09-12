@@ -12,6 +12,7 @@ import {
 	ProductionAttemptRunner,
 	VERIFICATION_RESULT_FILE,
 	VERIFICATION_RESULT_VERSION,
+	verifierInaccessiblePaths,
 } from "./attempt-runner.ts";
 import type { GitHubEffectClient } from "./effects/github.ts";
 import { BackgroundAgentsStateMachine } from "./state-machine.ts";
@@ -20,6 +21,52 @@ import { SpecificationWorkflow } from "./workflows/specification.ts";
 import { createEvidenceManifest } from "./verification/evidence.ts";
 
 const SHA = "0123456789012345678901234567890123456789";
+
+test("verifier isolation denies every configured profile, source, and control-plane path", () => {
+	const root = mkdtempSync(join(tmpdir(), "background-verifier-paths-"));
+	try {
+		const config = normalizeBackgroundAgentsConfig({
+			databasePath: join(root, "controller.sqlite"),
+			socket: { path: join(root, "controller.sock") },
+			backup: { directory: join(root, "backups") },
+			profiles: [
+				{
+					id: "one",
+					provider: "anthropic",
+					agentDir: join(root, "profile-one"),
+					authFiles: [join(root, "one.json")],
+				},
+				{ id: "two", provider: "openai", agentDir: join(root, "profile-two"), authFiles: [join(root, "two.json")] },
+			],
+			sources: {
+				slack: { enabled: true, credentialPath: join(root, "slack.json") },
+				linear: { enabled: true, credentialPath: join(root, "linear.json"), repositoryMappings: {} },
+				datadog: {
+					enabled: true,
+					credentialPath: join(root, "datadog.json"),
+					monitorQueries: [],
+					errorQueries: [],
+					repositoryMappings: {},
+				},
+			},
+		});
+		const paths = new Set(verifierInaccessiblePaths(config));
+		for (const path of [
+			config.databasePath,
+			`${config.databasePath}-wal`,
+			`${config.databasePath}-shm`,
+			config.socket.path,
+			config.backup.directory,
+			...config.profiles.flatMap((profile) => [profile.agentDir, ...profile.authFiles]),
+			config.sources.slack.credentialPath,
+			config.sources.linear.credentialPath,
+			config.sources.datadog.credentialPath,
+		].filter((path): path is string => path !== undefined))
+			assert.ok(paths.has(path));
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
 
 test("verifier requirements combine global and repository checks without duplicates", () => {
 	assert.deepEqual(combinedRequiredChecks(["lint", "test"], ["test", "integration"]), ["lint", "test", "integration"]);
@@ -314,6 +361,7 @@ test("delivers an approved two-item stack through durable GitHub effects", async
 			url: string;
 			branch: string;
 			base: string;
+			baseSha?: string;
 			isDraft: boolean;
 			headSha?: string;
 			title?: string;
@@ -338,6 +386,7 @@ test("delivers an approved two-item stack through durable GitHub effects", async
 				url: `https://github.test/pr/${nextNumber}`,
 				branch: input.branch,
 				base: input.base,
+				baseSha: input.base === "trunk" ? baseSha : candidateShas[0],
 				isDraft: true,
 				headSha: heads.get(input.branch),
 				title: input.title,

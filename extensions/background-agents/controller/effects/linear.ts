@@ -32,6 +32,7 @@ export interface LinearStartInput {
 	issue: LinearIssueSnapshot;
 	phase: LinearWorkPhase;
 	owner?: string;
+	stopEpoch?: number;
 }
 
 export interface LinearStartResult {
@@ -89,7 +90,14 @@ export class LinearEffects {
 			phase: input.phase,
 		};
 
-		return this.executor.execute<LinearStartResult>({
+		const executor =
+			input.stopEpoch === undefined
+				? this.executor
+				: new ExternalEffectExecutor(this.store, {
+						owner: input.owner ?? "linear",
+						expectedStopEpoch: input.stopEpoch,
+					});
+		return executor.execute<LinearStartResult>({
 			operationKey,
 			provider: "linear",
 			action: "advance-to-started",
@@ -116,7 +124,11 @@ export class LinearEffects {
 		const states = (await this.client.getStartedStates({ id: current.teamId, key: current.teamKey })).filter(
 			isStarted,
 		);
-		const target = states.find((state) => normalized(state.name) === "in progress");
+		const target =
+			states.find((state) => normalized(state.name) === "in progress") ??
+			[...states].sort((left, right) =>
+				`${normalized(left.name)}\u0000${left.id}`.localeCompare(`${normalized(right.name)}\u0000${right.id}`),
+			)[0];
 		if (!target) return { kind: "preserved", state: current.state };
 		return { kind: "advance", state: current.state, target };
 	}

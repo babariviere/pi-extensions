@@ -178,4 +178,23 @@ describe("background-agents SQLite ownership", () => {
 		assert.equal(reopened.get<{ state: string }>("SELECT state FROM jobs WHERE id = ?", otherJob)?.state, "paused");
 		reopened.close();
 	});
+
+	test("persists stop attempts and invalidates stale publishers", () => {
+		const path = databasePath();
+		const first = new BackgroundAgentsDatabase(path);
+		const caseId = first.createCase({ title: "epoch", source: "manual" });
+		const jobId = first.createJob({ caseId, role: "investigator" });
+		const claim = first.claimJob(jobId, "runner");
+		assert.ok(claim);
+		first.setEmergencyStop(true, "operator");
+		assert.equal(first.attemptMayPublish(claim.attemptId, claim.stopEpoch), false);
+		first.close();
+
+		const reopened = new BackgroundAgentsDatabase(path);
+		assert.equal(reopened.listEmergencyStopAttempts().length, 1);
+		assert.throws(() => reopened.setEmergencyStop(false, "operator"), /not fully reconciled/);
+		reopened.markEmergencyStopAttempt(claim.attemptId, { systemdConfirmed: true, reconciled: true });
+		reopened.setEmergencyStop(false, "operator");
+		reopened.close();
+	});
 });

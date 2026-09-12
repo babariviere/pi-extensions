@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
 import { join, resolve, relative, isAbsolute } from "node:path";
 import { tmpdir } from "node:os";
 import { spawn } from "node:child_process";
@@ -217,15 +217,35 @@ async function replayCommand(
 	runner: ReplayProcessRunner,
 	environment: NodeJS.ProcessEnv,
 ): Promise<CommandReplay> {
-	const cwd = resolve(worktree, commandCwd(command));
-	if (!inside(worktree, cwd))
+	const physicalWorktree = await realpath(worktree);
+	const requestedCwd = resolve(worktree, commandCwd(command));
+	let cwd: string;
+	try {
+		cwd = await realpath(requestedCwd);
+	} catch {
+		throw new Error(`evidence command cwd does not exist: ${commandCwd(command)}`);
+	}
+	if (!inside(physicalWorktree, cwd))
 		throw new Error(`evidence command cwd escapes verifier worktree: ${commandCwd(command)}`);
 	const env = buildReplayEnvironment(environment, command.environment ?? []);
 	const result = await runner(command.executable, commandArgv(command), { cwd, env, timeoutMs: command.timeoutMs });
 	const artifactChecksums: Record<string, string> = {};
 	for (const [path, expected] of Object.entries(command.artifactChecksums ?? {})) {
-		const artifact = resolve(worktree, path);
-		if (!inside(worktree, artifact)) throw new Error(`artifact path escapes verifier worktree: ${path}`);
+		const requestedArtifact = resolve(worktree, path);
+		let artifact = requestedArtifact;
+		try {
+			artifact = await realpath(requestedArtifact);
+		} catch {
+			try {
+				artifact = join(
+					await realpath(resolve(requestedArtifact, "..")),
+					requestedArtifact.split(/[\\/]/).pop() ?? "",
+				);
+			} catch {
+				artifact = requestedArtifact;
+			}
+		}
+		if (!inside(physicalWorktree, artifact)) throw new Error(`artifact path escapes verifier worktree: ${path}`);
 		try {
 			artifactChecksums[path] = await sha256File(artifact);
 		} catch {

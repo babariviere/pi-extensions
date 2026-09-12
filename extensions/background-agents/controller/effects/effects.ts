@@ -7,10 +7,11 @@ export interface EffectStore {
 	completeEffect(operationKey: string, owner: string, outcome?: unknown, remoteIdentifier?: string): void;
 	markEffectUnknown(operationKey: string, owner: string, outcome: unknown): void;
 	isEmergencyStop?(): boolean;
+	getEmergencyStopEpoch?(): number;
 	getReadyVerification?: (
 		manifestId: string,
 		verificationRunId: string,
-	) => { id: string; candidateSha: string; ciChecks: Record<string, string> } | undefined;
+	) => { id: string; baseSha: string; candidateSha: string; ciChecks: Record<string, string> } | undefined;
 }
 
 export interface ExternalMutationControls {
@@ -35,6 +36,7 @@ export interface EffectExecutorOptions {
 	leaseMs?: number;
 	now?: () => Date;
 	controls?: ExternalMutationControls;
+	expectedStopEpoch?: number;
 }
 
 function errorOutcome(error: unknown): { error: string } {
@@ -85,8 +87,18 @@ export class ExternalEffectExecutor {
 				}
 			}
 
+			if (
+				this.options.expectedStopEpoch !== undefined &&
+				this.store.getEmergencyStopEpoch?.() !== this.options.expectedStopEpoch
+			)
+				throw new Error("effect was invalidated by emergency stop");
 			if (this.stopped()) throw new Error("external mutations are disabled by emergency stop");
 			const value = await operation.perform();
+			if (
+				this.options.expectedStopEpoch !== undefined &&
+				this.store.getEmergencyStopEpoch?.() !== this.options.expectedStopEpoch
+			)
+				throw new Error("effect was invalidated by emergency stop");
 			this.store.completeEffect(
 				operation.operationKey,
 				this.options.owner,

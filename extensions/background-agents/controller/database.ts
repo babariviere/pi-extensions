@@ -141,6 +141,7 @@ export interface DurableRolloutState {
 
 export interface DurableControlState {
 	emergencyStop: boolean;
+	stopEpoch: number;
 	rollout: DurableRolloutState;
 }
 
@@ -186,6 +187,7 @@ export interface JobClaim {
 	expiresAt: string;
 	profileId?: string;
 	model?: string;
+	stopEpoch: number;
 }
 
 export interface ProviderProfileStateInput {
@@ -459,7 +461,7 @@ export class BackgroundAgentsDatabase {
 	getControlState(): DurableControlState {
 		const row = this.database
 			.prepare(
-				"SELECT emergency_stop, rollout_default, source_overrides, repository_overrides FROM controller_control_state WHERE id = 1",
+				"SELECT emergency_stop, stop_epoch, rollout_default, source_overrides, repository_overrides FROM controller_control_state WHERE id = 1",
 			)
 			.get() as Row | undefined;
 		if (!row) throw new Error("controller control state is unavailable");
@@ -474,6 +476,7 @@ export class BackgroundAgentsDatabase {
 		};
 		return {
 			emergencyStop: Number(row.emergency_stop) === 1,
+			stopEpoch: Number(row.stop_epoch),
 			rollout: {
 				defaultMode: rowString(row, "rollout_default") as RolloutMode,
 				sourceOverrides: parse("source_overrides"),
@@ -506,14 +509,39 @@ export class BackgroundAgentsDatabase {
 		return this.getControlState().emergencyStop;
 	}
 
+	getEmergencyStopEpoch(): number {
+		return this.getControlState().stopEpoch;
+	}
+
 	setEmergencyStop(enabled: boolean, actor: string, now = new Date()): void {
 		const createdAt = utcTimestamp(now, "now");
 		this.withTransaction(() => {
+			const current = this.database
+				.prepare("SELECT emergency_stop, stop_epoch FROM controller_control_state WHERE id = 1")
+				.get() as Row | undefined;
+			if (!current) throw new Error("controller control state is unavailable");
+			const wasEnabled = Number(current.emergency_stop) === 1;
+			const epoch = Number(current.stop_epoch) + (enabled && !wasEnabled ? 1 : 0);
 			this.database
 				.prepare(
-					"UPDATE controller_control_state SET initialized = 1, emergency_stop = ?, updated_at = ? WHERE id = 1",
+					"UPDATE controller_control_state SET initialized = 1, emergency_stop = ?, stop_epoch = ?, updated_at = ? WHERE id = 1",
 				)
-				.run(enabled ? 1 : 0, createdAt);
+				.run(enabled ? 1 : 0, epoch, createdAt);
+			if (enabled && !wasEnabled) {
+				this.database
+					.prepare(
+						"INSERT OR IGNORE INTO emergency_stop_attempts (stop_epoch, attempt_id, created_at, updated_at) SELECT ?, id, ?, ? FROM attempts WHERE state = 'running'",
+					)
+					.run(epoch, createdAt, createdAt);
+			}
+			if (!enabled) {
+				const pending = this.database
+					.prepare(
+						"SELECT count(*) AS count FROM emergency_stop_attempts WHERE stop_epoch = ? AND (systemd_confirmed = 0 OR reconciled = 0)",
+					)
+					.get(epoch) as Row;
+				if (Number(pending.count) > 0) throw new Error("emergency stop attempts are not fully reconciled");
+			}
 			this.recordOperatorEventInTransaction(
 				enabled ? "emergency-stop.enabled" : "emergency-stop.disabled",
 				actor,
@@ -521,6 +549,56 @@ export class BackgroundAgentsDatabase {
 				createdAt,
 			);
 		});
+	}
+
+	listEmergencyStopAttempts(): Array<{
+		stopEpoch: number;
+		attemptId: string;
+		systemdConfirmed: boolean;
+		reconciled: boolean;
+	}> {
+		const epoch = this.getEmergencyStopEpoch();
+		return this.database
+			.prepare(
+				"SELECT stop_epoch, attempt_id, systemd_confirmed, reconciled FROM emergency_stop_attempts WHERE stop_epoch = ? ORDER BY attempt_id",
+			)
+			.all(epoch)
+			.map((row) => {
+				const value = row as Row;
+				return {
+					stopEpoch: Number(value.stop_epoch),
+					attemptId: rowString(value, "attempt_id"),
+					systemdConfirmed: Number(value.systemd_confirmed) === 1,
+					reconciled: Number(value.reconciled) === 1,
+				};
+			});
+	}
+
+	markEmergencyStopAttempt(attemptId: string, status: { systemdConfirmed?: boolean; reconciled?: boolean }): void {
+		const epoch = this.getEmergencyStopEpoch();
+		this.run(
+			"UPDATE emergency_stop_attempts SET systemd_confirmed = coalesce(?, systemd_confirmed), reconciled = coalesce(?, reconciled), updated_at = ? WHERE stop_epoch = ? AND attempt_id = ?",
+			status.systemdConfirmed === undefined ? null : status.systemdConfirmed ? 1 : 0,
+			status.reconciled === undefined ? null : status.reconciled ? 1 : 0,
+			new Date().toISOString(),
+			epoch,
+			requiredString(attemptId, "attemptId"),
+		);
+	}
+
+	/** An attempt may publish only if it was not invalidated by a stop epoch. */
+	attemptMayPublish(attemptId: string, stopEpoch: number): boolean {
+		const row = this.get<{ attempt_epoch: number; current_epoch: number; emergency_stop: number; state: string }>(
+			"SELECT a.stop_epoch AS attempt_epoch, c.stop_epoch AS current_epoch, c.emergency_stop, a.state FROM attempts a CROSS JOIN controller_control_state c WHERE a.id = ?",
+			attemptId,
+		);
+		return Boolean(
+			row &&
+				row.state === "running" &&
+				Number(row.attempt_epoch) === stopEpoch &&
+				Number(row.current_epoch) === stopEpoch &&
+				Number(row.emergency_stop) === 0,
+		);
 	}
 
 	/** Pause only jobs captured by an emergency-stop activation. */
@@ -532,7 +610,7 @@ export class BackgroundAgentsDatabase {
 				const job = this.database
 					.prepare("SELECT state FROM jobs WHERE id = ?")
 					.get(requiredString(jobId, "jobId")) as Row | undefined;
-				if (!job || !["queued", "running", "needs-human"].includes(rowString(job, "state"))) continue;
+				if (!job || !["queued", "running"].includes(rowString(job, "state"))) continue;
 				this.database
 					.prepare("INSERT INTO emergency_stop_paused_jobs (job_id, paused_at) VALUES (?, ?)")
 					.run(jobId, pausedAt);
@@ -989,10 +1067,10 @@ export class BackgroundAgentsDatabase {
 	getReadyVerification(
 		manifestId: string,
 		verificationRunId: string,
-	): { id: string; candidateSha: string; ciChecks: Record<string, string> } | undefined {
+	): { id: string; baseSha: string; candidateSha: string; ciChecks: Record<string, string> } | undefined {
 		const row = this.database
 			.prepare(
-				"SELECT vr.id, vr.verdict, vr.ci_checks, em.candidate_sha FROM verification_runs vr JOIN evidence_manifests em ON em.id = vr.manifest_id WHERE vr.id = ? AND vr.manifest_id = ? ORDER BY vr.created_at DESC, vr.rowid DESC LIMIT 1",
+				"SELECT vr.id, vr.verdict, vr.ci_checks, em.base_sha, em.candidate_sha FROM verification_runs vr JOIN evidence_manifests em ON em.id = vr.manifest_id WHERE vr.id = ? AND vr.manifest_id = ? ORDER BY vr.created_at DESC, vr.rowid DESC LIMIT 1",
 			)
 			.get(verificationRunId, manifestId) as Row | undefined;
 		if (!row || rowString(row, "verdict") !== "pass") return undefined;
@@ -1002,6 +1080,7 @@ export class BackgroundAgentsDatabase {
 		if (!latest || rowString(latest, "id") !== rowString(row, "id")) return undefined;
 		return {
 			id: rowString(row, "id"),
+			baseSha: rowString(row, "base_sha"),
 			candidateSha: rowString(row, "candidate_sha"),
 			ciChecks: JSON.parse(rowString(row, "ci_checks")) as Record<string, string>,
 		};
@@ -1064,6 +1143,7 @@ export class BackgroundAgentsDatabase {
 		if (!Number.isSafeInteger(leaseMs) || leaseMs <= 0) throw new Error("leaseMs must be a positive integer");
 		return this.withTransaction(() => {
 			if (this.isEmergencyStop()) return null;
+			const stopEpoch = this.getEmergencyStopEpoch();
 			const job = this.database.prepare("SELECT id, case_id, role, state FROM jobs WHERE id = ?").get(jobId) as
 				| Row
 				| undefined;
@@ -1111,13 +1191,20 @@ export class BackgroundAgentsDatabase {
 			if (queuedAttempt) {
 				this.database
 					.prepare(
-						"UPDATE attempts SET state = 'running', profile_id = ?, model = ?, heartbeat_at = ?, started_at = ? WHERE id = ? AND state = 'queued'",
+						"UPDATE attempts SET state = 'running', profile_id = ?, model = ?, stop_epoch = ?, heartbeat_at = ?, started_at = ? WHERE id = ? AND state = 'queued'",
 					)
-					.run(assignment?.profileId ?? null, assignment?.model ?? null, claimedAt, claimedAt, attemptId);
+					.run(
+						assignment?.profileId ?? null,
+						assignment?.model ?? null,
+						stopEpoch,
+						claimedAt,
+						claimedAt,
+						attemptId,
+					);
 			} else {
 				this.database
 					.prepare(
-						"INSERT INTO attempts (id, job_id, case_id, role, generation, state, profile_id, model, heartbeat_at, started_at) VALUES (?, ?, ?, ?, ?, 'running', ?, ?, ?, ?)",
+						"INSERT INTO attempts (id, job_id, case_id, role, generation, state, profile_id, model, stop_epoch, heartbeat_at, started_at) VALUES (?, ?, ?, ?, ?, 'running', ?, ?, ?, ?, ?)",
 					)
 					.run(
 						attemptId,
@@ -1127,6 +1214,7 @@ export class BackgroundAgentsDatabase {
 						generation,
 						assignment?.profileId ?? null,
 						assignment?.model ?? null,
+						stopEpoch,
 						claimedAt,
 						claimedAt,
 					);
@@ -1146,6 +1234,7 @@ export class BackgroundAgentsDatabase {
 				leaseId,
 				generation,
 				expiresAt,
+				stopEpoch,
 				...(assignment?.profileId ? { profileId: assignment.profileId } : {}),
 				...(assignment?.model ? { model: assignment.model } : {}),
 			};

@@ -118,6 +118,33 @@ describe("durable external effects", () => {
 		database.close();
 	});
 
+	test("deterministically falls back to another started Linear state", async () => {
+		const database = new BackgroundAgentsDatabase(databasePath());
+		let issue: LinearIssueSnapshot = {
+			id: "issue-fallback",
+			revision: "rev-1",
+			teamKey: "ENG",
+			state: { id: "todo", name: "Todo", type: "unstarted" },
+		};
+		const client: LinearEffectClient = {
+			getIssue: async () => issue,
+			getStartedStates: async () => [
+				{ id: "z", name: "Working", type: "started" },
+				{ id: "a", name: "Active", type: "started" },
+			],
+			updateIssueState: async (_id, stateId) => {
+				issue = { ...issue, state: { id: stateId, name: stateId === "a" ? "Active" : "Working", type: "started" } };
+				return true;
+			},
+		};
+		const result = await new LinearEffects(database, client, { owner: "linear-fallback" }).startWork({
+			issue,
+			phase: "investigation",
+		});
+		assert.equal(result.state.id, "a");
+		database.close();
+	});
+
 	test("does not create a draft over an existing ready pull request", async () => {
 		const database = new BackgroundAgentsDatabase(databasePath());
 		const client: GitHubEffectClient = {
@@ -182,6 +209,7 @@ describe("durable external effects", () => {
 			url: "https://github.test/pull/7",
 			branch: "background/case/1",
 			base: "main",
+			baseSha: "base",
 			isDraft: true,
 			headSha: "different-head",
 			title: "Title",

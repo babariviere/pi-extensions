@@ -137,6 +137,8 @@ export function buildSystemdRunArgs(options: SystemdLaunchOptions): string[] {
 	const profile = absolute(options.profileDirectory, "profileDirectory");
 	const session = absolute(options.sessionDirectory, "sessionDirectory");
 	const security = options.security ?? "agent";
+	if (security === "verifier" && (!options.inaccessiblePaths || options.inaccessiblePaths.length === 0))
+		throw new Error("verifier services require a computed inaccessible path deny list");
 	if (descendant(worktree, primary)) throw new Error("worktree must not be inside the primary checkout");
 	for (const [path, field] of [
 		[profile, "profileDirectory"],

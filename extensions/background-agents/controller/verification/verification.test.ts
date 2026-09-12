@@ -260,7 +260,7 @@ test("polls pending required CI with an injected clock and records every result"
 		if (argv[1] === "view")
 			return {
 				code: 0,
-				stdout: JSON.stringify({ number: 7, headRefOid: candidateSha }),
+				stdout: JSON.stringify({ number: 7, headRefOid: candidateSha, baseRefOid: "b".repeat(40) }),
 				stderr: "",
 			};
 		checksPoll += 1;
@@ -273,6 +273,7 @@ test("polls pending required CI with an injected clock and records every result"
 	const result = await verifyPullRequestCi({
 		reference: 7,
 		candidateSha,
+		expectedBaseSha: "b".repeat(40),
 		requiredChecks: ["required"],
 		runner,
 		cwd: ".",
@@ -288,4 +289,26 @@ test("polls pending required CI with an injected clock and records every result"
 	assert.equal(result.allRequiredPassed, true);
 	assert.deepEqual(polls, ["pending", "pass"]);
 	assert.equal(result.polls?.length, 2);
+});
+
+test("rejects a pull request whose base ref differs from the evidence manifest", async () => {
+	const candidateSha = "c".repeat(40);
+	const result = await verifyPullRequestCi({
+		reference: 8,
+		candidateSha,
+		expectedBaseSha: "b".repeat(40),
+		requiredChecks: [],
+		runner: async (_executable, argv) =>
+			argv[1] === "view"
+				? {
+						code: 0,
+						stdout: JSON.stringify({ number: 8, headRefOid: candidateSha, baseRefOid: "d".repeat(40) }),
+						stderr: "",
+					}
+				: { code: 0, stdout: "[]", stderr: "" },
+		cwd: ".",
+		maxWaitMs: 0,
+	});
+	assert.equal(result.allRequiredPassed, false);
+	assert.match(result.uncertainties[0] ?? "", /base SHA/);
 });

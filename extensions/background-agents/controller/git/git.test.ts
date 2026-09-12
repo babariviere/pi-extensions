@@ -128,6 +128,7 @@ test("delivers a sequential draft stack with argv-only GitHub operations", async
 					verified.push(branch);
 					return { passed: true, verifiedCommit: await repository.branchCommit(branch), requiredCiPassed: true };
 				},
+				markReady: async () => {},
 			},
 		);
 
@@ -205,6 +206,7 @@ test("requires a verified boundary and current PR head before marking ready", as
 				["pr", "view"],
 				["pr", "view"],
 				["pr", "ready"],
+				["pr", "view"],
 			],
 		);
 	} finally {

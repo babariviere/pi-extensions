@@ -616,7 +616,7 @@ export class BackgroundAgentsController {
 				const event = eventRow ? this.database.getSourceEvent(eventRow.id) : undefined;
 				const issue = event ? linearIssueFromEvent(event) : undefined;
 				if (issue && !(claimedRole === "investigator" && candidateStateIsQuestion(this.database, claim.jobId)))
-					await this.linearEffects.startWork({ issue, phase, owner: this.owner });
+					await this.linearEffects.startWork({ issue, phase, owner: this.owner, stopEpoch: claim.stopEpoch });
 			}
 			const result = await this.options.attemptRunner.run(claim, this.database);
 			await finish(result);
@@ -633,33 +633,62 @@ export class BackgroundAgentsController {
 	}
 	private async setEmergencyStop(enabled: boolean): Promise<{ accepted: true }> {
 		if (!enabled) {
+			const failures = await this.reconcileEmergencyStopAttempts();
+			if (failures.length > 0) throw new Error(`Emergency stop remains enabled: ${failures.join("; ")}`);
+			if (
+				this.database
+					.listEmergencyStopAttempts()
+					.some((attempt) => !attempt.systemdConfirmed || !attempt.reconciled)
+			)
+				throw new Error("Emergency stop attempts are not fully reconciled");
 			this.database.resumeEmergencyStopJobs(this.options.clock?.() ?? new Date());
 			this.providerScheduler.setEmergencyStop(false, this.operator);
 			return { accepted: true };
 		}
 		this.providerScheduler.setEmergencyStop(true, this.operator);
+		const failures = await this.reconcileEmergencyStopAttempts();
 		const pausedJobIds = this.database
 			.all<{ id: string }>("SELECT id FROM jobs WHERE state IN ('queued', 'running') ORDER BY id")
 			.map((job) => job.id);
-		const active = this.database.all<{
-			id: string;
-			case_id: string;
-			systemd_unit: string | null;
-			pane_id: string | null;
-		}>("SELECT id, case_id, systemd_unit, pane_id FROM attempts WHERE state = 'running' ORDER BY id");
+		try {
+			this.database.pauseEmergencyStopJobs(pausedJobIds, this.options.clock?.() ?? new Date());
+		} catch (error) {
+			failures.push(`emergency-stop pause: ${error instanceof Error ? error.message : String(error)}`);
+		}
+		this.database.recordOperatorEvent("emergency-stop.reconciled", this.operator, {
+			attemptIds: this.database.listEmergencyStopAttempts().map((attempt) => attempt.attemptId),
+			pausedJobIds,
+			failures,
+		});
+		if (failures.length > 0) throw new Error(`Emergency stop completed with failures: ${failures.join("; ")}`);
+		return { accepted: true };
+	}
+	private async reconcileEmergencyStopAttempts(): Promise<string[]> {
 		const failures: string[] = [];
-		for (const attempt of active) {
+		for (const stopAttempt of this.database.listEmergencyStopAttempts()) {
+			const attempt = this.database.get<{
+				id: string;
+				systemd_unit: string | null;
+				pane_id: string | null;
+				state: string;
+			}>("SELECT id, systemd_unit, pane_id, state FROM attempts WHERE id = ?", stopAttempt.attemptId);
+			if (!attempt) {
+				this.database.markEmergencyStopAttempt(stopAttempt.attemptId, { systemdConfirmed: true, reconciled: true });
+				continue;
+			}
 			if (attempt.systemd_unit) {
 				try {
-					await this.runtimeControls.terminateSystemdUnit(attempt.systemd_unit);
+					if (!["inactive", "failed"].includes(attempt.state))
+						await this.runtimeControls.terminateSystemdUnit(attempt.systemd_unit);
 					if (!(await this.runtimeControls.isSystemdUnitStopped(attempt.systemd_unit)))
 						throw new Error(`systemd unit did not terminate: ${attempt.systemd_unit}`);
+					this.database.markEmergencyStopAttempt(attempt.id, { systemdConfirmed: true });
 				} catch (error) {
 					failures.push(
 						`attempt ${attempt.id} systemd: ${error instanceof Error ? error.message : String(error)}`,
 					);
 				}
-			}
+			} else this.database.markEmergencyStopAttempt(attempt.id, { systemdConfirmed: true });
 			if (attempt.pane_id && this.runtimeControls.closePane)
 				try {
 					await this.runtimeControls.closePane(attempt.pane_id);
@@ -667,23 +696,14 @@ export class BackgroundAgentsController {
 					failures.push(`attempt ${attempt.id} pane: ${error instanceof Error ? error.message : String(error)}`);
 				}
 			try {
-				await this.recovery.reconcileAttempt(attempt.id);
+				const result = await this.recovery.reconcileAttempt(attempt.id);
+				if (result.action === "running") throw new Error("attempt remains active");
+				this.database.markEmergencyStopAttempt(attempt.id, { reconciled: true });
 			} catch (error) {
 				failures.push(`attempt ${attempt.id} reconcile: ${error instanceof Error ? error.message : String(error)}`);
 			}
 		}
-		try {
-			this.database.pauseEmergencyStopJobs(pausedJobIds, this.options.clock?.() ?? new Date());
-		} catch (error) {
-			failures.push(`emergency-stop pause: ${error instanceof Error ? error.message : String(error)}`);
-		}
-		this.database.recordOperatorEvent("emergency-stop.reconciled", this.operator, {
-			attemptIds: active.map((attempt) => attempt.id),
-			pausedJobIds,
-			failures,
-		});
-		if (failures.length > 0) throw new Error(`Emergency stop completed with failures: ${failures.join("; ")}`);
-		return { accepted: true };
+		return failures;
 	}
 	private heartbeatTick(): void {
 		for (const attempt of this.database.all<{ id: string }>(

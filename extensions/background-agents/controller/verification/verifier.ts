@@ -69,6 +69,7 @@ export async function verifyReplayAndGithub(input: ReplayVerificationInput): Pro
 			ci = await verifyPullRequestCi({
 				reference: input.prNumber,
 				candidateSha: input.manifest.candidateSha,
+				expectedBaseSha: input.manifest.baseSha,
 				requiredChecks,
 				runner: input.githubRunner ?? spawnGithubVerificationRunner,
 				cwd: input.repository ?? ".",

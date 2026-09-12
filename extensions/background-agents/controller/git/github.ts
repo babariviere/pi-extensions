@@ -16,6 +16,7 @@ export interface GitHubPullRequest {
 export interface VerificationBoundary {
 	passed: boolean;
 	verifiedCommit?: string;
+	expectedBaseSha?: string;
 	requiredCiPassed?: boolean;
 	manifestId?: string;
 	verificationRunId?: string;

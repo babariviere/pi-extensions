@@ -28,7 +28,7 @@ export interface StackDeliveryOptions {
 		pullRequest: GitHubPullRequest;
 		parent?: StackItemResult;
 	}) => Promise<VerificationBoundary>;
-	markReady?: (reference: number | string, verification: VerificationBoundary) => Promise<void>;
+	markReady: (reference: number | string, verification: VerificationBoundary) => Promise<void>;
 }
 
 function validateItems(items: readonly StackItemInput[]): void {
@@ -54,13 +54,14 @@ export class GitStackController {
 	async deliver(items: readonly StackItemInput[], options: StackDeliveryOptions): Promise<StackItemResult[]> {
 		validateItems(items);
 		if (!options.baseBranch.trim()) throw new Error("baseBranch must be non-empty");
+		if (!options.markReady) throw new Error("stack delivery requires a readiness callback");
 		const ordered = [...items].sort((a, b) => a.ordinal - b.ordinal);
 		const results: StackItemResult[] = [];
 
 		for (const item of ordered) {
 			const parent = results.at(-1);
 			if (parent) {
-				if (!parent.verification.passed || parent.verification.requiredCiPassed === false)
+				if (!parent.verification.passed || parent.verification.requiredCiPassed !== true)
 					throw new Error(
 						`stack item ${item.ordinal} cannot start before item ${parent.item.ordinal} is verified`,
 					);
@@ -92,8 +93,9 @@ export class GitStackController {
 				pullRequest,
 				...(parent ? { parent } : {}),
 			});
-			if (!verification.passed) throw new Error(`verification failed for stack item ${item.ordinal}`);
-			if (options.markReady) await options.markReady(pullRequest.number, verification);
+			if (!verification.passed || verification.requiredCiPassed !== true)
+				throw new Error(`verification failed for stack item ${item.ordinal}`);
+			await options.markReady(pullRequest.number, verification);
 			results.push({ item, branch, base, worktree, pullRequest, verification });
 		}
 

@@ -228,9 +228,14 @@ test("restores durable controls across controller restart and reconciles an emer
 	const stopped = await first.handle({ version: 1, id: "stop", type: "emergency.stop", enabled: true });
 	assert.equal(stopped.ok, true);
 	assert.deepEqual(calls, ["stop:background-agent-test", "inspect:background-agent-test", "close:pane-test"]);
-	assert.equal(database.get<{ state: string }>("SELECT state FROM jobs WHERE id = ?", jobId)?.state, "paused");
+	assert.equal(database.get<{ state: string }>("SELECT state FROM jobs WHERE id = ?", jobId)?.state, "needs-human");
 
-	const second = new BackgroundAgentsController({ database, startSocket: false, operator: "operator" });
+	const second = new BackgroundAgentsController({
+		database,
+		startSocket: false,
+		operator: "operator",
+		runtimeControls,
+	});
 	assert.equal(second.snapshot().emergencyStop, true);
 	assert.equal(second.snapshot().rollout, "supervised");
 	assert.equal(database.get<{ count: number }>("SELECT count(*) AS count FROM operator_events")?.count, 3);
