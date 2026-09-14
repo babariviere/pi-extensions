@@ -1,6 +1,6 @@
 # `agents` reference
 
-Code Mode's `agents.*` namespace runs **custom agent definitions discovered on disk**, each as a child `pi` session. Discover definitions with `agents.list()`, and use `agents.models()` when selecting a model override. A `running` result is pending work, not a failure.
+Code Mode's `agents.*` namespace runs **custom agent definitions discovered on disk**, each as a child `pi` session. Discover definitions with `agents.list()`. Omit `model` and `thinking` for normal runs so the agent uses its configured defaults; set them only when the orchestrator intentionally needs a specialized model or reasoning level. A `running` result is pending work, not a failure.
 
 Agent definitions are markdown files with YAML frontmatter, discovered from:
 
@@ -19,7 +19,7 @@ return await agents.list();
 
 ## `agents.models()`
 
-Call this before choosing a model override rather than guessing identifiers.
+Most runs do not need this call because `model` and `thinking` should normally be omitted. Call it only when intentionally choosing a model override for a specialized run, rather than guessing identifiers.
 Takes no arguments. Returns `{ defaultModel: string | null, models: [...] }`.
 Each model has an exact provider-qualified `id` accepted by the `model` override,
 plus `name`, `provider`, `reasoning`, `input` (text/image), `contextWindow`, and `maxTokens`.
@@ -53,8 +53,8 @@ Two independent deadlines:
 |-------|----------|---------|
 | `agent` | yes | Name of a discovered agent (see `agents.list()`) |
 | `task` | yes | The concrete task for that agent |
-| `model` | no | Override the agent's frontmatter model for this run. Must be in the user's `enabledModels` allowlist when one is configured. |
-| `thinking` | no | Override the reasoning effort: `off` \| `minimal` \| `low` \| `medium` \| `high` \| `xhigh` |
+| `model` | no | Optional override for a specialized run. Normally omit it to use the agent's configured model. Must be in the user's `enabledModels` allowlist when one is configured. |
+| `thinking` | no | Optional reasoning-effort override for a specialized run. Normally omit it to use the agent's configured level. Values: `off` \| `minimal` \| `low` \| `medium` \| `high` \| `xhigh` |
 | `output` | no | **String** path (relative to cwd, or absolute) to persist the result at, instead of the auto run-dir file. There is no `output: false`: omit the field for the default path (a literal `"false"`/`"true"` is treated as omitted). |
 | `reads` | no | Files the agent should read first for context. Injected as a read-first instruction; the agent still needs a `read` tool. |
 | `waitMs` | no | How long to block before handing back a `running` handle. `0` returns as soon as the run is launched. Batch-level: on `runAll` it goes next to `tasks`, not inside an item. |

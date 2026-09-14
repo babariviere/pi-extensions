@@ -39,6 +39,7 @@ There is deliberately no `fetch`, no `crypto.subtle` and no `WebAssembly`: the a
 |------|------|---------|
 | `read` | `path` \| `{path,offset?,limit?}` | `string` |
 | `bash` | `command` \| `{command,timeout?,cwd?,env?,stdin?}` | `{ok:true,output,details}`; rejects on a nonzero exit (`settle:true` returns `{ok:false,output,details:null,exitCode,error}` instead) |
+| `exec` | `{argv:[program,...args],timeout?,cwd?,env?,stdin?}` | `{ok:true,output,details}`; rejects on a nonzero exit |
 | `grep` | `pattern` \| `{pattern,path?,glob?,ignoreCase?,literal?,context?,limit?}` \| `(pattern, path?, limit?)` | `string` |
 | `find` | `pattern` \| `{pattern,path?,limit?}` \| `(pattern, path?, limit?)` | `string` |
 | `ls` | `path?` \| `{path?,limit?}` | `string` |
@@ -75,6 +76,8 @@ Aliases (normalized to canonical before the host validates args): `cmd`/`shell`/
 - `stdin` — text piped to the command. This is the canonical way to run a multiline script on a remote host, with no quoting layers: `pi.bash({ command: 'ssh hezflix bash -s', stdin: π.script })`. Never build `echo ${JSON.stringify(π.script)} | ssh ...` — the `\n` escapes survive to the remote shell and mangle the script.
 
 Env values and stdin are redacted from recorded surfaces (audits, previews, session files); the live command still receives them.
+
+Use `pi.exec({ argv: [program, ...args] })` when every argument must be passed literally, without shell parsing. Its `timeout`, `cwd`, `env`, and `stdin` options behave like `pi.bash`; `cwd` must be absolute. Use `pi.bash` instead for pipelines, redirects, glob expansion, variable expansion, and other shell syntax.
 
 ### Payloads
 
@@ -130,7 +133,12 @@ return index.filter((entry) => entry.path.endsWith(".ts")).length;
 
 ## `web` — explicitly registered web capabilities (full code mode only)
 
-Only `web.search(args)` and `web.fetch(args)` are registered by this extension. They are available when capture is enabled, and are absent otherwise. Captured sibling tools are never exposed through a generic namespace. Discover their schemas with `tools.describe` or `tools.search` before calling them.
+Only `web.search(args)` and `web.fetch(args)` are registered by this extension:
+
+- `web.search({query,limit?})` searches the web and returns ranked links with snippets.
+- `web.fetch({url,timeout?})` fetches a URL as Markdown. `timeout` is in milliseconds.
+
+They are available when capture is enabled, and are absent otherwise. Captured sibling tools are never exposed through a generic namespace. Their exact schemas are generated from the captured tools and can also be inspected with `tools.describe` or `tools.search`.
 
 ## `tools` — cross-provider discovery + generic dispatch (full code mode only)
 
