@@ -8,6 +8,9 @@ importers:
 
   .:
     dependencies:
+      '@babariviere/code-mode':
+        specifier: git+https://github.com/babariviere/code-mode.git#ac5f6f1e0b78a2ebea4a64f36cb33ba395aa51b3
+        version: https://codeload.github.com/babariviere/code-mode/tar.gz/ac5f6f1e0b78a2ebea4a64f36cb33ba395aa51b3
       '@earendil-works/pi-ai':
         specifier: '*'
         version: 0.84.4(ws@8.21.3)(zod@4.5.4)
@@ -17,9 +20,6 @@ importers:
       '@earendil-works/pi-tui':
         specifier: '*'
         version: 0.84.4
-      '@jitl/quickjs-singlefile-mjs-release-sync':
-        specifier: ^0.32.0
-        version: 0.32.0
       '@modelcontextprotocol/client':
         specifier: ^2.0.0
         version: 2.0.0
@@ -38,30 +38,24 @@ importers:
       parse5:
         specifier: ^8.0.0
         version: 8.0.1
-      quickjs-emscripten-core:
-        specifier: ^0.32.0
-        version: 0.32.0
       shiki:
         specifier: ^4.3.1
         version: 4.4.3
       typebox:
         specifier: '*'
         version: 1.3.24
-      typescript:
-        specifier: ^6.0.3
-        version: 6.0.3
       ws:
         specifier: ^8.21.0
         version: 8.21.3
       yaml:
-        specifier: ^2.9.0
-        version: 2.9.0
+        specifier: ^2.9.1
+        version: 2.9.1
     devDependencies:
       '@biomejs/biome':
         specifier: 2.5.13
         version: 2.5.13
       '@types/node':
-        specifier: ^26.5.1
+        specifier: ^26.0.0
         version: 26.5.1
       '@types/ws':
         specifier: ^8.18.1
@@ -180,6 +174,11 @@ packages:
   '@aws/lambda-invoke-store@0.3.0':
     resolution: {integrity: sha512-sl4Bm6yiMNYrZKkqqDFWN0UfnWhlS8ivKxrYl+6t0gCLrqr8y3B2IqZZbFRkfaVVp7C/baApyh71P+LeE1A2sQ==}
     engines: {node: '>=18.0.0'}
+
+  '@babariviere/code-mode@https://codeload.github.com/babariviere/code-mode/tar.gz/ac5f6f1e0b78a2ebea4a64f36cb33ba395aa51b3':
+    resolution: {gitHosted: true, integrity: sha512-4wfbcjsJz+twuwQKSIu7jms9pJP4l8gy+NPNyU14AmkaiakEFC5bW0KQa58Cy4VeidBgewfSnc+QnNO9DxqEMw==, tarball: https://codeload.github.com/babariviere/code-mode/tar.gz/ac5f6f1e0b78a2ebea4a64f36cb33ba395aa51b3}
+    version: 0.1.0
+    engines: {node: '>=24'}
 
   '@babel/runtime@7.29.7':
     resolution: {integrity: sha512-Nq8OhGWiZIZGV6hLHoyAKLLcJihP/xFeBMGJoUrxTX2psI8dCifzLhZISFb+VWS3wFMRDmCGw5R+dOySCqPLhw==}
@@ -1275,6 +1274,11 @@ packages:
     engines: {node: '>= 14.6'}
     hasBin: true
 
+  yaml@2.9.1:
+    resolution: {integrity: sha512-3NxN8+78OdzbT7C/WjGsyfPAtJaN3FNDsWxv7Y7mcDsT/oOmgW8BpyQQFFBnvZE3j9Y2Sdz1ULFLezL7Eb2yFw==}
+    engines: {node: '>= 14.6'}
+    hasBin: true
+
   zod@4.5.4:
     resolution: {integrity: sha512-sC95tT5iHHH9gtpj6A81kh+NEaRAUFN+qlUPDUbRfOMvNf5QCBqsb3WgvnpVtK5Y+4UfA6KqufotuTvMGiTlsA==}
 
@@ -1503,6 +1507,12 @@ snapshots:
 
   '@aws/lambda-invoke-store@0.3.0': {}
 
+  '@babariviere/code-mode@https://codeload.github.com/babariviere/code-mode/tar.gz/ac5f6f1e0b78a2ebea4a64f36cb33ba395aa51b3':
+    dependencies:
+      '@jitl/quickjs-singlefile-mjs-release-sync': 0.32.0
+      quickjs-emscripten-core: 0.32.0
+      typescript: 6.0.3
+
   '@babel/runtime@7.29.7': {}
 
   '@biomejs/biome@2.5.13':
@@ -1718,25 +1728,35 @@ snapshots:
     dependencies:
       '@jitl/quickjs-ffi-types': 0.32.0
 
-  '@mariozechner/clipboard-darwin-arm64@0.3.9': {}
+  '@mariozechner/clipboard-darwin-arm64@0.3.9':
+    optional: true
 
-  '@mariozechner/clipboard-darwin-universal@0.3.9': {}
+  '@mariozechner/clipboard-darwin-universal@0.3.9':
+    optional: true
 
-  '@mariozechner/clipboard-darwin-x64@0.3.9': {}
+  '@mariozechner/clipboard-darwin-x64@0.3.9':
+    optional: true
 
-  '@mariozechner/clipboard-linux-arm64-gnu@0.3.9': {}
+  '@mariozechner/clipboard-linux-arm64-gnu@0.3.9':
+    optional: true
 
-  '@mariozechner/clipboard-linux-arm64-musl@0.3.9': {}
+  '@mariozechner/clipboard-linux-arm64-musl@0.3.9':
+    optional: true
 
-  '@mariozechner/clipboard-linux-riscv64-gnu@0.3.9': {}
+  '@mariozechner/clipboard-linux-riscv64-gnu@0.3.9':
+    optional: true
 
-  '@mariozechner/clipboard-linux-x64-gnu@0.3.9': {}
+  '@mariozechner/clipboard-linux-x64-gnu@0.3.9':
+    optional: true
 
-  '@mariozechner/clipboard-linux-x64-musl@0.3.9': {}
+  '@mariozechner/clipboard-linux-x64-musl@0.3.9':
+    optional: true
 
-  '@mariozechner/clipboard-win32-arm64-msvc@0.3.9': {}
+  '@mariozechner/clipboard-win32-arm64-msvc@0.3.9':
+    optional: true
 
-  '@mariozechner/clipboard-win32-x64-msvc@0.3.9': {}
+  '@mariozechner/clipboard-win32-x64-msvc@0.3.9':
+    optional: true
 
   '@mariozechner/clipboard@0.3.9':
     optionalDependencies:
@@ -1750,6 +1770,7 @@ snapshots:
       '@mariozechner/clipboard-linux-x64-musl': 0.3.9
       '@mariozechner/clipboard-win32-arm64-msvc': 0.3.9
       '@mariozechner/clipboard-win32-x64-msvc': 0.3.9
+    optional: true
 
   '@mixmark-io/domino@2.2.0':
     optional: true
@@ -2510,6 +2531,8 @@ snapshots:
   ws@8.21.3: {}
 
   yaml@2.9.0: {}
+
+  yaml@2.9.1: {}
 
   zod@4.5.4: {}
 
