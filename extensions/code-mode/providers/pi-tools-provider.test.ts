@@ -9,12 +9,25 @@ import { PiToolsProvider } from "./pi-tools-provider.ts";
 
 const context = {} as any;
 const listRequest = {} as any;
+const codexContext = { extensionContext: { model: { provider: "openai-codex" } } } as any;
 
 const provider = () => new PiToolsProvider(process.cwd(), undefined, undefined);
 
 test("the provider lists every pi core tool", async () => {
 	const names = (await provider().list(listRequest, context)).map((descriptor) => descriptor.name);
 	assert.deepEqual(names.sort(), [...PI_CORE_TOOL_NAMES].sort());
+});
+
+test("the openai-codex provider exposes applyPatch but not edit or write", async () => {
+	const piProvider = provider();
+	const names = (await piProvider.list(listRequest, codexContext)).map((descriptor) => descriptor.name);
+	assert.ok(names.includes("applyPatch"));
+	assert.ok(!names.includes("edit"));
+	assert.ok(!names.includes("write"));
+	assert.equal(await piProvider.describe("edit", codexContext), undefined);
+	assert.equal(await piProvider.describe("write", codexContext), undefined);
+	await assert.rejects(() => piProvider.invoke("edit", {}, codexContext), /unavailable.*pi\.applyPatch/);
+	await assert.rejects(() => piProvider.invoke("write", {}, codexContext), /unavailable.*pi\.applyPatch/);
 });
 
 test("describe resolves a tool with its schema", async () => {

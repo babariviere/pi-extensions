@@ -31,7 +31,7 @@ import { expandSkillDirMarkersForRead, expandSkillDirMarkersInSkillBlock } from 
 import { restoreSkillsForFullCodePrompt } from "./core/skill-prompt.ts";
 import { buildSkillReferenceGuidance } from "./core/skill-references.ts";
 import { ownsCodeModeToolSource, CodeModeToolLifecycle, CodeModeToolOwnership } from "./core/tool-ownership.ts";
-import { resolveCodeModeEditProfile, type CodeModeModelIdentity } from "./edit-profile.ts";
+import { isOpenAiCodexProvider, resolveCodeModeEditProfile, type CodeModeModelIdentity } from "./edit-profile.ts";
 import { piHostCompatibilityWarning } from "./host-compatibility.ts";
 import { authorizeMcpServer, logoutMcpServer } from "./mcp/auth-flow.ts";
 import { loadMcpServerConfig } from "./mcp/server-config.ts";
@@ -54,6 +54,7 @@ const FULL_CODE_GUIDANCE_SUFFIX =
 	" If the `code-mode` skill is available, load its listed SKILL.md through `pi.read` inside `code_mode` before other tool work, unless already loaded.";
 
 export const resolveCodeModeEditGuidance = (model: CodeModeModelIdentity | undefined): string => {
+	if (isOpenAiCodexProvider(model)) return "Use `pi.applyPatch` for file changes.";
 	const profile = resolveCodeModeEditProfile(model);
 	if (profile === "anthropic") {
 		return "Prefer `pi.edit`; use `pi.applyPatch` for coordinated multi-file changes.";

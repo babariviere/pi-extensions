@@ -6,6 +6,10 @@ export interface CodeModeModelIdentity {
 
 export type CodeModeEditProfile = "anthropic" | "openai" | "neutral";
 
+/** Codex exposes only its native apply-patch editing route. */
+export const isOpenAiCodexProvider = (model: CodeModeModelIdentity | undefined): boolean =>
+	model?.provider?.toLowerCase() === "openai-codex";
+
 /** Classifies only the stable provider/API/model identity used by edit guidance and metrics. */
 export const resolveCodeModeEditProfile = (model: CodeModeModelIdentity | undefined): CodeModeEditProfile => {
 	const provider = model?.provider?.toLowerCase() ?? "";

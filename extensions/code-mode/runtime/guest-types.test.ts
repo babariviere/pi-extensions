@@ -62,6 +62,13 @@ test("guest code type-checks pi.applyPatch and its structured result", () => {
 	assert.deepEqual(checked.errors, []);
 });
 
+test("openai-codex declarations omit pi.edit and pi.write", () => {
+	const declarations = guestTypeDeclarations(true, undefined, [], { omitPiEditAndWrite: true });
+	assert.deepEqual(typeCheckCodeModeCode("await pi.applyPatch({ patch: 'x' });", declarations).errors, []);
+	assert.doesNotMatch(declarations, /^  edit\(/m);
+	assert.doesNotMatch(declarations, /^  write\(/m);
+});
+
 test("pi.applyPatch rejects unknown keys at the type level", () => {
 	const declarations = guestTypeDeclarations(true);
 	assert.ok(typeCheckCodeModeCode("await pi.applyPatch({ patch: 'x', path: 'y' });", declarations).errors.length > 0);

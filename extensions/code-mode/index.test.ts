@@ -9,6 +9,11 @@ const editGuidanceCases: {
 	expected: RegExp;
 }[] = [
 	{
+		name: "OpenAI Codex provider",
+		model: { provider: "openai-codex", api: "openai-codex-responses", id: "gpt-5.4" },
+		expected: /Use `pi\.applyPatch` for file changes\./,
+	},
+	{
 		name: "OpenAI provider",
 		model: { provider: "openai", api: "custom", id: "o3" },
 		expected: /Prefer `pi\.applyPatch`; use `pi\.edit` or `pi\.write` as fallback\./,

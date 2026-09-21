@@ -9,7 +9,7 @@ Run tool calls in a type-checked TypeScript program inside an isolated QuickJS s
 
 ## Execution essentials
 
-- Use `pi.*` for core tools. `pi.read`, `pi.find`, `pi.grep`, and `pi.ls` return text; `pi.bash`, `pi.exec`, `pi.edit`, and `pi.write` return `{ ok, output, details }`. Use `pi.exec({ argv: [program, ...args] })` for literal arguments and `pi.bash` for shell syntax. Both command tools reject on nonzero exit, although `pi.bash` supports `settle: true`.
+- Use `pi.*` for core tools. `pi.read`, `pi.find`, `pi.grep`, and `pi.ls` return text; mutating tools return `{ ok, output, details }`. Use `pi.exec({ argv: [program, ...args] })` for literal arguments and `pi.bash` for shell syntax. Both command tools reject on nonzero exit, although `pi.bash` supports `settle: true`.
 - Use `web.search({ query, limit? })` to search the web and `web.fetch({ url, timeout? })` to fetch a URL as Markdown when those captured capabilities are available.
 - Put multiline content, JSON blobs, long prose, and strings with literal `${...}` in `payloads`, then read them as `π.key`. JSON-encode structured payloads and decode with `JSON.parse(π.key)`.
 - Batch independent calls with `Promise.all`; use `mapLimit(items, fn, N)` for bounded concurrency. Keep dependent steps sequential.
@@ -18,7 +18,7 @@ Run tool calls in a type-checked TypeScript program inside an isolated QuickJS s
 ## Repository work
 
 - Locate files with `pi.find`, `pi.grep`, or `pi.ls`, then read relevant ranges with `pi.read({ path, offset, limit })`. Avoid loading large generated, vendored, log, or lock files unless the task needs them.
-- Edit with `pi.edit`, `pi.write`, or `pi.applyPatch`, following the session's model-specific preference. Never manually edit through Python, shell text utilities, or redirection; formatters, generators, migrations, builds, and tests are allowed. See [file editing](references/full-reference.md#file-editing) for syntax and recovery.
+- Edit with the tools exposed by the session's model-specific profile. The `openai-codex` provider exposes only `pi.applyPatch`; other providers may also expose `pi.edit` and `pi.write`. Never manually edit through Python, shell text utilities, or redirection; formatters, generators, migrations, builds, and tests are allowed. See [file editing](references/full-reference.md#file-editing) for syntax and recovery.
 
 ## Read what the call needs
 

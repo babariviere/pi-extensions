@@ -13,6 +13,7 @@ import type { ActionRegistry, CodeModeCallAudit, CodeModeRegistryActivityEvent }
 import { redactRecordedArgs } from "./core/arg-redaction.ts";
 import { piBashExitMetadata } from "./core/pi-bash-error.ts";
 import { codeModeProcessSnapshot } from "./env-snapshot.ts";
+import { isOpenAiCodexProvider } from "./edit-profile.ts";
 import { fullCodeProvider, type HostCallContext, hostCallTable, type CodeModeStateNote } from "./host-calls.ts";
 import type { CodeModeGuestTypeSources } from "./protocol.ts";
 import { buildDynamicGuestDeclarations } from "./runtime/dynamic-guest-types.ts";
@@ -143,6 +144,7 @@ export class CodeModeExecutionService {
 					.providers()
 					.filter((provider) => effectiveFullCodeMode || !this.registry.isFullCodeProvider(provider.name))
 					.map((provider) => provider.name),
+				{ omitPiEditAndWrite: isOpenAiCodexProvider(options.context.model) },
 			),
 		);
 		if (checked.errors.length > 0) {

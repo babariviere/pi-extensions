@@ -18,6 +18,7 @@ import { DEFAULT_CODE_MODE_CONFIG } from "../config.ts";
 import { classifyPiBashError, piBashResultError } from "../core/pi-bash-error.ts";
 import { PI_CORE_TOOL_NAMES, type PiCoreToolName } from "../core/pi-tools.ts";
 import { expandSkillDirMarkersForRead } from "../core/skill-dir.ts";
+import { isOpenAiCodexProvider } from "../edit-profile.ts";
 import type {
 	CodeModeActionDescriptor,
 	CodeModeInvocationContext,
@@ -33,6 +34,9 @@ import { createCodeModeBashToolDefinition } from "./code-mode-bash-tool.ts";
 import { createPreviewWriteToolDefinition, writeContentForPreview } from "./write-preview.ts";
 
 const MAX_RENDERER_ARGUMENT_CHARS = 200_000;
+
+const unavailableForModel = (name: string, context: CodeModeInvocationContext): boolean =>
+	(name === "edit" || name === "write") && isOpenAiCodexProvider(context.extensionContext?.model);
 
 // The content array every pi core tool returns: text and/or image blocks.
 type ToolContent = AgentToolResult<unknown>["content"];
@@ -246,9 +250,10 @@ export class PiToolsProvider implements CodeModeProvider {
 
 	async describe(
 		actionName: string,
-		_context: CodeModeInvocationContext,
+		context: CodeModeInvocationContext,
 	): Promise<CodeModeActionDescriptor | undefined> {
 		if (!(actionName in this.#tools)) return undefined;
+		if (unavailableForModel(actionName, context)) return undefined;
 		const name = actionName as PiCoreToolName;
 		const override = this.#capturedTools?.describe(name);
 		if (override) return { ...override, namespace: "extension-override" };
@@ -276,6 +281,9 @@ export class PiToolsProvider implements CodeModeProvider {
 		context: CodeModeInvocationContext,
 	): Promise<unknown> {
 		if (!(actionName in this.#tools)) throw new Error(`Unknown Pi tool: ${actionName}`);
+		if (unavailableForModel(actionName, context)) {
+			throw new Error(`Pi tool ${actionName} is unavailable with the openai-codex provider; use pi.applyPatch`);
+		}
 		const name = actionName as PiCoreToolName;
 		// Runs for captured overrides too: the denyRead roots must bind every
 		// path a read-shaped tool can open.

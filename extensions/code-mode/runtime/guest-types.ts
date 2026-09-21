@@ -411,6 +411,12 @@ const MCP_LOOSE_DECLARATION = "declare const mcp: CodeModeMcpApi;\n";
 
 const terminatedDeclaration = (block: string): string => (block.endsWith("\n") ? block : `${block}\n`);
 
+const omitPiEditAndWriteDeclarations = (declarations: string): string =>
+	declarations
+		.split("\n")
+		.filter((line) => !line.startsWith("  edit(") && !line.startsWith("  write("))
+		.join("\n");
+
 /**
  * Swap the loose dynamic-surface declarations for schema-typed ones. Applied
  * only when the loose anchor is still present: orchestration-only mode removes
@@ -429,6 +435,7 @@ export const guestTypeDeclarations = (
 	fullCodeMode: boolean,
 	dynamic?: CodeModeDynamicGuestDeclarations,
 	providers: readonly string[] = [],
+	options: { omitPiEditAndWrite?: boolean } = {},
 ): string => {
 	const addCustomProviderDeclarations = (source: string): string => {
 		for (const provider of providers) {
@@ -444,14 +451,17 @@ export const guestTypeDeclarations = (
 		}
 		return source;
 	};
+	const baseDeclarations = options.omitPiEditAndWrite
+		? omitPiEditAndWriteDeclarations(GUEST_TYPE_DECLARATIONS)
+		: GUEST_TYPE_DECLARATIONS;
 	if (!fullCodeMode) {
 		const declarations = FULL_CODE_GLOBAL_DECLARATIONS.reduce(
 			(declarations, declaration) => declarations.replace(declaration, ""),
-			GUEST_TYPE_DECLARATIONS,
+			baseDeclarations,
 		);
 		return addCustomProviderDeclarations(declarations);
 	}
-	let declarations = dynamic ? applyDynamicDeclarations(GUEST_TYPE_DECLARATIONS, dynamic) : GUEST_TYPE_DECLARATIONS;
+	let declarations = dynamic ? applyDynamicDeclarations(baseDeclarations, dynamic) : baseDeclarations;
 	if (providers.length > 0 && !providers.includes("web"))
 		declarations = declarations.replace("declare const web: WebApi;\n", "");
 	return addCustomProviderDeclarations(declarations);
