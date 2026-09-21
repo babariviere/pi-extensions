@@ -12,7 +12,6 @@ directory, and `themes/*.json` files. The current inventory is:
 | Extension | User-facing surface and purpose |
 | --- | --- |
 | `ask` | `--ask` selects the cheapest priced model in the scoped model set and turns thinking off for a one-shot question. |
-| `background-agents` | `/background` opens the background-agent dashboard, submits a bug or feature case, or resumes a case through an owner-only Unix socket. |
 | `context` | `/context` shows loaded extensions, skills, project context files, and session context-window/token/cost information. |
 | `footer` | Replaces the footer with project, context, model, thinking, subscription-usage, and extension-status information. |
 | `guardrail` | `/guardrail` shows or toggles a checker for obvious catastrophic `bash`/`exec` commands and direct file-edit patterns. |
@@ -102,8 +101,6 @@ extension README.
 | `~/.pi/agent/mcp.json` | Code Mode's MCP server configuration. Code Mode has no separate MCP credential store; OAuth/keyring behavior follows its MCP implementation. |
 | `~/.pi/agent/secrets.json` | Per-machine `KAGI_SESSION_TOKEN` and `LINEAR_API_KEY` values read directly by those extensions. This file is not the source for the `secrets` extension. |
 | Nearest `fnox.toml` | `secrets` discovers this file upward from the working directory and calls `fnox export --format json`. |
-| `~/.pi/agent/background-agents.json` | Background-agent controller configuration, or the path in `BACKGROUND_AGENTS_CONFIG`. |
-| `~/.pi/agent/background-agents.sock` | Background-agent controller socket, or the path in `PI_BACKGROUND_AGENTS_SOCKET`. |
 | `~/.pi/agent/cache/usage-status/openai/pacing.json` | Persisted Codex pacing state managed by `usage`. |
 | `~/.pi/agent/night/` | Default night-mode prompts, instructions, reports, archive, todos, and sandboxes. |
 | `~/.herdr/workspaces` | Default root for managed jj workspaces. |
@@ -125,38 +122,6 @@ environment. The `secrets` extension is independent: it obtains values from
 and persisted details. It exposes secret names, never values. Pattern masking
 is defense in depth, not a guarantee against every indirect or streamed leak;
 review commands and logs before sharing them.
-
-## Background agents and repository scope
-
-The existing [`background-agents` extension](extensions/background-agents/README.md)
-is part of this repository and is packaged by the `extensions/*/index.ts`
-glob. Its Pi-side code is an owner-checked client and dashboard. The companion
-controller is a separate Node process started with
-`npm run background-agents:controller`; it owns its SQLite state and listens on
-the configured Unix socket. The controller documentation covers its optional
-Slack, Linear, Datadog, GitHub, Herdr, and systemd integrations.
-
-This repository contains no evidence that a separate private project is bundled
-here, so this README makes no such claim. The supported relationship documented
-by the code is only the client/controller protocol and the optional integrations
-of this existing extension. It is not a remote version of `night-mode`:
-background-agent documentation explicitly keeps those systems separate.
-
-Important controller boundaries are:
-
-- The socket is owner-only by default (`0600`), checks ownership, and limits
-  request size.
-- Slack and Datadog sources are read-only. Linear polling is limited to the
-  authenticated user's active cycle, with narrowly bounded forward state moves.
-- Agents work in isolated attempts; the controller, not an agent, imports exact
-  commits and performs GitHub effects. It creates reviewable PRs but has no merge
-  operation. Questions remain private and read-only.
-- Linux, systemd, cgroup v2, Herdr, Git, GitHub CLI, and `gh stack` are required
-  for isolated controller attempts. Missing isolation capabilities fail closed.
-
-Start the controller only after reading its configuration and deployment notes.
-Do not put credentials in JSON configuration, command arguments, SQLite,
-dashboard responses, or logs.
 
 ## Safety boundaries
 
@@ -196,7 +161,6 @@ npm run fmt:check
 `npm run fmt` applies Biome formatting. Focused checks include:
 
 ```sh
-node --import tsx --test 'extensions/background-agents/**/*.test.ts'
 npm run code-mode:evaluate -- extensions/code-mode/evaluation/corpus.jsonl --baseline edit-first
 ```
 
@@ -204,9 +168,6 @@ The CI workflow runs `npm ci`, `npm run typecheck`, and `npm test` on Node 24.
 
 ## Documentation map
 
-- [Background agents](extensions/background-agents/README.md), including
-  controller deployment, configuration, credentials, isolation, recovery, and
-  socket protocol.
 - [Guardrail](extensions/guardrail/README.md), including blocked command
   categories and known limitations.
 - [Night mode](extensions/night-mode/README.md), including scheduling, usage
