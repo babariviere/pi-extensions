@@ -10,7 +10,7 @@
 
 import type { ToolCallEvent } from "@earendil-works/pi-coding-agent";
 import { isToolCallEventType } from "@earendil-works/pi-coding-agent";
-import { hasMaskArtifact, type SecretRefRegistry } from "./secret-ref.ts";
+import { hasMaskArtifact, type HydrateResult, type SecretRefRegistry } from "./secret-ref.ts";
 
 export type PolicyOutcome = { block: false; notify?: string } | { block: true; reason: string };
 
@@ -60,6 +60,54 @@ function stringifyInput(input: unknown): string | undefined {
 	} catch {
 		return undefined;
 	}
+}
+
+/**
+ * Hydrate only file-content positions in a V4A patch. Paths and control lines
+ * deliberately stay outside the hydration boundary, matching write/edit where
+ * path arguments are never expanded.
+ */
+function hydrateApplyPatch(patch: string, registry: SecretRefRegistry): HydrateResult {
+	const parts = patch.split(/(\r\n|\r|\n)/u);
+	const resolved: HydrateResult["resolved"] = [];
+	const unresolved: string[] = [];
+	let action: "add" | "update" | undefined;
+
+	const hydrateLine = (line: string, prefix: string): string => {
+		const hydrated = registry.hydrate(line, "value");
+		resolved.push(...hydrated.resolved);
+		unresolved.push(...hydrated.unresolved);
+		// A secret can contain newlines. Repeat the patch marker so every expanded
+		// line remains part of the same add/update hunk.
+		return hydrated.text.replace(/\r\n|\r|\n/gu, (ending) => `${ending}${prefix}`);
+	};
+
+	for (let index = 0; index < parts.length; index += 2) {
+		const line = parts[index] ?? "";
+		const marker = line.trim();
+		if (/^\*\*\* Add File: /u.test(marker)) action = "add";
+		else if (/^\*\*\* Update File: /u.test(marker)) action = "update";
+		else if (/^\*\*\* Delete File: /u.test(marker) || marker === "*** End Patch") action = undefined;
+		else if (action === "add" && line.startsWith("+")) {
+			parts[index] = `+${hydrateLine(line.slice(1), "+")}`;
+			continue;
+		} else if (action === "update" && line.startsWith("@@ ")) {
+			// Anchor text names a line in the file. If a multiline value appears
+			// here, turn its remaining lines into ordinary context lines.
+			parts[index] = `@@ ${hydrateLine(line.slice(3), " ")}`;
+			continue;
+		} else if (action === "update" && [" ", "+", "-"].includes(line[0] ?? "")) {
+			const prefix = line[0] ?? "";
+			parts[index] = `${prefix}${hydrateLine(line.slice(1), prefix)}`;
+			continue;
+		}
+
+		// A reference in a path, move destination, or control line must not
+		// become a value-bearing filesystem argument. Escaped literal refs are inert.
+		unresolved.push(...registry.scan(line));
+	}
+
+	return { text: parts.join(""), resolved, unresolved: [...new Set(unresolved)] };
 }
 
 /**
@@ -121,6 +169,23 @@ export function applySecretPolicy(event: ToolCallEvent, registry: SecretRefRegis
 		return { block: false, notify: expansionNotice(expanded, event.input.path) };
 	}
 
+	if (event.toolName === "applyPatch") {
+		const input = event.input as unknown as { patch?: unknown };
+		if (typeof input.patch !== "string") return ALLOW;
+		const where = "applyPatch input";
+		if (hasMaskArtifact(input.patch)) return blockArtifact(where);
+		const hydrated = hydrateApplyPatch(input.patch, registry);
+		if (hydrated.unresolved.length > 0) return blockUnresolved(hydrated.unresolved, where);
+		input.patch = hydrated.text;
+		return {
+			block: false,
+			notify: expansionNotice(
+				hydrated.resolved.map((entry) => entry.names[0] ?? entry.label),
+				"applyPatch",
+			),
+		};
+	}
+
 	if (PASSTHROUGH_TOOLS.has(event.toolName)) return ALLOW;
 
 	// Every other tool is outside the hydration boundary. A ref reaching one is
@@ -139,7 +204,7 @@ export function applySecretPolicy(event: ToolCallEvent, registry: SecretRefRegis
 			block: true,
 			reason: [
 				`Secret reference passed to ${event.toolName}: ${found.join(", ")}.`,
-				"References only expand in write and edit. Nothing else receives the value.",
+				"References only expand in write, edit, and applyPatch. Nothing else receives the value.",
 			].join(" "),
 		};
 	}

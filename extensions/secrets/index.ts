@@ -123,7 +123,8 @@ export default function (pi: ExtensionAPI) {
 		const touchesSecrets =
 			isToolCallEventType("bash", event) ||
 			isToolCallEventType("write", event) ||
-			isToolCallEventType("edit", event);
+			isToolCallEventType("edit", event) ||
+			event.toolName === "applyPatch";
 		const secrets = touchesSecrets ? await getSecrets() : [];
 
 		const outcome = applySecretPolicy(event, registry);
@@ -189,7 +190,7 @@ export default function (pi: ExtensionAPI) {
 			`Available secrets (injected as env vars in bash): ${names}`,
 			"Use $SECRET_NAME in bash commands to reference secrets. Never ask the user for secret values.",
 			"Secret values never appear in tool output. They are replaced by references of the form `<secret:type:id>`.",
-			"Copy a reference verbatim. Written to a file with write or edit, it expands to the real value; in bash it becomes the matching variable.",
+			"Copy a reference verbatim. Written to a file with write, edit, or applyPatch, it expands to the real value; in bash it becomes the matching variable.",
 			"To place a secret you have never seen into a file, write `<secret:NAME>` using a name from the list above.",
 			"Never transcribe a partially masked value: that destroys the secret. Use the reference.",
 		].join("\n");

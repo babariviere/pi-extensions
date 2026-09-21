@@ -71,6 +71,60 @@ test("edit expands both sides so the match runs against the real file", () => {
 	assert.equal(edits[0].newText, `TOKEN=${GH}\nEXTRA=1`);
 });
 
+test("applyPatch expands refs in add and update content", () => {
+	const { registry, named } = setup();
+	const patch = [
+		"*** Begin Patch",
+		"*** Add File: added.env",
+		`+TOKEN=${named.ref}`,
+		"*** Update File: existing.env",
+		`@@ TOKEN=${named.ref}`,
+		`-TOKEN=${named.ref}`,
+		`+TOKEN=${named.ref}`,
+		"*** End Patch",
+	].join("\n");
+	const call = event("applyPatch", { patch });
+	const outcome = applySecretPolicy(call, registry);
+	assert.equal(outcome.block, false);
+	assert.equal((call.input as { patch: string }).patch, patch.replaceAll(named.ref, GH));
+	assert.match(String(outcome.block === false && outcome.notify), /GITHUB_TOKEN/);
+});
+
+test("applyPatch repeats hunk markers for a multiline secret", () => {
+	const registry = new SecretRefRegistry(KEY);
+	const entry = registry.registerNamed("MULTILINE", "first\nsecond");
+	const call = event("applyPatch", {
+		patch: `*** Begin Patch\n*** Add File: value.txt\n+${entry.ref}\n*** End Patch`,
+	});
+	assert.equal(applySecretPolicy(call, registry).block, false);
+	assert.match((call.input as { patch: string }).patch, /\+first\n\+second/);
+});
+
+test("applyPatch refuses refs in file paths instead of expanding them", () => {
+	const { registry, named } = setup();
+	const patch = `*** Begin Patch\n*** Add File: ${named.ref}\n+content\n*** End Patch`;
+	const call = event("applyPatch", { patch });
+	const outcome = applySecretPolicy(call, registry);
+	assert.equal(outcome.block, true);
+	assert.equal((call.input as { patch: string }).patch, patch);
+});
+
+test("applyPatch is blocked on an unknown ref without partially hydrating the patch", () => {
+	const { registry, named } = setup();
+	const unknown = "<" + "secret:github-token:deadbeef>";
+	const patch = [
+		"*** Begin Patch",
+		"*** Add File: value.txt",
+		`+known=${named.ref}`,
+		`+unknown=${unknown}`,
+		"*** End Patch",
+	].join("\n");
+	const call = event("applyPatch", { patch });
+	const outcome = applySecretPolicy(call, registry);
+	assert.equal(outcome.block, true);
+	assert.equal((call.input as { patch: string }).patch, patch);
+});
+
 test("bash rewrites an env-backed ref to a variable, never a value", () => {
 	const { registry, named } = setup();
 	const call = event("bash", { command: `curl -H "Authorization: Bearer ${named.ref}"` });
@@ -100,7 +154,7 @@ test("a ref passed to any other tool is refused, not expanded", () => {
 		const call = event(tool, { query: `check ${named.ref}` });
 		const outcome = applySecretPolicy(call, registry);
 		assert.equal(outcome.block, true, `${tool} must refuse refs`);
-		assert.match(outcome.block === true ? outcome.reason : "", /only expand in write and edit/);
+		assert.match(outcome.block === true ? outcome.reason : "", /only expand in write, edit, and applyPatch/);
 	}
 });
 
