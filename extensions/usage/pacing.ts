@@ -213,11 +213,19 @@ export function observeWeeklyUsage(
 	const weeklyUsedPercent = Math.max(0, Math.min(100, input.weeklyUsedPercent));
 	const previousReset = ledger ? new Date(ledger.weekResetAt).getTime() : Number.NaN;
 	const isNewWeek = !ledger || !Number.isFinite(previousReset) || previousReset !== reset.getTime();
-	const active: PacingLedger = isNewWeek
-		? { version: 3, weekResetAt: input.resetAt, windows: {} }
-		: (ledger ?? { version: 3, weekResetAt: input.resetAt, windows: {} });
 	const current = pacingWindow(input.now);
 	const windowKey = current.start.toISOString();
+	// A provider reset can occur in the middle of a local pacing window. Keep
+	// the allowance chosen when that window was first observed instead of
+	// recalculating it from the newly available weekly budget.
+	const currentRecord = ledger?.windows[windowKey];
+	const active: PacingLedger = isNewWeek
+		? {
+				version: 3,
+				weekResetAt: input.resetAt,
+				windows: currentRecord ? { [windowKey]: currentRecord } : {},
+			}
+		: (ledger ?? { version: 3, weekResetAt: input.resetAt, windows: {} });
 	const futureWindows = remainingWindows(input.now, reset);
 	const totalWeight = futureWindows.reduce((sum, window) => sum + window.weight, 0);
 	// Codex weekly periods span seven days. If this period began inside the
@@ -247,7 +255,6 @@ export function observeWeeklyUsage(
 	if (startsInCurrentWindow && record.usedPercent < weeklyUsedPercent) {
 		const missed = weeklyUsedPercent - record.usedPercent;
 		record.usedPercent += missed;
-		if (current.weight > 0) record.allowancePercent += (missed * current.weight) / totalWeight;
 	}
 	active.lastWeeklyPercent = weeklyUsedPercent;
 

@@ -206,20 +206,21 @@ test("repairs an existing first-window baseline without double counting", () => 
 	const result = observeWeeklyUsage(ledger, { weeklyUsedPercent: 2, resetAt, now });
 	assert.ok(result);
 	assert.equal(result.status.usedWindowPercent, 2);
-	assert.ok(Math.abs(result.status.allowancePercent - 100 / 8.5) < 1e-10);
+	assert.equal(result.status.allowancePercent, 98 / 8.5);
 	const again = observeWeeklyUsage(result.ledger, { weeklyUsedPercent: 2, resetAt, now });
 	assert.ok(again);
 	assert.equal(again.status.usedWindowPercent, 2);
 	assert.equal(again.status.allowancePercent, result.status.allowancePercent);
 });
 
-test("keeps the current fixed window across a provider reset and starts fresh usage", () => {
+test("keeps the current window allowance fixed across a provider reset", () => {
 	const first = observeWeeklyUsage(undefined, {
 		weeklyUsedPercent: 99,
 		resetAt: new Date(2025, 0, 6, 11, 42).toISOString(),
-		now: new Date(2025, 0, 5, 22),
+		now: new Date(2025, 0, 6, 10),
 	});
 	assert.ok(first);
+	assert.equal(first.status.allowancePercent, 1);
 	const nextReset = observeWeeklyUsage(first.ledger, {
 		weeklyUsedPercent: 1,
 		resetAt: new Date(2025, 0, 13, 11, 42).toISOString(),
@@ -227,7 +228,8 @@ test("keeps the current fixed window across a provider reset and starts fresh us
 	});
 	assert.ok(nextReset);
 	assert.equal(nextReset.status.usedWindowPercent, 1);
-	assert.equal(nextReset.status.blocked, false);
+	assert.equal(nextReset.status.allowancePercent, first.status.allowancePercent);
+	assert.equal(nextReset.status.blocked, true);
 });
 
 test("migrates reset-anchored state without attributing historical usage to a new window", () => {
