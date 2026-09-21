@@ -18,7 +18,7 @@ Run tool calls in a type-checked TypeScript program inside an isolated QuickJS s
 ## Repository work
 
 - Locate files with `pi.find`, `pi.grep`, or `pi.ls`, then read relevant ranges with `pi.read({ path, offset, limit })`. Avoid loading large generated, vendored, log, or lock files unless the task needs them.
-- Edit with the tools exposed by the session's model-specific profile. The `openai-codex` provider exposes only `pi.applyPatch`; other providers may also expose `pi.edit` and `pi.write`. Never manually edit through Python, shell text utilities, or redirection; formatters, generators, migrations, builds, and tests are allowed. See [file editing](references/full-reference.md#file-editing) for syntax and recovery.
+- Use the editing route specified by the session's model-specific guidance. Never manually edit through Python, shell text utilities, or redirection; formatters, generators, migrations, builds, and tests are allowed. See [file editing](references/full-reference.md#file-editing) for syntax and recovery.
 
 ## Read what the call needs
 
