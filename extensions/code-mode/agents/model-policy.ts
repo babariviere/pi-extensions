@@ -2,7 +2,7 @@ import type { Model } from "@earendil-works/pi-ai";
 
 import { qualifyModel, stripThinkingSuffix } from "./pi-args.ts";
 
-const PRICE_CEILING_MODELS = ["claude-opus-5", "gpt-6-sol"];
+const PRICE_CEILING_MODELS = ["claude-opus-5-5", "gpt-6-sol"];
 
 /** A model price is comparable only when both primary billable rates are known. */
 function rate(model: Model<any>): number | undefined {

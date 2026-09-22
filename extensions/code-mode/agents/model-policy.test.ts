@@ -9,7 +9,7 @@ function model(id: string, input: number, output: number): Model<any> {
 }
 
 const catalog = [
-	model("claude-opus-5", 10, 20),
+	model("claude-opus-5-5", 10, 20),
 	model("gpt-6-sol", 15, 10),
 	model("cheap", 5, 5),
 	model("expensive", 20, 20),

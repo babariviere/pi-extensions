@@ -29,7 +29,7 @@ test("models filters live runtime metadata by launch policy without exposing con
 		const settings = join(cwd, ".pi", "settings.json");
 		writeFileSync(settings, JSON.stringify({ enabledModels: [] }));
 		const catalog = [
-			model("claude-opus-5", 10),
+			model("claude-opus-5-5", 10),
 			model("gpt-6-sol", 8),
 			model("cheap", 1),
 			model("expensive", 100),
@@ -58,7 +58,7 @@ test("models filters live runtime metadata by launch policy without exposing con
 		assert.equal(result.defaultModel, "parent/cheap");
 		assert.deepEqual(
 			result.models.map((m) => m.id),
-			["parent/claude-opus-5", "parent/gpt-6-sol", "parent/cheap"],
+			["parent/claude-opus-5-5", "parent/gpt-6-sol", "parent/cheap"],
 		);
 		assert.deepEqual(result.models[2], {
 			id: "parent/cheap",
