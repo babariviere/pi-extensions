@@ -413,7 +413,15 @@ function checkFileRedirect(command: string, masked: string): GuardrailHit | null
 		const operatorStart = match.index + match[1].length;
 		const operatorText = command.slice(operatorStart, match.index + match[0].length);
 		const target = tokenize(command.slice(match.index + match[0].length))[0];
-		if (!target || /^&(?:\d+|-)$/.test(target) || target === "/dev/null") continue;
+		const normalizedTarget = target && isAbsolute(target) ? normalize(target) : undefined;
+		const isLiteralTmpFile = normalizedTarget?.startsWith("/tmp/") && !/[\$`*?[\]{}()]/.test(target);
+		const tmpdirRelative = target?.match(/^\$(?:TMPDIR|\{TMPDIR\})\/(.+)$/)?.[1];
+		const isTmpdirFile =
+			tmpdirRelative !== undefined &&
+			normalize(`/tmp/${tmpdirRelative}`).startsWith("/tmp/") &&
+			!/[\$`*?[\]{}()]/.test(tmpdirRelative);
+		if (!target || /^&(?:\d+|-)$/.test(target) || target === "/dev/null" || isLiteralTmpFile || isTmpdirFile)
+			continue;
 		return {
 			reason: "shell output redirection writing directly to a file; use the write or edit tool instead",
 			match: `${operatorText}${JSON.stringify(target)}`,

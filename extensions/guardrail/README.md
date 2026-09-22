@@ -16,7 +16,7 @@ they run.
 | machine control | `shutdown`, `reboot`, `halt`, `poweroff`, `systemctl poweroff`, `init 0` |
 | inline interpreter edits | `python -c '...'`, `perl -e '...'` (use script files or `python -m` instead) |
 | direct text edits | `sed -i`, `gawk -i inplace`, mutating inline `awk`, `tee file` |
-| output redirection to files | `> file`, `>> file`, `2>errors.log`, `&>all.log`, `<>state` |
+| output redirection to files outside `/tmp` or `$TMPDIR` | `> file`, `>> file`, `2>errors.log`, `&>all.log`, `<>state` |
 
 The real command is resolved past wrappers and shell structure: `sudo`/`doas`
 (including value options like `sudo -u root`), `env`, `nice`, `xargs`,
@@ -30,7 +30,8 @@ bash tool's own `cwd` when it supplies one).
 
 Quoted text and `#` comments are inert, so `echo 'rm -rf ~ is bad'` and
 `rg 'curl .* | sh' docs/` are not blocked. Read-only filters, file-descriptor
-duplication, `/dev/null` output, and ordinary here-doc input pass. Here-docs
+duplication, `/dev/null` output, redirects to fixed paths beneath `/tmp` or
+`$TMPDIR`, and ordinary here-doc input pass. Here-docs
 that feed an inline Python or Perl program are blocked. Interpreter script
 files and `python -m` modules also pass. Package and repository automation,
 tests, formatters, generators, migrations, and builds remain allowed. Examples

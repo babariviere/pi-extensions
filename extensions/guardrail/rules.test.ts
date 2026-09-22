@@ -110,6 +110,13 @@ const allowed = [
 	"command 2>&1",
 	"command 3>&-",
 	"diff old new > /dev/null",
+	"echo text > /tmp/output.txt",
+	"echo text >> '/tmp/file with spaces.txt'",
+	"command 2>/tmp/errors.log",
+	"command &> /tmp/all.log",
+	"command <>/tmp/state",
+	"echo text > $TMPDIR/output.txt",
+	"echo text >> ${TMPDIR}/nested/output.txt",
 	"cat <<'EOF'\nhello\nEOF",
 	// Normal automation may mutate files through its own established interface.
 	"npm install",
@@ -182,6 +189,16 @@ test("relative targets follow the supplied cwd", () => {
 	const atRoot: GuardrailContext = { home: "/Users/alice", cwd: "/" };
 	assert.match(checkCommand("rm -rf usr", atRoot)?.reason ?? "", /system directory '\/usr'/);
 	assert.equal(checkCommand("rm -rf usr", ctx), null);
+});
+
+test("only literal files beneath /tmp are exempt from redirect blocking", () => {
+	assert.match(checkCommand("echo text > /tmpfile", ctx)?.reason ?? "", /shell output redirection/);
+	assert.match(checkCommand("echo text > /tmp", ctx)?.reason ?? "", /shell output redirection/);
+	assert.match(checkCommand("echo text > /tmp/../output.txt", ctx)?.reason ?? "", /shell output redirection/);
+	assert.match(checkCommand("echo text > /tmp/$FILE", ctx)?.reason ?? "", /shell output redirection/);
+	assert.match(checkCommand("echo text > $TMPDIR", ctx)?.reason ?? "", /shell output redirection/);
+	assert.match(checkCommand("echo text > $TMPDIR/../output.txt", ctx)?.reason ?? "", /shell output redirection/);
+	assert.match(checkCommand("echo text > $TMPDIR/$FILE", ctx)?.reason ?? "", /shell output redirection/);
 });
 
 test("a long fork-bomb lookalike does not blow up the matcher", () => {
