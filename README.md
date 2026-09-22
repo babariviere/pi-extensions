@@ -74,6 +74,25 @@ Run that command from this repository. Individual extensions can also be loaded
 from a checkout through pi's normal `settings.json` extension configuration;
 the extension-specific docs contain examples where relevant.
 
+## Pi usage CLI
+
+The package exposes `pi-usage`, a non-interactive usage reporter that scans
+`~/.pi/agent/sessions` recursively. It includes nested subagent sessions,
+deduplicates records copied by session branches, and uses the authoritative
+cost embedded in each Pi assistant message instead of repricing model aliases.
+
+`daily` is the default report:
+
+```sh
+pi-usage daily
+pi-usage monthly --breakdown
+pi-usage session --since 2026-09-01
+pi-usage daily --timezone Europe/Paris --json
+```
+
+From a checkout, use `npm run pi-usage -- daily`. Run `pi-usage --help`
+for date filters, JSON output, and session-root overrides.
+
 ## Requirements
 
 - Node.js `>=24.0.0`, as required by the shared code-mode runtime and used by CI.

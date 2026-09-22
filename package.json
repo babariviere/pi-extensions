@@ -17,6 +17,9 @@
   "engines": {
     "node": ">=24.0.0"
   },
+  "bin": {
+    "pi-usage": "./cli/pi-usage.ts"
+  },
   "pi": {
     "extensions": [
       "extensions/*/index.ts"
@@ -55,7 +58,8 @@
   },
   "scripts": {
     "code-mode:evaluate": "tsx extensions/code-mode/evaluation/cli.ts",
-    "test": "node --import tsx --test 'extensions/**/*.test.ts'",
+    "pi-usage": "node cli/pi-usage.ts",
+    "test": "node --import tsx --test 'extensions/**/*.test.ts' 'cli/**/*.test.ts'",
     "typecheck": "tsgo -p tsconfig.json",
     "fmt": "biome format --write .",
     "fmt:check": "biome format ."
