@@ -103,8 +103,8 @@ export const DEFAULT_REPORT_SECTIONS = ["Summary", "Needs you", "Work", "Finding
 export const NEEDS_HUMAN_HEADING = DEFAULT_REPORT_SECTIONS[1];
 
 export const DEFAULT_NIGHT_CONFIG: NightConfig = {
-	plannerModel: "openai-codex/gpt-6-astra",
-	orchestratorModel: "openai-codex/gpt-5.6-sol",
+	plannerModel: "openai-codex/gpt-6-sol",
+	orchestratorModel: "openai-codex/gpt-6-sol",
 	promptPath: join(defaultNightDir(), "prompt.md"),
 	instructionsPath: join(defaultNightDir(), "instructions.md"),
 	reportPathTemplate: join(defaultNightDir(), "reports", "{datetime} - report.md"),

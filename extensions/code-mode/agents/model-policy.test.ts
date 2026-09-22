@@ -10,14 +10,14 @@ function model(id: string, input: number, output: number): Model<any> {
 
 const catalog = [
 	model("claude-opus-5", 10, 20),
-	model("gpt-5.6-sol", 15, 10),
+	model("gpt-6-sol", 15, 10),
 	model("cheap", 5, 5),
 	model("expensive", 20, 20),
 ];
 
 test("permits a model at or below the approved price ceiling", () => {
 	assert.equal(subagentModelPriceError("cheap", catalog, undefined), undefined);
-	assert.equal(subagentModelPriceError("gpt-5.6-sol", catalog, undefined), undefined);
+	assert.equal(subagentModelPriceError("gpt-6-sol", catalog, undefined), undefined);
 });
 
 test("rejects a model above the approved price ceiling", () => {

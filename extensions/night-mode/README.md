@@ -94,14 +94,14 @@ this extension only subscribes. State is republished as `night-mode:state`.
 
 `/night start` has separate planning, approval, and execution phases.
 
-1. The current session switches to **gpt-6-astra** and receives a planning-only prompt.
-2. Astra reads the standing routine and one-off instructions. It may spawn read-only subagents to explore repositories and services, but neither Astra nor its children implement anything.
-3. Astra submits structured candidates through the typed `night.plan` Code Mode provider action. Each task specifies `category`, `outputs`, and `permissions` (empty arrays for read-only work). Categories are `instructions`, `linear`, `ci`, `slack`, `daily-note`, `opportunistic`, `insights`, and `auto-improvement`. Every category needs a task or an `omissions` entry with `category` and a nonempty `reason`. For custom routines, mark unused categories not applicable. Validation errors allow revision and resubmission.
+1. The current session switches to **gpt-6-sol** and receives a planning-only prompt.
+2. Sol reads the standing routine and one-off instructions. It may spawn read-only subagents to explore repositories and services, but neither Sol nor its children implement anything.
+3. Sol submits structured candidates through the typed `night.plan` Code Mode provider action. Each task specifies `category`, `outputs`, and `permissions` (empty arrays for read-only work). Categories are `instructions`, `linear`, `ci`, `slack`, `daily-note`, `opportunistic`, `insights`, and `auto-improvement`. Every category needs a task or an `omissions` entry with `category` and a nonempty `reason`. For custom routines, mark unused categories not applicable. Validation errors allow revision and resubmission.
    Planning treats the configured prompt as an execution reference, not an instruction to stop discovering work. Extra instructions supplement the routine. Slack, daily-note, and insights passes are proposed unless excluded or blocked.
    The checklist shows omission reasons, task scope, outputs, and permissions. Users can still uncheck any task. Output and permission metadata survives into the ledger and execution prompt; it is a delegation contract, not a new OS permission grant. Declare `mcp-write` for MCP mutations: these tasks are rejected while `mcpReadOnly` is enabled, including after checklist edits. Filesystem capabilities still require the existing execution preflight; declared paths do not widen the sandbox. Legacy persisted handoffs remain readable.
 4. Night mode presents an interactive checklist. Tasks begin unchecked. They can be selected, edited as JSON, added, or deleted.
 5. Approval creates a fresh session with the planning session recorded as its parent. Only checked and refined tasks are placed in the new session state.
-6. If approval happens before **21:00 local time**, the fresh session waits until 21:00 that day. At or after 21:00, execution starts immediately. This is a calendar-day rule: approval at 02:00 also waits until 21:00. At execution time, **gpt-5.6-sol** creates the report and private working copy and materializes approved tasks through the todo extension's shared storage layer.
+6. If approval happens before **21:00 local time**, the fresh session waits until 21:00 that day. At or after 21:00, execution starts immediately. This is a calendar-day rule: approval at 02:00 also waits until 21:00. At execution time, **gpt-6-sol** creates the report and private working copy and materializes approved tasks through the todo extension's shared storage layer.
 7. Sol orchestrates those tasks through subagents. Every launch must carry the approved `nightTodoId`; the agents provider refuses unknown or unchecked ids.
 8. The run handshake at `~/.pi/agent/night/active.json` carries the approved ids, sandbox policy, report path, ledger store, and working copy to every participant.
 
@@ -566,8 +566,8 @@ and every path is configurable. Defaults keep the night files under
 
 | Key | Default | Meaning |
 |-----|---------|---------|
-| `plannerModel` | `openai-codex/gpt-6-astra` | Model used in the current session to propose the plan |
-| `orchestratorModel` | `openai-codex/gpt-5.6-sol` | Model used by the fresh approved execution session |
+| `plannerModel` | `openai-codex/gpt-6-sol` | Model used in the current session to propose the plan |
+| `orchestratorModel` | `openai-codex/gpt-6-sol` | Model used by the fresh approved execution session |
 | `promptPath` | `~/.pi/agent/night/prompt.md` | Your standing routine |
 | `instructionsPath` | `~/.pi/agent/night/instructions.md` | One-off asks, cleared after the run |
 | `reportPathTemplate` | `~/.pi/agent/night/reports/{datetime} - report.md` | `{datetime}`, `{date}`, `{time}` placeholders |
