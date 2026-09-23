@@ -21,7 +21,6 @@ directory, and `themes/*.json` files. The current inventory is:
 | `preview-system-prompt` | `/system-prompt` displays the assembled system prompt. |
 | `secrets` | `/secret-list`; injects `fnox` secrets into shell commands and replaces secret values in tool results with reversible references. |
 | `code-mode` | `code_mode` is the sole model-facing tool by default and runs bounded TypeScript programs through the shared code-mode runtime. Full Code Mode exposes Pi core tools, the explicitly registered `web.search` and `web.fetch` aliases, MCP, agents, and the typed `todo.*` and `night.plan` providers. Orchestration-only mode keeps MCP, agents, and trusted custom providers while hiding full-code-only capabilities. It also provides `/sandbox`, `/mcp`, and `/mcp-auth` controls. |
-| `taptap` | Requires two `Esc` presses within 600ms to cancel a running agent turn, while preserving pi's idle and completion behaviors. |
 | `todos` | The typed `todo.*` Code Mode provider manages file-backed todos, and `/todos` provides the interactive manager. |
 | `tool-substitute` | Adds pi search-tool guidance and blocks Git writes inside jj repositories, converting simple safe Git operations where possible. |
 | `usage` | `/usage` polls Claude and Codex/ChatGPT OAuth subscription windows and publishes usage and Codex pacing state. |
@@ -193,8 +192,6 @@ The CI workflow runs `npm ci`, `npm run typecheck`, and `npm test` on Node 24.
   guards, sandboxing, wake locks, and reports.
 - [Secrets](extensions/secrets/README.md), including provider patterns,
   reference expansion, and masking caveats.
-- [TapTap](extensions/taptap/README.md), including Escape handling and keybinding
-  caveats.
 - [Usage](extensions/usage/README.md), including Codex pacing semantics and
   persisted state.
 - [Code-mode migration and configuration](extensions/code-mode/README.md).
