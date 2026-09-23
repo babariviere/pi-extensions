@@ -2,7 +2,7 @@ import type { Usage } from "@earendil-works/pi-ai";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { CodeModeActivityStore } from "./activity/store.ts";
 import type { CodeModeRunDisplay } from "./activity/types.ts";
-import { assertBackgroundAction, backgroundRole } from "./background-policy.ts";
+import { assertBackgroundAction, assertBackgroundReadPath, backgroundRole } from "./background-policy.ts";
 import {
 	executionOutcomeFromError,
 	type CodeModeExecutionFailureStageV1,
@@ -323,7 +323,9 @@ export class CodeModeExecutionService {
 		): Promise<unknown> => {
 			const traceOperation = traceRecorder.issueCall(ref, redactRecordedArgs(ref, args));
 			try {
-				assertBackgroundAction(backgroundRole(), ref);
+				const role = backgroundRole();
+				assertBackgroundAction(role, ref);
+				assertBackgroundReadPath(role, ref, args, options.context.cwd);
 				guardFullCodeRef(ref);
 				guardAgentCall(ref);
 			} catch (error) {
