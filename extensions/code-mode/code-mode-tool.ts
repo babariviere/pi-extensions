@@ -85,15 +85,22 @@ export const createCodeModeExecTool = (
 	state: CodeModeState,
 	codePreviewSettings: CodePreviewSettings,
 	decorateShell: CodeModeToolShellDecorator = withCodePreviewShell,
+	options: { headless?: boolean } = {},
 ): ToolDefinition<any, any, any> =>
 	decorateShell(
 		defineTool({
 			name: "code_mode",
 			label: "Code Mode",
-			description:
-				"Execute type-checked TypeScript in isolated QuickJS to call Pi core tools and explicitly registered capabilities through `pi.*`, `web.*`, `mcp.*`, and `agents.*`. Do not use Python as an orchestration fallback.",
+			description: options.headless
+				? "Execute type-checked TypeScript in isolated QuickJS with role-scoped `pi.*` and read-only `mcp.*` capabilities. Web, subagents, and interactive commands are unavailable."
+				: "Execute type-checked TypeScript in isolated QuickJS to call Pi core tools and explicitly registered capabilities through `pi.*`, `web.*`, `mcp.*`, and `agents.*`. Do not use Python as an orchestration fallback.",
 			promptSnippet: "Pi core tools and explicitly registered capabilities",
 			promptGuidelines: [
+				...(options.headless
+					? [
+							"Use only the role-allowed `pi.*` calls and approved read-only `mcp.*` tools. `agents.*` and `web.*` are unavailable.",
+						]
+					: []),
 				"Batch independent operations in one `code_mode` program, not one call per tool; keep dependent/conditional steps sequential. Use `Promise.all` for a few independent calls; use `mapLimit(items, fn, N)` when fanning out over a wide list, because `Promise.all` receives promises that have already started and so cannot bound how many run at once. Return only the compact final value; intermediate results stay in the sandbox.",
 				"Awkward payloads MUST go through `payloads` and be read as `π.key`, never inlined in `code`: multi-line file content, JSON blobs, long prose, and strings with literal `${...}`. Inlining multi-line content nests it through three escape layers and the model emits literal `\\n`, corrupting the file; template literals also interpolate `${...}`. E.g. `payloads: { body }` then `pi.write({ path, content: π.body })`; JSON-encode data and `JSON.parse(π.key)`.",
 				"`process.env` exposes an allowlisted host environment (HOME, USER, SHELL, PWD, PATH, LANG, LC_*, TERM, TMPDIR, XDG_*); sensitive variables are never exposed. Use `pi.exec({ argv: [program, ...args] })` when arguments must be literal. `pi.bash` is for shell syntax and accepts per-call `cwd` (absolute working directory), `env` (merged over the shell environment), and `stdin` (text piped to the command).",
@@ -108,8 +115,9 @@ export const createCodeModeExecTool = (
 			// lucumr.pocoo.org/2026/7/4/better-models-worse-tools/ and pi-tool-repair.
 			parameters: Type.Object({
 				code: Type.String({
-					description:
-						"TypeScript function body. Top-level await and return are supported. Globals include explicitly registered `pi`, `web`, `mcp`, and `agents` capabilities, plus `mapLimit`, `print`, `π` (payloads), `τ` (session state), and allowlisted `process`. See session guidance / `code-mode` skill for exact signatures.",
+					description: options.headless
+						? "TypeScript function body with top-level await and return. Role-scoped `pi.*` and read-only `mcp.*` are available; `web.*` and `agents.*` are not. Use `π` for payloads."
+						: "TypeScript function body. Top-level await and return are supported. Globals include explicitly registered `pi`, `web`, `mcp`, and `agents` capabilities, plus `mapLimit`, `print`, `π` (payloads), `τ` (session state), and allowlisted `process`. See session guidance / `code-mode` skill for exact signatures.",
 				}),
 				payloads: Type.Optional(
 					Type.Record(Type.String(), Type.String(), {

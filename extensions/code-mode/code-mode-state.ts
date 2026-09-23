@@ -115,6 +115,7 @@ export class CodeModeState {
 	constructor(
 		readonly pi: ExtensionAPI,
 		readonly capturedTools: CapturedToolCatalog,
+		readonly options: { headless?: boolean } = {},
 	) {}
 
 	get initialized(): boolean {
@@ -156,17 +157,18 @@ export class CodeModeState {
 	async initialize(context: ExtensionContext): Promise<void> {
 		await this.#closeInternal();
 		this.#pacingDisabled = process.env.PI_USAGE_PACING === "off";
-		this.#unsubscribePacing = this.pi.events.on(USAGE_PACING_EVENT, (payload) => {
-			if (isUsagePacingEvent(payload)) this.#pacingDisabled = payload.enforced === false;
-		});
+		if (!this.options.headless)
+			this.#unsubscribePacing = this.pi.events.on(USAGE_PACING_EVENT, (payload) => {
+				if (isUsagePacingEvent(payload)) this.#pacingDisabled = payload.enforced === false;
+			});
 		this.activity.reset();
 		this.agentRuns.reset();
 		this.#cwd = context.cwd;
-		this.#agentSandbox = agentSandboxFloor();
+		this.#agentSandbox = this.options.headless ? undefined : agentSandboxFloor();
 		// A new session must not inherit the previous one's children, nor its state.
 		this.agentRunBook.reset();
 		this.sessionStore.reset();
-		this.agentRunBook.setSink((event) => this.#announceAgentCompletion(event));
+		if (!this.options.headless) this.agentRunBook.setSink((event) => this.#announceAgentCompletion(event));
 		const projectTrusted = context.isProjectTrusted();
 		this.#config = loadCodeModeConfig({
 			cwd: context.cwd,
@@ -186,11 +188,12 @@ export class CodeModeState {
 			this.#sessionRef.sessionFile = undefined;
 		}
 		this.#registry = new ActionRegistry(new CodeModeToolResultProxy(() => this.capturedTools.runner));
-		const capturedToolOverrides = this.#config.fullCodeMode
-			? new CapturedToolOverrideAdapter(this.capturedTools, () => this.#mcpReadOnlyGate())
-			: undefined;
+		const capturedToolOverrides =
+			this.#config.fullCodeMode && !this.options.headless
+				? new CapturedToolOverrideAdapter(this.capturedTools, () => this.#mcpReadOnlyGate())
+				: undefined;
 		const capturedToolsProvider =
-			this.#config.fullCodeMode && this.#config.capture.enabled
+			this.#config.fullCodeMode && this.#config.capture.enabled && !this.options.headless
 				? new CapturedToolsProvider(this.capturedTools, () => this.#mcpReadOnlyGate(), {
 						aliases: CAPTURED_WEB_ALIASES,
 					})
@@ -199,14 +202,19 @@ export class CodeModeState {
 			this.#sandbox = await this.#createSandbox(context);
 			const sandbox = this.#sandbox;
 			this.#registry.register(
-				new PiToolsProvider(context.cwd, this.capturedTools, capturedToolOverrides, {
-					bash: sandbox.bashOperations(),
-					wrapCommand: (command: string) => sandbox.wrapCommand(command),
-					wrapArgv: (argv: readonly string[]) => sandbox.wrapArgv(argv),
-					edit: sandbox.editOperations(),
-					writeGuard: sandbox.writeGuard(),
-					readGuard: sandbox.readGuard(),
-				}),
+				new PiToolsProvider(
+					context.cwd,
+					this.options.headless ? undefined : this.capturedTools,
+					capturedToolOverrides,
+					{
+						bash: sandbox.bashOperations(),
+						wrapCommand: (command: string) => sandbox.wrapCommand(command),
+						wrapArgv: (argv: readonly string[]) => sandbox.wrapArgv(argv),
+						edit: sandbox.editOperations(),
+						writeGuard: sandbox.writeGuard(),
+						readGuard: sandbox.readGuard(),
+					},
+				),
 			);
 		}
 		if (capturedToolsProvider) this.#registry.register(capturedToolsProvider);
@@ -219,37 +227,41 @@ export class CodeModeState {
 				() => this.#mcpReadOnlyGate(),
 			),
 		);
-		const availableModels: readonly Model<any>[] =
-			context.scopedModels.length > 0
-				? context.scopedModels.map((entry) => entry.model)
-				: await context.modelRegistry.getAvailable();
-		this.#registry.register(
-			new CodeModeAgentsProvider(
-				() => this.#sessionRef,
-				this.agentRuns,
-				() => ({
-					timeoutMs: this.config.agents.timeoutMs,
-					waitMs: this.config.agents.waitMs,
-					parentProvider: context.model?.provider,
-					defaultModel:
-						this.config.agents.defaultModel ??
-						(context.model ? `${context.model.provider}/${context.model.id}` : undefined),
-					...(this.config.agents.defaultThinking ? { defaultThinking: this.config.agents.defaultThinking } : {}),
-					models: availableModels,
-					pacingDisabled: this.#pacingDisabled,
-				}),
-				this.agentRunBook,
-			),
-		);
-		for (const provider of this.#externalProviders.values()) {
-			this.#registry.register(provider);
+		if (!this.options.headless) {
+			const availableModels: readonly Model<any>[] =
+				context.scopedModels.length > 0
+					? context.scopedModels.map((entry) => entry.model)
+					: await context.modelRegistry.getAvailable();
+			this.#registry.register(
+				new CodeModeAgentsProvider(
+					() => this.#sessionRef,
+					this.agentRuns,
+					() => ({
+						timeoutMs: this.config.agents.timeoutMs,
+						waitMs: this.config.agents.waitMs,
+						parentProvider: context.model?.provider,
+						defaultModel:
+							this.config.agents.defaultModel ??
+							(context.model ? `${context.model.provider}/${context.model.id}` : undefined),
+						...(this.config.agents.defaultThinking
+							? { defaultThinking: this.config.agents.defaultThinking }
+							: {}),
+						models: availableModels,
+						pacingDisabled: this.#pacingDisabled,
+					}),
+					this.agentRunBook,
+				),
+			);
+			for (const provider of this.#externalProviders.values()) {
+				this.#registry.register(provider);
+			}
 		}
 		this.#execution = new CodeModeExecutionService(this.#registry, this.#config, this.activity, this.sessionStore);
 		const discovery: CodeModeProviderDiscovery = {
 			version: 1,
 			register: (provider, options) => this.registerExternal(provider, options),
 		};
-		this.pi.events.emit(CODE_MODE_PROVIDER_DISCOVER_EVENT, discovery);
+		if (!this.options.headless) this.pi.events.emit(CODE_MODE_PROVIDER_DISCOVER_EVENT, discovery);
 	}
 
 	async ensure(context: ExtensionContext): Promise<void> {
@@ -314,13 +326,15 @@ export class CodeModeState {
 		// `XDG_CONFIG_HOME` and ledger store here, so every shell this process spawns
 		// inherits them. Without it a subagent that was not handed an environment
 		// runs `jj` against a config dir the sandbox refuses to write.
-		applyNightRunEnv({ sessionId: this.#sessionRef.sessionId, cwd });
+		if (!this.options.headless) applyNightRunEnv({ sessionId: this.#sessionRef.sessionId, cwd });
 		const effective = effectiveSandbox({
 			settings: this.config.sandbox,
 			requested: this.#sandboxRequest,
 			// Session identity, so only participants of the run inherit its policy:
 			// the handshake file is global, and a session opened mid-run is a bystander.
-			night: activeNightSandboxRequest({ sessionId: this.#sessionRef.sessionId, cwd }),
+			night: this.options.headless
+				? undefined
+				: activeNightSandboxRequest({ sessionId: this.#sessionRef.sessionId, cwd }),
 			// The parent's floor for this subagent, read from argv at initialize().
 			agent: this.#agentSandbox,
 		});
@@ -344,7 +358,7 @@ export class CodeModeState {
 	 */
 	#mcpReadOnlyGate(): McpReadOnlyGate {
 		const cwd = this.#cwd ?? this.#sessionRef.cwd;
-		const night = activeNightMcpReadOnly({ sessionId: this.#sessionRef.sessionId, cwd });
+		const night = !this.options.headless && activeNightMcpReadOnly({ sessionId: this.#sessionRef.sessionId, cwd });
 		return McpReadOnlyGate.of(
 			effectiveMcpReadOnlyConfig(this.config.mcp, night || process.env.PI_BACKGROUND_AGENT_ATTEMPT === "1"),
 		);
@@ -376,11 +390,12 @@ export class CodeModeState {
 		// Another extension (night-mode) or the `/sandbox` command can change the
 		// mode for the rest of the session. The operations installed on the tools
 		// are late-bound, so the swap needs no re-registration.
-		this.#unsubscribeSandbox = this.pi.events.on(SANDBOX_REQUEST_EVENT, (payload) => {
-			const request = parseSandboxRequestEvent(payload);
-			if (!request) return;
-			this.#queueSandboxRequest(request.policy, request.reason, context);
-		});
+		if (!this.options.headless)
+			this.#unsubscribeSandbox = this.pi.events.on(SANDBOX_REQUEST_EVENT, (payload) => {
+				const request = parseSandboxRequestEvent(payload);
+				if (!request) return;
+				this.#queueSandboxRequest(request.policy, request.reason, context);
+			});
 		return controller;
 	}
 

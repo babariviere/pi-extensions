@@ -5,6 +5,7 @@
 ## Configuration and identifiers
 
 - Explicit extension paths use `extensions/code-mode/index.ts`; the model-facing tool and bundled skill are `code_mode` and `code-mode`.
+- Controller-owned background attempts load `extensions/code-mode/headless.ts` explicitly instead. This entry requires the attempt marker, isolated profile, untrusted project and print mode. It registers only `code_mode`, uses the same Pi core, MCP, and patch providers, and omits interactive commands, captured extension tools, widgets, web tools, and subagents.
 - Configuration is loaded from `~/.pi/agent/code-mode.json` and, for trusted projects, `.pi/code-mode.json`.
 - Code Mode environment overrides use the `PI_CODE_MODE_*` prefix.
 - Events and persisted protocol values use `pi-code-mode` or `code-mode` prefixes. Child-process flags use `--code-mode-*`.
