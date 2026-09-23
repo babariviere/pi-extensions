@@ -47,7 +47,7 @@ const deferred = <T>() => {
 	return { promise, resolve, reject };
 };
 
-const createState = async () => {
+const createState = async (child = false) => {
 	const cwd = await mkdtemp(path.join(tmpdir(), "code-mode-state-test-"));
 	temporaryDirectories.push(cwd);
 	const events = new TestEvents();
@@ -68,9 +68,36 @@ const createState = async () => {
 		},
 	} as unknown as ExtensionContext;
 	const state = new CodeModeState(pi, new CapturedToolCatalog());
-	await state.initialize(context);
+	const previous = process.env.PI_CODE_MODE_SUBAGENT;
+	if (child) process.env.PI_CODE_MODE_SUBAGENT = "1";
+	try {
+		await state.initialize(context);
+	} finally {
+		if (previous === undefined) delete process.env.PI_CODE_MODE_SUBAGENT;
+		else process.env.PI_CODE_MODE_SUBAGENT = previous;
+	}
 	return { state, context, events, notifications };
 };
+
+test("child sessions expose neither detachable jobs nor nested subagents", async () => {
+	const parent = await createState();
+	try {
+		const providers = parent.state.registry.providers().map((provider) => provider.name);
+		assert.ok(providers.includes("jobs"));
+		assert.ok(providers.includes("agents"));
+	} finally {
+		await parent.state.shutdown();
+	}
+	const child = await createState(true);
+	try {
+		const providers = child.state.registry.providers().map((provider) => provider.name);
+		assert.ok(!providers.includes("jobs"));
+		assert.ok(!providers.includes("agents"));
+		assert.ok(providers.includes("mcp"));
+	} finally {
+		await child.state.shutdown();
+	}
+});
 
 const stateEvents = (events: TestEvents) => events.emitted.filter((event) => event.name === SANDBOX_STATE_EVENT);
 

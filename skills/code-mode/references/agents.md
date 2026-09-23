@@ -2,6 +2,8 @@
 
 Code Mode's `agents.*` namespace runs **custom agent definitions discovered on disk**, each as a child `pi` session. Discover definitions with `agents.list()`. Omit `model` and `thinking` for normal runs so the agent uses its configured defaults; set them only when the orchestrator intentionally needs a specialized model or reasoning level. A `running` result is pending work, not a failure.
 
+`agents.*` is unavailable inside a Code Mode subagent child session. The child turn can settle before a detached nested agent exits, causing the parent to mark the child done while work is still running. Launch parallel agents from the parent orchestrator instead.
+
 Agent definitions are markdown files with YAML frontmatter, discovered from:
 
 - user scope: `$PI_CODING_AGENT_DIR/agents/**/*.md` (default `~/.pi/agent/agents`)

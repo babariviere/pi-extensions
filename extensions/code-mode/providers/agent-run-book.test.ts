@@ -83,6 +83,18 @@ test("a claimed result is never announced to the session", async () => {
 	assert.deepEqual(announced, []);
 });
 
+test("waiting after a child exits but before delivery suppresses the wake-up", async () => {
+	const announced: AgentCompletionEvent[] = [];
+	const book = bookWithSink(announced);
+	const batch = deferred();
+	book.register({ runId: "finished", agents: ["worker"], promise: batch.promise, cancel: () => {} });
+	batch.settle([result("worker", "finished")]);
+	await sleep(0);
+	assert.equal((await book.wait("finished", 0)).state, "settled");
+	await sleep(ANNOUNCE_MS * 6);
+	assert.deepEqual(announced, []);
+});
+
 test("an unclaimed result is announced once the wait window is gone", async () => {
 	const announced: AgentCompletionEvent[] = [];
 	const book = bookWithSink(announced);

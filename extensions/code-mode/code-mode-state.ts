@@ -34,6 +34,7 @@ import { CodeModeAgentRunRegistry } from "./providers/agent-run-monitor.ts";
 import { type SessionRef, CodeModeAgentsProvider } from "./providers/agents-provider.ts";
 import { CapturedToolOverrideAdapter, CapturedToolsProvider } from "./providers/captured-tools-provider.ts";
 import { McpClientProvider } from "./providers/mcp-client-provider.ts";
+import { CodeModeJobsProvider, type JobSnapshot } from "./providers/jobs-provider.ts";
 import { PiToolsProvider } from "./providers/pi-tools-provider.ts";
 import { agentSandboxFloor } from "./sandbox/agent-floor.ts";
 import { SandboxController } from "./sandbox/controller.ts";
@@ -50,7 +51,7 @@ import {
 import { effectiveSandbox } from "./sandbox/resolve.ts";
 import { CodeModeSessionStore } from "./session-store.ts";
 
-const RESERVED_PROVIDER_NAMES = ["pi", "mcp", "agents", "web", "code-mode"];
+const RESERVED_PROVIDER_NAMES = ["pi", "mcp", "agents", "jobs", "web", "code-mode"];
 export const CAPTURED_WEB_ALIASES = { search: "web_search", fetch: "fetch_content" } as const;
 
 /** How long session teardown waits for cancelled subagent children to die. */
@@ -201,6 +202,16 @@ export class CodeModeState {
 		if (this.#config.fullCodeMode) {
 			this.#sandbox = await this.#createSandbox(context);
 			const sandbox = this.#sandbox;
+			// A child Pi turn can settle before its detached work finishes. Do not
+			// advertise jobs there: the parent must not report that child as done
+			// while a child-owned process is still running.
+			if (!this.options.headless && process.env.PI_CODE_MODE_SUBAGENT !== "1")
+				this.#registry.register(
+					new CodeModeJobsProvider(
+						(command) => sandbox.wrapCommand(command),
+						(job) => this.#announceJobCompletion(job),
+					),
+				);
 			this.#registry.register(
 				new PiToolsProvider(
 					context.cwd,
@@ -227,7 +238,7 @@ export class CodeModeState {
 				() => this.#mcpReadOnlyGate(),
 			),
 		);
-		if (!this.options.headless) {
+		if (!this.options.headless && process.env.PI_CODE_MODE_SUBAGENT !== "1") {
 			const availableModels: readonly Model<any>[] =
 				context.scopedModels.length > 0
 					? context.scopedModels.map((entry) => entry.model)
@@ -252,6 +263,8 @@ export class CodeModeState {
 					this.agentRunBook,
 				),
 			);
+		}
+		if (!this.options.headless) {
 			for (const provider of this.#externalProviders.values()) {
 				this.#registry.register(provider);
 			}
@@ -537,6 +550,22 @@ export class CodeModeState {
 			);
 		} catch {
 			// No session to deliver into (shutting down, or a host without injection).
+		}
+	}
+
+	#announceJobCompletion(job: JobSnapshot): void {
+		try {
+			this.pi.sendMessage(
+				{
+					customType: "code-mode.job_result",
+					content: `Background job ${job.name} (${job.id}) ${job.state}. Output: ${job.outputPath}${job.error ? `\n${job.error}` : ""}. Use jobs.logs({ id: "${job.id}" }) to inspect it.`,
+					display: true,
+					details: job,
+				},
+				{ deliverAs: "followUp", triggerTurn: true },
+			);
+		} catch {
+			// Session replacement may have removed the recipient.
 		}
 	}
 

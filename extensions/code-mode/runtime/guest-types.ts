@@ -454,15 +454,19 @@ export const guestTypeDeclarations = (
 	const baseDeclarations = options.omitPiEditAndWrite
 		? omitPiEditAndWriteDeclarations(GUEST_TYPE_DECLARATIONS)
 		: GUEST_TYPE_DECLARATIONS;
+	const omitUnavailableAgents = (source: string): string =>
+		providers.length > 0 && !providers.includes("agents")
+			? source.replace("declare const agents: CodeModeAgentsApi;\n", "")
+			: source;
 	if (!fullCodeMode) {
 		const declarations = FULL_CODE_GLOBAL_DECLARATIONS.reduce(
 			(declarations, declaration) => declarations.replace(declaration, ""),
 			baseDeclarations,
 		);
-		return addCustomProviderDeclarations(declarations);
+		return addCustomProviderDeclarations(omitUnavailableAgents(declarations));
 	}
 	let declarations = dynamic ? applyDynamicDeclarations(baseDeclarations, dynamic) : baseDeclarations;
 	if (providers.length > 0 && !providers.includes("web"))
 		declarations = declarations.replace("declare const web: WebApi;\n", "");
-	return addCustomProviderDeclarations(declarations);
+	return addCustomProviderDeclarations(omitUnavailableAgents(declarations));
 };

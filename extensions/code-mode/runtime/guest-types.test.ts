@@ -14,6 +14,21 @@ test("agents.models metadata type-checks in both code modes", () => {
 	}
 });
 
+test("child sessions without an agents provider do not declare the agents global", () => {
+	for (const full of [true, false]) {
+		const declarations = guestTypeDeclarations(full, undefined, ["mcp", "pi"]);
+		assert.doesNotMatch(declarations, /declare const agents: CodeModeAgentsApi;/);
+		assert.match(
+			typeCheckCodeModeCode("return await agents.start({ task: 'x' });", declarations).errors[0]?.message ?? "",
+			/Cannot find name 'agents'/,
+		);
+		assert.match(
+			guestTypeDeclarations(full, undefined, ["mcp", "agents"]),
+			/declare const agents: CodeModeAgentsApi;/,
+		);
+	}
+});
+
 test("full code mode declares the tools discovery namespace", () => {
 	const declarations = guestTypeDeclarations(true);
 	assert.match(declarations, /declare const tools: CodeModeToolsApi;/);

@@ -50,7 +50,7 @@ function childEnv(
 	pacingDisabled: boolean | undefined,
 ): NodeJS.ProcessEnv {
 	const base = req.night ? nightChildEnv(readActiveNightRun()) : process.env;
-	return withPacingDisabled(pacingDisabled, withChildConfigHome(configHome, base));
+	return { ...withPacingDisabled(pacingDisabled, withChildConfigHome(configHome, base)), PI_CODE_MODE_SUBAGENT: "1" };
 }
 
 export function runHeadlessBatch(reqs: RunRequest[], ctx: RunContext): Promise<RunResult[]> {
