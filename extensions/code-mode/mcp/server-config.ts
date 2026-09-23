@@ -69,11 +69,12 @@ export interface McpServerConfig {
 
 const CREDENTIAL_FIELDS = ["headers", "auth", "bearerToken", "bearerTokenEnv", "oauth"] as const;
 
-export const mcpAgentDir = (): string => process.env.PI_AGENT_DIR ?? path.join(os.homedir(), ".pi", "agent");
+export const mcpAgentDir = (): string =>
+	process.env.PI_AGENT_DIR ?? process.env.PI_CODING_AGENT_DIR ?? path.join(os.homedir(), ".pi", "agent");
 
 export const mcpConfigLayerPaths = (cwd: string): string[] => {
 	const layers = [path.join(mcpAgentDir(), "mcp.json")];
-	if (typeof cwd === "string" && cwd.length > 0) {
+	if (process.env.PI_BACKGROUND_AGENT_ATTEMPT !== "1" && typeof cwd === "string" && cwd.length > 0) {
 		layers.push(path.join(cwd, ".pi", "mcp.json"), path.join(cwd, ".mcp.json"));
 	}
 	return layers;

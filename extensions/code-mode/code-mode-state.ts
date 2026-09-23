@@ -351,7 +351,9 @@ export class CodeModeState {
 	#mcpReadOnlyGate(): McpReadOnlyGate {
 		const cwd = this.#cwd ?? this.#sessionRef.cwd;
 		const night = activeNightMcpReadOnly({ sessionId: this.#sessionRef.sessionId, cwd });
-		return McpReadOnlyGate.of(effectiveMcpReadOnlyConfig(this.config.mcp, night));
+		return McpReadOnlyGate.of(
+			effectiveMcpReadOnlyConfig(this.config.mcp, night || process.env.PI_BACKGROUND_AGENT_ATTEMPT === "1"),
+		);
 	}
 
 	/**
