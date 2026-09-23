@@ -40,6 +40,7 @@ interface Job extends JobSnapshot {
 	claimed: boolean;
 	waiters: number;
 	loggedBytes: number;
+	finishedWriting: boolean;
 	timer?: ReturnType<typeof setTimeout>;
 }
 export type JobCompletionSink = (job: JobSnapshot) => void;
@@ -130,10 +131,27 @@ export class CodeModeJobsProvider implements CodeModeProvider {
 	#closing = false;
 	readonly wrapCommand: (command: string) => Promise<string>;
 	readonly sink: JobCompletionSink;
+	readonly canAnnounce: () => boolean;
 
-	constructor(wrapCommand: (command: string) => Promise<string>, sink: JobCompletionSink) {
+	constructor(wrapCommand: (command: string) => Promise<string>, sink: JobCompletionSink, canAnnounce = () => true) {
 		this.wrapCommand = wrapCommand;
 		this.sink = sink;
+		this.canAnnounce = canAnnounce;
+	}
+
+	/** Recheck unclaimed exits when the parent agent finishes its turn. */
+	flushCompletions(): void {
+		for (const job of this.#jobs.values()) this.#announce(job);
+	}
+
+	#announce(job: Job): void {
+		if (this.#closing || !job.finishedWriting || job.claimed || job.waiters > 0 || !this.canAnnounce()) return;
+		job.claimed = true;
+		try {
+			this.sink(this.#snapshot(job));
+		} catch {
+			// A notification failure must not crash Pi.
+		}
 	}
 
 	async list(
@@ -184,6 +202,7 @@ export class CodeModeJobsProvider implements CodeModeProvider {
 				claimed: false,
 				waiters: 0,
 				loggedBytes: 0,
+				finishedWriting: false,
 			};
 			const recordOutput = (chunk: Buffer) => {
 				const remaining = MAX_LOG_BYTES - job.loggedBytes;
@@ -200,18 +219,10 @@ export class CodeModeJobsProvider implements CodeModeProvider {
 			const finalize = () => {
 				if (finalized || !job.endedAt) return;
 				finalized = true;
+				job.finishedWriting = true;
 				job.resolve();
 				this.#prune();
-				const announcement = setTimeout(() => {
-					if (!this.#closing && !job.claimed && job.waiters === 0) {
-						job.claimed = true;
-						try {
-							this.sink(this.#snapshot(job));
-						} catch {
-							// A notification failure must not crash Pi.
-						}
-					}
-				}, ANNOUNCE_DELAY_MS);
+				const announcement = setTimeout(() => this.#announce(job), ANNOUNCE_DELAY_MS);
 				announcement.unref?.();
 			};
 			output.on("error", (error) => {

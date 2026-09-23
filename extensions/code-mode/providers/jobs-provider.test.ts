@@ -51,6 +51,56 @@ test("a terminal wait claims the result, a stopped job cannot wake the model", a
 	}
 });
 
+test("a completion during an active turn stays pending until wait claims it", async () => {
+	const sent: JobSnapshot[] = [];
+	let idle = false;
+	const jobs = new CodeModeJobsProvider(
+		async (command) => command,
+		(job) => sent.push(job),
+		() => idle,
+	);
+	try {
+		const started = await start(jobs, "echo claimed-later");
+		await sleep(250); // Longer than the announcement delay: the old code already queued a wake-up here.
+		assert.deepEqual(sent, []);
+		const claimed = (await jobs.invoke("wait", { id: started.id }, context)) as JobSnapshot;
+		assert.equal(claimed.state, "done");
+		idle = true;
+		jobs.flushCompletions();
+		assert.deepEqual(sent, []);
+	} finally {
+		await jobs.close();
+	}
+});
+
+test("an unclaimed completion during a turn wakes once the turn settles", async () => {
+	const sent: JobSnapshot[] = [];
+	let idle = false;
+	const jobs = new CodeModeJobsProvider(
+		async (command) => command,
+		(job) => sent.push(job),
+		() => idle,
+	);
+	try {
+		const started = await start(jobs, "echo unclaimed");
+		await sleep(250);
+		assert.equal(sent.length, 0);
+		assert.equal(
+			((await jobs.invoke("status", {}, context)) as JobSnapshot[]).find((job) => job.id === started.id)?.state,
+			"done",
+		);
+		idle = true;
+		jobs.flushCompletions();
+		jobs.flushCompletions();
+		assert.deepEqual(
+			sent.map((job) => job.id),
+			[started.id],
+		);
+	} finally {
+		await jobs.close();
+	}
+});
+
 test("sandbox wrapping is applied before launch and rejects unsafe launches", async () => {
 	const jobs = new CodeModeJobsProvider(
 		async () => {

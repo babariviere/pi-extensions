@@ -153,7 +153,7 @@ Cancels one batch, or every live batch when `runId` is omitted. Resolves to `{ c
 
 ## Unclaimed results arrive as a message
 
-When a batch settles and nobody is waiting on it (its window expired, or it was launched with `agents.start`), the result is injected into the parent session as a follow-up message (`customType: "code-mode.agent_result"`) that triggers a turn. You do not have to poll to avoid losing a background run's output; polling is for when you want it *now*.
+When a batch settles and nobody claims it (its window expired, or it was launched with `agents.start`), the result is injected into the parent session as a follow-up message (`customType: "code-mode.agent_result"`) that triggers a turn. Delivery waits until the current parent turn settles so a later terminal `agents.wait` in that turn can claim the result without a redundant wake-up. You do not have to poll to avoid losing a background run's output; polling is for when you want it *now*.
 
 ## Cancellation
 

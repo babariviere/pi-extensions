@@ -119,9 +119,19 @@ export class AgentRunBook {
 	readonly #batches = new Map<string, Batch>();
 	readonly #announceDelayMs: number;
 	#sink: AgentCompletionSink | undefined;
+	#canAnnounce: () => boolean = () => true;
 
 	constructor(options: { announceDelayMs?: number } = {}) {
 		this.#announceDelayMs = options.announceDelayMs ?? ANNOUNCE_DELAY_MS;
+	}
+
+	/** Hold detached completions while the orchestrator can still call agents.wait. */
+	setAnnounceWhen(ready: () => boolean): void {
+		this.#canAnnounce = ready;
+	}
+
+	flushCompletions(): void {
+		for (const batch of this.#batches.values()) this.#announce(batch);
 	}
 
 	/**
@@ -132,7 +142,7 @@ export class AgentRunBook {
 	setSink(sink: AgentCompletionSink | undefined): void {
 		this.#sink = sink;
 		if (!sink) return;
-		for (const batch of this.#batches.values()) this.#announce(batch);
+		this.flushCompletions();
 	}
 
 	register(registration: AgentBatchRegistration): void {
@@ -306,7 +316,7 @@ export class AgentRunBook {
 	}
 
 	#announce(batch: Batch): void {
-		if (batch.claimed || batch.waiters > 0) return;
+		if (batch.claimed || batch.waiters > 0 || !this.#canAnnounce()) return;
 		const sink = this.#sink;
 		const results = batch.results;
 		if (!sink || !results) return;

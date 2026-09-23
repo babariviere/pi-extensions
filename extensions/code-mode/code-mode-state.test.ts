@@ -55,6 +55,7 @@ const createState = async (child = false) => {
 	const pi = { events } as unknown as ExtensionAPI;
 	const context = {
 		cwd,
+		isIdle: () => true,
 		hasUI: true,
 		isProjectTrusted: () => true,
 		sessionManager: {

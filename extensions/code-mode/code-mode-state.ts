@@ -98,6 +98,7 @@ export class CodeModeState {
 	 * session through the completion sink below.
 	 */
 	readonly agentRunBook = new AgentRunBook();
+	#jobs: CodeModeJobsProvider | undefined;
 	/**
 	 * The session's `τ` scratchpad. Lives here for the same reason the run book
 	 * does: it has to outlive a single `code_mode` program, so one program can
@@ -169,6 +170,7 @@ export class CodeModeState {
 		// A new session must not inherit the previous one's children, nor its state.
 		this.agentRunBook.reset();
 		this.sessionStore.reset();
+		this.agentRunBook.setAnnounceWhen(() => context.isIdle());
 		if (!this.options.headless) this.agentRunBook.setSink((event) => this.#announceAgentCompletion(event));
 		const projectTrusted = context.isProjectTrusted();
 		this.#config = loadCodeModeConfig({
@@ -205,13 +207,14 @@ export class CodeModeState {
 			// A child Pi turn can settle before its detached work finishes. Do not
 			// advertise jobs there: the parent must not report that child as done
 			// while a child-owned process is still running.
-			if (!this.options.headless && process.env.PI_CODE_MODE_SUBAGENT !== "1")
-				this.#registry.register(
-					new CodeModeJobsProvider(
-						(command) => sandbox.wrapCommand(command),
-						(job) => this.#announceJobCompletion(job),
-					),
+			if (!this.options.headless && process.env.PI_CODE_MODE_SUBAGENT !== "1") {
+				this.#jobs = new CodeModeJobsProvider(
+					(command) => sandbox.wrapCommand(command),
+					(job) => this.#announceJobCompletion(job),
+					() => context.isIdle(),
 				);
+				this.#registry.register(this.#jobs);
+			}
 			this.#registry.register(
 				new PiToolsProvider(
 					context.cwd,
@@ -322,6 +325,12 @@ export class CodeModeState {
 		this.sessionStore.reset();
 		this.#widgetDismissedAt = 0;
 		this.#externalProviders.clear();
+	}
+
+	/** Called after Pi has finished its turn, before announcing unclaimed work. */
+	flushCompletions(): void {
+		this.agentRunBook.flushCompletions();
+		this.#jobs?.flushCompletions();
 	}
 
 	/**
@@ -592,6 +601,7 @@ export class CodeModeState {
 	}
 
 	async #closeInternal(preserveExternalProviders = true): Promise<void> {
+		this.#jobs = undefined;
 		this.#sandboxGeneration++;
 		this.#unsubscribePacing?.();
 		this.#unsubscribePacing = undefined;

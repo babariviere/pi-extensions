@@ -463,6 +463,7 @@ export default async function codeMode(pi: ExtensionAPI): Promise<void> {
 			systemPrompt: `${systemPrompt}\n\n${guidance}`,
 		};
 	});
+	pi.on("agent_settled", () => state.flushCompletions());
 
 	pi.on("session_shutdown", async () => {
 		unsubscribeProviderRegistration();

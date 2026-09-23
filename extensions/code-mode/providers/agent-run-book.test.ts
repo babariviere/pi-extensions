@@ -95,6 +95,41 @@ test("waiting after a child exits but before delivery suppresses the wake-up", a
 	assert.deepEqual(announced, []);
 });
 
+test("a subagent completion while the parent is working stays claimable without waking it", async () => {
+	const announced: AgentCompletionEvent[] = [];
+	const book = bookWithSink(announced);
+	let idle = false;
+	book.setAnnounceWhen(() => idle);
+	const batch = deferred();
+	book.register({ runId: "later", agents: ["worker"], promise: batch.promise, cancel: () => {} });
+	batch.settle([result("worker", "later")]);
+	await sleep(ANNOUNCE_MS * 6);
+	assert.deepEqual(announced, []);
+	assert.equal((await book.wait("later", 0)).state, "settled");
+	idle = true;
+	book.flushCompletions();
+	assert.deepEqual(announced, []);
+});
+
+test("an unclaimed subagent completion is announced when the parent settles", async () => {
+	const announced: AgentCompletionEvent[] = [];
+	const book = bookWithSink(announced);
+	let idle = false;
+	book.setAnnounceWhen(() => idle);
+	const batch = deferred();
+	book.register({ runId: "unclaimed", agents: ["worker"], promise: batch.promise, cancel: () => {} });
+	batch.settle([result("worker", "unclaimed")]);
+	await sleep(ANNOUNCE_MS * 6);
+	assert.equal(announced.length, 0);
+	idle = true;
+	book.flushCompletions();
+	book.flushCompletions();
+	assert.deepEqual(
+		announced.map((event) => event.runId),
+		["unclaimed"],
+	);
+});
+
 test("an unclaimed result is announced once the wait window is gone", async () => {
 	const announced: AgentCompletionEvent[] = [];
 	const book = bookWithSink(announced);
