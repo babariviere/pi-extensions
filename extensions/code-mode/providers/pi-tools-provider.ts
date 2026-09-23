@@ -1,4 +1,4 @@
-import { readFileSync, statSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 import {
 	type AgentToolResult,
@@ -14,7 +14,6 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { runAbortable, throwIfAborted } from "../async-settlement.ts";
 import type { CapturedToolCatalog } from "../capture/catalog.ts";
-import { DEFAULT_CODE_MODE_CONFIG } from "../config.ts";
 import { classifyPiBashError, piBashResultError } from "../core/pi-bash-error.ts";
 import { PI_CORE_TOOL_NAMES, type PiCoreToolName } from "../core/pi-tools.ts";
 import { expandSkillDirMarkersForRead } from "../core/skill-dir.ts";
@@ -199,19 +198,15 @@ export class PiToolsProvider implements CodeModeProvider {
 	readonly #capturedTools: CapturedToolOverrideAdapter | undefined;
 	readonly #cwd: string;
 	readonly #readGuard: ((absolutePath: string) => void) | undefined;
-	/** Ceiling on a single `pi.read`; see `executor.readMaxBytes`. */
-	readonly #readMaxBytes: number;
 
 	constructor(
 		cwd: string,
 		catalog?: CapturedToolCatalog,
 		capturedTools?: CapturedToolOverrideAdapter,
 		sandbox?: PiToolsSandbox,
-		limits?: { readMaxBytes?: number },
 	) {
 		this.#cwd = cwd;
 		this.#readGuard = sandbox?.readGuard;
-		this.#readMaxBytes = limits?.readMaxBytes ?? DEFAULT_CODE_MODE_CONFIG.executor.readMaxBytes;
 		// The mutating tools are gated: `bash` by the OS sandbox, and `write`,
 		// `edit`, and `applyPatch` by path checks. The read tools keep pi's definitions (image
 		// handling, truncation and offsets stay identical) but the sandbox's
@@ -474,8 +469,7 @@ export class PiToolsProvider implements CodeModeProvider {
 		const normalized = normalizeResult(name, result);
 		if (name !== "read" || typeof normalized !== "string") return normalized;
 		// pi cut the file at its context budget. The sandbox is not context, so read
-		// the rest here rather than hand back a head (`#readWholeFile`), and only
-		// refuse when the file is past the guest's own ceiling.
+		// the rest here rather than hand back a head (`#readWholeFile`).
 		const whole = this.#readWholeFile(result.details, args);
 		// Belt and braces: if the file could not be widened (no path to re-read),
 		// the cut still has to be loud rather than silently short.
@@ -484,31 +478,20 @@ export class PiToolsProvider implements CodeModeProvider {
 	}
 
 	/**
-	 * Re-read a file pi truncated, whole, up to `readMaxBytes`.
+	 * Re-read a file pi truncated, whole.
 	 *
 	 * Only reached when pi reported an involuntary cut, so an untruncated read
 	 * keeps pi's own code path (and its media handling) untouched. The read guard
 	 * already ran on this path in `invoke`, on the same resolved path.
 	 *
-	 * Returns undefined when there was nothing to widen. Throws when the file is
-	 * larger than the ceiling: a program that asked for 200 MB of log gets an
-	 * error naming the size, not a silent head and not an out-of-memory an hour
-	 * later.
+	 * Returns undefined when there was nothing to widen. The QuickJS heap limit
+	 * still bounds what a program can hold; it must not silently shorten a read.
 	 */
 	#readWholeFile(details: unknown, args: Record<string, unknown>): string | undefined {
 		const truncation = readTruncation(details);
 		if (!truncation || (!truncation.truncated && !truncation.firstLineExceedsLimit)) return undefined;
 		if (typeof args.path !== "string" || args.path === "") return undefined;
 		const absolute = isAbsolute(args.path) ? args.path : resolve(this.#cwd, args.path);
-
-		const size = truncation.totalBytes ?? statSync(absolute).size;
-		if (size > this.#readMaxBytes) {
-			throw new Error(
-				`pi.read(${args.path}) is ${formatBytes(size)}, past the sandbox's ${formatBytes(this.#readMaxBytes)} read ` +
-					"ceiling (executor.readMaxBytes). Filter it in pi.bash (rg/sed/jq) instead of pulling the whole file " +
-					"into the sandbox, or page it with offset and limit.",
-			);
-		}
 
 		const content = readFileSync(absolute, "utf-8");
 		// `offset` is 1-indexed and `limit` counts lines, as in pi's read tool.

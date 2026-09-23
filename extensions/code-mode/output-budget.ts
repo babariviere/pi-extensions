@@ -49,7 +49,9 @@ export const boundModelOutput = async (
 	} catch {
 		artifactPath = undefined;
 	}
-	const suffix = artifactPath ? `\n\n[Full output (${fullOutput.length} chars) saved to: ${artifactPath}]` : "";
+	const suffix = artifactPath
+		? `\n\n[Full output (${fullOutput.length} chars) saved to: ${artifactPath}. Read in smaller ranges with pi.read({path, offset, limit}).]`
+		: "";
 	const bodyBudget = Math.max(1, maxChars - suffix.length);
 	const text = `${truncateMiddle(visible, bodyBudget)}${suffix}`;
 	return {

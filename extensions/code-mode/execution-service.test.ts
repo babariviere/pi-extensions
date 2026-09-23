@@ -1,10 +1,14 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
 
 import { DEFAULT_CODE_MODE_CONFIG, type CodeModeConfig } from "./config.ts";
 import { ActionRegistry } from "./core/action-registry.ts";
 import { CodeModeExecutionService } from "./execution-service.ts";
 import type { CodeModeProvider } from "./protocol.ts";
+import { PiToolsProvider } from "./providers/pi-tools-provider.ts";
 
 /** A provider whose actions are plain functions over their arguments. */
 const makeProvider = (
@@ -85,6 +89,27 @@ test("a program can call a registered web capability", async () => {
 	assert.equal(result.audits[0]!.ref, "web.echo");
 	assert.equal(result.audits[0]!.success, true);
 	assert.ok(result.elapsedMs >= 0);
+});
+
+test("pi.read remains exact past the nested result budget", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "code-mode-nested-read-"));
+	try {
+		const file = join(dir, "large.txt");
+		const content = `${"a".repeat(100)}\n`.repeat(300);
+		writeFileSync(file, `${content}LAST LINE`);
+		const service = serviceWith([new PiToolsProvider(dir)], {
+			executor: { ...DEFAULT_CODE_MODE_CONFIG.executor, maxNestedResultChars: 10_000 },
+		});
+		const result = await execute(
+			service,
+			`const text = await pi.read({path: ${JSON.stringify(file)}}); return {length: text.length, end: text.slice(-9)};`,
+		);
+		assert.equal(result.success, true, result.error ?? "");
+		assert.deepEqual(result.value, { length: content.length + 9, end: "LAST LINE" });
+		assert.equal(result.audits[0]?.resultTruncated, false);
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
 });
 
 test("discovery actions dispatch through the static host calls", async () => {

@@ -13,11 +13,11 @@ Run tool calls in a type-checked TypeScript program inside an isolated QuickJS s
 - Use `web.search({ query, limit? })` to search the web and `web.fetch({ url, timeout? })` to fetch a URL as Markdown when those captured capabilities are available.
 - Put multiline content, JSON blobs, long prose, and strings with literal `${...}` in `payloads`, then read them as `π.key`. JSON-encode structured payloads and decode with `JSON.parse(π.key)`.
 - Batch independent calls with `Promise.all`; use `mapLimit(items, fn, N)` for bounded concurrency. Keep dependent steps sequential.
-- Only the program's `return` enters model context. Return compact results directly, not JSON strings. Keep intermediates local, use `τ` across calls, or files for durable data.
+- Only the program's `return` enters model context. Return compact results directly, not JSON strings. Oversized returns spill to a temp file whose path is reported; inspect it in smaller slices on subsequent calls. Keep intermediates local, use `τ` across calls, or files for durable data.
 
 ## Repository work
 
-- Locate files with `pi.find`, `pi.grep`, or `pi.ls`, then read relevant ranges with `pi.read({ path, offset, limit })`. Avoid loading large generated, vendored, log, or lock files unless the task needs them.
+- Locate files with `pi.find`, `pi.grep`, or `pi.ls`, then read relevant ranges with `pi.read({ path, offset, limit })`. `pi.read` does not truncate its value inside the program; only returned output is context-budgeted. Avoid loading large generated, vendored, log, or lock files unless the task needs them.
 - Use the editing route specified by the session's model-specific guidance. Never manually edit through Python, shell text utilities, or redirection; formatters, generators, migrations, builds, and tests are allowed. See [file editing](references/full-reference.md#file-editing) for syntax and recovery.
 
 ## Read what the call needs

@@ -617,7 +617,12 @@ export class ActionRegistry {
 						}),
 					)
 				: providerValue;
-			const bounded = boundedResult(value, context.maxResultChars);
+			// A read must be exact inside the guest. The model-facing code_mode
+			// result is budgeted separately; a nested preview is not file content.
+			const bounded =
+				ref === "pi.read" && typeof value === "string"
+					? { value, chars: value.length, truncated: false }
+					: boundedResult(value, context.maxResultChars);
 			const resultError = failedResultError(value);
 			activeAudit.success = resultError === undefined;
 			if (resultError) activeAudit.error = resultError;

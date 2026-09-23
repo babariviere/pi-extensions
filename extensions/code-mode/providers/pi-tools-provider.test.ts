@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { test } from "node:test";
@@ -151,9 +151,6 @@ test("a read the guard allows still executes", async () => {
  * written into the file as content. Inside the sandbox a short read must fail,
  * not read like a whole one.
  */
-const cappedProvider = (readMaxBytes: number) =>
-	new PiToolsProvider(process.cwd(), undefined, undefined, undefined, { readMaxBytes });
-
 test("a file past pi's read limit is returned whole, not as a head", async () => {
 	const dir = mkdtempSync(join(tmpdir(), "code-mode-read-limit-"));
 	const file = join(dir, "big.md");
@@ -165,19 +162,16 @@ test("a file past pi's read limit is returned whole, not as a head", async () =>
 	assert.doesNotMatch(String(result), /Showing lines/);
 });
 
-test("a file past the sandbox ceiling is refused, with its size and the way out", async () => {
+test("a file past the old 8 MB read ceiling is returned whole", async () => {
 	const dir = mkdtempSync(join(tmpdir(), "code-mode-read-ceiling-"));
-	const file = join(dir, "huge.md");
-	writeFileSync(file, `${"x".repeat(200)}\n`.repeat(600)); // ~120 KB
-	await assert.rejects(
-		() => cappedProvider(64 * 1024).invoke("read", { path: file }, context),
-		(error: Error) => {
-			assert.match(error.message, /past the sandbox's 64 KB read ceiling/);
-			assert.match(error.message, /executor\.readMaxBytes/);
-			assert.match(error.message, /pi\.bash \(rg\/sed\/jq\)/);
-			return true;
-		},
-	);
+	try {
+		const file = join(dir, "huge.md");
+		const content = "x".repeat(8 * 1024 * 1024 + 1);
+		writeFileSync(file, content);
+		assert.equal(await provider().invoke("read", { path: file }, context), content);
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
 });
 
 test("offset and limit still slice a widened read", async () => {
@@ -199,10 +193,6 @@ test("a single line too long for pi is returned whole too", async () => {
 	// pi returns nothing at all for this shape (`firstLineExceedsLimit`), which is
 	// what a minified JSON payload hits.
 	assert.equal(await provider().invoke("read", { path: file }, context), content);
-	await assert.rejects(
-		() => cappedProvider(50 * 1024).invoke("read", { path: file }, context),
-		/past the sandbox's 50 KB read ceiling/,
-	);
 });
 
 test("a file inside the limit is returned whole, with no truncation notice", async () => {

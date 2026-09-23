@@ -199,20 +199,14 @@ export class CodeModeState {
 			this.#sandbox = await this.#createSandbox(context);
 			const sandbox = this.#sandbox;
 			this.#registry.register(
-				new PiToolsProvider(
-					context.cwd,
-					this.capturedTools,
-					capturedToolOverrides,
-					{
-						bash: sandbox.bashOperations(),
-						wrapCommand: (command: string) => sandbox.wrapCommand(command),
-						wrapArgv: (argv: readonly string[]) => sandbox.wrapArgv(argv),
-						edit: sandbox.editOperations(),
-						writeGuard: sandbox.writeGuard(),
-						readGuard: sandbox.readGuard(),
-					},
-					{ readMaxBytes: this.#config.executor.readMaxBytes },
-				),
+				new PiToolsProvider(context.cwd, this.capturedTools, capturedToolOverrides, {
+					bash: sandbox.bashOperations(),
+					wrapCommand: (command: string) => sandbox.wrapCommand(command),
+					wrapArgv: (argv: readonly string[]) => sandbox.wrapArgv(argv),
+					edit: sandbox.editOperations(),
+					writeGuard: sandbox.writeGuard(),
+					readGuard: sandbox.readGuard(),
+				}),
 			);
 		}
 		if (capturedToolsProvider) this.#registry.register(capturedToolsProvider);

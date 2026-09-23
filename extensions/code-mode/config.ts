@@ -40,20 +40,6 @@ interface CodeModeExecutorConfig {
 	 */
 	maxTimeoutMs: number;
 	memoryLimitBytes: number;
-	/**
-	 * Ceiling on what one `pi.read` may hand a program, in bytes.
-	 *
-	 * pi's own read limit (2000 lines / 50 KB) is a context-window budget, and the
-	 * sandbox is not context: a read result is a string in the guest, and only
-	 * what a program returns is charged to the model (`maxOutputChars`). So the
-	 * sandbox reads whole files up to this ceiling instead.
-	 *
-	 * It is a ceiling and not an absence of one because guest strings live in the
-	 * QuickJS heap (`memoryLimitBytes`) and cross the host bridge as a copy: past
-	 * a few megabytes the honest answer is to filter the file in `pi.bash` rather
-	 * than to OOM the program halfway through it.
-	 */
-	readMaxBytes: number;
 	maxOutputChars: number;
 	maxNestedResultChars: number;
 	resultFormat: CodeModeResultFormat;
@@ -145,7 +131,6 @@ export const DEFAULT_CODE_MODE_CONFIG: CodeModeConfig = {
 		timeoutMs: 120_000,
 		maxTimeoutMs: 900_000,
 		memoryLimitBytes: 64 * 1024 * 1024,
-		readMaxBytes: 8 * 1024 * 1024,
 		maxOutputChars: 30_000,
 		maxNestedResultChars: 2_000_000,
 		resultFormat: "auto",
@@ -272,14 +257,6 @@ export const normalizeCodeModeConfig = (input: Record<string, unknown>): CodeMod
 				executor.memoryLimitBytes,
 				DEFAULT_CODE_MODE_CONFIG.executor.memoryLimitBytes,
 				8 * 1024 * 1024,
-				maxExecutorMemoryLimitBytes(),
-			),
-			readMaxBytes: boundedInteger(
-				executor.readMaxBytes,
-				DEFAULT_CODE_MODE_CONFIG.executor.readMaxBytes,
-				// Never below pi's own limit (that would make the sandbox worse than the
-				// model's own read), never above what the guest heap can hold.
-				50 * 1024,
 				maxExecutorMemoryLimitBytes(),
 			),
 			maxOutputChars: boundedInteger(

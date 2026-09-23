@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { readFileSync, rmSync } from "node:fs";
+import { dirname } from "node:path";
 import { test } from "node:test";
 
 import { boundModelOutput, MAX_FAILURE_MODEL_OUTPUT_CHARS, modelOutputBudget } from "./output-budget.ts";
@@ -27,6 +29,19 @@ test("oversized output spills to an artifact and names its path", async () => {
 	assert.ok(bounded.text.length <= 500);
 	assert.match(bounded.text, /Full output \(5000 chars\) saved to: \/tmp\/code-mode-test\/output\.txt/);
 	assert.equal(bounded.artifactPath, "/tmp/code-mode-test/output.txt");
+	assert.match(bounded.text, /Read in smaller ranges with pi\.read/);
+});
+
+test("the real spill keeps the entire return available across calls", async () => {
+	const fullOutput = "a".repeat(20_000) + "END";
+	const bounded = await boundModelOutput(fullOutput, 1_000);
+	assert.ok(bounded.artifactPath);
+	try {
+		assert.equal(readFileSync(bounded.artifactPath, "utf8"), fullOutput);
+		assert.ok(bounded.text.length <= 1_000);
+	} finally {
+		rmSync(dirname(bounded.artifactPath), { recursive: true, force: true });
+	}
 });
 
 test("a failing artifact writer still returns bounded text", async () => {

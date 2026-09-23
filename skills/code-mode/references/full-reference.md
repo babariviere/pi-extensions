@@ -67,7 +67,9 @@ return await pi.edit({
 
 Aliases (normalized to canonical before the host validates args): `cmd`/`shell`/`cmdline`→`command`; `workdir`/`workingDir`/`workingDirectory`→`cwd`; Bash `timeout` is in seconds, while `timeoutMs` is converted from milliseconds to `timeout`; `query`/`regex`/`search`→`pattern`; `ic`/`caseInsensitive`→`ignoreCase`; `globPattern`→`glob`; `ctx`→`context`; `max`→`limit`; `file`/`dir`→`path`; `start`→`offset`; `old`→`oldText`; `new`/`replacement`→`newText`; `contents`/`body`/`text`→`content`. Misspelled keys still fail the excess-property type check.
 
-`pi.read` returns whole files, not the head pi's own `read` tool shows the model: pi truncates at 2000 lines / 50 KB to protect the context window, and a sandbox string is not context. Past `executor.readMaxBytes` (8 MB by default) the call **throws** with the size and this advice — it never hands back a short read that looks whole. For anything bigger, filter it where it lives (`pi.bash` with `rg`/`sed`/`jq`) instead of pulling the file into the guest heap.
+`pi.read` returns the complete requested text, not the head pi's own `read` tool shows the model: pi truncates at 2000 lines / 50 KB to protect the context window, and a sandbox string is not context. The nested tool-result budget does not truncate `pi.read` either. The model-facing return and logs are budgeted separately. Very large reads can still exhaust the QuickJS heap (`executor.memoryLimitBytes`); process them in smaller ranges with `offset` and `limit` if needed. Never treat an incomplete read as the whole file.
+
+If your return exceeds `executor.maxOutputChars`, the result names a temporary file containing the full model-facing output. Use `pi.read({path, offset, limit})` on that path to inspect lines in subsequent calls, returning only the relevant slice; for a very long single line, use `pi.bash` to select a byte range. `τ.set` is optional for explicit cross-call state, not an automatic destination for large returns (its per-value limit is 4 MB).
 
 `pi.bash` per-call extras:
 

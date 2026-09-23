@@ -33,3 +33,5 @@ Node 24 or newer is required. Git dependency installation needs network access a
 - `/mcp-auth` performs explicit MCP authorization.
 
 The async `τ` scratchpad survives calls within the session, not session restarts. Payloads, output limits, source-mapped errors, agent call budgets, progress rendering, and the `mapLimit` helper retain their existing contracts.
+
+`pi.read` hands the complete requested text to the program, including files past Pi's model-facing read limit. It is not subject to the nested result cap. The QuickJS heap still limits how much a program can hold; use `offset` and `limit` for files too large for memory. Model-facing returns are bounded by `executor.maxOutputChars`, and oversized output spills to a temporary file whose path is included in the result. Read that file in smaller slices in subsequent calls. `τ` is optional explicit cross-call state and has its own 4 MB per-value limit, so oversized returns are not automatically stored there.
