@@ -1,17 +1,12 @@
 /**
  * LOCAL REWRITE of upstream `src/ui/controller.ts`.
  *
- * Keeps the polling/refresh shape (`start`/`stop`/`#schedulePoll`/
- * `#scheduleRefresh`/`#refresh`/`#renderWidget`) and the single
- * `aboveEditor` widget. Everything else — `openDashboard`, the model picker,
- * mesh event polling, actor subscriptions and the transcript sources — belongs
- * to dropped subsystems and is gone.
+ * Keeps one above-editor widget for detached subagents and background jobs.
  */
 
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { TUI } from "@earendil-works/pi-tui";
 import type { CodePreviewSettings } from "./code-preview.ts";
-import type { CodeModeActivityRun } from "../activity/types.ts";
 import type { CodeModeState } from "../code-mode-state.ts";
 import { createDashboardSnapshot } from "./snapshot.ts";
 import { isActiveStatus, type CodeModeDashboardSnapshot } from "./types.ts";
@@ -22,17 +17,14 @@ const ACTIVITY_REFRESH_MS = 100;
 
 const emptySnapshot = (): CodeModeDashboardSnapshot => ({
 	now: Date.now(),
-	runs: [],
 	agents: [],
 	jobs: [],
-	actors: [],
 });
 
 export class CodeModeUiController {
 	#context: ExtensionContext | undefined;
 	#snapshot: CodeModeDashboardSnapshot = emptySnapshot();
 	#timer: NodeJS.Timeout | undefined;
-	#activityUnsubscribe: (() => void) | undefined;
 	#agentUnsubscribe: (() => void) | undefined;
 	#scheduledRefresh: NodeJS.Timeout | undefined;
 	#widgetTui: TUI | undefined;
@@ -40,8 +32,6 @@ export class CodeModeUiController {
 	#widget: CodeModeWidget | undefined;
 	#lastRefreshErrorAt = 0;
 	#lastRefreshAt = 0;
-	#activityRevision: number | undefined;
-	#activityRuns: CodeModeActivityRun[] = [];
 
 	constructor(
 		readonly state: CodeModeState,
@@ -52,7 +42,6 @@ export class CodeModeUiController {
 		this.stop();
 		this.#context = context;
 		if (!this.state.config.ui.enabled || context.mode !== "tui") return;
-		this.#activityUnsubscribe = this.state.activity.subscribe(() => this.#scheduleRefresh());
 		this.#agentUnsubscribe = this.state.agentRuns.subscribe(() => this.#scheduleRefresh());
 		this.state.onJobsChange(() => this.#scheduleRefresh());
 		this.#refresh();
@@ -65,8 +54,6 @@ export class CodeModeUiController {
 		this.#timer = undefined;
 		this.#scheduledRefresh = undefined;
 		this.#widget = undefined;
-		this.#activityUnsubscribe?.();
-		this.#activityUnsubscribe = undefined;
 		this.#agentUnsubscribe?.();
 		this.#agentUnsubscribe = undefined;
 		this.state.onJobsChange(undefined);
@@ -79,8 +66,6 @@ export class CodeModeUiController {
 		this.#snapshot = emptySnapshot();
 		this.#lastRefreshErrorAt = 0;
 		this.#lastRefreshAt = 0;
-		this.#activityRevision = undefined;
-		this.#activityRuns = [];
 	}
 
 	snapshot(): CodeModeDashboardSnapshot {
@@ -94,9 +79,7 @@ export class CodeModeUiController {
 		}
 		if (this.#timer || !this.#context) return;
 		const active =
-			this.#snapshot.runs.some((run) => run.status === "running") ||
-			this.#snapshot.agents.some((agent) => isActiveStatus(agent.status)) ||
-			this.#snapshot.jobs.length > 0;
+			this.#snapshot.agents.some((agent) => isActiveStatus(agent.status)) || this.#snapshot.jobs.length > 0;
 		if (!active) return;
 		this.#timer = setTimeout(() => {
 			this.#timer = undefined;
@@ -123,13 +106,7 @@ export class CodeModeUiController {
 		const context = this.#context;
 		if (!context || !this.state.initialized) return;
 		try {
-			const revision =
-				typeof this.state.activity.revision === "function" ? this.state.activity.revision() : undefined;
-			if (revision === undefined || revision !== this.#activityRevision) {
-				this.#activityRuns = this.state.activity.runs();
-				this.#activityRevision = revision;
-			}
-			this.#snapshot = createDashboardSnapshot(this.state, context, this.#activityRuns);
+			this.#snapshot = createDashboardSnapshot(this.state);
 			this.#renderWidget(context);
 			if (this.#widgetTui && this.#widget?.hasChanged()) this.#widgetTui.requestRender();
 		} catch (error) {

@@ -3,7 +3,6 @@ import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { CodeModeUiWidgetMode } from "../config.ts";
 import { spinnerFrame } from "./spinner.ts";
-import type { CodeModeActivityCall, CodeModeActivityRun, CodeModeActivityStatus } from "../activity/types.ts";
 import { formatDuration, formatTokens, safeText } from "./format.ts";
 import {
 	isActiveStatus,
@@ -30,21 +29,6 @@ const colorStatus = (theme: Theme, status: string, value: string): string => {
 	return theme.fg("dim", value);
 };
 
-const phaseProgress = (run: CodeModeActivityRun, phaseId: string): { completed: number; total: number } => {
-	const phase = run.phases.find((candidate) => candidate.id === phaseId);
-	const statuses: CodeModeActivityStatus[] = [
-		...run.calls.filter((call) => call.phaseId === phaseId).map((call) => call.status),
-		...run.items.filter((item) => item.phaseId === phaseId).map((item) => item.status),
-	];
-	const completed = statuses.filter((status) => status === "completed").length;
-	return { completed, total: Math.max(phase?.total ?? 0, statuses.length) };
-};
-
-const totalTokens = (snapshot: CodeModeDashboardSnapshot, run: CodeModeActivityRun | undefined): number =>
-	snapshot.agents
-		.filter((agent) => (run ? agent.runId === run.id : isActiveStatus(agent.status)))
-		.reduce((sum, agent) => sum + (agent.usage ? agent.usage.input + agent.usage.output : 0), 0);
-
 const agentLines = (theme: Theme, agent: CodeModeUiAgent, now: number): string[] => {
 	const status = colorStatus(theme, agent.status, statusGlyph(agent.status));
 	const activity =
@@ -69,23 +53,10 @@ const agentLines = (theme: Theme, agent: CodeModeUiAgent, now: number): string[]
 	];
 };
 
-const callLine = (theme: Theme, call: CodeModeActivityCall, now: number): string => {
-	const glyph = colorStatus(theme, call.status, statusGlyph(call.status));
-	const detail = isActiveStatus(call.status) ? call.progress : call.status === "failed" ? call.error : call.detail;
-	return `  ${glyph} ${safeText(call.label)}${detail ? `  ${theme.fg("muted", safeText(detail).slice(0, 80))}` : ""}${theme.fg("dim", ` · ${formatDuration((call.finishedAt ?? now) - call.startedAt)}`)}`;
-};
-
 export const shouldShowCodeModeWidget = (snapshot: CodeModeDashboardSnapshot, mode: CodeModeUiWidgetMode): boolean => {
 	if (mode === "hidden") return false;
 	if (mode === "always") return true;
-	if (snapshot.agents.some((agent) => isActiveStatus(agent.status))) return true;
-	if (snapshot.jobs.length > 0) return true;
-	if (snapshot.actors.some((actor) => actor.status !== "stopped")) return true;
-	const run = snapshot.runs[0];
-	if (!run) return false;
-	if (run.status === "running") return true;
-	const finishedAt = run.finishedAt ?? run.updatedAt;
-	return finishedAt > (snapshot.widgetDismissedAt ?? 0);
+	return snapshot.jobs.length > 0 || snapshot.agents.some((agent) => isActiveStatus(agent.status));
 };
 
 export class CodeModeWidget implements Component {
@@ -139,70 +110,15 @@ export class CodeModeWidget implements Component {
 	}
 
 	#buildContent(snapshot: CodeModeDashboardSnapshot): { lines: string[]; leaseKey: string } {
-		const candidateRun = snapshot.runs[0];
-		const candidateFinishedAt = candidateRun?.finishedAt ?? candidateRun?.updatedAt ?? 0;
-		const run =
-			candidateRun &&
-			(candidateRun.status === "running" ||
-				(snapshot.jobs.length === 0 && candidateFinishedAt > (snapshot.widgetDismissedAt ?? 0)))
-				? candidateRun
-				: undefined;
-		const orderedAgents = orderAgentsByCreation(snapshot.agents);
-		const activeAgents = orderedAgents.filter((agent) => isActiveStatus(agent.status));
+		const activeAgents = orderAgentsByCreation(snapshot.agents).filter((agent) => isActiveStatus(agent.status));
 		const activeJobs = snapshot.jobs;
-		const activeAgentIds = new Set(activeAgents.map((agent) => agent.id));
-		const terminalAgents = run
-			? orderedAgents.filter(
-					(agent) => agent.runId === run.id && !activeAgentIds.has(agent.id) && !isActiveStatus(agent.status),
-				)
-			: [];
-		const visibleActors = snapshot.actors.filter((actor) => actor.status !== "stopped");
-		const activeActorWorkers = visibleActors
-			.filter((actor) => actor.worker && isActiveStatus(actor.worker.status))
-			.map((actor) => ({ ...actor.worker!, name: actor.name }));
-		const terminalActorWorkers = visibleActors
-			.filter((actor) => actor.worker && !isActiveStatus(actor.worker.status))
-			.map((actor) => ({ ...actor.worker!, name: actor.name }));
-		const nestedCalls = run?.calls.filter((call) => call.kind !== "agent" && call.kind !== "actor") ?? [];
-		const activeCalls = nestedCalls.filter((call) => isActiveStatus(call.status));
-		const visibleCalls = activeCalls.length > 0 ? activeCalls : nestedCalls.slice(-1);
-		const title =
-			activeJobs.length > 0 && run?.status !== "running" ? "Code Mode session" : (run?.name ?? "Code Mode session");
-		const headerStatus =
-			activeJobs.length > 0 || activeAgents.length > 0 || activeActorWorkers.length > 0
-				? "running"
-				: (run?.status ?? "idle");
+		const headerStatus = activeJobs.length > 0 || activeAgents.length > 0 ? "running" : "idle";
 		const parts: string[] = [];
-
-		const callTotal = nestedCalls.length;
-		if (callTotal > 1) {
-			const callDone = nestedCalls.filter((call) => call.status === "completed" || call.status === "failed").length;
-			parts.push(`${callDone}/${callTotal} calls`);
-		}
-		if (run?.currentPhaseId) {
-			const phaseIndex = run.phases.findIndex((phase) => phase.id === run.currentPhaseId);
-			const phase = run.phases[phaseIndex];
-			if (phase) {
-				const progress = phaseProgress(run, phase.id);
-				parts.push(
-					`${phaseIndex + 1}/${run.phases.length} ${safeText(phase.name)}${
-						progress.total > 0 ? ` ${progress.completed}/${progress.total}` : ""
-					}`,
-				);
-			}
-		}
-		if (activeAgents.length > 0) parts.push(`${activeAgents.length} running`);
+		if (activeAgents.length > 0) parts.push(`${activeAgents.length} agent${activeAgents.length === 1 ? "" : "s"}`);
 		if (activeJobs.length > 0) parts.push(`${activeJobs.length} job${activeJobs.length === 1 ? "" : "s"}`);
-		if (visibleActors.length > 0) parts.push(`${visibleActors.length} actor${visibleActors.length === 1 ? "" : "s"}`);
-		const tokens = totalTokens(snapshot, run);
-		if (tokens > 0) parts.push(`${formatTokens(tokens)} tok`);
-		if (run) parts.push(formatDuration((run.finishedAt ?? snapshot.now) - run.startedAt));
 
 		const glyph = colorStatus(this.theme, headerStatus, statusGlyph(headerStatus));
-		const header = `${glyph} ${this.theme.fg("accent", "Code Mode")} ${this.theme.fg(
-			"text",
-			safeText(title),
-		)}${parts.length > 0 ? this.theme.fg("dim", ` · ${parts.join(" · ")}`) : ""}`;
+		const header = `${glyph} ${this.theme.fg("accent", "Code Mode")} ${this.theme.fg("text", "background work")}${parts.length > 0 ? this.theme.fg("dim", ` · ${parts.join(" · ")}`) : ""}`;
 		const lines = [header];
 
 		lines.push(
@@ -210,23 +126,15 @@ export class CodeModeWidget implements Component {
 				(job) =>
 					`  ${colorStatus(this.theme, "running", statusGlyph("running"))} ${safeText(job.name)}  ${this.theme.fg("muted", `job ${job.id.slice(0, 8)}`)}${this.theme.fg("dim", ` · ${formatDuration(snapshot.now - job.startedAt)}`)}`,
 			),
-			...(run?.status === "running" && activeCalls.length === 0
-				? [`  ${colorStatus(this.theme, "running", statusGlyph("running"))} Running TypeScript`]
-				: []),
-			...visibleCalls.map((call) => callLine(this.theme, call, snapshot.now)),
 			...activeAgents.flatMap((agent) => agentLines(this.theme, agent, snapshot.now)),
-			...activeActorWorkers.flatMap((agent) => agentLines(this.theme, agent, snapshot.now)),
-			...terminalActorWorkers.flatMap((agent) => agentLines(this.theme, agent, snapshot.now)),
-			...terminalAgents.flatMap((agent) => agentLines(this.theme, agent, snapshot.now)),
 		);
 		const ambientOwners = [
 			...activeAgents.map((agent) => `agent:${agent.id}`),
 			...activeJobs.map((job) => `job:${job.id}`),
-			...visibleActors.map((actor) => `actor:${actor.id}:${actor.worker?.id ?? actor.lastRunId ?? "idle"}`),
 		];
 		return {
 			lines,
-			leaseKey: run?.id ?? (ambientOwners.length > 0 ? `ambient:${ambientOwners.join(",")}` : "ambient"),
+			leaseKey: ambientOwners.length > 0 ? `ambient:${ambientOwners.join(",")}` : "ambient",
 		};
 	}
 

@@ -1,13 +1,4 @@
-/**
- * LOCAL REWRITE of upstream `src/ui/snapshot.ts`.
- *
- * Upstream built a full dashboard snapshot from the mesh store, the participant
- * directory and code-mode's own agent manager. Code Mode has none of those: the
- * snapshot is activity runs, the subagent run registry mapped onto
- * `CodeModeUiAgent`, and the active session-owned jobs.
- */
-
-import type { CodeModeActivityRun } from "../activity/types.ts";
+/** Project only active subagents and session-owned jobs into the widget. */
 import type { CodeModeState } from "../code-mode-state.ts";
 import type { CodeModeAgentRun } from "../providers/agent-run-monitor.ts";
 import {
@@ -37,35 +28,8 @@ const boundedUiAgents = (agents: CodeModeUiAgent[]): CodeModeUiAgent[] => {
 	return ordered.slice(ordered.length - MAX_UI_AGENTS);
 };
 
-export const createDashboardSnapshot = (
-	state: CodeModeState,
-	_context?: unknown,
-	activityRuns?: CodeModeActivityRun[],
-): CodeModeDashboardSnapshot => {
-	const runs = activityRuns ?? state.activity.runs();
-	const agents = boundedUiAgents(state.agentRuns.list().map(agentFromRun));
-	const activeRunIds = new Set(
-		agents.filter((agent) => agent.runId && activeStatuses.has(agent.status)).map((agent) => agent.runId as string),
-	);
-	const orderedRuns = runs
-		.map((run, index) => ({ run, index }))
-		.sort((left, right) => {
-			// The currently executing program must win over an older completed run
-			// whose detached subagent is still active.
-			const leftRunning = left.run.status === "running" ? 1 : 0;
-			const rightRunning = right.run.status === "running" ? 1 : 0;
-			const leftActive = activeRunIds.has(left.run.id) ? 1 : 0;
-			const rightActive = activeRunIds.has(right.run.id) ? 1 : 0;
-			return rightRunning - leftRunning || rightActive - leftActive || left.index - right.index;
-		})
-		.map(({ run }) => run);
-
-	return {
-		now: Date.now(),
-		widgetDismissedAt: state.widgetDismissedAt,
-		runs: orderedRuns,
-		agents,
-		jobs: state.runningJobs(),
-		actors: [],
-	};
-};
+export const createDashboardSnapshot = (state: CodeModeState): CodeModeDashboardSnapshot => ({
+	now: Date.now(),
+	agents: boundedUiAgents(state.agentRuns.list().map(agentFromRun)),
+	jobs: state.runningJobs(),
+});

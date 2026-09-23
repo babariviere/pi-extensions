@@ -147,7 +147,9 @@ export const createCodeModeExecTool = (
 								Type.String({ description: "Human-readable name for the code-mode activity widget" }),
 							),
 							description: Type.Optional(
-								Type.String({ description: "Compact objective shown in the code-mode widget" }),
+								Type.String({
+									description: "Compact objective shown beneath the title in the code_mode tool call",
+								}),
 							),
 						}),
 						Type.String({
@@ -192,8 +194,13 @@ export const createCodeModeExecTool = (
 						);
 
 				const lines = safeTerminalText(code).split("\n");
-				const runDisplayName = normalizeRunDisplay(params.display)?.name;
+				const runDisplay = normalizeRunDisplay(params.display);
+				const runDisplayName = runDisplay?.name;
 				const displayName = runDisplayName ? safeTerminalText(runDisplayName) : "";
+				const objective = runDisplay?.description?.replace(/\s+/g, " ").trim().slice(0, 160);
+				const objectiveLine = objective
+					? `\n${theme.fg("muted", `Objective: ${safeTerminalText(objective)}`)}`
+					: "";
 				const title = `${theme.fg("toolTitle", theme.bold("Code Mode"))}${
 					displayName ? ` ${theme.fg("accent", displayName)}` : ""
 				} ${theme.fg("dim", `TypeScript · ${countLabel(lines.length, "line")}`)}`;
@@ -215,7 +222,9 @@ export const createCodeModeExecTool = (
 						hidden > 0
 							? `\n${theme.fg("dim", `… ${countLabel(hidden, "line")} hidden · `)}${expandHint(theme)}`
 							: "";
-					return new Text(`${title}${preview ? `\n${preview}` : ""}${hiddenHint}`, 0, 0).render(width);
+					return new Text(`${title}${objectiveLine}${preview ? `\n${preview}` : ""}${hiddenHint}`, 0, 0).render(
+						width,
+					);
 				};
 				const codePreview = new HiddenRowBorrowingComponent(baseLimit, maxLimit, renderCodePreview, rowBalance);
 				// `payloads` is where a program is told to put every awkward value, so
