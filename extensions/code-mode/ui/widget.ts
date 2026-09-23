@@ -3,7 +3,7 @@ import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { CodeModeUiWidgetMode } from "../config.ts";
 import { spinnerFrame } from "./spinner.ts";
-import type { CodeModeActivityRun, CodeModeActivityStatus } from "../activity/types.ts";
+import type { CodeModeActivityCall, CodeModeActivityRun, CodeModeActivityStatus } from "../activity/types.ts";
 import { formatDuration, formatTokens, safeText } from "./format.ts";
 import {
 	isActiveStatus,
@@ -69,10 +69,17 @@ const agentLines = (theme: Theme, agent: CodeModeUiAgent, now: number): string[]
 	];
 };
 
+const callLine = (theme: Theme, call: CodeModeActivityCall, now: number): string => {
+	const glyph = colorStatus(theme, call.status, statusGlyph(call.status));
+	const detail = isActiveStatus(call.status) ? call.progress : call.status === "failed" ? call.error : call.detail;
+	return `  ${glyph} ${safeText(call.label)}${detail ? `  ${theme.fg("muted", safeText(detail).slice(0, 80))}` : ""}${theme.fg("dim", ` · ${formatDuration((call.finishedAt ?? now) - call.startedAt)}`)}`;
+};
+
 export const shouldShowCodeModeWidget = (snapshot: CodeModeDashboardSnapshot, mode: CodeModeUiWidgetMode): boolean => {
 	if (mode === "hidden") return false;
 	if (mode === "always") return true;
 	if (snapshot.agents.some((agent) => isActiveStatus(agent.status))) return true;
+	if (snapshot.jobs.length > 0) return true;
 	if (snapshot.actors.some((actor) => actor.status !== "stopped")) return true;
 	const run = snapshot.runs[0];
 	if (!run) return false;
@@ -135,11 +142,14 @@ export class CodeModeWidget implements Component {
 		const candidateRun = snapshot.runs[0];
 		const candidateFinishedAt = candidateRun?.finishedAt ?? candidateRun?.updatedAt ?? 0;
 		const run =
-			candidateRun && (candidateRun.status === "running" || candidateFinishedAt > (snapshot.widgetDismissedAt ?? 0))
+			candidateRun &&
+			(candidateRun.status === "running" ||
+				(snapshot.jobs.length === 0 && candidateFinishedAt > (snapshot.widgetDismissedAt ?? 0)))
 				? candidateRun
 				: undefined;
 		const orderedAgents = orderAgentsByCreation(snapshot.agents);
 		const activeAgents = orderedAgents.filter((agent) => isActiveStatus(agent.status));
+		const activeJobs = snapshot.jobs;
 		const activeAgentIds = new Set(activeAgents.map((agent) => agent.id));
 		const terminalAgents = run
 			? orderedAgents.filter(
@@ -154,9 +164,14 @@ export class CodeModeWidget implements Component {
 			.filter((actor) => actor.worker && !isActiveStatus(actor.worker.status))
 			.map((actor) => ({ ...actor.worker!, name: actor.name }));
 		const nestedCalls = run?.calls.filter((call) => call.kind !== "agent" && call.kind !== "actor") ?? [];
-		const title = run?.name ?? "Code Mode session";
+		const activeCalls = nestedCalls.filter((call) => isActiveStatus(call.status));
+		const visibleCalls = activeCalls.length > 0 ? activeCalls : nestedCalls.slice(-1);
+		const title =
+			activeJobs.length > 0 && run?.status !== "running" ? "Code Mode session" : (run?.name ?? "Code Mode session");
 		const headerStatus =
-			run?.status ?? (activeAgents.length > 0 || activeActorWorkers.length > 0 ? "running" : "idle");
+			activeJobs.length > 0 || activeAgents.length > 0 || activeActorWorkers.length > 0
+				? "running"
+				: (run?.status ?? "idle");
 		const parts: string[] = [];
 
 		const callTotal = nestedCalls.length;
@@ -177,6 +192,7 @@ export class CodeModeWidget implements Component {
 			}
 		}
 		if (activeAgents.length > 0) parts.push(`${activeAgents.length} running`);
+		if (activeJobs.length > 0) parts.push(`${activeJobs.length} job${activeJobs.length === 1 ? "" : "s"}`);
 		if (visibleActors.length > 0) parts.push(`${visibleActors.length} actor${visibleActors.length === 1 ? "" : "s"}`);
 		const tokens = totalTokens(snapshot, run);
 		if (tokens > 0) parts.push(`${formatTokens(tokens)} tok`);
@@ -190,6 +206,14 @@ export class CodeModeWidget implements Component {
 		const lines = [header];
 
 		lines.push(
+			...activeJobs.map(
+				(job) =>
+					`  ${colorStatus(this.theme, "running", statusGlyph("running"))} ${safeText(job.name)}  ${this.theme.fg("muted", `job ${job.id.slice(0, 8)}`)}${this.theme.fg("dim", ` · ${formatDuration(snapshot.now - job.startedAt)}`)}`,
+			),
+			...(run?.status === "running" && activeCalls.length === 0
+				? [`  ${colorStatus(this.theme, "running", statusGlyph("running"))} Running TypeScript`]
+				: []),
+			...visibleCalls.map((call) => callLine(this.theme, call, snapshot.now)),
 			...activeAgents.flatMap((agent) => agentLines(this.theme, agent, snapshot.now)),
 			...activeActorWorkers.flatMap((agent) => agentLines(this.theme, agent, snapshot.now)),
 			...terminalActorWorkers.flatMap((agent) => agentLines(this.theme, agent, snapshot.now)),
@@ -197,6 +221,7 @@ export class CodeModeWidget implements Component {
 		);
 		const ambientOwners = [
 			...activeAgents.map((agent) => `agent:${agent.id}`),
+			...activeJobs.map((job) => `job:${job.id}`),
 			...visibleActors.map((actor) => `actor:${actor.id}:${actor.worker?.id ?? actor.lastRunId ?? "idle"}`),
 		];
 		return {

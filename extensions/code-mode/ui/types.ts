@@ -4,16 +4,17 @@
  * Upstream pulled actor/mesh/peer/participant/main-agent types in from
  * subsystems code-mode drops. This module keeps only what the two remaining UI
  * consumers need:
- *   - `ui/widget.ts` (parity file: upstream modulo the mechanical specifier and
- *     naming rewrites) — must stay compilable, so
+ *   - `ui/widget.ts` renders Code Mode activity, subagents, and background jobs;
+ *     for compatibility with its older actor layout,
  *     `CodeModeDashboardSnapshot` keeps `widgetDismissedAt` and an `actors` field
  *     with a locally-declared minimal `CodeModeUiActor`. Code Mode never populates
  *     `actors` (it has no actor subsystem); the field exists purely so the
- *     parity renderer is untouched.
+ *     the actor rows stay empty.
  *   - `ui/snapshot.ts` — builds the reduced snapshot.
  */
 
 import type { CodeModeActivityRun } from "../activity/types.ts";
+import type { JobSnapshot } from "../providers/jobs-provider.ts";
 
 /** Token counters read by `ui/widget.ts`; local stand-in for upstream `AgentUsage`. */
 export interface CodeModeUiAgentUsage {
@@ -59,6 +60,7 @@ export interface CodeModeDashboardSnapshot {
 	widgetDismissedAt?: number;
 	runs: CodeModeActivityRun[];
 	agents: CodeModeUiAgent[];
+	jobs: JobSnapshot[];
 	/** Always empty in code-mode. See `CodeModeUiActor`. */
 	actors: CodeModeUiActor[];
 }

@@ -132,11 +132,22 @@ export class CodeModeJobsProvider implements CodeModeProvider {
 	readonly wrapCommand: (command: string) => Promise<string>;
 	readonly sink: JobCompletionSink;
 	readonly canAnnounce: () => boolean;
+	readonly onChange: () => void;
 
-	constructor(wrapCommand: (command: string) => Promise<string>, sink: JobCompletionSink, canAnnounce = () => true) {
+	constructor(
+		wrapCommand: (command: string) => Promise<string>,
+		sink: JobCompletionSink,
+		canAnnounce = () => true,
+		onChange = () => {},
+	) {
 		this.wrapCommand = wrapCommand;
 		this.sink = sink;
 		this.canAnnounce = canAnnounce;
+		this.onChange = onChange;
+	}
+
+	running(): JobSnapshot[] {
+		return [...this.#jobs.values()].filter((job) => job.state === "running").map((job) => this.#snapshot(job));
 	}
 
 	/** Recheck unclaimed exits when the parent agent finishes its turn. */
@@ -236,6 +247,7 @@ export class CodeModeJobsProvider implements CodeModeProvider {
 			}, MAX_LIFETIME_MS);
 			job.timer.unref?.();
 			this.#jobs.set(job.id, job);
+			this.onChange();
 			const settle = (code: number | null, error?: Error) => {
 				if (job.endedAt) return;
 				if (job.timer) clearTimeout(job.timer);
@@ -243,6 +255,7 @@ export class CodeModeJobsProvider implements CodeModeProvider {
 				job.exitCode = code;
 				if (error) job.error = error.message;
 				if (job.state !== "cancelled") job.state = code === 0 && !job.error ? "done" : "failed";
+				this.onChange();
 				if (output.destroyed) finalize();
 				else output.end(finalize);
 			};
@@ -256,6 +269,7 @@ export class CodeModeJobsProvider implements CodeModeProvider {
 			if (job.state === "running") {
 				job.state = "cancelled";
 				job.claimed = true;
+				this.onChange();
 				terminateProcessTree(job.child);
 			}
 			return this.#snapshot(job);

@@ -24,6 +24,7 @@ const emptySnapshot = (): CodeModeDashboardSnapshot => ({
 	now: Date.now(),
 	runs: [],
 	agents: [],
+	jobs: [],
 	actors: [],
 });
 
@@ -53,6 +54,7 @@ export class CodeModeUiController {
 		if (!this.state.config.ui.enabled || context.mode !== "tui") return;
 		this.#activityUnsubscribe = this.state.activity.subscribe(() => this.#scheduleRefresh());
 		this.#agentUnsubscribe = this.state.agentRuns.subscribe(() => this.#scheduleRefresh());
+		this.state.onJobsChange(() => this.#scheduleRefresh());
 		this.#refresh();
 		this.#schedulePoll();
 	}
@@ -67,6 +69,7 @@ export class CodeModeUiController {
 		this.#activityUnsubscribe = undefined;
 		this.#agentUnsubscribe?.();
 		this.#agentUnsubscribe = undefined;
+		this.state.onJobsChange(undefined);
 		if (this.#context?.mode === "tui") {
 			this.#context.ui.setWidget(WIDGET_ID, undefined);
 		}
@@ -92,7 +95,8 @@ export class CodeModeUiController {
 		if (this.#timer || !this.#context) return;
 		const active =
 			this.#snapshot.runs.some((run) => run.status === "running") ||
-			this.#snapshot.agents.some((agent) => isActiveStatus(agent.status));
+			this.#snapshot.agents.some((agent) => isActiveStatus(agent.status)) ||
+			this.#snapshot.jobs.length > 0;
 		if (!active) return;
 		this.#timer = setTimeout(() => {
 			this.#timer = undefined;

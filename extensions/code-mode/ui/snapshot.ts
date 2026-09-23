@@ -3,8 +3,8 @@
  *
  * Upstream built a full dashboard snapshot from the mesh store, the participant
  * directory and code-mode's own agent manager. Code Mode has none of those: the
- * snapshot is the activity runs plus the subagent run registry, mapped onto the
- * `CodeModeUiAgent` shape `ui/widget.ts` already renders.
+ * snapshot is activity runs, the subagent run registry mapped onto
+ * `CodeModeUiAgent`, and the active session-owned jobs.
  */
 
 import type { CodeModeActivityRun } from "../activity/types.ts";
@@ -50,9 +50,13 @@ export const createDashboardSnapshot = (
 	const orderedRuns = runs
 		.map((run, index) => ({ run, index }))
 		.sort((left, right) => {
+			// The currently executing program must win over an older completed run
+			// whose detached subagent is still active.
+			const leftRunning = left.run.status === "running" ? 1 : 0;
+			const rightRunning = right.run.status === "running" ? 1 : 0;
 			const leftActive = activeRunIds.has(left.run.id) ? 1 : 0;
 			const rightActive = activeRunIds.has(right.run.id) ? 1 : 0;
-			return rightActive - leftActive || left.index - right.index;
+			return rightRunning - leftRunning || rightActive - leftActive || left.index - right.index;
 		})
 		.map(({ run }) => run);
 
@@ -61,6 +65,7 @@ export const createDashboardSnapshot = (
 		widgetDismissedAt: state.widgetDismissedAt,
 		runs: orderedRuns,
 		agents,
+		jobs: state.runningJobs(),
 		actors: [],
 	};
 };

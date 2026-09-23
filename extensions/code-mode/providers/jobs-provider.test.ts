@@ -12,16 +12,27 @@ const start = (provider: CodeModeJobsProvider, command: string) =>
 
 test("a running job remains running across calls, then wakes only when unclaimed", async () => {
 	const sent: JobSnapshot[] = [];
+	let changes = 0;
 	const jobs = new CodeModeJobsProvider(
 		async (command) => command,
 		(job) => sent.push(job),
+		undefined,
+		() => changes++,
 	);
 	try {
 		const job = await start(jobs, "sleep 0.15; echo completed");
 		assert.equal(job.state, "running");
+		assert.deepEqual(
+			jobs.running().map((item) => item.id),
+			[job.id],
+		);
+		assert.equal(changes, 1);
 		assert.equal(((await jobs.invoke("wait", { id: job.id, waitMs: 0 }, context)) as JobSnapshot).state, "running");
 		assert.equal(((await jobs.invoke("status", {}, context)) as JobSnapshot[])[0]?.state, "running");
-		await sleep(450);
+		const deadline = Date.now() + 3_000;
+		while (sent.length === 0 && Date.now() < deadline) await sleep(30);
+		assert.deepEqual(jobs.running(), []);
+		assert.equal(changes, 2);
 		assert.equal(sent.length, 1);
 		assert.equal(sent[0]?.state, "done");
 		assert.match(
@@ -35,15 +46,21 @@ test("a running job remains running across calls, then wakes only when unclaimed
 
 test("a terminal wait claims the result, a stopped job cannot wake the model", async () => {
 	const sent: JobSnapshot[] = [];
+	let changes = 0;
 	const jobs = new CodeModeJobsProvider(
 		async (command) => command,
 		(job) => sent.push(job),
+		undefined,
+		() => changes++,
 	);
 	try {
 		const finished = await start(jobs, "echo claimed");
 		assert.equal(((await jobs.invoke("wait", { id: finished.id }, context)) as JobSnapshot).state, "done");
 		const stopped = await start(jobs, "sleep 30");
+		const beforeStop = changes;
 		assert.equal(((await jobs.invoke("stop", { id: stopped.id }, context)) as JobSnapshot).state, "cancelled");
+		assert.equal(changes, beforeStop + 1);
+		assert.deepEqual(jobs.running(), []);
 		await sleep(300);
 		assert.deepEqual(sent, []);
 	} finally {

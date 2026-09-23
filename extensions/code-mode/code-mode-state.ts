@@ -99,6 +99,7 @@ export class CodeModeState {
 	 */
 	readonly agentRunBook = new AgentRunBook();
 	#jobs: CodeModeJobsProvider | undefined;
+	#jobsChange: (() => void) | undefined;
 	/**
 	 * The session's `τ` scratchpad. Lives here for the same reason the run book
 	 * does: it has to outlive a single `code_mode` program, so one program can
@@ -212,6 +213,7 @@ export class CodeModeState {
 					(command) => sandbox.wrapCommand(command),
 					(job) => this.#announceJobCompletion(job),
 					() => context.isIdle(),
+					() => this.#jobsChange?.(),
 				);
 				this.#registry.register(this.#jobs);
 			}
@@ -331,6 +333,14 @@ export class CodeModeState {
 	flushCompletions(): void {
 		this.agentRunBook.flushCompletions();
 		this.#jobs?.flushCompletions();
+	}
+
+	runningJobs(): JobSnapshot[] {
+		return this.#jobs?.running() ?? [];
+	}
+
+	onJobsChange(listener: (() => void) | undefined): void {
+		this.#jobsChange = listener;
 	}
 
 	/**
@@ -601,6 +611,7 @@ export class CodeModeState {
 	}
 
 	async #closeInternal(preserveExternalProviders = true): Promise<void> {
+		this.#jobsChange = undefined;
 		this.#jobs = undefined;
 		this.#sandboxGeneration++;
 		this.#unsubscribePacing?.();
