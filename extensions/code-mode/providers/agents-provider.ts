@@ -32,9 +32,9 @@
 import { RunLauncher } from "../agents/backend.ts";
 import { CauseBreaker, type CauseVerdict } from "../agents/cause-breaker.ts";
 import { recordNightCapability } from "../agents/night-journal.ts";
-import { discoverAgentsForCwd } from "../agents/discovery.ts";
+import { BUILTIN_AGENT_NAME, discoverAgentsForCwd } from "../agents/discovery.ts";
 import { subagentModelPriceError } from "../agents/model-policy.ts";
-import { qualifyModel } from "../agents/pi-args.ts";
+import { extractThinkingSuffix, qualifyModel } from "../agents/pi-args.ts";
 import { newRunId } from "../agents/paths.ts";
 import { buildRunRequests, type NormalizedItem, validateOverrides } from "../agents/request.ts";
 import { allocateNightWorkspaces, relocateWorkspacePaths, releaseNightWorkspaces } from "../agents/night-workspace.ts";
@@ -485,18 +485,24 @@ export class CodeModeAgentsProvider implements CodeModeProvider {
 
 	/**
 	 * Resolve raw items to run requests: discover the agents (always at least the
-	 * built-in personaless one), apply the runtime model/thinking defaults, then
-	 * build and validate the requests. Pure of UI and spawning.
+	 * built-in personaless one), apply runtime defaults only where the selected
+	 * agent has no setting, then build and validate the requests. Pure of UI and
+	 * spawning.
 	 */
 	#resolveRequests(items: NormalizedItem[], ref: SessionRef, runtimeConfig: CodeModeAgentRuntimeConfig): RunRequest[] {
 		const discovered = discoverAgentsForCwd(ref.cwd);
-		const withDefaults = items.map((item) => ({
-			...item,
-			...((item.model ?? runtimeConfig.defaultModel) ? { model: item.model ?? runtimeConfig.defaultModel } : {}),
-			...((item.thinking ?? runtimeConfig.defaultThinking)
-				? { thinking: item.thinking ?? runtimeConfig.defaultThinking }
-				: {}),
-		}));
+		const withDefaults = items.map((item) => {
+			const agent = discovered.find((candidate) => candidate.config.name === (item.agent ?? BUILTIN_AGENT_NAME));
+			const model = item.model ?? agent?.config.model ?? runtimeConfig.defaultModel;
+			const hasThinking = item.thinking || extractThinkingSuffix(model ?? "") || agent?.config.thinking;
+			return {
+				...item,
+				...(item.model || agent?.config.model || !runtimeConfig.defaultModel
+					? {}
+					: { model: runtimeConfig.defaultModel }),
+				...(hasThinking || !runtimeConfig.defaultThinking ? {} : { thinking: runtimeConfig.defaultThinking }),
+			};
+		});
 		const built = buildRunRequests(
 			{ tasks: withDefaults },
 			discovered,

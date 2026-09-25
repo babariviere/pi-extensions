@@ -1,6 +1,8 @@
 # `agents` reference
 
-Code Mode's `agents.*` namespace runs **custom agent definitions discovered on disk**, each as a child `pi` session. Discover definitions with `agents.list()`. Omit `model` and `thinking` for normal runs so the agent uses its configured defaults; set them only when the orchestrator intentionally needs a specialized model or reasoning level. A `running` result is pending work, not a failure.
+Code Mode's `agents.*` namespace runs **custom agent definitions discovered on disk**, each as a child `pi` session. Omit `agent` to run the built-in generic `task` agent, or discover named definitions with `agents.list()`. For routine delegation, pass the task without `model` or `thinking`. Only override them for unusually demanding work that needs a specific model or reasoning level. A `running` result is pending work, not a failure.
+
+When omitted, model and thinking use the named agent's frontmatter first, then the configured subagent defaults (the generic agent uses the configured model or parent model), then Pi's child defaults. A thinking suffix on the selected model also takes precedence over a configured default thinking level. Task type is a reason to choose an agent, not a reason to override its model.
 
 `agents.*` is unavailable inside a Code Mode subagent child session. The child turn can settle before a detached nested agent exits, causing the parent to mark the child done while work is still running. Launch parallel agents from the parent orchestrator instead.
 
@@ -9,7 +11,7 @@ Agent definitions are markdown files with YAML frontmatter, discovered from:
 - user scope: `$PI_CODING_AGENT_DIR/agents/**/*.md` (default `~/.pi/agent/agents`)
 - project scope: `<cwd>/.pi/agents/**/*.md`
 
-Project scope wins on a name collision. If no definitions exist, `agents.run` throws and names both searched directories.
+Project scope wins on a name collision. The built-in `task` agent is always available unless a definition with that name replaces it.
 
 ## `agents.list()`
 
@@ -53,7 +55,7 @@ Two independent deadlines:
 
 | Field | Required | Meaning |
 |-------|----------|---------|
-| `agent` | yes | Name of a discovered agent (see `agents.list()`) |
+| `agent` | no | Name of a discovered agent (see `agents.list()`); omit for the generic `task` agent |
 | `task` | yes | The concrete task for that agent |
 | `model` | no | Optional override for a specialized run. Normally omit it to use the agent's configured model. Must be in the user's `enabledModels` allowlist when one is configured. |
 | `thinking` | no | Optional reasoning-effort override for a specialized run. Normally omit it to use the agent's configured level. Values: `off` \| `minimal` \| `low` \| `medium` \| `high` \| `xhigh` |

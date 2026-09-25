@@ -8,13 +8,15 @@
  */
 
 import assert from "node:assert/strict";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
 import { Value } from "typebox/value";
 
 import { RunLauncher } from "../agents/backend.ts";
 import { CauseBreaker } from "../agents/cause-breaker.ts";
-import type { RunBackend, RunContext, RunResult } from "../agents/run.ts";
+import type { RunBackend, RunContext, RunRequest, RunResult } from "../agents/run.ts";
 import type { CodeModeInvocationContext } from "../protocol.ts";
 import { AgentRunBook } from "./agent-run-book.ts";
 import { CodeModeAgentRunRegistry } from "./agent-run-monitor.ts";
@@ -85,6 +87,64 @@ const doneResult = (agent: string): RunResult => ({
 	output: `${agent} finished`,
 	backend: "headless",
 	exitCode: 0,
+});
+
+test("agent settings take precedence over runtime defaults unless the caller overrides them", async () => {
+	const cwd = mkdtempSync(join(tmpdir(), "code-mode-agent-defaults-"));
+	try {
+		const dir = join(cwd, ".pi", "agents");
+		mkdirSync(dir, { recursive: true });
+		writeFileSync(join(cwd, ".pi", "settings.json"), JSON.stringify({ enabledModels: [] }));
+		writeFileSync(
+			join(dir, "reviewer.md"),
+			"---\nname: reviewer\nmodel: parent/reviewer\nthinking: low\n---\nReview.",
+		);
+		writeFileSync(join(dir, "suffix.md"), "---\nname: suffix\nmodel: parent/reviewer:high\n---\nReview.");
+		writeFileSync(join(dir, "worker.md"), "---\nname: worker\n---\nWork.");
+		let received: RunRequest[] = [];
+		const headless: RunBackend = async (reqs) => {
+			received = reqs;
+			return reqs.map((req) => doneResult(req.agent.config.name));
+		};
+		const provider = new CodeModeAgentsProvider(
+			() => ({ cwd, sessionId: undefined, sessionFile: undefined }),
+			new CodeModeAgentRunRegistry(),
+			() => ({
+				timeoutMs: 60_000,
+				waitMs: 1_000,
+				parentProvider: "parent",
+				defaultModel: "parent/default",
+				defaultThinking: "medium",
+			}),
+			new AgentRunBook(),
+			new RunLauncher({ inHerdr: () => false, headless }),
+		);
+		await provider.invoke(
+			"runAll",
+			{
+				tasks: [
+					{ agent: "reviewer", task: "a" },
+					{ agent: "suffix", task: "b" },
+					{ agent: "worker", task: "c" },
+					{ task: "d" },
+					{ agent: "reviewer", task: "e", model: "parent/special", thinking: "xhigh" },
+				],
+			},
+			{ ...invocationContext(), cwd },
+		);
+		assert.deepEqual(
+			received.map((req) => ({ name: req.agent.config.name, overrides: req.overrides })),
+			[
+				{ name: "reviewer", overrides: { model: "parent/reviewer", thinking: undefined } },
+				{ name: "suffix", overrides: { model: "parent/reviewer:high", thinking: undefined } },
+				{ name: "worker", overrides: { model: "parent/default", thinking: "medium" } },
+				{ name: "task", overrides: { model: "parent/default", thinking: "medium" } },
+				{ name: "reviewer", overrides: { model: "parent/special", thinking: "xhigh" } },
+			],
+		);
+	} finally {
+		rmSync(cwd, { recursive: true, force: true });
+	}
 });
 
 test("a pacing-disabled parent marks its child run context as pacing-disabled", async () => {
