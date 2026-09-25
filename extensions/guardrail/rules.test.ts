@@ -201,6 +201,15 @@ test("only literal files beneath /tmp are exempt from redirect blocking", () => 
 	assert.match(checkCommand("echo text > $TMPDIR/$FILE", ctx)?.reason ?? "", /shell output redirection/);
 });
 
+test("a redirect destination ends at the next separator, not just whitespace", () => {
+	assert.equal(checkCommand("for i in a b; do echo $i > /dev/null; done", ctx), null);
+	assert.equal(checkCommand("if true; then cmd 2>/dev/null; fi", ctx), null);
+	assert.equal(checkCommand("cmd >/dev/null&&cmd2", ctx), null);
+	assert.equal(checkCommand("cmd >/dev/null|grep x", ctx), null);
+	const hit = checkCommand("echo text > file.txt;true", ctx);
+	assert.equal(hit?.match, '>"file.txt"');
+});
+
 test("a long fork-bomb lookalike does not blow up the matcher", () => {
 	const started = Date.now();
 	checkCommand(`:(){ ${"a".repeat(20000)}`, ctx);

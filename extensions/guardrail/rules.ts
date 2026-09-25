@@ -412,7 +412,12 @@ function checkFileRedirect(command: string, masked: string): GuardrailHit | null
 	for (const match of masked.matchAll(redirect)) {
 		const operatorStart = match.index + match[1].length;
 		const operatorText = command.slice(operatorStart, match.index + match[0].length);
-		const target = tokenize(command.slice(match.index + match[0].length))[0];
+		// The destination word ends at the first unquoted separator, so
+		// `> /dev/null; done` still reads as `/dev/null` rather than `/dev/null;`.
+		// Quoted spans are blank in the mask, keeping separators inside them inert.
+		let end = match.index + match[0].length;
+		while (end < masked.length && !/[;|&()`]/.test(masked[end])) end++;
+		const target = tokenize(command.slice(match.index + match[0].length, end))[0];
 		const normalizedTarget = target && isAbsolute(target) ? normalize(target) : undefined;
 		const isLiteralTmpFile = normalizedTarget?.startsWith("/tmp/") && !/[\$`*?[\]{}()]/.test(target);
 		const tmpdirRelative = target?.match(/^\$(?:TMPDIR|\{TMPDIR\})\/(.+)$/)?.[1];
