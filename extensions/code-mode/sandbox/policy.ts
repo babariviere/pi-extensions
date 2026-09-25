@@ -252,6 +252,8 @@ export function isWriteAllowed(policy: SandboxPolicy, absolutePath: string): boo
 	// denyRead roots are also write-protected in the OS profile. Keep direct
 	// write/edit tools aligned with shell enforcement.
 	if (policy.denyRead.some((root) => isInside(canonicalPathForGuard(root), canonical))) return false;
+	// Discarding output is safe even when the workspace is otherwise read-only.
+	if (absolutePath === "/dev/null") return true;
 	return policy.allowWrite.some((root) => isInside(canonicalPathForGuard(root), canonical));
 }
 

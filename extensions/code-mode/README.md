@@ -33,6 +33,8 @@ Node 24 or newer is required. Git dependency installation needs network access a
 - `/mcp` shows status, lists tools, connects servers, or logs out.
 - `/mcp-auth` performs explicit MCP authorization.
 
+The filesystem sandbox permits `/dev/null` as an output destination even in restricted modes. Other device paths remain outside the writable roots.
+
 The async `τ` scratchpad survives calls within the session, not session restarts. Payloads, output limits, source-mapped errors, agent call budgets, progress rendering, and the `mapLimit` helper retain their existing contracts.
 
 ## Background jobs

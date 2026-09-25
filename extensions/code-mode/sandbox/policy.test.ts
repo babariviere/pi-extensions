@@ -108,6 +108,15 @@ test("read-only grants temp dirs only", () => {
 	assert.equal(isWriteAllowed(policy, "/tmp/build/out"), true);
 });
 
+test("the null device is a write destination in restricted modes, but not its neighbors", () => {
+	for (const mode of ["read-only", "workspace-write"] as const) {
+		const policy = resolveSandboxPolicy({ mode }, environment());
+		assert.equal(isWriteAllowed(policy, "/dev/null"), true);
+		assert.doesNotThrow(() => assertWriteAllowed(policy, "/dev/null"));
+		assert.equal(isWriteAllowed(policy, "/dev/zero"), false);
+	}
+});
+
 test("ambient policies grant the platform temporary directory", () => {
 	const ambient = policyEnvironment("/work/repo");
 	assert.equal(ambient.tmp, tmpdir());

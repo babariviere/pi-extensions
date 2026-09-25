@@ -297,6 +297,8 @@ export function buildSeatbeltProfile(
 		}
 		sections.push(`(allow file-write*\n${rootFilters.join("\n")})`);
 	}
+	// A redirect to the null device discards output rather than rewriting a file.
+	sections.push('(allow file-write* (literal "/dev/null"))');
 
 	// 5. Network: unconditionally unrestricted. `(allow network*)` covers bind,
 	// inbound and outbound, so loopback listen+connect needs no extra flag; the

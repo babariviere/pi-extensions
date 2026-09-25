@@ -43,6 +43,12 @@ test("/tmp in allowWrite resolves to the real path, not the top-level alias", ()
 	}
 });
 
+test("the null device is writable without granting other device paths", () => {
+	const result = buildSeatbeltProfile(basePolicy());
+	assert.ok(result.profile.includes('(allow file-write* (literal "/dev/null"))'));
+	assert.ok(!result.profile.includes('(allow file-write* (subpath "/dev"))'));
+});
+
 test("a symlinked writable root resolves to its target and warns", () => {
 	const real = join(fixtureDir, "real");
 	const link = join(fixtureDir, "link");
