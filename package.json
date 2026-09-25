@@ -44,7 +44,7 @@
     "@babariviere/code-mode": "git+https://github.com/babariviere/code-mode.git#ac5f6f1e0b78a2ebea4a64f36cb33ba395aa51b3"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.5.13",
+    "@biomejs/biome": "2.5.14",
     "@types/node": "^26.0.0",
     "@types/ws": "^8.18.1",
     "@typescript/native-preview": "latest",
