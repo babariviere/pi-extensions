@@ -124,6 +124,11 @@ export class McpOAuthProvider implements OAuthClientProvider {
 		if (config?.clientId) {
 			const information: Record<string, unknown> = { client_id: config.clientId };
 			if (config.clientSecret) information.client_secret = config.clientSecret;
+			// The SDK stamps client information with its authorization-server issuer on
+			// first use. Keep returning that stamp even for a configured client ID,
+			// but never reuse one belonging to a different configured client.
+			const cached = this.#entry()?.clientInfo;
+			if (cached?.clientId === config.clientId && cached.issuer) information.issuer = cached.issuer;
 			return information as StoredOAuthClientInformation;
 		}
 		const clientInfo = this.#entry()?.clientInfo;

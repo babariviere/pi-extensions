@@ -75,8 +75,19 @@ test("a rebound url replaces the record rather than merging into it", () => {
 
 test("a config clientId wins over a dynamically registered one", () => {
 	const { provider, store } = providerWith({ config: { clientId: "configured" } });
-	store.write("slack", { clientInfo: { clientId: "registered" }, serverUrl: "https://mcp.slack.com/mcp" });
+	store.write("slack", {
+		clientInfo: { clientId: "registered", issuer: "https://old-issuer.example" },
+		serverUrl: "https://mcp.slack.com/mcp",
+	});
 	assert.deepEqual(provider.clientInformation(), { client_id: "configured" });
+});
+
+test("a configured clientId round-trips the SDK's issuer stamp", () => {
+	const { provider, store } = providerWith({ config: { clientId: "configured" } });
+	assert.deepEqual(provider.clientInformation(), { client_id: "configured" });
+	provider.saveClientInformation({ client_id: "configured", issuer: "https://auth.example" } as never);
+	assert.equal(store.read("slack")?.clientInfo?.issuer, "https://auth.example");
+	assert.deepEqual(provider.clientInformation(), { client_id: "configured", issuer: "https://auth.example" });
 });
 
 test("dynamic registration round-trips through the store", () => {
