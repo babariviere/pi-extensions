@@ -46,7 +46,7 @@ export default function (pi: ExtensionAPI) {
 						);
 				},
 			);
-			if (report) return { message: { customType: "prewalk.report", content: report, display: false } };
+			if (report) return { message: { customType: "prewalk.report", content: report, display: true } };
 		} catch {
 			// An unavailable scout must not block the main agent's response.
 		} finally {

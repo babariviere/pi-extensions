@@ -63,8 +63,10 @@ test("automatic prewalk runs only on the first fresh-session prompt and explains
 		// /new starts a fresh branch and permits exactly one new classification.
 		sessionStart({}, context);
 		const result = (await hook({ prompt: "Investigate the login flow" }, context)) as {
-			message: { content: string };
+			message: { customType: string; content: string; display: boolean };
 		};
+		assert.equal(result.message.customType, "prewalk.report");
+		assert.equal(result.message.display, true);
 		assert.match(result.message.content, /login.ts:1/);
 		assert.deepEqual(status.splice(0), ["Prewalk: checking…", "Prewalk: exploring…", undefined]);
 		assert.deepEqual(notices.splice(0), ["Prewalk recommended: login code spans files"]);
