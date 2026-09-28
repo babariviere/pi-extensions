@@ -12,3 +12,5 @@ Pi reserves Ctrl+D for its built-in exit action. For this extension to receive t
 ```
 
 Reload Pi with `/reload`. Ctrl+D no longer deletes characters in the editor; use the Delete key instead. The built-in Ctrl+D behavior in session and tree pickers is unchanged.
+
+Pi may warn that this shortcut overlaps `app.tree.filter.default`. That binding is used in the tree picker, while this extension handles the main editor, so the warning does not prevent either from working.
