@@ -35,6 +35,9 @@ test("session advisory shows measured context and active children without claimi
 	assert.match(text, /123k tokens/);
 	assert.match(text, /2 active subagents/);
 	assert.match(text, /fresh session/);
+	assert.match(text, /worklog/);
+	assert.match(text, /todos/);
+	assert.match(text, /Do not interrupt an active task or reset automatically/);
 	assert.doesNotMatch(text, /weekly|quota|cost/);
 });
 

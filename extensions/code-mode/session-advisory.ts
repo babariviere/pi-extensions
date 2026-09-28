@@ -16,5 +16,5 @@ export const sessionAdvisory = (options: { turns: number; contextTokens?: number
 	const { turns, contextTokens, activeAgents } = options;
 	const context = contextTokens && contextTokens > 0 ? `; latest context ~${formatTokens(contextTokens)} tokens` : "";
 	const children = activeAgents > 0 ? `; ${activeAgents} active subagent${activeAgents === 1 ? "" : "s"}` : "";
-	return `This session has ${turns} assistant turns${context}${children}. At the next task boundary, consider a short handoff and a fresh session (/new). This is a context advisory, not a usage limit.`;
+	return `This session has ${turns} assistant turns${context}${children}. At the next task boundary, if this is a long-running task, update its worklog with decisions, verification and next steps; update existing todos if there is unfinished checklist work. If context is unwieldy, suggest a short handoff and a fresh session (/new). Do not interrupt an active task or reset automatically. This is a context advisory, not a usage limit.`;
 };

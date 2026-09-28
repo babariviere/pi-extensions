@@ -108,6 +108,7 @@ export default async function codeMode(pi: ExtensionAPI): Promise<void> {
 	const toolOwnership = new CodeModeToolOwnership(pi);
 	const codeModeUi = new CodeModeUiController(state, codePreviewSettings);
 	let lastSessionAdvisoryCheckpoint = 0;
+	let pendingSessionAdvisory: number | undefined;
 
 	// A subagent's task arrives as a file path rather than as typed input (see
 	// `agents/task-delivery.ts`). Registered here, in Code Mode itself, so it works
@@ -174,6 +175,7 @@ export default async function codeMode(pi: ExtensionAPI): Promise<void> {
 		lastSessionAdvisoryCheckpoint =
 			Math.floor(completedAssistantTurns(context.sessionManager.getBranch()) / SESSION_ADVISORY_INTERVAL) *
 			SESSION_ADVISORY_INTERVAL;
+		pendingSessionAdvisory = undefined;
 		applyCodeModeMode();
 		codeModeUi.start(context);
 		sandboxContext = context;
@@ -201,6 +203,7 @@ export default async function codeMode(pi: ExtensionAPI): Promise<void> {
 		const checkpoint = sessionAdvisoryCheckpoint(turns, lastSessionAdvisoryCheckpoint);
 		if (checkpoint === undefined) return;
 		lastSessionAdvisoryCheckpoint = checkpoint;
+		pendingSessionAdvisory = checkpoint;
 		const usage = event.message.role === "assistant" ? event.message.usage : undefined;
 		const contextTokens = usage ? usage.input + usage.cacheRead : undefined;
 		const activeAgents = state.agentRunBook
@@ -486,6 +489,22 @@ export default async function codeMode(pi: ExtensionAPI): Promise<void> {
 			(skillReferenceGuidance ? `\n\n${skillReferenceGuidance}` : "");
 		return {
 			systemPrompt: `${systemPrompt}\n\n${guidance}`,
+		};
+	});
+	pi.on("before_agent_start", (_event, context) => {
+		if (pendingSessionAdvisory === undefined || process.env.PI_CODE_MODE_SUBAGENT === "1") return;
+		const checkpoint = pendingSessionAdvisory;
+		pendingSessionAdvisory = undefined;
+		return {
+			message: {
+				customType: "code-mode.session-advisory",
+				content: sessionAdvisory({
+					turns: checkpoint,
+					contextTokens: context.getContextUsage()?.tokens ?? undefined,
+					activeAgents: 0,
+				}),
+				display: false,
+			},
 		};
 	});
 	pi.on("agent_settled", () => state.flushCompletions());

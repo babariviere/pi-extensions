@@ -37,7 +37,7 @@ The filesystem sandbox permits `/dev/null` as an output destination even in rest
 
 The async `τ` scratchpad survives calls within the session, not session restarts. Payloads, output limits, source-mapped errors, agent call budgets, progress rendering, and the `mapLimit` helper retain their existing contracts.
 
-In interactive top-level sessions, Code Mode shows a non-blocking advisory at 100 completed assistant turns and every 100 thereafter. It reports the latest response's approximate input context (when available) and the number of running subagents, and suggests a handoff and `/new` at the next task boundary. Resuming an already-advised session does not replay old notices. The count includes turns before compaction; these are session diagnostics, not Codex subscription quota or a limit on work.
+In interactive top-level sessions, Code Mode shows a non-blocking advisory at 100 completed assistant turns and every 100 thereafter. It reports the latest response's approximate input context (when available) and the number of running subagents. On the next user prompt, the agent also receives a one-time reminder to update the task worklog (and existing todos if relevant), and to suggest a handoff and `/new` at a task boundary if context is unwieldy. It never resets the session automatically or interrupts an active task. Resuming an already-advised session does not replay old notices. The count includes turns before compaction; these are session diagnostics, not Codex subscription quota or a limit on work.
 
 ## Background jobs
 
