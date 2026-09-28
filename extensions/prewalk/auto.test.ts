@@ -101,3 +101,40 @@ test("Luna can read a search result but cannot read unrelated files", async () =
 		await rm(cwd, { recursive: true, force: true });
 	}
 });
+
+test("Luna can continue reading a long file by byte offset", async () => {
+	const cwd = await mkdtemp(path.join(os.tmpdir(), "prewalk-chunks-"));
+	try {
+		await writeFile(path.join(cwd, "login.ts"), `login\n${"a".repeat(32 * 1024)}\nend of login\n`);
+		let calls = 0;
+		await automaticPrewalk(cwd, "Investigate login", async (context) => {
+			calls++;
+			if (calls === 1) return reply("YES: inspect login");
+			if (calls === 2)
+				return {
+					...reply("", "toolUse"),
+					content: [{ type: "toolCall", id: "first", name: "read", arguments: { path: "login.ts" } }],
+				};
+			if (calls === 3) {
+				const result = context.messages.at(-1);
+				assert.equal(result?.role, "toolResult");
+				if (result?.role === "toolResult") {
+					assert.match(JSON.stringify(result.content), /more available: read with offset 32768/);
+					assert.doesNotMatch(JSON.stringify(result.content), /end of login/);
+				}
+				return {
+					...reply("", "toolUse"),
+					content: [
+						{ type: "toolCall", id: "second", name: "read", arguments: { path: "login.ts", offset: 32768 } },
+					],
+				};
+			}
+			assert.match(JSON.stringify(context.messages.at(-1)), /end of login/);
+			assert.match(JSON.stringify(context.messages.at(-1)), /end of file/);
+			return reply("login.ts contains the complete login context.");
+		});
+		assert.equal(calls, 4);
+	} finally {
+		await rm(cwd, { recursive: true, force: true });
+	}
+});

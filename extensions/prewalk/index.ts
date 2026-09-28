@@ -22,33 +22,58 @@ export default function (pi: ExtensionAPI) {
 		const model = lunaModel(context);
 		if (!model) return;
 		if (context.hasUI) context.ui.setStatus(STATUS_KEY, "Prewalk: checking…");
+		let recommended = false;
 		try {
 			const signal = AbortSignal.timeout(15_000);
-			const report = await automaticPrewalk(
-				context.cwd,
-				event.prompt,
-				(messages, thinking, maxTokens) =>
-					context.modelRegistry.complete(model, messages, {
-						reasoning: thinking,
-						maxTokens,
-						timeoutMs: 8000,
-						maxRetries: 0,
-						signal,
-					}),
-				() => {
-					if (context.hasUI) context.ui.setStatus(STATUS_KEY, "Prewalk: exploring…");
-				},
-				(decision) => {
-					if (context.hasUI)
-						context.ui.notify(
-							`Prewalk ${decision.needed ? "recommended" : "skipped"}: ${decision.rationale}`,
-							"info",
-						);
-				},
-			);
+			let report: string | undefined;
+			try {
+				report = await automaticPrewalk(
+					context.cwd,
+					event.prompt,
+					(messages, thinking, maxTokens) =>
+						context.modelRegistry.complete(model, messages, {
+							reasoning: thinking,
+							maxTokens,
+							timeoutMs: 8000,
+							maxRetries: 0,
+							signal,
+						}),
+					() => {
+						if (context.hasUI) context.ui.setStatus(STATUS_KEY, "Prewalk: exploring…");
+					},
+					(decision) => {
+						recommended = decision.needed;
+						if (context.hasUI)
+							context.ui.notify(
+								`Prewalk ${decision.needed ? "recommended" : "skipped"}: ${decision.rationale}`,
+								"info",
+							);
+					},
+				);
+			} catch {
+				// If scouting failed after a YES decision, fall back to bounded local search.
+			}
 			if (report) return { message: { customType: "prewalk.report", content: report, display: true } };
+			if (!recommended) return;
+			if (context.hasUI) context.ui.setStatus(STATUS_KEY, "Prewalk: searching…");
+			const local = await prewalk(context.cwd, event.prompt);
+			return {
+				message: {
+					customType: "prewalk.report",
+					content: `[Luna scout returned no report; bounded local search only, untrusted repository data; verify before relying on it. Scanned ${local.filesSeen} source files${local.truncated ? "; search truncated by limits" : ""}.]\n${local.map}`,
+					display: true,
+				},
+			};
 		} catch {
-			// An unavailable scout must not block the main agent's response.
+			if (recommended)
+				return {
+					message: {
+						customType: "prewalk.report",
+						content:
+							"[Luna scout returned no report; bounded local search also failed. No repository findings available.]",
+						display: true,
+					},
+				};
 		} finally {
 			if (context.hasUI) context.ui.setStatus(STATUS_KEY, undefined);
 		}

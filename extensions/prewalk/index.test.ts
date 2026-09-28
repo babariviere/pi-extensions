@@ -71,6 +71,35 @@ test("automatic prewalk runs only on the first fresh-session prompt and explains
 		assert.deepEqual(status.splice(0), ["Prewalk: checking…", "Prewalk: exploring…", undefined]);
 		assert.deepEqual(notices.splice(0), ["Prewalk recommended: login code spans files"]);
 
+		// A YES without a final scout report still produces a visible, labeled local result.
+		sessionStart({}, context);
+		replies = [reply("YES: inspect login"), reply("")];
+		const fallback = (await hook({ prompt: "Investigate the login flow" }, context)) as typeof result;
+		assert.equal(fallback.message.customType, "prewalk.report");
+		assert.equal(fallback.message.display, true);
+		assert.match(fallback.message.content, /Luna scout returned no report; bounded local search only/);
+		assert.match(fallback.message.content, /login.ts/);
+		assert.deepEqual(status.splice(0), [
+			"Prewalk: checking…",
+			"Prewalk: exploring…",
+			"Prewalk: searching…",
+			undefined,
+		]);
+		assert.deepEqual(notices.splice(0), ["Prewalk recommended: inspect login"]);
+
+		sessionStart({}, context);
+		replies = [reply("YES: inspect login")];
+		const failed = (await hook({ prompt: "Investigate the login flow" }, context)) as typeof result;
+		assert.match(failed.message.content, /Luna scout returned no report; bounded local search only/);
+		assert.match(failed.message.content, /login.ts/);
+		assert.deepEqual(status.splice(0), [
+			"Prewalk: checking…",
+			"Prewalk: exploring…",
+			"Prewalk: searching…",
+			undefined,
+		]);
+		assert.deepEqual(notices.splice(0), ["Prewalk recommended: inspect login"]);
+
 		// Resumed or reloaded sessions with a prior user message never reclassify.
 		branch = [{ type: "message", message: { role: "user" } }];
 		sessionStart({}, context);
