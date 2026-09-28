@@ -27,11 +27,14 @@ test("automatic prewalk runs only on the first fresh-session prompt and explains
 		assert.ok(sessionStart);
 		const status: (string | undefined)[] = [];
 		const notices: string[] = [];
+		const controller = new AbortController();
+		const requests: unknown[] = [];
 		let branch: { type: "message"; message: { role: "user" } }[] = [];
-		let available = [{ provider: "example", id: "luna" }];
+		let available = [{ provider: "openai-codex", api: "openai-codex-responses", id: "gpt-6-luna" }];
 		let replies = [reply("NO: this question is general knowledge")];
 		const context = {
 			cwd,
+			signal: controller.signal,
 			hasUI: true,
 			isProjectTrusted: () => true,
 			sessionManager: { getBranch: () => branch },
@@ -39,7 +42,8 @@ test("automatic prewalk runs only on the first fresh-session prompt and explains
 			modelRegistry: {
 				getAvailable: () => available,
 				hasConfiguredAuth: () => true,
-				complete: async () => {
+				complete: async (_model: unknown, _messages: unknown, options: unknown) => {
+					requests.push(options);
 					const next = replies.shift();
 					if (!next) throw new Error("Luna unavailable");
 					return next;
@@ -54,6 +58,9 @@ test("automatic prewalk runs only on the first fresh-session prompt and explains
 		assert.equal(await hook({ prompt: "Investigate the login flow" }, context), undefined);
 		assert.deepEqual(status.splice(0), ["Prewalk: checking…", undefined]);
 		assert.deepEqual(notices.splice(0), ["Prewalk skipped: this question is general knowledge"]);
+		assert.deepEqual(requests.splice(0), [
+			{ timeoutMs: 60_000, maxRetries: 0, signal: controller.signal, reasoningEffort: "none" },
+		]);
 
 		replies = [reply("YES: login code spans files"), reply("login.ts:1 contains login; verify callers")];
 		assert.equal(await hook({ prompt: "Investigate the login flow" }, context), undefined);
@@ -70,6 +77,10 @@ test("automatic prewalk runs only on the first fresh-session prompt and explains
 		assert.match(result.message.content, /login.ts:1/);
 		assert.deepEqual(status.splice(0), ["Prewalk: checking…", "Prewalk: exploring…", undefined]);
 		assert.deepEqual(notices.splice(0), ["Prewalk recommended: login code spans files"]);
+		assert.deepEqual(requests.splice(0), [
+			{ timeoutMs: 60_000, maxRetries: 0, signal: controller.signal, reasoningEffort: "none" },
+			{ timeoutMs: 60_000, maxRetries: 0, signal: controller.signal, reasoningEffort: "low" },
+		]);
 
 		// A YES without a final scout report still produces a visible, labeled local result.
 		sessionStart({}, context);
@@ -120,7 +131,7 @@ test("automatic prewalk runs only on the first fresh-session prompt and explains
 		sessionStart({}, context);
 		available = [];
 		assert.equal(await hook({ prompt: "Investigate the login flow" }, context), undefined);
-		available = [{ provider: "example", id: "luna" }];
+		available = [{ provider: "openai-codex", api: "openai-codex-responses", id: "gpt-6-luna" }];
 		assert.equal(await hook({ prompt: "Investigate the login flow" }, context), undefined);
 		assert.equal(replies.length, 1);
 		assert.deepEqual(status.splice(0), []);

@@ -24,20 +24,22 @@ export default function (pi: ExtensionAPI) {
 		if (context.hasUI) context.ui.setStatus(STATUS_KEY, "Prewalk: checking…");
 		let recommended = false;
 		try {
-			const signal = AbortSignal.timeout(15_000);
 			let report: string | undefined;
 			try {
 				report = await automaticPrewalk(
 					context.cwd,
 					event.prompt,
-					(messages, thinking, maxTokens) =>
-						context.modelRegistry.complete(model, messages, {
-							reasoning: thinking,
-							maxTokens,
-							timeoutMs: 8000,
-							maxRetries: 0,
-							signal,
-						}),
+					(messages, thinking, maxTokens) => {
+						const options = { timeoutMs: 60_000, maxRetries: 0, signal: context.signal };
+						// ModelRegistry.complete takes provider-specific options, not SimpleStreamOptions.
+						// Codex ignores `reasoning` and `maxTokens`; use its native reasoning option.
+						return model.api === "openai-codex-responses"
+							? context.modelRegistry.complete(model, messages, {
+									...options,
+									reasoningEffort: thinking === "off" ? "none" : "low",
+								})
+							: context.modelRegistry.complete(model, messages, { ...options, reasoning: thinking, maxTokens });
+					},
 					() => {
 						if (context.hasUI) context.ui.setStatus(STATUS_KEY, "Prewalk: exploring…");
 					},
