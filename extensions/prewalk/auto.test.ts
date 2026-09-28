@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import type { AssistantMessage, Context } from "@earendil-works/pi-ai";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { automaticPrewalk, lunaModel, needsPrewalk, shouldConsiderPrewalk } from "./auto.ts";
+import { automaticPrewalk, lunaModel, prewalkDecision, shouldConsiderPrewalk } from "./auto.ts";
 
 function reply(text: string, stopReason: "stop" | "toolUse" = "stop"): AssistantMessage {
 	return { role: "assistant", content: [{ type: "text", text }], stopReason } as AssistantMessage;
@@ -17,9 +17,17 @@ test("automatic gate skips untrusted, subagent, short and manual-prewalk prompts
 	assert.equal(shouldConsiderPrewalk("Investigate login", true, true), false);
 	assert.equal(shouldConsiderPrewalk("go", true, false), false);
 	assert.equal(shouldConsiderPrewalk("Investigate login [Local prewalk, files]", true, false), false);
-	assert.equal(needsPrewalk(reply("YES, inspect code")), true);
-	assert.equal(needsPrewalk(reply("NO")), false);
-	assert.equal(needsPrewalk(reply("YES", "toolUse")), false);
+	assert.deepEqual(prewalkDecision(reply("YES: inspect login files")), {
+		needed: true,
+		rationale: "inspect login files",
+	});
+	assert.deepEqual(prewalkDecision(reply("NO: general question")), {
+		needed: false,
+		rationale: "general question",
+	});
+	assert.equal(prewalkDecision(reply("YES", "toolUse")), undefined);
+	assert.equal(prewalkDecision(reply("maybe")), undefined);
+	assert.equal(prewalkDecision(reply(`NO: ${"x".repeat(200)}`))?.rationale.length, 160);
 });
 
 test("Luna selection honors the session scope and requires configured auth", () => {
@@ -44,13 +52,21 @@ test("Luna selection honors the session scope and requires configured auth", () 
 
 test("NO classification does not scan or start exploration", async () => {
 	let calls = 0;
-	const report = await automaticPrewalk("/nonexistent", "Explain the weather forecast", async (_context, thinking) => {
-		calls++;
-		assert.equal(thinking, "off");
-		return reply("NO");
-	});
+	const decisions: string[] = [];
+	const report = await automaticPrewalk(
+		"/nonexistent",
+		"Explain the weather forecast",
+		async (_context, thinking) => {
+			calls++;
+			assert.equal(thinking, "off");
+			return reply("NO: general knowledge request");
+		},
+		undefined,
+		(decision) => decisions.push(decision.rationale),
+	);
 	assert.equal(report, undefined);
 	assert.equal(calls, 1);
+	assert.deepEqual(decisions, ["general knowledge request"]);
 });
 
 test("Luna can read a search result but cannot read unrelated files", async () => {

@@ -5,7 +5,18 @@ import { prewalk } from "./prewalk.ts";
 const STATUS_KEY = "prewalk";
 
 export default function (pi: ExtensionAPI) {
+	let firstPromptConsumed = false;
+	pi.on("session_start", (_event, context) => {
+		firstPromptConsumed = context.sessionManager
+			.getBranch()
+			.some((entry) => entry.type === "message" && entry.message.role === "user");
+	});
+
 	pi.on("before_agent_start", async (event, context) => {
+		if (firstPromptConsumed) return;
+		// Pi has not yet appended this prompt to the branch. Consume the first
+		// submitted prompt even when Luna is unavailable or the prompt is ineligible.
+		firstPromptConsumed = true;
 		if (!shouldConsiderPrewalk(event.prompt, context.isProjectTrusted(), process.env.PI_CODE_MODE_SUBAGENT === "1"))
 			return;
 		const model = lunaModel(context);
@@ -26,6 +37,13 @@ export default function (pi: ExtensionAPI) {
 					}),
 				() => {
 					if (context.hasUI) context.ui.setStatus(STATUS_KEY, "Prewalk: exploring…");
+				},
+				(decision) => {
+					if (context.hasUI)
+						context.ui.notify(
+							`Prewalk ${decision.needed ? "recommended" : "skipped"}: ${decision.rationale}`,
+							"info",
+						);
 				},
 			);
 			if (report) return { message: { customType: "prewalk.report", content: report, display: false } };

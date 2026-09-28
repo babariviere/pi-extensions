@@ -33,11 +33,24 @@ export function lunaModel(ctx: Pick<ExtensionContext, "scopedModels" | "modelReg
 	);
 }
 
-export function needsPrewalk(reply: AssistantMessage): boolean {
-	return (
-		reply.stopReason === "stop" &&
-		reply.content.some((part) => part.type === "text" && /^YES\b/i.test(part.text.trim()))
-	);
+export interface PrewalkDecision {
+	needed: boolean;
+	rationale: string;
+}
+
+/** Luna's explicit decision, not provider-internal reasoning. Ignore malformed/incomplete answers. */
+export function prewalkDecision(reply: AssistantMessage): PrewalkDecision | undefined {
+	if (reply.stopReason !== "stop") return undefined;
+	const match = textOf(reply)
+		.trim()
+		.match(/^(YES|NO)\b[\s,.:;-]*(?<reason>[^\n]*)/i);
+	if (!match) return undefined;
+	const needed = match[1]?.toUpperCase() === "YES";
+	const rationale = (match.groups?.reason ?? "")
+		.replace(/[\x00-\x1f\x7f-\x9f]/g, " ")
+		.trim()
+		.slice(0, 160);
+	return { needed, rationale: rationale || "Luna did not provide a reason." };
 }
 
 export function shouldConsiderPrewalk(prompt: string, trusted: boolean, subagent: boolean): boolean {
@@ -82,17 +95,21 @@ export async function automaticPrewalk(
 	prompt: string,
 	ask: AskLuna,
 	onExploring?: () => void,
+	onDecision?: (decision: PrewalkDecision) => void,
 ): Promise<string | undefined> {
 	const decision = await ask(
 		{
 			systemPrompt:
-				"Decide whether a coding assistant needs repository exploration before answering this request. Reply YES or NO only. YES for code changes or questions about project internals; NO for chat, generic questions, or requests with sufficient supplied context.",
+				"Decide whether a coding assistant needs repository exploration before answering this request. Reply on one line: YES: <brief reason> or NO: <brief reason>. Give a concrete reason under 120 characters, not internal reasoning. YES for code changes or questions about project internals; NO for chat, generic questions, or requests with sufficient supplied context.",
 			messages: [user(prompt)],
 		},
 		"off",
-		24,
+		100,
 	);
-	if (!needsPrewalk(decision)) return undefined;
+	const parsed = prewalkDecision(decision);
+	if (!parsed) return undefined;
+	onDecision?.(parsed);
+	if (!parsed.needed) return undefined;
 	onExploring?.();
 	const root = await realpath(cwd);
 	const initial = await prewalk(root, prompt);
