@@ -27,7 +27,6 @@ import {
 	prepareChildRun,
 	runCwd,
 	withChildConfigHome,
-	withPacingDisabled,
 	type RunContext,
 	type RunFailure,
 	type RunRequest,
@@ -246,7 +245,7 @@ async function launchRun(p: PreparedRun, ctx: RunContext): Promise<SpawnedRun> {
 	}
 	const base = p.req.night ? nightChildEnv(readActiveNightRun(), {}) : {};
 	const env = {
-		...withPacingDisabled(ctx.pacingDisabled, withChildConfigHome(p.configHome, base)),
+		...withChildConfigHome(p.configHome, base),
 		PI_CODE_MODE_SUBAGENT: "1",
 	};
 	const launched = await herdr.runPi(p.paneId, p.childArgs, env, ctx.signal);

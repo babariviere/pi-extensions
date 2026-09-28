@@ -1,30 +1,9 @@
 # Usage
 
-The usage extension owns subscription-usage polling for Claude and Codex / ChatGPT OAuth accounts. It publishes `usage:snapshot` and `usage:pacing` events for other extensions and provides the `/usage` command.
+The usage extension owns subscription-usage polling for Claude and Codex / ChatGPT OAuth accounts. It publishes `usage:snapshot` events for other extensions and provides the `/usage` command.
 
 ## Commands
 
-- `/usage` or `/usage status` shows provider usage, reset times, and the active Codex pacing window.
-- `/usage pacing on` enables pacing.
-- `/usage pacing off` disables pacing for the current session.
-- `/usage pacing off daytime` disables pacing until the local 21:00 boundary. The override is persisted so it also applies to another pi session.
+`/usage` or `/usage status` shows provider usage and reset times. The Codex 5h and weekly windows are informational and do not block tool calls.
 
-Pacing is enabled by default. Set `PI_USAGE_PACING=off` to disable it when pi starts. The weekly hard stop and pacing warnings apply only to Codex models, and the override remains advisory control for the current user.
-
-## Codex pacing semantics
-
-The weekly budget is divided across fixed local-time windows:
-
-- Day windows are 07:00 inclusive through 21:00 exclusive.
-- Night windows are 21:00 through the next day's 07:00.
-- A weekday day window has weight 1. A weekday night window has weight 0.5.
-- Every weekend window has weight 0 and receives no allowance. Friday night remains enabled through Saturday 07:00.
-- Weekend classification uses the window start date. For example, Saturday 21:00 through Sunday 07:00 is a Saturday weekend window.
-
-Weekend work requires an override such as `/usage pacing off daytime` (until 21:00) or `/usage pacing off` (for the session). Override usage still consumes the weekly budget. Previously cached weekend allowances are set to zero; existing weekday allowances stay fixed. If only weekend windows remain before reset, the allowance is zero.
-
-At each window boundary, the remaining weekly budget is allocated across the current and all later windows through the provider's next reset, normalized by their weights. An allowance is fixed when a window is first observed. Unused budget is therefore available to later windows, but neither later polling nor a provider reset during the same window changes its allowance. Provider reset also does not move the 07:00 or 21:00 calendar boundaries. The first weekly usage observation establishes a baseline unless the weekly period began inside the current window (inferred as seven days before reset). In that case, cumulative weekly usage counts toward this window, including usage missed before the first poll. Older cached baselines in that window are corrected automatically without changing its fixed allowance. Otherwise, historical usage reduces the remaining weekly budget but does not consume the new window’s allowance. Persisted usage is tracked by positive cumulative deltas, without double counting.
-
-The weekly 100% stop is a hard stop. A warning is delivered once per window at 90% of that window's allowance. Use `/usage pacing off` to continue when pacing blocks a tool call. Pacing state is stored at `~/.pi/agent/cache/usage-status/openai/pacing.json` with restrictive file permissions. Version 2 reset-anchored ledgers are migrated to the fixed-window format. Historical usage remains the weekly baseline during migration, rather than being charged to the newly active window, so an old reset-anchored record cannot keep Monday 07:00 blocked.
-
-Usage polling reads OAuth credentials and calls the provider usage endpoints. It does not use API keys, and the undocumented Codex endpoint may change or become unavailable. Pacing is advisory cache state and an unwritable cache does not break usage polling.
+Usage polling reads OAuth credentials and calls the provider usage endpoints. It does not use API keys, and the undocumented Codex endpoint may change or become unavailable.

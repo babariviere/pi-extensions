@@ -37,7 +37,7 @@ crash or forced kill can leave `disablesleep 1` enabled. Restore it manually wit
 `sudo -n /usr/bin/pmset -c disablesleep 0`. Multiple pi processes also share this
 global setting, so one process releasing its lock can restore sleep while another
 still runs.
-2. **Budget guard**: watches Claude's 5h and weekly subscription windows, and also respects the global Codex pacing guard published by `usage`. A spent Codex allowance pauses the run and requires a manual `/night resume` after the allowance is available. `/usage pacing off` clears the Codex pacing pause for this session.
+2. **Budget guard**: watches Claude's 5h and weekly subscription windows.
 3. **Automated resume**: once the window has room again, sends a `continue` prompt on its own.
 
 ## How pausing works
@@ -87,7 +87,7 @@ its own.
 ## Data source
 
 No HTTP calls of its own. The `usage` extension owns subscription polling and
-publishes `usage:snapshot` plus Codex `usage:pacing` state on pi's event bus;
+publishes `usage:snapshot` on pi's event bus;
 this extension only subscribes. State is republished as `night-mode:state`.
 
 ## Night runs

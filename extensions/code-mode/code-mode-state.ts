@@ -14,7 +14,6 @@ import type { Model } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { type ExtensionContext, getAgentDir } from "@earendil-works/pi-coding-agent";
 import { applyNightRunEnv } from "../night-mode/night-run.ts";
-import { isUsagePacingEvent, USAGE_PACING_EVENT } from "../usage/protocol.ts";
 import { CodeModeActivityStore } from "./activity/store.ts";
 import type { CapturedToolCatalog } from "./capture/catalog.ts";
 import { loadCodeModeConfig, type CodeModeConfig } from "./config.ts";
@@ -73,10 +72,6 @@ export class CodeModeState {
 	#sandboxGeneration = 0;
 	/** Request handlers are async even though the extension event bus is synchronous. */
 	readonly #pendingSandboxRequests = new Set<Promise<void>>();
-	/** Unsubscribe for the parent session's usage-pacing state. */
-	#unsubscribePacing: (() => void) | undefined;
-	/** Pacing is session state, seeded from the compatibility environment switch. */
-	#pacingDisabled = process.env.PI_USAGE_PACING === "off";
 	/**
 	 * Last sandbox request from `/sandbox` or the bus. Cleared by a revert, so a
 	 * request refused by an active night run does not resurface when the run ends.
@@ -159,11 +154,6 @@ export class CodeModeState {
 
 	async initialize(context: ExtensionContext): Promise<void> {
 		await this.#closeInternal();
-		this.#pacingDisabled = process.env.PI_USAGE_PACING === "off";
-		if (!this.options.headless)
-			this.#unsubscribePacing = this.pi.events.on(USAGE_PACING_EVENT, (payload) => {
-				if (isUsagePacingEvent(payload)) this.#pacingDisabled = payload.enforced === false;
-			});
 		this.activity.reset();
 		this.agentRuns.reset();
 		this.#cwd = context.cwd;
@@ -263,7 +253,6 @@ export class CodeModeState {
 							? { defaultThinking: this.config.agents.defaultThinking }
 							: {}),
 						models: availableModels,
-						pacingDisabled: this.#pacingDisabled,
 					}),
 					this.agentRunBook,
 				),
@@ -614,8 +603,6 @@ export class CodeModeState {
 		this.#jobsChange = undefined;
 		this.#jobs = undefined;
 		this.#sandboxGeneration++;
-		this.#unsubscribePacing?.();
-		this.#unsubscribePacing = undefined;
 		this.#unsubscribeSandbox?.();
 		this.#unsubscribeSandbox = undefined;
 		const sandbox = this.#sandbox;

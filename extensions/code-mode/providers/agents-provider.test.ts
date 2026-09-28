@@ -42,7 +42,7 @@ interface Harness {
 	count: () => number;
 }
 
-const harness = (waitMs = 0, pacingDisabled = false): Harness => {
+const harness = (waitMs = 0): Harness => {
 	let runContext: RunContext | undefined;
 	let settle: (results: RunResult[]) => void = () => {};
 	let count = 0;
@@ -73,7 +73,7 @@ const harness = (waitMs = 0, pacingDisabled = false): Harness => {
 	const provider = new CodeModeAgentsProvider(
 		() => ({ sessionId: undefined, sessionFile: undefined, cwd: tmpdir() }),
 		new CodeModeAgentRunRegistry(),
-		() => ({ timeoutMs: 60_000, waitMs, pacingDisabled }),
+		() => ({ timeoutMs: 60_000, waitMs }),
 		book,
 		new RunLauncher({ inHerdr: () => false, headless }),
 	);
@@ -145,12 +145,6 @@ test("agent settings take precedence over runtime defaults unless the caller ove
 	} finally {
 		rmSync(cwd, { recursive: true, force: true });
 	}
-});
-
-test("a pacing-disabled parent marks its child run context as pacing-disabled", async () => {
-	const { provider, contextOf } = harness(0, true);
-	await provider.invoke("start", { task: "do a thing" }, invocationContext());
-	assert.equal(contextOf()?.pacingDisabled, true);
 });
 
 test("an expired wait window returns a running handle without killing the run", async () => {

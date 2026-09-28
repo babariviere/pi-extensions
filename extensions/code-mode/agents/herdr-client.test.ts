@@ -30,7 +30,7 @@ function scriptedTransport(responses: HerdrCliResult[] | ((args: string[], call:
 test("runPi atomically submits a quoted Pi command with explicit environment", async () => {
 	const { transport, calls } = scriptedTransport([{ ok: true, result: {} }]);
 	const result = await new HerdrClient(transport).runPi("wA:p1", ["--model", "openai/gpt", "--value=it's"], {
-		PI_USAGE_PACING: "off",
+		PI_CODE_MODE_SUBAGENT: "1",
 		PI_NIGHT_RUN: "1",
 	});
 	assert.deepEqual(result, { ok: true });
@@ -39,7 +39,7 @@ test("runPi atomically submits a quoted Pi command with explicit environment", a
 			"pane",
 			"run",
 			"wA:p1",
-			`PI_USAGE_PACING='off' PI_NIGHT_RUN='1' exec pi '--model' 'openai/gpt' '--value=it'"'"'s'`,
+			`PI_CODE_MODE_SUBAGENT='1' PI_NIGHT_RUN='1' exec pi '--model' 'openai/gpt' '--value=it'"'"'s'`,
 		],
 	]);
 });

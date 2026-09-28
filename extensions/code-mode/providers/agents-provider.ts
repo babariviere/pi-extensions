@@ -77,8 +77,6 @@ export interface CodeModeAgentRuntimeConfig {
 	defaultThinking?: string;
 	/** Available parent models and their configured prices. */
 	models?: readonly import("@earendil-works/pi-ai").Model<any>[];
-	/** Whether the parent session disabled the usage pacing guard. */
-	pacingDisabled?: boolean;
 }
 
 /** One task in a batch. Timing lives on the batch, not here. */
@@ -570,9 +568,6 @@ export class CodeModeAgentsProvider implements CodeModeProvider {
 			// Inherited, not re-derived: a child in a fresh working copy would
 			// otherwise stop on pi's project-trust prompt with no tty to answer.
 			projectTrusted: ref.projectTrusted === true,
-			// Usage pacing is session state, not a configuration file. Carry its
-			// explicit disabled state into the separately started Pi process.
-			pacingDisabled: runtimeConfig.pacingDisabled === true,
 			// Child lifetime is host policy, not a per-call model choice.
 			timeoutMs: configuredTimeoutMs,
 			signal: controller.signal,

@@ -6,7 +6,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { ResolvedOutput } from "./output.ts";
-import { baseResult, withChildConfigHome, withPacingDisabled, type RunRequest } from "./run.ts";
+import { baseResult, withChildConfigHome, type RunRequest } from "./run.ts";
 
 const request = (): RunRequest => ({
 	agent: {
@@ -21,13 +21,6 @@ const resolved = (ok: boolean, extra: Partial<ResolvedOutput> = {}): ResolvedOut
 	ok,
 	output: ok ? "done" : "(no output produced)",
 	...extra,
-});
-
-test("a pacing-disabled parent yields a pacing-disabled child environment", () => {
-	const env = withPacingDisabled(true, { PATH: "/usr/bin" });
-	assert.equal(env.PI_USAGE_PACING, "off");
-	assert.equal(env.PATH, "/usr/bin");
-	assert.equal(withPacingDisabled(false, env).PI_USAGE_PACING, "off");
 });
 
 test("a private child config home preserves the rest of the environment", () => {

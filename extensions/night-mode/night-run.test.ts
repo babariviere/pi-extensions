@@ -32,12 +32,11 @@ const run = (overrides: Partial<ActiveNightRun> = {}): ActiveNightRun => ({
 	...overrides,
 });
 
-test("nightChildEnv carries the run's config home, ledger store, and pacing policy", () => {
-	const env = nightChildEnv(run({ pacingDisabled: true }), { PATH: "/usr/bin" });
+test("nightChildEnv carries the run's config home and ledger store", () => {
+	const env = nightChildEnv(run(), { PATH: "/usr/bin" });
 	assert.equal(env.XDG_CONFIG_HOME, "/night/sandboxes/repo/run.agents/xdg");
 	assert.equal(env.PI_TODO_PATH, "/night/todos");
 	assert.equal(env.PI_NIGHT_RUN, "1");
-	assert.equal(env.PI_USAGE_PACING, "off");
 	assert.equal(env.PATH, "/usr/bin");
 });
 
@@ -55,16 +54,12 @@ test("nightChildEnv leaves the environment alone when no run is active", () => {
 test("a child shell spawned with nightChildEnv sees the run policy", () => {
 	// The regression this file exists for: assert the values in the child, not in
 	// the process that set them.
-	const env = nightChildEnv(run({ pacingDisabled: true }), process.env);
-	const seen = execFileSync(
-		"sh",
-		["-c", "printenv XDG_CONFIG_HOME; printenv PI_NIGHT_RUN; printenv PI_USAGE_PACING"],
-		{
-			env: env as NodeJS.ProcessEnv,
-			encoding: "utf-8",
-		},
-	);
-	assert.deepEqual(seen.trim().split("\n"), ["/night/sandboxes/repo/run.agents/xdg", "1", "off"]);
+	const env = nightChildEnv(run(), process.env);
+	const seen = execFileSync("sh", ["-c", "printenv XDG_CONFIG_HOME; printenv PI_NIGHT_RUN"], {
+		env: env as NodeJS.ProcessEnv,
+		encoding: "utf-8",
+	});
+	assert.deepEqual(seen.trim().split("\n"), ["/night/sandboxes/repo/run.agents/xdg", "1"]);
 });
 
 test("buildNightContract points a child at the capability probe when there is one", () => {
@@ -91,13 +86,12 @@ afterEach(() => {
 });
 
 test("applyNightRunEnv sets the config home for a participant, so its own shells inherit it", () => {
-	writeActiveNightRun(run({ sessionId: "coordinator", pacingDisabled: true }));
+	writeActiveNightRun(run({ sessionId: "coordinator" }));
 	const env: NodeJS.ProcessEnv = { XDG_CONFIG_HOME: "/home/dev/.config" };
 	const applied = applyNightRunEnv({ sessionId: "coordinator" }, env);
-	assert.deepEqual(applied, ["XDG_CONFIG_HOME", "PI_TODO_PATH", "PI_USAGE_PACING"]);
+	assert.deepEqual(applied, ["XDG_CONFIG_HOME", "PI_TODO_PATH"]);
 	assert.equal(env.XDG_CONFIG_HOME, "/night/sandboxes/repo/run.agents/xdg");
 	assert.equal(env.PI_TODO_PATH, "/night/todos");
-	assert.equal(env.PI_USAGE_PACING, "off");
 	// Idempotent: a second call has nothing left to change.
 	assert.deepEqual(applyNightRunEnv({ sessionId: "coordinator" }, env), []);
 });
@@ -110,10 +104,9 @@ test("applyNightRunEnv leaves a bystander session alone", () => {
 });
 
 test("the handshake round-trips the config home and the probe path", () => {
-	writeActiveNightRun(run({ preflightPath: "/night/probe.md", pacingDisabled: true }));
+	writeActiveNightRun(run({ preflightPath: "/night/probe.md" }));
 	const body = JSON.parse(execFileSync("cat", [activeRunPath()], { encoding: "utf-8" }));
 	assert.equal(body.configHome, "/night/sandboxes/repo/run.agents/xdg");
 	assert.equal(body.preflightPath, "/night/probe.md");
-	assert.equal(body.pacingDisabled, true);
 	writeFileSync(join(agentDir, "night", "touched"), "");
 });

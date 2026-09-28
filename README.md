@@ -23,7 +23,7 @@ directory, and `themes/*.json` files. The current inventory is:
 | `code-mode` | `code_mode` is the sole model-facing tool by default and runs bounded TypeScript programs through the shared code-mode runtime. Full Code Mode exposes Pi core tools, the explicitly registered `web.search` and `web.fetch` aliases, MCP, agents, and the typed `todo.*` and `night.plan` providers. Orchestration-only mode keeps MCP, agents, and trusted custom providers while hiding full-code-only capabilities. It also provides `/sandbox`, `/mcp`, and `/mcp-auth` controls. |
 | `todos` | The typed `todo.*` Code Mode provider manages file-backed todos, and `/todos` provides the interactive manager. |
 | `tool-substitute` | Adds pi search-tool guidance and blocks Git writes inside jj repositories, converting simple safe Git operations where possible. |
-| `usage` | `/usage` polls Claude and Codex/ChatGPT OAuth subscription windows and publishes usage and Codex pacing state. |
+| `usage` | `/usage` polls Claude and Codex/ChatGPT OAuth subscription windows and publishes usage snapshots. |
 | `web` | `web_search` searches Kagi, `fetch_content` fetches pages or summarizes Git repositories, and `/kagi-status` validates the Kagi token. |
 | `workspaces` | `/workspace` lists, creates, switches, and deletes jj workspaces, with optional Herdr integration. |
 
@@ -119,14 +119,12 @@ extension README.
 | `~/.pi/agent/mcp.json` | Code Mode's MCP server configuration. Code Mode has no separate MCP credential store; OAuth/keyring behavior follows its MCP implementation. |
 | `~/.pi/agent/secrets.json` | Per-machine `KAGI_SESSION_TOKEN` and `LINEAR_API_KEY` values read directly by those extensions. This file is not the source for the `secrets` extension. |
 | Nearest `fnox.toml` | `secrets` discovers this file upward from the working directory and calls `fnox export --format json`. |
-| `~/.pi/agent/cache/usage-status/openai/pacing.json` | Persisted Codex pacing state managed by `usage`. |
 | `~/.pi/agent/night/` | Default night-mode prompts, instructions, reports, archive, todos, and sandboxes. |
 | `~/.herdr/workspaces` | Default root for managed jj workspaces. |
 
 Useful environment controls include `PI_CODING_AGENT_DIR` (alternate pi agent
 directory), `PI_AGENT_DIR` (MCP agent directory), `PI_TODO_PATH` (todo store),
-`PI_USAGE_PACING=off` (disable Codex pacing at startup), `PI_GUARDRAIL=off`
-(disable the guardrail at startup), and `HERDR_SOCKET_PATH` (alternate Herdr
+`PI_GUARDRAIL=off` (disable the guardrail at startup), and `HERDR_SOCKET_PATH` (alternate Herdr
 socket). `PI_NIGHT_RUN` and `PI_BACKGROUND_AGENT_ATTEMPT` are internal markers
 used when extensions spawn or join managed runs; do not set them casually.
 
@@ -192,8 +190,7 @@ The CI workflow runs `npm ci`, `npm run typecheck`, and `npm test` on Node 24.
   guards, sandboxing, wake locks, and reports.
 - [Secrets](extensions/secrets/README.md), including provider patterns,
   reference expansion, and masking caveats.
-- [Usage](extensions/usage/README.md), including Codex pacing semantics and
-  persisted state.
+- [Usage](extensions/usage/README.md), including subscription usage polling.
 - [Code-mode migration and configuration](extensions/code-mode/README.md).
 - [Code-mode evaluation](extensions/code-mode/evaluation/README.md), including the
   JSONL format and experiment protocol.
