@@ -6,6 +6,8 @@ When omitted, model and thinking use the named agent's frontmatter first, then t
 
 `agents.*` is unavailable inside a Code Mode subagent child session. The child turn can settle before a detached nested agent exits, causing the parent to mark the child done while work is still running. Launch parallel agents from the parent orchestrator instead.
 
+Default to doing routine file lookup and small edits in the parent. Delegate only bounded, independently useful work with a concrete deliverable; start with one agent, or two to three when the tasks are truly independent. Avoid overlapping edits and broad speculative fan-out. `agentBudget` and `agents.maxPerExecution` limit launch calls within one `code_mode` invocation, not concurrent children, the task count in a `runAll` batch, or total agents across the session.
+
 Agent definitions are markdown files with YAML frontmatter, discovered from:
 
 - user scope: `$PI_CODING_AGENT_DIR/agents/**/*.md` (default `~/.pi/agent/agents`)
