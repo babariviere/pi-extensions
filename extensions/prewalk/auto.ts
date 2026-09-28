@@ -77,7 +77,12 @@ async function readAllowed(root: string, allowed: Set<string>, name: string): Pr
 }
 
 /** Fail open on model errors: no report is better than delaying or misleading the main agent. */
-export async function automaticPrewalk(cwd: string, prompt: string, ask: AskLuna): Promise<string | undefined> {
+export async function automaticPrewalk(
+	cwd: string,
+	prompt: string,
+	ask: AskLuna,
+	onExploring?: () => void,
+): Promise<string | undefined> {
 	const decision = await ask(
 		{
 			systemPrompt:
@@ -88,6 +93,7 @@ export async function automaticPrewalk(cwd: string, prompt: string, ask: AskLuna
 		24,
 	);
 	if (!needsPrewalk(decision)) return undefined;
+	onExploring?.();
 	const root = await realpath(cwd);
 	const initial = await prewalk(root, prompt);
 	const allowed = new Set(initial.paths);
