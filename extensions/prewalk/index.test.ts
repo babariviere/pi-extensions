@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import prewalkExtension from "./index.ts";
 
 const reply = (text: string) =>
@@ -151,6 +151,75 @@ test("automatic prewalk runs only on the first fresh-session prompt and explains
 		assert.equal(await hook({ prompt: "Investigate the login flow" }, context), undefined);
 		assert.deepEqual(status.splice(0), ["Prewalk: checking…", undefined]);
 		assert.deepEqual(notices.splice(0), []);
+	} finally {
+		await rm(cwd, { recursive: true, force: true });
+	}
+});
+
+test("oversized first prompt falls back to bounded search using its tail", async () => {
+	const cwd = await mkdtemp(path.join(os.tmpdir(), "prewalk-long-"));
+	try {
+		await writeFile(path.join(cwd, "sessionrouting.ts"), "export const sessionrouting = true;\n");
+		let hook: ((event: { prompt: string }, context: ExtensionContext) => Promise<unknown>) | undefined;
+		prewalkExtension({
+			on: (event: string, handler: unknown) => {
+				if (event === "before_agent_start") hook = handler as typeof hook;
+			},
+			registerCommand: () => {},
+		} as unknown as ExtensionAPI);
+		assert.ok(hook);
+		let calls = 0;
+		const context = {
+			cwd,
+			hasUI: false,
+			isProjectTrusted: () => true,
+			scopedModels: [],
+			modelRegistry: {
+				getAvailable: () => [{ provider: "example", id: "luna" }],
+				hasConfiguredAuth: () => true,
+				complete: async () => {
+					if (calls++ === 0) return reply("YES: search for session routing");
+					throw new Error("Scout unavailable");
+				},
+			},
+		} as unknown as ExtensionContext;
+		const result = (await hook({ prompt: `Investigate ${"a".repeat(4000)} sessionrouting` }, context)) as {
+			message: { content: string };
+		};
+		assert.match(result.message.content, /sessionrouting.ts/);
+	} finally {
+		await rm(cwd, { recursive: true, force: true });
+	}
+});
+
+test("manual prewalk notifies that local search completed without Luna", async () => {
+	const cwd = await mkdtemp(path.join(os.tmpdir(), "prewalk-manual-"));
+	try {
+		await writeFile(path.join(cwd, "login.ts"), "export function login() {}\n");
+		let handler: ((args: string, context: ExtensionCommandContext) => Promise<void>) | undefined;
+		const messages: string[] = [];
+		prewalkExtension({
+			on: () => {},
+			registerCommand: (_name: string, command: { handler: typeof handler }) => {
+				handler = command.handler;
+			},
+			sendUserMessage: (text: string) => messages.push(text),
+		} as unknown as ExtensionAPI);
+		assert.ok(handler);
+		const statuses: (string | undefined)[] = [];
+		const notices: [string, string][] = [];
+		const context = {
+			cwd,
+			hasUI: true,
+			ui: {
+				setStatus: (_key: string, status: string | undefined) => statuses.push(status),
+				notify: (message: string, level: string) => notices.push([message, level]),
+			},
+		} as unknown as ExtensionCommandContext;
+		await handler("Investigate login", context);
+		assert.deepEqual(notices, [["Local prewalk complete: scanned 1 source files. Luna was not used.", "info"]]);
+		assert.deepEqual(statuses, ["Prewalk: searching…", undefined]);
+		assert.match(messages[0] ?? "", /\[Local prewalk,.*login.ts/s);
 	} finally {
 		await rm(cwd, { recursive: true, force: true });
 	}

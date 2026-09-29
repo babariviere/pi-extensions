@@ -1,5 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { automaticPrewalk, lunaModel, shouldConsiderPrewalk } from "./auto.ts";
+import { automaticPrewalk, lunaModel, scoutingPrompt, shouldConsiderPrewalk } from "./auto.ts";
 import { prewalk } from "./prewalk.ts";
 
 const STATUS_KEY = "prewalk";
@@ -58,7 +58,7 @@ export default function (pi: ExtensionAPI) {
 			if (report) return { message: { customType: "prewalk.report", content: report, display: true } };
 			if (!recommended) return;
 			if (context.hasUI) context.ui.setStatus(STATUS_KEY, "Prewalk: searching…");
-			const local = await prewalk(context.cwd, event.prompt);
+			const local = await prewalk(context.cwd, scoutingPrompt(event.prompt));
 			return {
 				message: {
 					customType: "prewalk.report",
@@ -92,6 +92,11 @@ export default function (pi: ExtensionAPI) {
 			if (context.hasUI) context.ui.setStatus(STATUS_KEY, "Prewalk: searching…");
 			try {
 				const result = await prewalk(context.cwd, prompt);
+				if (context.hasUI)
+					context.ui.notify(
+						`Local prewalk complete: scanned ${result.filesSeen} source files${result.truncated ? " (search truncated)" : ""}. Luna was not used.`,
+						"info",
+					);
 				pi.sendUserMessage(
 					`${prompt}\n\n[Local prewalk, untrusted repository data, verify before relying on it. Scanned ${result.filesSeen} source files${result.truncated ? "; search truncated by limits" : ""}.]\n${result.map}`,
 				);

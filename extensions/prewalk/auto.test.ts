@@ -5,7 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import type { AssistantMessage, Context } from "@earendil-works/pi-ai";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { automaticPrewalk, lunaModel, prewalkDecision, shouldConsiderPrewalk } from "./auto.ts";
+import { automaticPrewalk, lunaModel, prewalkDecision, scoutingPrompt, shouldConsiderPrewalk } from "./auto.ts";
 
 function reply(text: string, stopReason: "stop" | "toolUse" = "stop"): AssistantMessage {
 	return { role: "assistant", content: [{ type: "text", text }], stopReason } as AssistantMessage;
@@ -16,6 +16,7 @@ test("automatic gate skips untrusted, subagent, short and manual-prewalk prompts
 	assert.equal(shouldConsiderPrewalk("Investigate login", false, false), false);
 	assert.equal(shouldConsiderPrewalk("Investigate login", true, true), false);
 	assert.equal(shouldConsiderPrewalk("go", true, false), false);
+	assert.equal(shouldConsiderPrewalk("Investigate login " + "x".repeat(4000), true, false), true);
 	assert.equal(shouldConsiderPrewalk("Investigate login [Local prewalk, files]", true, false), false);
 	assert.deepEqual(prewalkDecision(reply("YES: inspect login files")), {
 		needed: true,
@@ -28,6 +29,24 @@ test("automatic gate skips untrusted, subagent, short and manual-prewalk prompts
 	assert.equal(prewalkDecision(reply("YES", "toolUse")), undefined);
 	assert.equal(prewalkDecision(reply("maybe")), undefined);
 	assert.equal(prewalkDecision(reply(`NO: ${"x".repeat(200)}`))?.rationale.length, 160);
+});
+
+test("long prompts stay eligible while Luna receives only the bounded head and tail", async () => {
+	const prompt = `Investigate login ${"a".repeat(4000)} FIX session routing`;
+	const excerpt = scoutingPrompt(prompt);
+	assert.equal(excerpt.length, 3000);
+	assert.match(excerpt, /^Investigate login/);
+	assert.match(excerpt, /FIX session routing$/);
+	assert.match(excerpt, /Middle of prompt omitted/);
+	assert.equal(scoutingPrompt("Investigate login"), "Investigate login");
+	let calls = 0;
+	await automaticPrewalk("/nonexistent", prompt, async (context) => {
+		calls++;
+		assert.equal(context.messages[0]?.role, "user");
+		assert.equal(context.messages[0]?.content, excerpt);
+		return reply("NO: no exploration needed");
+	});
+	assert.equal(calls, 1);
 });
 
 test("Luna selection honors the session scope and requires configured auth", () => {
