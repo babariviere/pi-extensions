@@ -37,8 +37,6 @@ The filesystem sandbox permits `/dev/null` as an output destination even in rest
 
 The async `τ` scratchpad survives calls within the session, not session restarts. Payloads, output limits, source-mapped errors, agent call budgets, progress rendering, and the `mapLimit` helper retain their existing contracts.
 
-In interactive top-level sessions, Code Mode shows a non-blocking advisory at 100 completed assistant turns and every 100 thereafter. It reports the latest response's approximate input context (when available) and the number of running subagents. On the next user prompt, the agent also receives a one-time reminder to update the task worklog (and existing todos if relevant), and to suggest a handoff and `/new` at a task boundary if context is unwieldy. It never resets the session automatically or interrupts an active task. Resuming an already-advised session does not replay old notices. The count includes turns before compaction; these are session diagnostics, not Codex subscription quota or a limit on work.
-
 ## Background jobs
 
 In full code mode, `jobs.start({ name, command, cwd? })` starts a shell command without blocking the program. Use `jobs.status()` to see running and recent jobs, `jobs.logs({ id, maxChars? })` for a bounded output tail, `jobs.wait({ id, waitMs? })` to wait up to 120 seconds (default 30 seconds), and `jobs.stop({ id })` to terminate the process group. `jobs.wait` returns `state: "running"` while the process is still alive. The job has a two-hour lifetime limit and at most 20 jobs can run concurrently. The shell command uses the same OS sandbox wrapper as `pi.bash`; without an enforcing sandbox it runs with the user's permissions.

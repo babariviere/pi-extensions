@@ -15,7 +15,6 @@ Run tool calls in a type-checked TypeScript program inside an isolated QuickJS s
 - Batch independent calls with `Promise.all`; use `mapLimit(items, fn, N)` for bounded concurrency. Keep dependent steps sequential.
 - Batch only genuinely independent operations. Scope exploration before fanning out; use focused checks at meaningful checkpoints rather than repeatedly scanning the same files or rerunning broad checks after every small change.
 - Only the program's `return` enters model context. Return compact results directly, not JSON strings. Oversized returns spill to a temp file whose path is reported; inspect it in smaller slices on subsequent calls. Keep intermediates local, use `τ` across calls, or files for durable data.
-- At a task boundary in a long session, leave a short handoff with decisions, changed files, verification, and next steps; suggest starting a fresh session with `/new` rather than carrying a large transcript indefinitely. Do not interrupt an unfinished task solely to reset context.
 - For a command that must outlive this program, use `jobs.start({ name, command })` in full code mode, then `jobs.status()`, `jobs.logs({ id })`, `jobs.wait({ id })`, or `jobs.stop({ id })`. A job ends on exit, stop, the two-hour cap, or session shutdown. Unclaimed terminal results wake the model; a terminal wait or stop suppresses the wake-up. For ordinary short commands, keep using `pi.exec` or `pi.bash`.
 
 ## Repository work
