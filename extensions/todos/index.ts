@@ -45,14 +45,11 @@ import path from "node:path";
 import fs from "node:fs/promises";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import {
-	CODE_MODE_PROVIDER_DISCOVER_EVENT,
-	CODE_MODE_PROVIDER_REGISTER_EVENT,
-	type CodeModeActionDescriptor,
-	type CodeModeInvocationContext,
-	type CodeModeProvider,
-	type CodeModeProviderDiscovery,
-	type CodeModeProviderRegistration,
-} from "../code-mode/protocol.ts";
+	createActionTool,
+	type ActionDescriptor,
+	type ActionContext,
+	type ActionProvider,
+} from "../shared/action-tools.ts";
 import {
 	createTodo,
 	ensureTodosDir,
@@ -1463,7 +1460,7 @@ const assignmentInputSchema = {
 	additionalProperties: false,
 };
 
-const todoActionDescriptors: CodeModeActionDescriptor[] = [
+const todoActionDescriptors: ActionDescriptor[] = [
 	{
 		name: "list",
 		description: "List open todos, with assigned todos first",
@@ -1549,6 +1546,17 @@ const todoActionDescriptors: CodeModeActionDescriptor[] = [
 	},
 ];
 
+const TODO_READ_ACTIONS = new Set(["list", "listAll", "get"]);
+
+for (const descriptor of todoActionDescriptors) {
+	descriptor.annotations = {
+		readOnlyHint: TODO_READ_ACTIONS.has(descriptor.name),
+		destructiveHint: descriptor.name === "delete",
+		idempotentHint: TODO_READ_ACTIONS.has(descriptor.name),
+		openWorldHint: false,
+	};
+}
+
 function structuredTodo(todo: TodoRecord): TodoRecord {
 	return { ...todo, id: formatTodoId(todo.id) };
 }
@@ -1568,9 +1576,7 @@ function todoRecordOrThrow(result: TodoRecord | { error: string }): TodoRecord {
 	return result;
 }
 
-const TODO_READ_ACTIONS = new Set(["list", "listAll", "get"]);
-
-function createTodoProvider(pi: ExtensionAPI): CodeModeProvider {
+function createTodoActions(pi: ExtensionAPI): ActionProvider {
 	return {
 		name: "todo",
 		description:
@@ -1593,7 +1599,7 @@ function createTodoProvider(pi: ExtensionAPI): CodeModeProvider {
 			return todoActionDescriptors.find((descriptor) => descriptor.name === actionName);
 		},
 
-		async invoke(actionName: string, args: Record<string, unknown>, context: CodeModeInvocationContext) {
+		async invoke(actionName: string, args: Record<string, unknown>, context: ActionContext) {
 			if (!TODO_READ_ACTIONS.has(actionName)) {
 				const query: NightModePlanningQuery = { version: 1, planning: false };
 				pi.events.emit(NIGHT_MODE_PLANNING_QUERY_EVENT, query);
@@ -1716,7 +1722,7 @@ export default function todosExtension(pi: ExtensionAPI) {
 		refreshCurrentTodoWidget(ctx);
 	});
 
-	// Nudge the agent toward the todo provider only when open todos already exist in
+	// Nudge the agent toward the native todo tools only when open todos already exist in
 	// this repo. This reinforces the workflow during real task work without
 	// nagging on unrelated turns.
 	pi.on("before_agent_start", (event, ctx) => {
@@ -1730,21 +1736,15 @@ export default function todosExtension(pi: ExtensionAPI) {
 			"",
 			"## Todo tracking",
 			`There ${open.length === 1 ? "is" : "are"} ${open.length} open todo${plural} in ${TODO_DIR_NAME} for this repo${mine.length ? `, ${mine.length} assigned to this session` : ""}.`,
-			'Use the typed `todo` provider through `code_mode` to track multi-step or multi-session work: call `todo.claim({ id })` before working, `todo.append({ id, body })` for progress or blockers, and `todo.update({ id, status: "closed" })` when done. Prefer todos over ad-hoc plan/scratch files for durable task state.',
+			'Use the native todo tools through `codemode` to track multi-step or multi-session work: call `tools.todo_claim({ id })` before working, `tools.todo_append({ id, body })` for progress or blockers, and `tools.todo_update({ id, status: "closed" })` when done. Prefer todos over ad-hoc plan/scratch files for durable task state.',
 		].join("\n");
 		return { systemPrompt: event.systemPrompt + "\n" + guidance };
 	});
 
-	const todoProvider = createTodoProvider(pi);
-	const unsubscribeProviderDiscovery = pi.events.on(CODE_MODE_PROVIDER_DISCOVER_EVENT, (value: unknown) => {
-		if (typeof value !== "object" || value === null || Array.isArray(value)) return;
-		const discovery = value as Partial<CodeModeProviderDiscovery>;
-		if (discovery.version !== 1 || typeof discovery.register !== "function") return;
-		discovery.register(todoProvider, { overwrite: true });
-	});
-	const registration: CodeModeProviderRegistration = { version: 1, provider: todoProvider, overwrite: true };
-	pi.events.emit(CODE_MODE_PROVIDER_REGISTER_EVENT, registration);
-	pi.on("session_shutdown", () => unsubscribeProviderDiscovery());
+	const todoActions = createTodoActions(pi);
+	for (const descriptor of todoActionDescriptors) {
+		pi.registerTool(createActionTool(todoActions, descriptor));
+	}
 
 	pi.registerCommand("todos", {
 		description: "List todos from .pi/todos",

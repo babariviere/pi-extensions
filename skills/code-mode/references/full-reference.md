@@ -1,177 +1,53 @@
-# code_mode core reference
+# Native codemode reference
 
-Use this reference for API signatures and runtime behavior. For MCP or subagent calls, see [MCP](mcp.md) or [subagents](agents.md).
+## Globals and tools
 
-One type-checked TS program in a fresh isolated QuickJS sandbox. Only the `return` value reaches the model; `print()`/`console.log` go to the activity widget. `π` is not a tool.
+Scripts are JavaScript async-function bodies in pi's QuickJS sandbox. Top-level `await` and `return` work. There is no Node.js, direct filesystem/network access, timers, TypeScript checker or legacy payload/state API.
 
-Available globals: `pi`, explicit `web`, and `tools` (full code mode only), `mcp`, `agents`, `mapLimit`, `print`, `console`, `π`, `τ`, `process`, the timer family (`setTimeout` / `clearTimeout` / `setInterval` / `clearInterval`), and the host APIs listed below. Nothing else exists: there is no `memory`, `schema`, `compact`, `mesh`, `council`, `rlm`, `agent()`, `budget`, or `workflow` (and no bare `parallel` / `pipeline` / `phase` / `log` aliases).
+- `tools.<name>(args)` calls a registered callable tool through pi's validation, permission and result middleware.
+- `ALL_TOOLS` is an array of `{ name, description }` metadata.
+- `await searchTools(query, { limit?, namespace? })` ranks callable tools. Default limit: 8.
+- `await describeTool(name)` returns a description and declaration, or `undefined`.
+- `text(value)`, `console.*` and top-level `return value` append model-facing output.
+- `image(imageBlockOrDataUrl)` forwards an individual image block, for example from an MCP result.
+- `exit()` finishes the script early. Always await work you intend to complete; unawaited calls are cancelled when the script finishes.
+- `store(key, value)` and `load(key)` persist JSON values across successful scripts on the session branch. `store(key, undefined)` deletes a value.
+- `models.*` exposes pi's model catalog and classifiers when enabled by the host. Consult the native tool description for its declarations.
 
-The language level is ES2025: `Object.groupBy`, `Map.groupBy`, `Promise.withResolvers`, `Promise.try`, the `Set` combinators (`union`, `intersection`, `difference`, `isSubsetOf`), the iterator helpers (`values().map(...).toArray()`), `RegExp.escape`, `Array.prototype.toSorted`/`with`/`toSpliced`, `Float16Array` and `Error.isError` are all available and typed. `Array.fromAsync`, `JSON.rawJSON`, `Symbol.dispose` and `Temporal` are not.
+A first-line options comment sets output budget and a hard deadline:
 
-## Host APIs
-
-These are polyfilled, and injected only when your program mentions them by name (so reaching one dynamically through `globalThis["Text" + "Encoder"]` will not work).
-
-| API | Notes |
-|------|-------|
-| `TextEncoder` / `TextDecoder` | utf-8 only; `TextDecoder` does not stream and rejects any other label |
-| `URL` / `URLSearchParams` | pragmatic, not WHATWG-conformant: authority parsing needs an explicit `//`, hostnames are lowercased but not punycode-normalized |
-| `atob` / `btoa` | `btoa` throws on input outside Latin-1; encode with `TextEncoder` first |
-| `structuredClone` | a real clone: keeps `Map`, `Set`, `Date`, `RegExp`, typed arrays, handles cycles, throws on functions and promises |
-| `crypto.getRandomValues` / `crypto.randomUUID` | draws on a 4096-byte pool of host entropy and throws once drained, because a synchronous call cannot reach the async host bridge. No `crypto.subtle` |
-| `AbortController` / `AbortSignal` | real cancellation, see below. `AbortSignal.abort` / `timeout` / `any` included |
-| `queueMicrotask` | |
-| `performance.now` | milliseconds since program start, wall clock, not monotonic |
-
-There is deliberately no `fetch`, no `crypto.subtle` and no `WebAssembly`: the audited host-call table (`pi.*`, `web.*`, `mcp.*`) is meant to be the only route out of the sandbox. For network access use an explicit `web.*` capability or an MCP tool.
-
-`Intl` and `Atomics` do not exist, and TypeScript's `lib.es5` declares both, so they type-check and then fail at runtime. Both now fail with a `NotSupportedError` naming the property rather than an undefined-property `TypeError`.
-
-`Intl` is absent because the engine is built without ICU, so it carries no locale data. The `toLocaleString` family does exist and would silently ignore a locale argument, which turns a wrong answer into one that looks right, so passing a locale throws instead. Calling them with no arguments still works and is equivalent to the non-locale form. For locale-aware output, format the value explicitly or return it raw and let the host format it.
-
-`process` is a minimal shim: `process.env` is an allowlisted host snapshot (HOME, USER, LOGNAME, SHELL, PWD, PATH, LANG, LC_*, TERM, TMPDIR, XDG_*), `process.platform`/`process.arch` are host facts, and `process.cwd()` returns the session working directory. Sensitive variables are never exposed; for secrets in bash use the `<\\secret:NAME>` reference path.
-
-## `pi` core tools (full code mode only)
-
-`pi.<tool>(arg)` — single arg: bare string (primary field) or options object. Multi-arg positional calls are accepted for `grep`/`find` (`pattern, path, limit`), `write` (`path, content`), and `edit` (`path, oldText, newText`); one-field tools (`read`/`bash`/`ls`) stay single-arg — a 2-arg call on those is a type error so the extra arg isn't silently dropped.
-
-| Tool | Form | Returns |
-|------|------|---------|
-| `read` | `path` \| `{path,offset?,limit?}` | `string` |
-| `bash` | `command` \| `{command,timeout?,cwd?,env?,stdin?}` | `{ok:true,output,details}`; rejects on a nonzero exit (`settle:true` returns `{ok:false,output,details:null,exitCode,error}` instead) |
-| `exec` | `{argv:[program,...args],timeout?,cwd?,env?,stdin?}` | `{ok:true,output,details}`; rejects on a nonzero exit |
-| `grep` | `pattern` \| `{pattern,path?,glob?,ignoreCase?,literal?,context?,limit?}` \| `(pattern, path?, limit?)` | `string` |
-| `find` | `pattern` \| `{pattern,path?,limit?}` \| `(pattern, path?, limit?)` | `string` |
-| `ls` | `path?` \| `{path?,limit?}` | `string` |
-| `edit` | `{path,edits:[{oldText,newText}]}` \| `{path,oldText,newText}` \| `(path, oldText, newText)` | `{ok,output,details}` |
-| `write` | `{path,content}` \| `(path, content)` | `{ok,output,details}` |
-| `applyPatch` | `{patch}` (V4A patch text) | `{ok,output,details}` |
-
-### File editing
-
-Use `pi.edit({ path, edits: [{ oldText, newText }] })` for exact replacements, `pi.write({ path, content })` for complete files, or `pi.applyPatch({ patch: π.patch })` for V4A patches. The session guidance selects the preferred tool for the active model; all three remain available in full code mode.
-
-Put V4A and other multiline content in `payloads`. If `pi.edit` misses, reread the affected range and retry against its current text.
-
-```ts
-// payloads: { oldText: "...", newText: "..." }
-return await pi.edit({
-  path: "src/example.ts",
-  edits: [{ oldText: π.oldText, newText: π.newText }],
-});
+```js
+// @options: {"max_output_tokens": 2000, "timeout_ms": 60000}
+const results = await Promise.all([
+  tools.read({ path: "package.json" }),
+  tools.read({ path: "README.md", limit: 80 }),
+]);
+return results;
 ```
 
-### Tool behavior and argument aliases
+Output defaults to 10000 tokens. The sandbox has a 256 MB memory limit. Native tool schemas in the codemode description are authoritative; tools can be omitted from that description's inline budget and still be discoverable.
 
-`bash` rejects on an ordinary nonzero exit; pass `settle:true` to get `{ok:false,output,details:null,exitCode,error}` instead of a rejection. Timeout, cancellation, approval, security, and spawn failures still reject. Other Pi core tool errors reject normally.
+## Core tool inputs
 
-Aliases (normalized to canonical before the host validates args): `cmd`/`shell`/`cmdline`→`command`; `workdir`/`workingDir`/`workingDirectory`→`cwd`; Bash `timeout` is in seconds, while `timeoutMs` is converted from milliseconds to `timeout`; `query`/`regex`/`search`→`pattern`; `ic`/`caseInsensitive`→`ignoreCase`; `globPattern`→`glob`; `ctx`→`context`; `max`→`limit`; `file`/`dir`→`path`; `start`→`offset`; `old`→`oldText`; `new`/`replacement`→`newText`; `contents`/`body`/`text`→`content`. Misspelled keys still fail the excess-property type check.
+| Tool | Input | Script result |
+| --- | --- | --- |
+| `read` | `{ path, offset?, limit? }` | Text, with normal pi truncation |
+| `find` | `{ pattern, path?, limit? }` | Text |
+| `grep` | `{ pattern, path?, glob?, literal?, ignoreCase?, context?, limit? }` | Text |
+| `ls` | `{ path?, limit? }` | Text |
+| `bash` | `{ command, timeout? }` | `{ output, truncated, full_output_path?, exit_code, wall_time_seconds }` |
+| `edit` | `{ path, edits: [{ oldText, newText }] }` | Text |
+| `write` | `{ path, content }` | Text |
+| `applyPatch` (separate extension) | `{ patch }` | `{ changes: [{ kind, path, moveTo? }] }` |
 
-`pi.read` returns the complete requested text, not the head pi's own `read` tool shows the model: pi truncates at 2000 lines / 50 KB to protect the context window, and a sandbox string is not context. The nested tool-result budget does not truncate `pi.read` either. The model-facing return and logs are budgeted separately. Very large reads can still exhaust the QuickJS heap (`executor.memoryLimitBytes`); process them in smaller ranges with `offset` and `limit` if needed. Never treat an incomplete read as the whole file.
+Only active direct tools, and registered codemode/deferred tools, are callable. Enable optional search tools in pi's `defaultTools` or `--tools` selection. Do not use a Python fallback when a tool is unavailable; inspect the current selection.
 
-If your return exceeds `executor.maxOutputChars`, the result names a temporary file containing the full model-facing output. Use `pi.read({path, offset, limit})` on that path to inspect lines in subsequent calls, returning only the relevant slice; for a very long single line, use `pi.bash` to select a byte range. `τ.set` is optional for explicit cross-call state, not an automatic destination for large returns (its per-value limit is 4 MB).
+Bash returns up to 1 MiB to scripts, including on nonzero exit. Check `exit_code` and use `full_output_path` for larger output. Other failed, blocked or invalid calls reject. Tools with an output schema return `structuredContent`; schema-bearing error results can resolve with error data, so inspect the declared error fields too.
 
-`pi.bash` per-call extras:
+## File editing
 
-- `cwd` — absolute working directory for this one command (must exist).
-- `env` — extra variables **merged over** the shell environment (override, not replace).
-- `stdin` — text piped to the command. This is the canonical way to run a multiline script on a remote host, with no quoting layers: `pi.bash({ command: 'ssh hezflix bash -s', stdin: π.script })`. Never build `echo ${JSON.stringify(π.script)} | ssh ...` — the `\n` escapes survive to the remote shell and mangle the script.
+Use `tools.edit({ path, edits: [{ oldText, newText }] })` for exact replacements and `tools.write({ path, content })` for full files. If an edit misses, reread the current file before retrying.
 
-Env values and stdin are redacted from recorded surfaces (audits, previews, session files); the live command still receives them.
+`tools.applyPatch({ patch })` accepts V4A patches beginning with `*** Begin Patch` and ending with `*** End Patch`. It supports Add/Update/Delete File, Move to, anchors, hunks and End of File. Patch operations run in order; a later error does not roll back earlier file changes. The optional sandbox extension guards paths, including moves.
 
-Use `pi.exec({ argv: [program, ...args] })` when every argument must be passed literally, without shell parsing. Its `timeout`, `cwd`, `env`, and `stdin` options behave like `pi.bash`; `cwd` must be absolute. Use `pi.bash` instead for pipelines, redirects, glob expansion, variable expansion, and other shell syntax.
-
-### Payloads
-
-MUST pass through `payloads` and read as `π.key`, never inline in `code`: multi-line file content (writes, edits, heredocs), JSON blobs, long prose (agent prompts, task text), and strings with literal `${...}`.
-
-Inlining multi-line content nests it through three escape layers (file → JS `"..."` → JSON `code`); at that depth the model emits literal `\n`/`\t` instead of newlines, silently corrupting the file. Template literals also interpolate `${...}` you meant to keep literal. `payloads` values cross only one JSON boundary and survive intact.
-
-```ts
-// payloads: { body: "line1\nline2", panel: '[{"model":"..."}]', task: "analyze ..." }
-await pi.write({ path: "/x.ts", content: π.body });
-await pi.edit({ path: "/y.ts", oldText: π.oldChunk, newText: π.newChunk });
-const panel = JSON.parse(π.panel) as Array<{ model: string }>;
-const prompt = `Objective:\n\n${π.task}`;
-```
-
-Short single-line literals with no `${...}` are fine inline.
-
-For documents too large for one reliable tool call, use smaller writes or edits through `pi.write`, `pi.edit`, or `pi.applyPatch`, and check the resulting file for truncation.
-
-## `τ` — session scratchpad shared across calls
-
-`π` is this call's read-only payloads; `τ` is JSON state that outlives the program and dies with the session. `τ = 2π`, which is the whole mnemonic.
-
-| Call | Returns |
-|------|---------|
-| `await τ.set(key, value)` | `{key, bytes, keys}` |
-| `await τ.get<T>(key)` | the value, or `undefined` when not held |
-| `await τ.keys()` | `[{key, bytes, updatedAt}]` |
-| `await τ.delete(key)` | `{key, deleted, keys}` |
-| `await τ.clear()` | `{cleared}` |
-
-Every member is async (each one is a host call). Keys held after a program runs are echoed in its result as a `τ keys: name (size)` line, so a later program never has to guess what is there.
-
-Reach for it when a large intermediate is needed by a *later* program but should never enter the transcript: a repo index, a parsed API response, an accumulator across a multi-step plan, a cache that survives a program that threw halfway. Do not reach for it when the value is small (return it), when one program can do the whole job (`mapLimit` / `Promise.all` in a single program is still the default), or when the data is big or wants to outlive the session (write a file under `process.env.TMPDIR`).
-
-Writes are methods rather than assignments because they can fail, and they fail loudly rather than evicting:
-
-- values must be JSON-serializable — no closures, sockets or handles survive, since the interpreter is torn down between programs, and a stored value is a snapshot, not a live reference;
-- keys match `[A-Za-z0-9][A-Za-z0-9_.:-]*`, up to 64 characters;
-- limits are 64 keys, 4 MB per value, 16 MB per session; over a limit the write throws and names what is held.
-
-```ts
-// program 1
-const index = JSON.parse(await pi.bash({ command: "…" }).then((r) => r.output));
-await τ.set("index", index);
-return { files: index.length };
-
-// program 2
-const index = (await τ.get<{ path: string }[]>("index")) ?? [];
-return index.filter((entry) => entry.path.endsWith(".ts")).length;
-```
-
-
-## `web` — explicitly registered web capabilities (full code mode only)
-
-Only `web.search(args)` and `web.fetch(args)` are registered by this extension:
-
-- `web.search({query,limit?})` searches the web and returns ranked links with snippets.
-- `web.fetch({url,timeout?})` fetches a URL as Markdown. `timeout` is in milliseconds.
-
-They are available when capture is enabled, and are absent otherwise. Captured sibling tools are never exposed through a generic namespace. Their exact schemas are generated from the captured tools and can also be inspected with `tools.describe` or `tools.search`.
-
-## `tools` — cross-provider discovery + generic dispatch (full code mode only)
-
-`tools` owns no tools; it is a top-level global that enumerates and invokes actions across every registered provider (pi, web, mcp, agents and trusted custom providers). Use it to discover names and schemas at runtime, then call them on their own namespace. Search accepts natural-language terms for snake_case names, so `tools.search({ query: "web search" })` finds `web.search`. No sibling-tool compatibility alias exists.
-
-- `tools.providers()` → `[{name, description}]` for every registered provider.
-- `tools.list({provider?, namespace?, query?, limit?})` → `CodeModeAction[]` (`ref, provider, name, description, inputSchema, namespace?`). No args lists the currently registered providers.
-- `tools.catalog({provider?, limit?})` → provider/action head tree (navigation metadata).
-- `tools.search({query, limit?})` → ranked `CodeModeAction[]`.
-- `tools.describe({ref})` → one action's full descriptor; read `inputSchema` before calling.
-- `tools.call({ref, args?})` → invoke a ref computed at runtime (same path as `web.*`, `pi.*`, or `mcp.*`). Prefer direct property calls for statically known tools.
-
-Refs are namespaced (`web.search`, `web.fetch`, `pi.grep`, `mcp.<server>.<tool>`). Calling a core-tool name on `tools` (e.g. `tools.read(...)`) throws with a hint to use `pi.read(...)`).
-
-## `mcp` tools
-
-Code Mode's in-process MCP client connects configured servers lazily. `mcp.list`, `mcp.search`, and `mcp.describe` use config and cached schemas; `mcp.connect` refreshes a server's tools. See [MCP](mcp.md) for discovery, calls, and authorization.
-
-## `agents` — custom markdown subagents
-
-`agents.list()` / `agents.run({agent, task})` / `agents.runAll({tasks})` / `agents.start({agent, task})` / `agents.wait({runId})` / `agents.status()` / `agents.cancel({runId})`. These run agent definitions discovered on disk (`~/.pi/agent/agents/**`, `<cwd>/.pi/agents/**`) as child Pi sessions. `run`/`runAll` block for a bounded wait window: a result with `state: "running"` means the child is still working, keep its `runId` and resume with `agents.wait` (or let the finished result arrive as a follow-up message). See [subagents](agents.md).
-
-## `mapLimit` — bounded-concurrency fan-out
-
-Use it when work needs a concurrency cap, such as a large batch of file reads or API calls.
-
-- `mapLimit(items, mapper, concurrency?)` or `mapLimit(thunks, concurrency?)` → results in input order.
-- Prefer it over `Promise.all` when the set is large or you want to cap concurrency (e.g. 200 files, 8 at a time). `Promise.all` receives promises that have already started, so it cannot bound how many run at once.
-- Concurrency is unbounded when omitted; pass a number or `{ concurrency }`.
-- Use `Promise.all` for a handful of independent calls that do not need a concurrency cap.
-
-## Error recovery: read the error, fix the shape, retry
-
-The type checker runs before execution, so a shape mistake never executes. Read the line-numbered error and match the declared signature; do not guess. Common mistakes: calling a core tool bare (`grep(...)` → `pi.grep(...)`); 2 positional args on `read`/`bash`/`ls` (use an options object — positional is supported only for `grep`/`find`/`write`/`edit`).
+Native scripts have no `payloads` argument. Use ordinary JavaScript strings, or read existing documents from files. For literal content containing `${...}`, avoid template-literal interpolation. Neither script failure nor store rollback reverses file or external tool mutations.

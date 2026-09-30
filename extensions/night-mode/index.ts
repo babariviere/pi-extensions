@@ -77,16 +77,13 @@ import {
 } from "./night-mode.ts";
 import { clearActiveNightRun, readActiveNightRun, type NightSandboxRequest, writeActiveNightRun } from "./night-run.ts";
 import { answerNightModePlanningQuery, NIGHT_MODE_PLANNING_QUERY_EVENT } from "./protocol.ts";
-import { SANDBOX_REQUEST_EVENT, type SandboxRequestEvent } from "../code-mode/sandbox/protocol.ts";
+import { SANDBOX_REQUEST_EVENT, type SandboxRequestEvent } from "../sandbox/protocol.ts";
 import {
-	CODE_MODE_PROVIDER_DISCOVER_EVENT,
-	CODE_MODE_PROVIDER_REGISTER_EVENT,
-	type CodeModeActionDescriptor,
-	type CodeModeInvocationContext,
-	type CodeModeProvider,
-	type CodeModeProviderDiscovery,
-	type CodeModeProviderRegistration,
-} from "../code-mode/protocol.ts";
+	createActionTool,
+	type ActionDescriptor,
+	type ActionContext,
+	type ActionProvider,
+} from "../shared/action-tools.ts";
 import { agentWorkspacesRoot } from "./agent-workspace.ts";
 import {
 	createRunSandbox,
@@ -365,7 +362,7 @@ export default function (pi: ExtensionAPI): void {
 		else process.env.PI_TODO_PATH = previousTodoPath;
 		previousTodoPath = undefined;
 		clearActiveNightRun();
-		// Release the sandbox: the session goes back to whatever code-mode.json says,
+		// Release the sandbox: the session goes back to its configured sandbox policy,
 		// so an interactive morning is not stuck inside the night's policy.
 		requestSandbox(null, "night run ended");
 		run = undefined;
@@ -576,7 +573,7 @@ export default function (pi: ExtensionAPI): void {
 		process.env.PI_TODO_PATH = ledgerPath;
 
 		// Path only: the probe itself runs in the sandboxed shell once the policy is
-		// in force (see `code-mode/sandbox/preflight-bridge.ts`), but the prompt and the
+		// in force (see `sandbox/preflight-bridge.ts`), but the prompt and the
 		// child contract are composed now and have to be able to point at it.
 		const preflightPath = preflightPathFor({ reportPath, ...(workspace ? { workspacePath: workspace } : {}) });
 		// Same placement rule, and also path-only: nothing is written until something
@@ -663,7 +660,7 @@ export default function (pi: ExtensionAPI): void {
 	}
 
 	/**
-	 * Ask Code Mode to sandbox the filesystem for the duration of the run.
+	 * Ask the standalone sandbox extension to enforce the filesystem policy for the run.
 	 *
 	 * The writable set is derived from the run itself rather than configured: the
 	 * working copy the agent was told to use and the report it has to append to.
@@ -702,7 +699,7 @@ export default function (pi: ExtensionAPI): void {
 		};
 	}
 
-	/** Publish a sandbox request on the bus. No listener means no Code Mode integration: harmless. */
+	/** Publish the existing sandbox event contract. Enforcement requires the sandbox extension. */
 	function requestSandbox(policy: NightSandboxRequest | null, reason: string): void {
 		const event: SandboxRequestEvent = { policy, reason };
 		pi.events.emit(SANDBOX_REQUEST_EVENT, event);
@@ -1099,7 +1096,7 @@ export default function (pi: ExtensionAPI): void {
 		evaluate();
 	});
 
-	const nightPlanDescriptor: CodeModeActionDescriptor = {
+	const nightPlanDescriptor: ActionDescriptor = {
 		name: "plan",
 		description:
 			"Submit the complete proposed night plan for interactive user review. Planning only: this action never executes tasks.",
@@ -1113,7 +1110,7 @@ export default function (pi: ExtensionAPI): void {
 			approved: Type.Optional(Type.Array(NightPlanTaskSchema)),
 		}) as unknown as Record<string, unknown>,
 	};
-	const nightProvider: CodeModeProvider = {
+	const nightActions: ActionProvider = {
 		name: "night",
 		description: "Interactive approval for a proposed unattended night run",
 		async list(request) {
@@ -1125,7 +1122,7 @@ export default function (pi: ExtensionAPI): void {
 		async describe(actionName) {
 			return actionName === nightPlanDescriptor.name ? nightPlanDescriptor : undefined;
 		},
-		async invoke(actionName, args, context: CodeModeInvocationContext) {
+		async invoke(actionName, args, context: ActionContext) {
 			if (actionName !== nightPlanDescriptor.name) throw new Error(`Unknown night action: ${actionName}`);
 			if (!planning) {
 				throw new Error("No night planning phase is active");
@@ -1133,7 +1130,7 @@ export default function (pi: ExtensionAPI): void {
 			const params = args as { tasks: NightPlanTask[]; omissions?: NightCoverage[] };
 			const problems = planProblems(params.tasks, params.omissions ?? [], planning.config.mcpReadOnly);
 			if (problems.length)
-				throw new Error(`Plan incomplete. Revise and resubmit night.plan:\n${problems.join("\n")}`);
+				throw new Error(`Plan incomplete. Revise and resubmit tools.night_plan:\n${problems.join("\n")}`);
 			const approved = await reviewNightPlan(
 				context.extensionContext,
 				params.tasks,
@@ -1145,7 +1142,7 @@ export default function (pi: ExtensionAPI): void {
 				return {
 					status: "dismissed",
 					message:
-						"The user dismissed the plan review without approving it. Night planning remains active. Wait for user feedback before revising and resubmitting with night.plan. Do not execute any work.",
+						"The user dismissed the plan review without approving it. Night planning remains active. Wait for user feedback before revising and resubmitting with tools.night_plan. Do not execute any work.",
 				};
 			}
 			planning.approved = approved;
@@ -1156,17 +1153,10 @@ export default function (pi: ExtensionAPI): void {
 			};
 		},
 	};
-	const registration: CodeModeProviderRegistration = { version: 1, provider: nightProvider, overwrite: true };
-	const unsubscribeProviderDiscovery = pi.events.on(CODE_MODE_PROVIDER_DISCOVER_EVENT, (value: unknown) => {
-		const discovery = value as Partial<CodeModeProviderDiscovery>;
-		if (discovery.version === 1 && typeof discovery.register === "function") {
-			discovery.register(nightProvider, { overwrite: true });
-		}
-	});
+	pi.registerTool(createActionTool(nightActions, nightPlanDescriptor));
 	const unsubscribePlanningQuery = pi.events.on(NIGHT_MODE_PLANNING_QUERY_EVENT, (value: unknown) => {
 		answerNightModePlanningQuery(value, planning !== undefined);
 	});
-	pi.events.emit(CODE_MODE_PROVIDER_REGISTER_EVENT, registration);
 
 	function clearPendingStart(): void {
 		if (startTimer) clearTimeout(startTimer);
@@ -1245,7 +1235,7 @@ export default function (pi: ExtensionAPI): void {
 			if (!planning.reminded) {
 				planning.reminded = true;
 				deliver(
-					"[night-mode] Planning is not complete. Submit the proposed tasks with `night.plan`, then stop.",
+					"[night-mode] Planning is not complete. Submit the proposed tasks with `tools.night_plan` in native codemode, then stop.",
 					ctx,
 				);
 				return;
@@ -1300,7 +1290,6 @@ export default function (pi: ExtensionAPI): void {
 		}
 		unsubscribeUsage?.();
 		unsubscribeUsage = undefined;
-		unsubscribeProviderDiscovery();
 		unsubscribePlanningQuery();
 	});
 

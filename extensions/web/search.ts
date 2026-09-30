@@ -2,7 +2,7 @@
  * web_search tool: ranked web links + snippets via Kagi.
  */
 
-import { defineTool } from "@earendil-works/pi-coding-agent";
+import { type AgentToolResult, defineTool } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { renderFoldableResult } from "./render.ts";
@@ -24,6 +24,13 @@ export function createWebSearchTool(settings: WebSettings = DEFAULT_SETTINGS) {
 	return defineTool({
 		name: "web_search",
 		label: "web search",
+		namespace: { name: "web", description: "Web search and content fetching" },
+		annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+		outputSchema: Type.Object({
+			query: Type.String(),
+			results: Type.Array(Type.Object({ title: Type.String(), url: Type.String(), snippet: Type.String() })),
+			error: Type.Optional(Type.String()),
+		}),
 		description:
 			"Search the web via Kagi. Returns a ranked Markdown list of links with snippets. " +
 			"Use fetch_content to read a specific result.",
@@ -46,17 +53,26 @@ export function createWebSearchTool(settings: WebSettings = DEFAULT_SETTINGS) {
 		renderResult(result, options, theme, context) {
 			return renderFoldableResult(result, options, theme, context);
 		},
-		async execute(_toolCallId, params, signal) {
+		async execute(_toolCallId, params, signal): Promise<AgentToolResult<undefined>> {
 			const limit = clamp(params.limit ?? settings.searchLimit, 1, settings.maxSearchLimit);
 			try {
 				const results = await kagiSearch(params.query, { limit, signal, timeoutMs: settings.fetchTimeout });
-				return { content: [{ type: "text" as const, text: formatResults(results) }], details: undefined };
+				return {
+					content: [{ type: "text" as const, text: formatResults(results) }],
+					details: undefined,
+					structuredContent: { query: params.query, results: results.map((result) => ({ ...result })) },
+				};
 			} catch (err) {
 				const message =
 					err instanceof KagiTokenMissingError || err instanceof KagiAuthError
 						? err.message
 						: `Kagi search failed: ${err instanceof Error ? err.message : String(err)}`;
-				return { content: [{ type: "text" as const, text: message }], details: undefined };
+				return {
+					content: [{ type: "text" as const, text: message }],
+					details: undefined,
+					structuredContent: { query: params.query, results: [], error: message },
+					isError: true,
+				};
 			}
 		},
 	});

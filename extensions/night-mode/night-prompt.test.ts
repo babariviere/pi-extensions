@@ -134,7 +134,8 @@ describe("composePlanningPrompt", () => {
 		});
 		assert.match(text, /Build a proposed plan only/);
 		assert.match(text, /spawn subagents to explore/);
-		assert.match(text, /night\.plan/);
+		assert.match(text, /tools\.night_plan/);
+		assert.doesNotMatch(text, /code_mode|night\.plan/);
 		assert.match(text, /Check documentation/);
 	});
 });

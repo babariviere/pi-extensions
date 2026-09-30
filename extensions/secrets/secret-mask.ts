@@ -711,3 +711,25 @@ export function scrubContent<T extends { type: string; text?: string }>(
 	});
 	return changed ? scrubbed : undefined;
 }
+
+/**
+ * Scrub every tool-result data channel without rewriting an untouched result.
+ * Pi drops structuredContent when content is patched without it, so even a clean
+ * structured value must accompany a content patch. Details-only patches omit
+ * content, keeping the original structured result intact.
+ */
+export function scrubToolResult<C extends { type: string; text?: string }, D, S>(
+	result: { content: readonly C[]; details: D; structuredContent?: S },
+	secrets: SecretEntry[],
+	refs?: RefCodec,
+): { content?: C[]; details?: D; structuredContent?: S } | undefined {
+	const content = scrubContent(result.content, secrets, refs);
+	const details = scrubDeep(result.details, secrets, refs);
+	const structuredContent = scrubDeep(result.structuredContent, secrets, refs);
+	if (!content && details === result.details && structuredContent === result.structuredContent) return undefined;
+	return {
+		...(content ? { content } : {}),
+		...(details !== result.details ? { details } : {}),
+		...(content || structuredContent !== result.structuredContent ? { structuredContent } : {}),
+	};
+}

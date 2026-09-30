@@ -1,0 +1,172 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { JobsProvider, type JobSnapshot } from "./jobs-provider.ts";
+import { Value } from "typebox/value";
+import { createActionTool } from "../shared/action-tools.ts";
+
+const context = { cwd: process.cwd() } as never;
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+const start = (provider: JobsProvider, command: string) =>
+	provider.invoke("start", { name: "test", command }, context) as Promise<JobSnapshot>;
+
+test("a running job remains running across calls, then wakes only when unclaimed", async () => {
+	const sent: JobSnapshot[] = [];
+	let changes = 0;
+	const jobs = new JobsProvider(
+		async (command) => command,
+		(job) => sent.push(job),
+		undefined,
+		() => changes++,
+	);
+	try {
+		const job = await start(jobs, "sleep 0.15; echo completed");
+		assert.equal(job.state, "running");
+		assert.deepEqual(
+			jobs.running().map((item) => item.id),
+			[job.id],
+		);
+		assert.equal(changes, 1);
+		assert.equal(((await jobs.invoke("wait", { id: job.id, waitMs: 0 }, context)) as JobSnapshot).state, "running");
+		assert.equal(((await jobs.invoke("status", {}, context)) as JobSnapshot[])[0]?.state, "running");
+		const deadline = Date.now() + 3_000;
+		while (sent.length === 0 && Date.now() < deadline) await sleep(30);
+		assert.deepEqual(jobs.running(), []);
+		assert.equal(changes, 2);
+		assert.equal(sent.length, 1);
+		assert.equal(sent[0]?.state, "done");
+		assert.match(
+			String(((await jobs.invoke("logs", { id: job.id }, context)) as { text: string }).text),
+			/completed/,
+		);
+	} finally {
+		await jobs.close();
+	}
+});
+
+test("a terminal wait claims the result, a stopped job cannot wake the model", async () => {
+	const sent: JobSnapshot[] = [];
+	let changes = 0;
+	const jobs = new JobsProvider(
+		async (command) => command,
+		(job) => sent.push(job),
+		undefined,
+		() => changes++,
+	);
+	try {
+		const finished = await start(jobs, "echo claimed");
+		assert.equal(((await jobs.invoke("wait", { id: finished.id }, context)) as JobSnapshot).state, "done");
+		const stopped = await start(jobs, "sleep 30");
+		const beforeStop = changes;
+		assert.equal(((await jobs.invoke("stop", { id: stopped.id }, context)) as JobSnapshot).state, "cancelled");
+		assert.equal(changes, beforeStop + 1);
+		assert.deepEqual(jobs.running(), []);
+		await sleep(300);
+		assert.deepEqual(sent, []);
+	} finally {
+		await jobs.close();
+	}
+});
+
+test("a completion during an active turn stays pending until wait claims it", async () => {
+	const sent: JobSnapshot[] = [];
+	let idle = false;
+	const jobs = new JobsProvider(
+		async (command) => command,
+		(job) => sent.push(job),
+		() => idle,
+	);
+	try {
+		const started = await start(jobs, "echo claimed-later");
+		await sleep(250); // Longer than the announcement delay: the old code already queued a wake-up here.
+		assert.deepEqual(sent, []);
+		const claimed = (await jobs.invoke("wait", { id: started.id }, context)) as JobSnapshot;
+		assert.equal(claimed.state, "done");
+		idle = true;
+		jobs.flushCompletions();
+		assert.deepEqual(sent, []);
+	} finally {
+		await jobs.close();
+	}
+});
+
+test("an unclaimed completion during a turn wakes once the turn settles", async () => {
+	const sent: JobSnapshot[] = [];
+	let idle = false;
+	const jobs = new JobsProvider(
+		async (command) => command,
+		(job) => sent.push(job),
+		() => idle,
+	);
+	try {
+		const started = await start(jobs, "echo unclaimed");
+		await sleep(250);
+		assert.equal(sent.length, 0);
+		assert.equal(
+			((await jobs.invoke("status", {}, context)) as JobSnapshot[]).find((job) => job.id === started.id)?.state,
+			"done",
+		);
+		idle = true;
+		jobs.flushCompletions();
+		jobs.flushCompletions();
+		assert.deepEqual(
+			sent.map((job) => job.id),
+			[started.id],
+		);
+	} finally {
+		await jobs.close();
+	}
+});
+
+test("sandbox wrapping is applied before launch and rejects unsafe launches", async () => {
+	const jobs = new JobsProvider(
+		async () => {
+			throw new Error("sandbox refused");
+		},
+		() => {},
+	);
+	await assert.rejects(start(jobs, "echo hi"), /sandbox refused/);
+	assert.deepEqual(await jobs.invoke("status", {}, context), []);
+	await jobs.close();
+});
+
+test("a failed command remains queryable and is not reported as done", async () => {
+	const sent: JobSnapshot[] = [];
+	const jobs = new JobsProvider(
+		async (command) => command,
+		(job) => sent.push(job),
+	);
+	try {
+		const started = await start(jobs, "echo failure >&2; exit 7");
+		const result = (await jobs.invoke("wait", { id: started.id }, context)) as JobSnapshot;
+		assert.equal(result.state, "failed");
+		assert.equal(result.exitCode, 7);
+		assert.equal(((await jobs.invoke("status", {}, context)) as JobSnapshot[])[0]?.state, "failed");
+		assert.match(
+			String(((await jobs.invoke("logs", { id: started.id }, context)) as { text: string }).text),
+			/failure/,
+		);
+		await sleep(250);
+		assert.deepEqual(sent, []);
+	} finally {
+		await jobs.close();
+	}
+});
+
+test("jobs native tools retain structured output schemas and codemode exposure", async () => {
+	const jobs = new JobsProvider(
+		async (command) => command,
+		() => {},
+	);
+	const actions = await jobs.list({}, context);
+	const descriptor = actions.find((action) => action.name === "start")!;
+	const tool = createActionTool(jobs, descriptor);
+	assert.equal(tool.name, "jobs_start");
+	assert.equal(tool.exposure, "codemode");
+	assert.ok(tool.outputSchema);
+	assert.ok(Value.Check(descriptor.inputSchema, { name: "check", command: "echo ready" }));
+	assert.ok(!Value.Check(descriptor.inputSchema, { name: "check" }));
+	const result = await tool.execute("call", { name: "check", command: "echo ready" }, undefined, undefined, context);
+	assert.ok(Value.Check(descriptor.outputSchema!, result.structuredContent));
+	assert.equal((result.structuredContent as unknown as JobSnapshot).state, "running");
+	await jobs.close();
+});

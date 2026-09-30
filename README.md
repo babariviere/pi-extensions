@@ -1,86 +1,158 @@
 # pi-extensions
 
 Personal extensions, skills, and themes for [pi](https://github.com/earendil-works/pi).
-This repository remains a collection of pi integrations. It is not a bundle or
-renaming of any separate private application.
+This remains a collection of pi integrations, not a bundle of a separate application.
 
 ## What is packaged
 
-The package manifest discovers every `extensions/*/index.ts`, the `skills`
-directory, and `themes/*.json` files. The current inventory is:
+The manifest discovers `extensions/*/index.ts`, `skills/`, and `themes/*.json`.
 
-| Extension | User-facing surface and purpose |
+| Extension | Purpose |
 | --- | --- |
-| `ask` | `--ask` selects the cheapest priced model in the scoped model set and turns thinking off for a one-shot question. |
-| `context` | `/context` shows loaded extensions, skills, project context files, and session context-window/token/cost information. |
-| `footer` | Replaces the footer with project, context, model, thinking, subscription-usage, and extension-status information. |
-| `guardrail` | `/guardrail` shows or toggles a checker for obvious catastrophic `bash`/`exec` commands and direct file-edit patterns. |
-| `linear` | `/linear` lists current-sprint issues or fetches a ticket, moves it to In Progress, and starts `/feature`. |
-| `night-mode` | `/night` runs scheduled overnight planning/orchestration with a todo ledger, usage guards, reports, optional private working copies, and wake-lock support. |
-| `pr` | `/review-comments` hands selected unresolved review comments to the agent; `/autofix` watches PR CI and `/autofix-stop` stops it. |
-| `preview-system-prompt` | `/system-prompt` displays the assembled system prompt. |
-| `secrets` | `/secret-list`; injects `fnox` secrets into shell commands and replaces secret values in tool results with reversible references. |
-| `code-mode` | `code_mode` is the sole model-facing tool by default and runs bounded TypeScript programs through the shared code-mode runtime. Full Code Mode exposes Pi core tools, the explicitly registered `web.search` and `web.fetch` aliases, MCP, agents, and the typed `todo.*` and `night.plan` providers. Orchestration-only mode keeps MCP, agents, and trusted custom providers while hiding full-code-only capabilities. It also provides `/sandbox`, `/mcp`, and `/mcp-auth` controls. |
-| `todos` | The typed `todo.*` Code Mode provider manages file-backed todos, and `/todos` provides the interactive manager. |
-| `tool-substitute` | Adds pi search-tool guidance and blocks Git writes inside jj repositories, converting simple safe Git operations where possible. |
-| `usage` | `/usage` polls Claude and Codex/ChatGPT OAuth subscription windows and publishes usage snapshots. |
-| `web` | `web_search` searches Kagi, `fetch_content` fetches pages or summarizes Git repositories, and `/kagi-status` validates the Kagi token. |
-| `workspaces` | `/workspace` lists, creates, switches, and deletes jj workspaces, with optional Herdr integration. |
+| `apply-patch` | Standalone `applyPatch` V4A file-editing tool, available directly and through native codemode. |
+| `ask` | `--ask` selects the cheapest priced scoped model and disables thinking for a one-shot question. |
+| `context` | `/context` shows loaded resources, project context, tokens and cost. |
+| `footer` | Project, context, model, thinking, subscription usage and extension status. |
+| `guardrail` | `/guardrail` controls checks for obvious catastrophic shell commands and direct shell-edit patterns. |
+| `jobs` | Native `jobs_*` tools manage session-owned background shell jobs through the sandbox extension. |
+| `linear` | `/linear` lists current-sprint issues or starts work on a ticket. |
+| `night-mode` | `/night` runs approved overnight tasks with a ledger, usage guards, reports, optional private working copies and wake locks. Native `night_plan` reviews the plan. |
+| `pr` | `/review-comments`, `/autofix`, and `/autofix-stop` integrate GitHub reviews and CI. |
+| `preview-system-prompt` | `/system-prompt` shows the assembled prompt. |
+| `sandbox` | `/sandbox` controls filesystem policy and native MCP read-only permissions for direct and codemode-nested calls. |
+| `secrets` | `/secret-list`; fnox shell injection and reversible secret references in text, structured results and persisted details. |
+| `subagents` | Native `agents_*` tools launch markdown-defined child agents with bounded waits, cancellation, progress and completion notifications. |
+| `themes` | Theme selection helpers. |
+| `todos` | Native `todo_*` tools manage file-backed todos; `/todos` provides the interactive manager. |
+| `tool-substitute` | Search guidance and jj-aware Git-write checks. |
+| `usage` | `/usage` polls Claude and Codex/ChatGPT subscription windows. |
+| `web` | `web_search` searches Kagi; `fetch_content` fetches pages or summarizes Git repositories; `/kagi-status` checks credentials. |
+| `workspaces` | `/workspace` manages jj workspaces, with optional Herdr integration. |
 
-### Skills
-
-The package currently includes one skill, `code-mode`, at
-[`skills/code-mode/SKILL.md`](skills/code-mode/SKILL.md), with references
-for agents, the full API, and MCP at
-[`skills/code-mode/references/`](skills/code-mode/references/).
-
-### Themes
-
-The packaged themes are:
-
-- `catppuccin-frappe`
-- `catppuccin-latte`
-- `catppuccin-macchiato`
-- `rose-pine-dawn`
-- `rose-pine-moon`
-
-They are JSON theme files under [`themes/`](themes/).
+The bundled [code-mode skill](skills/code-mode/SKILL.md) describes **native pi codemode**.
+Themes include Catppuccin Frappé, Latte and Macchiato, plus Rosé Pine Dawn and Moon.
 
 ## Install and update
 
-Install the package with pi:
-
 ```sh
 pi install git:github.com/babariviere/pi-extensions
-```
-
-pi installs the package in its managed package area and installs the package's
-npm dependencies. The `pi` metadata in `package.json` then exposes the
-extension entry points, skill directory, and theme files. Update installed
-extensions with:
-
-```sh
 pi update --extensions
 ```
 
-For a local checkout, install the current directory instead:
+For a local checkout, run `pi install ./`. Individual extension paths can also be
+loaded through pi's normal configuration.
 
-```sh
-pi install ./
+Requires Node.js `>=24.0.0` and pi `>=0.99.0`. The host supplies
+`@earendil-works/pi-ai`, `@earendil-works/pi-coding-agent`, `@earendil-works/pi-tui`
+and `typebox` as peer dependencies. This package no longer installs its own
+execution runtime, MCP SDK or keyring implementation.
+
+Optional integrations need their own tools and credentials, including Kagi,
+fnox, Linear, GitHub CLI, jj, Herdr and platform wake-lock facilities.
+
+## Native codemode and MCP
+
+Pi owns `codemode`, `tool_search`, MCP connections, OAuth, discovery, QuickJS
+execution, nested tool events, usage accounting and branch-aware script state.
+There is no Code Mode extension, custom provider registry, tool interceptor or
+legacy execution fallback in this package.
+
+Configure native pi in `settings.json`:
+
+```json
+{
+  "defaultTools": ["+codemode", "-find", "-grep", "-ls"],
+  "codemode": { "mode": "only" }
+}
 ```
 
-Run that command from this repository. Individual extensions can also be loaded
-from a checkout through pi's normal `settings.json` extension configuration;
-the extension-specific docs contain examples where relevant.
+`only` hides callable direct tools from the model while keeping them active and
+reachable through scripts. Use `on` to keep direct declarations too. Our extensions
+do not override codemode. The `apply-patch` extension disables `edit` and `write`
+for selected OpenAI models; add `-edit` and `-write` to `defaultTools` to exclude
+them for every model. Other tool selections are left alone.
+
+Scripts are JavaScript and use `tools.<name>`, for example:
+
+```js
+const todos = await tools.todo_list({});
+const page = await tools.fetch_content({ url: "https://example.com" });
+return { tasks: todos.length, page: page.text.slice(0, 1000) };
+```
+
+Other capabilities include `tools.night_plan`, `tools.agents_run`, `tools.jobs_start`,
+`tools.applyPatch`, and `tools.web_search`. Use native `searchTools()` and
+`describeTool()` for exact schemas and tools omitted from the inline catalog.
+There are no old `pi.*`, `web.*`, `mcp.*`, `agents.*`, `jobs.*`, `π` or `τ` globals.
+Use `store()`/`load()` for branch-aware state. Native core reads retain their
+ordinary truncation limits; read large files in slices.
+
+### Migration from our Code Mode extension
+
+- Remove explicit `extensions/code-mode/index.ts`, `legacy.ts` or `headless.ts`
+  paths. The package discovers the replacement standalone extensions normally.
+- Move the old `code-mode.json` `agents` block to `subagents.json`, and its
+  `sandbox` fields to the root of `sandbox.json`. Put its MCP permission policy
+  under `sandbox.json`'s `mcp` block. Executor, capture, runtime UI and full-code
+  mode settings are retired. No runtime fallback remains.
+- Native MCP uses `mcpServers` in `~/.pi/agent/mcp.json` and trusted project
+  `.pi/mcp.json`. A project entry replaces the same global server, rather than
+  merging per field. Native pi does not read root `.mcp.json` files.
+- Convert `disabled` to `enabled`, `requestTimeoutMs` to `timeout` seconds,
+  `directTools` and include/exclude filters to `exposure`/`toolExposure`, OAuth
+  `redirectPort` to `callbackPort`, and `scopes` to a space-separated `scope`.
+  Review unsupported legacy fields rather than silently dropping them.
+- Keep credentials as environment or whole-command references. Native OAuth uses
+  `mcp-auth.json`; old keyring credentials do not automatically transfer. Use
+  `/mcp` or `pi mcp login <server>` for explicit sign-in.
+- Remove `-builtin:mcp` and `-builtin:codemode` exclusions to use native support.
+  SDK sessions must explicitly load `createCodemodeExtension()`,
+  `createMcpExtension()` and optionally `createToolSearchExtension()` through their
+  resource loader; CLI sessions load these built-ins by default.
+
+## Configuration
+
+| Location | Purpose |
+| --- | --- |
+| `~/.pi/agent/settings.json` and trusted `.pi/settings.json` | Pi settings, resource paths and night-mode configuration. |
+| `~/.pi/agent/mcp.json` and trusted `.pi/mcp.json` | Native MCP servers. Native OAuth uses the agent directory's `mcp-auth.json`. |
+| `~/.pi/agent/subagents.json` and trusted `.pi/subagents.json` | Child limits, waits and default model/thinking. |
+| `~/.pi/agent/sandbox.json` and trusted `.pi/sandbox.json` | Filesystem and native MCP permission policy. |
+| `~/.pi/agent/secrets.json` | Per-machine Kagi/Linear values, not the fnox secrets extension's source. |
+| Nearest `fnox.toml` | Source for shell secret injection and reversible references. |
+| `~/.pi/agent/night/` | Default night prompts, instructions, reports, archive, todos and sandboxes. |
+| `~/.herdr/workspaces` | Default managed jj workspace root. |
+
+Useful controls include `PI_CODING_AGENT_DIR`, `PI_TODO_PATH`, `PI_GUARDRAIL=off`
+and `HERDR_SOCKET_PATH`. Child-run and night markers are internal; do not set them casually.
+
+Keep credentials out of this repository. `secrets.json` accepts either
+`{"NAME":"value"}` or `{"secrets":{"NAME":"value"}}`. Web and Linear also read the
+process environment. The separate `secrets` extension uses fnox, injects names
+into shell environments and redacts text, structured results and persisted details.
+Pattern masking is defense in depth, not a guarantee against every indirect leak.
+
+## Safety and operational caveats
+
+- Guardrail catches known destructive command shapes, not arbitrary scripts.
+- Sandbox is off by default for ordinary sessions. Night runs and sandboxed child
+  agents impose floors that cannot be loosened through `/sandbox`.
+- Restricted shells and jobs use macOS Seatbelt. They fail closed if enforcement
+  cannot start. Networking is unrestricted; this is filesystem accident prevention,
+  not isolation from malicious installed extensions.
+- Native codemode's QuickJS boundary does not sandbox the tools it calls. Trusted
+  extension callbacks run with host permissions. Review the extensions you install.
+- Jobs require the sandbox extension, even when policy is off. Detached jobs and
+  children are session-owned and stopped on shutdown or reload, not durable queues.
+- The macOS pmset wake-lock backend changes a persistent sleep setting and may need
+  narrowly scoped sudo. A crash can require manual restoration.
+- Workspace deletion, todo deletion, file patches, external CLIs and MCP tools have
+  real side effects. Review permissions, maintain backups, and limit credentials.
 
 ## Pi usage CLI
 
-The package exposes `pi-usage`, a non-interactive usage reporter that scans
-`~/.pi/agent/sessions` recursively. It includes nested subagent sessions,
-deduplicates records copied by session branches, and uses the authoritative
-cost embedded in each Pi assistant message instead of repricing model aliases.
-
-`daily` is the default report:
+`pi-usage` scans session files recursively, including child sessions, deduplicates
+branched records and uses recorded assistant costs rather than repricing aliases.
 
 ```sh
 pi-usage daily
@@ -89,81 +161,7 @@ pi-usage session --since 2026-09-01
 pi-usage daily --timezone Europe/Paris --json
 ```
 
-From a checkout, use `npm run pi-usage -- daily`. Run `pi-usage --help`
-for date filters, JSON output, and session-root overrides.
-
-## Requirements
-
-- Node.js `>=24.0.0`, as required by the shared code-mode runtime and used by CI.
-- The pi host supplies the peer packages `@earendil-works/pi-ai`,
-  `@earendil-works/pi-coding-agent`, `@earendil-works/pi-tui`, and `typebox`.
-  The package installs its declared runtime dependencies such as `defuddle`,
-  `parse5`, `shiki`, and `yaml`; code mode also consumes the shared
-  `@babariviere/code-mode` runtime and its host-pi adapter.
-- Optional integrations need their own tools and credentials. Examples include
-  Kagi, `fnox`, Linear, GitHub CLI, jj, Herdr, and the platform facilities
-  required by night mode or the background-agent controller.
-
-## Configuration and credentials
-
-Pi's normal extension and model settings remain in its settings files. The
-following files and environment variables are used by extensions in this
-repository; absent values generally use the defaults in source or the linked
-extension README.
-
-| Location or variable | Used by |
-| --- | --- |
-| `~/.pi/agent/settings.json` | Pi settings, `workspaces`, the user `nightMode` configuration, shell path, and manually loaded extensions. |
-| `<cwd>/.pi/settings.json` | Project `nightMode` settings, which take precedence over user night settings when the project is trusted; project MCP configuration may also live here. |
-| `~/.pi/agent/code-mode.json` and trusted `<cwd>/.pi/code-mode.json` | Code Mode configuration. Project values are merged over user values. Full Code Mode and sandbox settings are separate from pi's own config. |
-| `~/.pi/agent/mcp.json` | Code Mode's MCP server configuration. Code Mode has no separate MCP credential store; OAuth/keyring behavior follows its MCP implementation. |
-| `~/.pi/agent/secrets.json` | Per-machine `KAGI_SESSION_TOKEN` and `LINEAR_API_KEY` values read directly by those extensions. This file is not the source for the `secrets` extension. |
-| Nearest `fnox.toml` | `secrets` discovers this file upward from the working directory and calls `fnox export --format json`. |
-| `~/.pi/agent/night/` | Default night-mode prompts, instructions, reports, archive, todos, and sandboxes. |
-| `~/.herdr/workspaces` | Default root for managed jj workspaces. |
-
-Useful environment controls include `PI_CODING_AGENT_DIR` (alternate pi agent
-directory), `PI_AGENT_DIR` (MCP agent directory), `PI_TODO_PATH` (todo store),
-`PI_GUARDRAIL=off` (disable the guardrail at startup), and `HERDR_SOCKET_PATH` (alternate Herdr
-socket). `PI_NIGHT_RUN` and `PI_BACKGROUND_AGENT_ATTEMPT` are internal markers
-used when extensions spawn or join managed runs; do not set them casually.
-
-### Secrets
-
-Keep credentials out of this repository. `secrets.json` accepts either
-`{"NAME":"value"}` or `{"secrets":{"NAME":"value"}}`; the `web` and
-`linear` extensions read their named values from it or from the process
-environment. The `secrets` extension is independent: it obtains values from
-`fnox`, injects them into `bash` and user `!` commands, and scrubs tool results
-and persisted details. It exposes secret names, never values. Pattern masking
-is defense in depth, not a guarantee against every indirect or streamed leak;
-review commands and logs before sharing them.
-
-## Safety boundaries
-
-These integrations are safeguards and workflow tools, not a universal security
-boundary:
-
-- `guardrail` catches known destructive command shapes. Its own documentation
-  lists bypasses such as indirect mutations and destructive scripts.
-- Code Mode's filesystem sandbox is configured through `code-mode.json` and is off
-  by default for ordinary sessions. `read-only` and `workspace-write` enforce
-  direct read/write paths; night mode enables its own workspace-oriented policy
-  and read-only MCP policy by default. Treat shell/network access as capable of
-  side effects and inspect the effective `/sandbox` status. Captured web
-  capabilities are explicit aliases, not a generic view of sibling extension
-  tools. Unselected siblings remain on Pi's native direct path. A trusted
-  custom provider is available in orchestration-only mode unless it declares
-  itself full-code-only.
-- `night-mode` can hold a wake lock. The macOS `pmset` backend changes a
-  persistent sleep setting and may need narrowly scoped passwordless sudo; a
-  crash can require manual restoration. See its wake-lock documentation.
-- `workspaces` can forget workspaces and remove managed directories, and
-  `todos` can delete todo files. Confirm destructive actions and maintain
-  backups where appropriate.
-- `web`, Linear, PR helpers, MCP servers, and external CLIs act with the
-  credentials and permissions supplied by the host. Limit those permissions and
-  review network and repository mutations.
+From a checkout, use `npm run pi-usage -- daily`. See `pi-usage --help` for filters.
 
 ## Development
 
@@ -174,25 +172,17 @@ npm test
 npm run fmt:check
 ```
 
-`npm run fmt` applies Biome formatting. Focused checks include:
+`npm run fmt` applies Biome formatting. CI runs `npm ci`, typechecking and tests on Node 24.
 
-```sh
-npm run code-mode:evaluate -- extensions/code-mode/evaluation/corpus.jsonl --baseline edit-first
-```
+## Documentation
 
-The CI workflow runs `npm ci`, `npm run typecheck`, and `npm test` on Node 24.
-
-## Documentation map
-
-- [Guardrail](extensions/guardrail/README.md), including blocked command
-  categories and known limitations.
-- [Night mode](extensions/night-mode/README.md), including scheduling, usage
-  guards, sandboxing, wake locks, and reports.
-- [Secrets](extensions/secrets/README.md), including provider patterns,
-  reference expansion, and masking caveats.
-- [Usage](extensions/usage/README.md), including subscription usage polling.
-- [Code-mode migration and configuration](extensions/code-mode/README.md).
-- [Code-mode evaluation](extensions/code-mode/evaluation/README.md), including the
-  JSONL format and experiment protocol.
-- [Code-mode patch format](extensions/code-mode/NATIVE_APPLY_PATCH.md).
-- [pi documentation](https://github.com/earendil-works/pi).
+- [Apply Patch](extensions/apply-patch/README.md)
+- [Sandbox](extensions/sandbox/README.md)
+- [Subagents](extensions/subagents/README.md)
+- [Jobs](extensions/jobs/README.md)
+- [Night mode](extensions/night-mode/README.md)
+- [Guardrail](extensions/guardrail/README.md)
+- [Secrets](extensions/secrets/README.md)
+- [Usage](extensions/usage/README.md)
+- [Native codemode skill](skills/code-mode/SKILL.md)
+- [pi documentation](https://github.com/earendil-works/pi)

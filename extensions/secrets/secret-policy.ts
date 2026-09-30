@@ -19,12 +19,10 @@ const ALLOW: PolicyOutcome = { block: false };
 /**
  * Tools that carry other tool calls rather than performing one themselves.
  *
- * Code Mode runs pi tools nested and replays `tool_call` for each, so a ref inside
- * its code payload is hydrated at the inner write and must not be refused here.
- * Refusing it would make refs unusable in full-code mode, where Code Mode is the
- * only path to the file tools.
+ * Native codemode calls tools through Pi's pipeline, so a reference in its
+ * script is hydrated at the inner file tool, never in the JavaScript source.
  */
-const PASSTHROUGH_TOOLS = new Set(["code_mode"]);
+const PASSTHROUGH_TOOLS = new Set(["codemode"]);
 
 function blockUnresolved(unresolved: string[], where: string): PolicyOutcome {
 	return {

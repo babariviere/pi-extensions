@@ -1,36 +1,23 @@
-# `mcp` reference
+# Native MCP
 
-Code Mode serves `mcp.*` through its own in-process client. It uses `mcp.json` configuration and stored credentials compatible with pi-mcp-adapter; that extension is not required.
+Pi 0.99+ owns MCP connections, OAuth, discovery, resources and tool calls. This package does not provide an MCP client or override `/mcp`.
 
-## Discovery
+## Call tools
 
-| Call | Purpose |
-|------|---------|
-| `mcp.list()` or `mcp.list({ server })` | Server status from config and cache, without connecting |
-| `mcp.search(query)` or `mcp.search({ query, server?, regex?, includeSchemas? })` | Find tools in the schema cache |
-| `mcp.describe({ tool, server? })` | Read a cached tool's description and input schema |
-| `mcp.connect(server)` | Connect or reconnect one configured server and refresh its schemas |
+MCP tools are named `mcp__<server>__<tool>`. Discover them with `await searchTools(query, { namespace: "mcp__server" })` or `ALL_TOOLS`, and read exact declarations with `describeTool(name)`. Then call `tools.<name>(args)`.
 
-Discovery does not connect servers automatically. If a configured server has no cached tools, connect that server, then search or describe the needed tool. An empty cache does not mean the service has no tools.
+Scripts receive the full MCP `CallToolResult`: `content`, optional `structuredContent`, and `isError`. An MCP error result may resolve instead of rejecting; check `isError`. Forward an individual image block with `image(result.content[0])`. There are no legacy `mcp.list`, `mcp.call`, or `mcp.*` globals.
 
-## Call a tool
+Resource tools are `list_mcp_resources`, `list_mcp_resource_templates`, and `read_mcp_resource`, when offered. Use their declared schemas, including the server and URI.
 
-Use the discovered tool name and input schema:
+## Configuration
 
-```ts
-return await mcp.call("my-server", "my-tool", { q: "x" });
-```
+Servers live in `~/.pi/agent/mcp.json` or trusted project `.pi/mcp.json`, under `mcpServers`. Pi supports stdio and streamable HTTP, not legacy SSE. A project server replaces the global entry with the same name. A command is one executable plus an `args` array, not a shell string. `timeout` is in seconds; `enabled: false` disables an entry.
 
-The property form `mcp.<server>.<tool>(args)` calls the same tool. The object form supports computed names; omit `server` only when the tool name is unambiguous:
+Use `${NAME}` in env/header values or a whole `!command` value for credential lookup. Never embed credentials in repository files, reports or tool output. Native OAuth credentials live in `mcp-auth.json`; previous extension keyring credentials do not automatically transfer.
 
-```ts
-return await mcp.call({ server: "my-server", tool: "weird-tool-name", args: { q: "x" } });
-```
+Exposures: `codemode` (default), `codemode-deferred`, `deferred`, `direct`, `hidden`. `toolExposure` can override individual tools with exact names or wildcard patterns. Hidden tools are unreachable. Large catalogs need not be declared directly: native codemode has an inline budget and lazy discovery.
 
-Tool calls connect lazily and return `{ text: string, content: unknown[], structuredContent: unknown }`. Tool errors reject with their text. Management calls return status, metadata, or connection results instead of this tool-result envelope.
+Manage servers with `/mcp`, or `pi mcp add|remove|list|login|logout`. Configuration changes require `/reload` or a new session. Login opens a browser and needs explicit user authorization; do not start consent flows silently. `/mcp` may change exposure or enabled state and persists those changes.
 
-## Authorization and policy
-
-Configured tool filters and Code Mode's MCP read-only policy apply to calls. Stored tokens can refresh headlessly. If authorization requires user consent, ask the user to run `/mcp-auth <server>`; the tool cannot open a consent flow on the user's behalf.
-
-Use `/mcp` for status, `/mcp connect <server>` to refresh schemas, and `/mcp logout <server>` to clear stored credentials. There is no `mcp.servers()`, `mcp.reload()`, or `mcp.register()` API.
+Tool calls pass through pi's permission and secret-redaction pipeline, including native codemode nested calls. The separate sandbox extension can impose read-only MCP policy for night runs. Tool annotations describe behavior; they are not proof that a remote tool is safe.

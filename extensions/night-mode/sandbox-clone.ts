@@ -3,7 +3,7 @@
  *
  * The agent gets its own checkout instead of the one you left open, so an
  * unattended run cannot dirty, stash or reset your working tree. Combined with
- * Code Mode's sandbox (see `code-mode/sandbox/`), which makes everything outside
+ * the standalone sandbox (see `extensions/sandbox/`), which makes everything outside
  * that copy unwritable, an overnight mistake is contained to a directory you
  * can delete in the morning.
  *

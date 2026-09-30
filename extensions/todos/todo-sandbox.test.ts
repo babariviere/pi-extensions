@@ -1,87 +1,90 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import {
-	CODE_MODE_PROVIDER_DISCOVER_EVENT,
-	CODE_MODE_PROVIDER_REGISTER_EVENT,
-	type CodeModeInvocationContext,
-	type CodeModeProvider,
-	type CodeModeProviderDiscovery,
-	type CodeModeProviderRegistration,
-} from "../code-mode/protocol.ts";
-import { assertReadAllowed, assertWriteAllowed, resolveSandboxPolicy } from "../code-mode/sandbox/policy.ts";
+import type {
+	ExtensionAPI,
+	ExtensionContext,
+	ExtensionToolContext,
+	ToolDefinition,
+} from "@earendil-works/pi-coding-agent";
+import { Value } from "typebox/value";
+import { assertReadAllowed, assertWriteAllowed, resolveSandboxPolicy } from "../sandbox/policy.ts";
 import { NIGHT_MODE_PLANNING_QUERY_EVENT, type NightModePlanningQuery } from "../night-mode/protocol.ts";
 import todosExtension from "./index.ts";
 
-// The sandbox applies to a child agent's Pi tools and shell. Providers run in
-// Pi's trusted host process, so the todo provider keeps the sole write capability.
-test("a child cannot access the todo store directly while the typed todo provider can write it", async () => {
+// The sandbox applies to a child's Pi tools and shell. Native todo tools run in
+// Pi's trusted host process and retain the sole write capability for this store.
+test("native todo tools can manage the store while direct child access is denied", async () => {
 	const store = mkdtempSync(join(tmpdir(), "todo-sandbox-"));
 	const previous = process.env.PI_TODO_PATH;
-	let registration: CodeModeProviderRegistration | undefined;
-	let discover: ((value: unknown) => void) | undefined;
-	let nativeToolRegistered = false;
+	const tools = new Map<string, ToolDefinition<any, any>>();
+	const listeners: string[] = [];
+	const emissions: string[] = [];
+	const handlers = new Map<string, (event: any, ctx: ExtensionContext) => any>();
 	let planning = false;
 	try {
 		process.env.PI_TODO_PATH = store;
 		todosExtension({
-			on: () => {},
+			on: (name: string, handler: (event: any, ctx: ExtensionContext) => any) => handlers.set(name, handler),
 			events: {
-				on: (event: string, handler: (value: unknown) => void) => {
-					if (event === CODE_MODE_PROVIDER_DISCOVER_EVENT) discover = handler;
+				on: (event: string) => {
+					listeners.push(event);
 					return () => {};
 				},
 				emit: (event: string, value: unknown) => {
-					if (event === CODE_MODE_PROVIDER_REGISTER_EVENT) registration = value as CodeModeProviderRegistration;
+					emissions.push(event);
 					if (event === NIGHT_MODE_PLANNING_QUERY_EVENT) (value as NightModePlanningQuery).planning = planning;
 				},
 			},
-			registerTool: () => {
-				nativeToolRegistered = true;
-			},
-			registerCommand: () => {},
-		} as any);
+			registerTool: (tool: ToolDefinition<any, any>) => tools.set(tool.name, tool),
+			registerCommand() {},
+		} as unknown as ExtensionAPI);
 
-		assert.equal(nativeToolRegistered, false);
-		assert.equal(registration?.version, 1);
-		assert.equal(registration?.overwrite, true);
-		const provider = registration?.provider;
-		assert.ok(provider);
-		assert.equal(provider.name, "todo");
+		assert.deepEqual(
+			[...tools.keys()],
+			[
+				"todo_list",
+				"todo_listAll",
+				"todo_get",
+				"todo_create",
+				"todo_update",
+				"todo_append",
+				"todo_delete",
+				"todo_claim",
+				"todo_release",
+			],
+		);
+		assert.deepEqual(listeners, []);
+		assert.deepEqual(emissions, []);
+		for (const tool of tools.values()) {
+			assert.equal(tool.exposure, "codemode");
+			assert.equal(tool.namespace?.name, "todo");
+			assert.ok(tool.outputSchema);
+			assert.equal(tool.annotations?.readOnlyHint, ["todo_list", "todo_listAll", "todo_get"].includes(tool.name));
+		}
+		assert.equal(tools.has("todo_list-all"), false);
 
-		let discoveredProvider: CodeModeProvider | undefined;
-		const discovery: CodeModeProviderDiscovery = {
-			version: 1,
-			register: (candidate) => {
-				discoveredProvider = candidate;
-			},
-		};
-		discover?.(discovery);
-		assert.equal(discoveredProvider, provider);
-
-		const extensionContext = {
+		const ctx = {
 			cwd: store,
 			hasUI: false,
+			tools: [],
+			executeTool: async () => {
+				throw new Error("Unexpected nested execution");
+			},
 			sessionManager: { getSessionId: () => "child", getSessionFile: () => "/tmp/child.json" },
-		} as any;
-		const invocationContext = {
-			cwd: store,
-			signal: new AbortController().signal,
-			parentToolCallId: "parent",
-			nestedToolCallId: "nested",
-			extensionContext,
-			update: () => {},
-		} satisfies CodeModeInvocationContext;
-
-		const descriptors = await provider.list({}, invocationContext);
-		assert.deepEqual(
-			descriptors.map((descriptor) => descriptor.name),
-			["list", "listAll", "get", "create", "update", "append", "delete", "claim", "release"],
-		);
-		assert.equal(await provider.describe("list-all", invocationContext), undefined);
-		assert.ok((await provider.describe("create", invocationContext))?.inputSchema);
+		} as unknown as ExtensionToolContext;
+		const invoke = async (name: string, args: Record<string, unknown> = {}, signal?: AbortSignal) => {
+			const tool = tools.get(name);
+			assert.ok(tool);
+			const result = await tool.execute("native-todo-call", args, signal, undefined, ctx);
+			assert.ok(Value.Check(tool.outputSchema!, result.structuredContent));
+			assert.equal(result.content[0]?.type, "text");
+			if (result.content[0]?.type === "text")
+				assert.deepEqual(JSON.parse(result.content[0].text), result.structuredContent);
+			return result.structuredContent as any;
+		};
 
 		const policy = resolveSandboxPolicy(
 			{ mode: "workspace-write", allowWrite: [store], denyRead: [store] },
@@ -91,45 +94,68 @@ test("a child cannot access the todo store directly while the typed todo provide
 		assert.throws(() => assertReadAllowed(policy, directPath), /denied by mode/);
 		assert.throws(() => assertWriteAllowed(policy, directPath), /denied by mode/);
 
-		const created = (await provider.invoke(
-			"create",
-			{ title: "Todo provider remains available", tags: ["test"], body: "Initial" },
-			invocationContext,
-		)) as any;
+		const created = await invoke("todo_create", {
+			title: "Native todo tools remain available",
+			tags: ["test"],
+			body: "Initial",
+		});
 		assert.match(created.id, /^TODO-[a-f0-9]{8}$/);
-		assert.equal(created.title, "Todo provider remains available");
+		assert.equal(created.title, "Native todo tools remain available");
 		assert.equal(readdirSync(store).filter((entry) => entry.endsWith(".md")).length, 1);
 		assert.equal(existsSync(directPath), false);
+		const guidance = handlers.get("before_agent_start")?.({ systemPrompt: "Base prompt" }, ctx).systemPrompt;
+		assert.match(guidance, /tools\.todo_claim/);
+		assert.match(guidance, /tools\.todo_append/);
+		assert.match(guidance, /tools\.todo_update/);
+		assert.doesNotMatch(guidance, /code_mode|todo\.claim/);
 
-		const appended = (await provider.invoke(
-			"append",
-			{ id: created.id, body: "Progress" },
-			invocationContext,
-		)) as any;
+		const appended = await invoke("todo_append", { id: created.id, body: "Progress" });
 		assert.equal(appended.body, "Initial\n\nProgress\n");
-		const claimed = (await provider.invoke("claim", { id: created.id }, invocationContext)) as any;
+		const claimed = await invoke("todo_claim", { id: created.id });
 		assert.equal(claimed.assigned_to_session, "child");
-		const released = (await provider.invoke("release", { id: created.id }, invocationContext)) as any;
+		const released = await invoke("todo_release", { id: created.id });
 		assert.equal(released.assigned_to_session, undefined);
-		const closed = (await provider.invoke("update", { id: created.id, status: "closed" }, invocationContext)) as any;
+		const closed = await invoke("todo_update", { id: created.id, status: "closed" });
 		assert.equal(closed.status, "closed");
-		assert.deepEqual(await provider.invoke("list", {}, invocationContext), []);
-		assert.equal(((await provider.invoke("listAll", {}, invocationContext)) as any[])[0]?.id, created.id);
+		assert.deepEqual(await invoke("todo_list"), []);
+		assert.equal((await invoke("todo_listAll"))[0]?.id, created.id);
 		planning = true;
-		assert.equal(((await provider.invoke("get", { id: created.id }, invocationContext)) as any).id, created.id);
-		await assert.rejects(
-			provider.invoke("update", { id: created.id, title: "blocked" }, invocationContext),
-			/planning is read-only/,
-		);
+		assert.equal((await invoke("todo_get", { id: created.id })).id, created.id);
+		assert.deepEqual(await invoke("todo_list"), []);
+		assert.equal((await invoke("todo_listAll")).length, 1);
+		for (const [name, args] of [
+			["todo_create", { title: "blocked" }],
+			["todo_update", { id: created.id, title: "blocked" }],
+			["todo_append", { id: created.id, body: "blocked" }],
+			["todo_delete", { id: created.id }],
+			["todo_claim", { id: created.id }],
+			["todo_release", { id: created.id }],
+		] as const)
+			await assert.rejects(invoke(name, args), /planning is read-only/);
 		planning = false;
-		assert.equal(
-			((await provider.invoke("get", { id: created.id }, invocationContext)) as any).body,
-			"Initial\n\nProgress\n",
+		assert.equal((await invoke("todo_get", { id: created.id })).body, "Initial\n\nProgress\n");
+		await assert.rejects(invoke("todo_get"), /Invalid arguments for todo\.get/);
+		await assert.rejects(invoke("todo_create", { title: "Bad", extra: true }), /Invalid arguments/);
+		await assert.rejects(
+			invoke("todo_create", { title: "Aborted" }, AbortSignal.abort(new Error("cancelled"))),
+			/cancelled/,
 		);
-		await assert.rejects(provider.invoke("list-all", {}, invocationContext), /Unknown todo action: list-all/);
-		await assert.rejects(provider.invoke("get", {}, invocationContext), /id required/);
-		assert.equal(((await provider.invoke("delete", { id: created.id }, invocationContext)) as any).id, created.id);
-		assert.deepEqual(await provider.invoke("listAll", {}, invocationContext), []);
+
+		// A competing host mutation must still honor the file lock.
+		const lockPath = join(store, `${created.id.slice(5)}.lock`);
+		writeFileSync(lockPath, JSON.stringify({ session: "other", created_at: new Date().toISOString() }));
+		await assert.rejects(invoke("todo_update", { id: created.id, title: "locked" }), /is locked/);
+		rmSync(lockPath);
+		await invoke("todo_update", { id: created.id, title: "Unlocked" });
+		assert.equal(existsSync(lockPath), false);
+
+		const night = await invoke("todo_create", { title: "Night evidence", tags: ["night"] });
+		await assert.rejects(invoke("todo_update", { id: night.id, status: "closed" }), /Evidence/);
+		assert.equal((await invoke("todo_get", { id: night.id })).status, "open");
+		await invoke("todo_delete", { id: night.id });
+		assert.equal((await invoke("todo_delete", { id: created.id })).id, created.id);
+		assert.deepEqual(await invoke("todo_listAll"), []);
+		assert.ok(emissions.every((event) => event === NIGHT_MODE_PLANNING_QUERY_EVENT));
 	} finally {
 		if (previous === undefined) delete process.env.PI_TODO_PATH;
 		else process.env.PI_TODO_PATH = previous;

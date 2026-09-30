@@ -90,26 +90,35 @@ No HTTP calls of its own. The `usage` extension owns subscription polling and
 publishes `usage:snapshot` on pi's event bus;
 this extension only subscribes. State is republished as `night-mode:state`.
 
+## Native tools
+
+Night mode registers `night_plan` directly with Pi, exposed to native `codemode`
+as `tools.night_plan({ tasks, omissions })`. Its structured result has status
+`approved` or `dismissed`, a message, and approved tasks when selected. The tool
+requires an active planning phase and interactive TUI approval. It reviews tasks
+only, never executes them. Pi owns tool discovery, execution, and MCP connections.
+The standalone sandbox extension supplies filesystem and read-only MCP guards.
+
 ## Night runs
 
 `/night start` has separate planning, approval, and execution phases.
 
 1. The current session switches to **gpt-6.1-sol** and receives a planning-only prompt.
 2. Sol reads the standing routine and one-off instructions. It may spawn read-only subagents to explore repositories and services, but neither Sol nor its children implement anything.
-3. Sol submits structured candidates through the typed `night.plan` Code Mode provider action. Each task specifies `category`, `outputs`, and `permissions` (empty arrays for read-only work). Categories are `instructions`, `linear`, `ci`, `slack`, `daily-note`, `opportunistic`, `insights`, and `auto-improvement`. Every category needs a task or an `omissions` entry with `category` and a nonempty `reason`. For custom routines, mark unused categories not applicable. Validation errors allow revision and resubmission.
+3. Sol submits structured candidates through the native `tools.night_plan` tool through Pi's `codemode`. Each task specifies `category`, `outputs`, and `permissions` (empty arrays for read-only work). Categories are `instructions`, `linear`, `ci`, `slack`, `daily-note`, `opportunistic`, `insights`, and `auto-improvement`. Every category needs a task or an `omissions` entry with `category` and a nonempty `reason`. For custom routines, mark unused categories not applicable. Validation errors allow revision and resubmission.
    Planning treats the configured prompt as an execution reference, not an instruction to stop discovering work. Extra instructions supplement the routine. Slack, daily-note, and insights passes are proposed unless excluded or blocked.
    The checklist shows omission reasons, task scope, outputs, and permissions. Users can still uncheck any task. Output and permission metadata survives into the ledger and execution prompt; it is a delegation contract, not a new OS permission grant. Declare `mcp-write` for MCP mutations: these tasks are rejected while `mcpReadOnly` is enabled, including after checklist edits. Filesystem capabilities still require the existing execution preflight; declared paths do not widen the sandbox. Legacy persisted handoffs remain readable.
 4. Night mode presents an interactive checklist. Tasks begin unchecked. They can be selected, edited as JSON, added, or deleted.
 5. Approval creates a fresh session with the planning session recorded as its parent. Only checked and refined tasks are placed in the new session state.
 6. If approval happens before **21:00 local time**, the fresh session waits until 21:00 that day. At or after 21:00, execution starts immediately. This is a calendar-day rule: approval at 02:00 also waits until 21:00. At execution time, **gpt-6.1-sol** creates the report and private working copy and materializes approved tasks through the todo extension's shared storage layer.
-7. Sol orchestrates those tasks through subagents. Every launch must carry the approved `nightTodoId`; the agents provider refuses unknown or unchecked ids.
+7. Sol orchestrates those tasks through subagents. Every launch must carry the approved `nightTodoId`; the native subagent tool refuses unknown or unchecked ids.
 8. The run handshake at `~/.pi/agent/night/active.json` carries the approved ids, sandbox policy, report path, ledger store, and working copy to every participant.
 
 The execution session does not inherit the planning transcript. It receives the approved task descriptions and the planner findings attached to them. New work discovered during execution is reported for a later planning session rather than executed.
 
 The scheduled timestamp is persisted in the execution session. Reloading or resuming it restores the schedule; an overdue schedule starts immediately once the session is idle. The footer and `/night status` show the scheduled time. `/night off` cancels a pending start, including across reloads. Keep pi running and the machine awake for an on-time start: the schedule does not launch pi or wake a sleeping machine. No execution prompt, report, working copy, or ledger is created while waiting. Legacy approved handoffs without a scheduled timestamp still start immediately.
 
-The instructions file is archived and truncated when the approved run *ends*, not during planning. Cancelling the checklist leaves it untouched and keeps the current session in read-only night planning with the same model and sandbox. The planner waits for feedback instead of reopening the checklist automatically. Ask for revisions and resubmit with `night.plan`; execution starts only after approval. Use `/night off` to exit night mode explicitly.
+The instructions file is archived and truncated when the approved run *ends*, not during planning. Cancelling the checklist leaves it untouched and keeps the current session in read-only night planning with the same model and sandbox. The planner waits for feedback instead of reopening the checklist automatically. Ask for revisions and resubmit with `tools.night_plan`; execution starts only after approval. Use `/night off` to exit night mode explicitly.
 
 Pauses and resumes are appended to the report's `## Timeline`, so a report read
 in the morning shows where the 5h window bit.
@@ -162,7 +171,7 @@ remote. A fresh workspace still checks out tracked files only, so
 `sandboxCopyFiles` is replayed into it and the new path is trusted like any
 other copy.
 
-Placement is host side. `cwd` is not part of the `agents.run` schema, so the
+Placement is host side. `cwd` is not part of the `tools.agents_run` schema, so the
 coordinator can ask for a subagent but cannot choose where it runs. When the
 batch finishes, each workspace is snapshotted (`jj status`, so the child's edits
 reach the shared store), its files are copied to the deliverables directory
@@ -262,18 +271,15 @@ HTTPS egress, raw DNS, SSH to github.com, `gh auth status`, loopback TCP, and
 contract.
 
 Probes live in `preflight.ts` (pure: specs, classification, report) and are
-executed by `code-mode/sandbox/preflight-bridge.ts`, because only Code Mode can run
-a command through the same `srt` wrapper the children get. A probe run from the
+executed by `sandbox/preflight-bridge.ts`, which runs commands through the same
+Seatbelt wrapper as native tools in child sessions. A probe run from the
 extension host would report an egress the children do not have.
 
 Loopback TCP is probed **twice**, as separate rows (`loopback-tcp` and
-`loopback-tcp-host`): once wrapped through the same `srt` policy a subagent's
-own `pi.bash` runs under (the boundary `sandboxAllowLoopback` actually
-configures), and once unwrapped, measuring the host shell underneath that wrap.
-The built `allowLoopback` fix only ever changed the first boundary, and the two
-answers diverged on 2026-09-03: without both rows a broken host-level socket and
-a denying sandbox policy report the same single "NO" and there is no way to
-tell which one a night is actually looking at.
+`loopback-tcp-host`): once wrapped through the same Seatbelt policy a subagent's
+own native bash tool runs under, and once unwrapped, measuring the host shell
+underneath that wrap. This distinguishes a host-level socket failure from a
+sandbox refusal.
 
 Not probed yet: one read call per configured MCP server, which would have caught
 the night the read-only gate denied every MCP read for subagents while the
@@ -298,7 +304,7 @@ subagent at a time per repository.
 ## Filesystem sandbox
 
 The working copy stops the agent from touching your checkout. It does not stop
-`rm -rf ~`. So `/night start` also asks Code Mode to sandbox the filesystem **for
+`rm -rf ~`. So `/night start` also asks the standalone sandbox extension to sandbox the filesystem **for
 the duration of the run**, and releases it when the run ends. Nothing to
 configure: an interactive session stays unsandboxed, the night does not.
 
@@ -347,21 +353,24 @@ While the run is active the sandbox is a **floor**: `/sandbox off` is refused an
 reported, so nothing can un-sandbox the night mid-flight. Tightening it (say
 `/sandbox read-only`) is allowed, and the run's own writable roots survive it.
 When the run ends, night-mode releases the floor and the session goes back to
-`code-mode.json`. Two known holes: granting Docker socket access defeats the
+`sandbox.json`. Two known holes: granting Docker socket access defeats the
 filesystem boundary entirely (a container can bind-mount `/`), and the backend
 is `sandbox-exec`, which Apple has deprecated (still true, and not a
 regression: every prior backend used it too). Enforcement is macOS-only, so a
-night run on Linux gets `bash` refusing to run rather than an OS sandbox; see
-`extensions/code-mode/CONTEXT.md`.
+night run on Linux gets `bash` refusing to run rather than an OS sandbox.
 
 ## Read-only MCP
 
+Pi connects and discovers MCP servers from its native `mcp.json` configuration.
+The sandbox extension applies the night policy to the registered native MCP
+tools; it does not replace Pi's MCP client, execution, or `/mcp` command.
+
 The prose contract says "never send a message, never comment, never change a
 ticket". Prose is not enforcement: one confused subagent can post to a customer
-channel. So `/night start` also asks Code Mode to refuse write-shaped MCP calls for
+channel. So `/night start` also asks the sandbox extension to refuse write-shaped native MCP tool calls for
 the whole run, for the coordinator and every subagent process, in code.
 
-A call is judged by name against a declarative policy (`code-mode.json`, `mcp`
+A call is judged by name against a declarative policy (`sandbox.json`, `mcp`
 block), never by the model's judgement at call time: the server's deny list of
 known write tools first, then its allow list of known read tools, then a
 name-shape heuristic (`create_`, `send_`, `save_`, `add_`, ...), then
@@ -382,7 +391,7 @@ silently. Set `mcpReadOnly: false` in `nightMode` to disable the request:
 ```
 
 Outside a night run the same machinery is available through
-`code-mode.json`:
+`sandbox.json`:
 
 ```json
 {
@@ -395,14 +404,14 @@ Outside a night run the same machinery is available through
 ```
 
 Like the filesystem sandbox, the night request is a floor: `readOnly: false` in
-`code-mode.json` cannot turn it back off while the run is in flight.
+`sandbox.json` cannot turn it back off while the run is in flight.
 
 
 ## The approved ledger, and finishing
 
 Only checklist selections are materialized as ledger entries. Each item carries `night`, `night-approved`, and the current `run:<id>` tag. The active run reads only that run id, so unresolved items from an older night cannot enter the execution queue.
 
-The agents provider also checks the active handshake before launching a child. During an approved run, every launch needs a `nightTodoId` present in `approvedTaskIds`. This is the enforcement boundary behind “only checked tasks,” rather than relying on prompt wording alone.
+The native subagent tool also checks the active handshake before launching a child. During an approved run, every launch needs a `nightTodoId` present in `approvedTaskIds`. This is the enforcement boundary behind “only checked tasks,” rather than relying on prompt wording alone.
 
 ## Ledger completion and evidence
 
@@ -552,7 +561,12 @@ an agent that knows nothing about night mode cannot skip it. With no active run
 the flag is a no-op.
 
 ```ts
-await agents.run({ agent: "worker", task: "Fix the flaky login test", night: true });
+await tools.agents_run({
+  agent: "worker",
+  task: "Fix the flaky login test",
+  night: true,
+  nightTodoId: "TODO-abcd1234", // Must be an approved task in the active run.
+});
 ```
 
 ## Configuration

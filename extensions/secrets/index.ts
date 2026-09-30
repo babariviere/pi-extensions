@@ -24,7 +24,7 @@ import { basename, dirname, join } from "node:path";
 import type { ExtensionAPI, ToolCallEvent } from "@earendil-works/pi-coding-agent";
 import { createLocalBashOperations, isToolCallEventType } from "@earendil-works/pi-coding-agent";
 import { applySecretPolicy } from "./secret-policy";
-import { scrubContent, scrubDeep, type SecretEntry } from "./secret-mask";
+import { scrubToolResult, type SecretEntry } from "./secret-mask";
 import { REF_KEY_ENV, SecretRefRegistry } from "./secret-ref";
 
 /**
@@ -143,15 +143,7 @@ export default function (pi: ExtensionAPI) {
 	pi.on("tool_result", async (event) => {
 		const secrets = await getSecrets();
 
-		// scrubContent returns undefined when nothing changed (see its docstring for
-		// why an untouched patch is harmful); cast keeps the SDK content-part union.
-		const scrubbed = scrubContent(event.content as any[], secrets, registry);
-		// details are persisted to the session file, so they are scrubbed too.
-		// scrubDeep returns the input by reference when nothing changed, which is what
-		// keeps an untouched result from being patched.
-		const details = scrubDeep(event.details, secrets, registry);
-		if (!scrubbed && details === event.details) return undefined;
-		return { content: scrubbed ?? event.content, details };
+		return scrubToolResult(event, secrets, registry);
 	});
 
 	// Inject secrets into user ! commands too

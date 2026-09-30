@@ -1,194 +1,29 @@
-# `agents` reference
+# Standalone subagents
 
-Code Mode's `agents.*` namespace runs **custom agent definitions discovered on disk**, each as a child `pi` session. Omit `agent` to run the built-in generic `task` agent, or discover named definitions with `agents.list()`. For routine delegation, pass the task without `model` or `thinking`. Only override them for unusually demanding work that needs a specific model or reasoning level. A `running` result is pending work, not a failure.
+The `subagents` extension supplies native tools named `agents_*`. Scripts call them through `tools`, not an `agents` global. These tools run custom markdown definitions as child pi sessions; omit `agent` for the generic task agent.
 
-When omitted, model and thinking use the named agent's frontmatter first, then the configured subagent defaults (the generic agent uses the configured model or parent model), then Pi's child defaults. A thinking suffix on the selected model also takes precedence over a configured default thinking level. Task type is a reason to choose an agent, not a reason to override its model.
+For routine delegation, omit `model` and `thinking`. Named-agent frontmatter takes precedence over configured defaults; missing defaults fall back to the parent. Only use overrides for unusually demanding work. Discover valid names with `tools.agents_list({})` and model IDs with `tools.agents_models({})` when an override is needed.
 
-`agents.*` is unavailable inside a Code Mode subagent child session. The child turn can settle before a detached nested agent exits, causing the parent to mark the child done while work is still running. Launch parallel agents from the parent orchestrator instead.
+| Tool | Input | Purpose |
+| --- | --- | --- |
+| `agents_list` | `{}` | Discover user/project agents |
+| `agents_models` | `{}` | Permitted model overrides and default |
+| `agents_run` | `{ task, agent?, model?, thinking?, output?, reads?, waitMs?, night?, nightTodoId? }` | Run one task with a bounded wait |
+| `agents_runAll` | `{ tasks: [...], waitMs? }` | Run a batch in parallel |
+| `agents_start` | Single task or `{ tasks: [...] }` | Detach and return a run handle |
+| `agents_wait` | `{ runId, waitMs? }` | Resume a bounded wait |
+| `agents_status` | `{}` | Live and recent batch metadata |
+| `agents_cancel` | `{ runId? }` | Stop one batch or all live batches |
 
-Default to doing routine file lookup and small edits in the parent. Delegate only bounded, independently useful work with a concrete deliverable; start with one agent, or two to three when the tasks are truly independent. Avoid overlapping edits and broad speculative fan-out. `agentBudget` and `agents.maxPerExecution` limit launch calls within one `code_mode` invocation, not concurrent children, the task count in a `runAll` batch, or total agents across the session.
+Inspect `describeTool()` for the loaded tool's exact schema. A result with `state: "running"` and `ok: false` is pending work, not failure. Wait windows and child lifetime limits are distinct. Detached children survive the launching script, but not session shutdown. Cancelling an attached wait cancels its children; cancelled batches suppress completion notifications.
 
-Agent definitions are markdown files with YAML frontmatter, discovered from:
+Unclaimed completions arrive as follow-up messages after the parent settles. A terminal `agents_wait` claims the result so it is not announced again. Children do not expose subagent or background-job tools, avoiding misleading parent-visible completion while nested work remains alive.
 
-- user scope: `$PI_CODING_AGENT_DIR/agents/**/*.md` (default `~/.pi/agent/agents`)
-- project scope: `<cwd>/.pi/agents/**/*.md`
+Delegate only bounded independent work. Start with one agent, or a few truly independent tasks. Give each a concrete deliverable and nonoverlapping file ownership. Pass the task artifact directory and resolved output paths. For large inputs, provide files or a manifest instead of embedding all data in the task. Never share one output file between concurrent tasks.
 
-Project scope wins on a name collision. The built-in `task` agent is always available unless a definition with that name replaces it.
+Definitions are discovered under the agent directory's `agents/` and trusted project `.pi/agents/`. Subagent configuration is `subagents.json`, not the removed `code-mode.json`. Sandboxed definitions retain a floor the child cannot loosen.
 
-## `agents.list()`
-
-Takes no arguments. Resolves to `Array<{ name: string; scope: "project" | "user"; description?: string }>`.
-
-```ts
-return await agents.list();
+```js
+const run = await tools.agents_start({ task: "Review the changed files. Do not edit.", output: ".pi/goal/my-task/review.md" });
+return await tools.agents_wait({ runId: run.runId, waitMs: 30000 });
 ```
-
-## `agents.models()`
-
-Most runs do not need this call because `model` and `thinking` should normally be omitted. Call it only when intentionally choosing a model override for a specialized run, rather than guessing identifiers.
-Takes no arguments. Returns `{ defaultModel: string | null, models: [...] }`.
-Each model has an exact provider-qualified `id` accepted by the `model` override,
-plus `name`, `provider`, `reasoning`, `input` (text/image), `contextWindow`, and `maxTokens`.
-The catalog is filtered by the current runtime model catalog, caller provider,
-`enabledModels`, and the subagent price ceiling. Missing catalog or required pricing
-produces an empty list. No credentials or provider connection details are returned.
-
-`defaultModel` identifies the generic agent's configured or inherited default, not
-a guarantee that it passes policy. Named agents can have their own defaults.
-Discovery is read-only, does not launch a child, and does not check provider
-reachability. Launch-time validation remains authoritative.
-
-```ts
-return await agents.models();
-```
-
-## `agents.run(request)`
-
-Runs one agent and resolves to a single result. Blocks for at most the wait window (`waitMs`, default `agents.waitMs` = 10 min), **not** for the child's whole lifetime.
-
-Two independent deadlines:
-
-| Deadline | Default | What happens when it hits |
-|----------|---------|---------------------------|
-| `waitMs` | `agents.waitMs` (10 min) | The call returns `{ state: "running", runId, ok: false }`. The child keeps working. Resume with `agents.wait({ runId })`, or let the result arrive on its own (see below). |
-| Child lifetime | `agents.timeoutMs` (2 h) | The child and its whole process group are killed and the run settles as failed, with whatever output it had produced. This is host configuration and cannot be overridden per call. |
-
-`request` fields:
-
-| Field | Required | Meaning |
-|-------|----------|---------|
-| `agent` | no | Name of a discovered agent (see `agents.list()`); omit for the generic `task` agent |
-| `task` | yes | The concrete task for that agent |
-| `model` | no | Optional override for a specialized run. Normally omit it to use the agent's configured model. Must be in the user's `enabledModels` allowlist when one is configured. |
-| `thinking` | no | Optional reasoning-effort override for a specialized run. Normally omit it to use the agent's configured level. Values: `off` \| `minimal` \| `low` \| `medium` \| `high` \| `xhigh` |
-| `output` | no | **String** path (relative to cwd, or absolute) to persist the result at, instead of the auto run-dir file. There is no `output: false`: omit the field for the default path (a literal `"false"`/`"true"` is treated as omitted). |
-| `reads` | no | Files the agent should read first for context. Injected as a read-first instruction; the agent still needs a `read` tool. |
-| `waitMs` | no | How long to block before handing back a `running` handle. `0` returns as soon as the run is launched. Batch-level: on `runAll` it goes next to `tasks`, not inside an item. |
-
-Resolves to `CodeModeAgentResult`:
-
-```ts
-{
-  agent: string;       // agent name
-  ok: boolean;         // produced usable output AND finished cleanly
-  output: string;      // the agent's final assistant message, else backend fallback
-  outputPath?: string; // where the result was persisted; absent when nothing landed on disk (see `error`)
-  exitCode?: number;   // headless backend only
-  paneId?: string;     // herdr backend only
-  error?: string;
-  state?: "done" | "failed" | "running";  // "running" = wait window expired, child still working
-  runId?: string;      // handle for agents.wait / agents.cancel
-}
-```
-
-Check `state` before treating `ok: false` as a failure: a pending run reports `ok: false` with `state: "running"`.
-
-```ts
-const result = await agents.run({
-  agent: "reviewer",
-  task: "Review the current diff for concrete security defects. Do not edit files.",
-  reads: ["package.json"],
-});
-return { ok: result.ok, output: result.output };
-```
-
-## `agents.runAll({ tasks })`
-
-Runs several agents in parallel and waits for all of them, for at most `waitMs`. `tasks` is an array of the same request objects **without** `waitMs`; the wait window sits next to `tasks` and applies to the whole batch.
-
-```ts
-await agents.runAll({ tasks: [{ agent: "reviewer", task: "..." }], waitMs: 60_000 });
-```
-
-Resolves to `CodeModeAgentResult[]` in input order.
-
-```ts
-return await agents.runAll({
-  tasks: [
-    { agent: "reviewer", task: "Audit the diff for security defects." },
-    { agent: "librarian", task: "Summarize how config loading works today." },
-  ],
-});
-```
-
-When several parallel tasks share one `output` path, each run's destination gets a distinct `-<index>` suffix so they do not clobber each other. A single run keeps its `output` verbatim. Use task-scoped paths, such as `.pi/goal/<slug>/review.md`, to avoid overwriting another task's artifacts.
-
-All runs launched by one call share a single `runId`, and `agents.wait` on it settles when the whole batch settles.
-
-## `agents.start(request | { tasks })`
-
-Launches without blocking and resolves to `{ runId, agents, state: "running" }`. Use it to fan work out and do something else in the same program:
-
-```ts
-const { runId } = await agents.start({ agent: "reviewer", task: "Review the current diff. Do not edit files." });
-await pi.bash({ command: "npm run typecheck" });
-const settled = await agents.wait({ runId, waitMs: 300_000 });
-return settled.state === "running" ? { pending: runId } : settled.results;
-```
-
-A `start` run is deliberately **not** tied to the turn that launched it: cancelling that turn does not kill it. It ends when it finishes, when `agents.cancel` is called, or when the session shuts down.
-
-## `agents.wait({ runId, waitMs? })`
-
-`timeoutMs` is also accepted here as an alias for `waitMs`. On `wait` it means
-this call's own wait window; `waitMs` wins if both are set.
-
-Resumes waiting on a launched batch. Resolves to:
-
-```ts
-{
-  runId: string;
-  state: "running" | "settled" | "cancelled";
-  elapsedMs: number;
-  agents: string[];
-  results: CodeModeAgentResult[];  // placeholders while state is "running"
-}
-```
-
-An expired window is a normal outcome, not an error. Waiting on a batch that already settled returns its results immediately, so a poll loop across several `code_mode` calls keeps working, for the 50 most recent batches (older ones are evicted and `agents.wait` then reports an unknown run). A result that was already delivered as a follow-up message can still be returned by a later `wait`.
-
-## `agents.status()`
-
-Lists live and recently finished batches: `{ runId, agents, state, startedAt, elapsedMs, detached }`. `detached: true` means nobody is blocked on it. Outputs are deliberately omitted (50 full subagent results would flood your context): read them with `agents.wait({ runId })`.
-
-## `agents.cancel({ runId? })`
-
-Cancels one batch, or every live batch when `runId` is omitted. Resolves to `{ cancelled: string[] }`. A headless child is torn down process-group wide (SIGTERM, then SIGKILL), so the subprocesses a subagent spawned die with it; a herdr batch has its pane tab closed. The batch reports `state: "cancelled"` immediately, even though the children take a moment to die.
-
-## Unclaimed results arrive as a message
-
-When a batch settles and nobody claims it (its window expired, or it was launched with `agents.start`), the result is injected into the parent session as a follow-up message (`customType: "code-mode.agent_result"`) that triggers a turn. Delivery waits until the current parent turn settles so a later terminal `agents.wait` in that turn can claim the result without a redundant wake-up. You do not have to poll to avoid losing a background run's output; polling is for when you want it *now*.
-
-## Cancellation
-
-- Cancelling the turn (Esc) tears down the children of any batch currently being waited on. That batch is marked cancelled, so its result is not delivered as a message afterwards.
-- A detached batch survives the turn; cancel it explicitly with `agents.cancel`, or let session shutdown reap it.
-- Session shutdown always cancels every live batch.
-
-## Agent tool allowlists
-
-An agent definition's `tools:` frontmatter restricts what that agent may call. The child `pi` process always keeps `code_mode` regardless of the list. The declared list is also enforced inside the child's sandbox: disallowed Pi core tools and captured web capabilities are removed from declarations, hidden from listings, and rejected at dispatch with an explicit "not in this agent's tool allowlist" error. Use the native tool names (`read`, `web_search`, `fetch_content`) in the allowlist.
-
-`mcp.*` and `agents.*` are not covered by `tools:`.
-
-## Large inputs
-
-For data-heavy analysis, give the child file paths instead of embedding the data in its task. A manifest can identify each file's absolute path, contents, size, and source command so the child can choose what to read. Put the manifest and output alongside the task's other artifacts.
-
-```ts
-// payloads: { task: "Analyze the files listed in the task manifest and report concrete findings." }
-return await agents.run({
-  agent: "reviewer", // choose a name returned by agents.list()
-  task: π.task,
-  reads: [".pi/goal/analyze-export/manifest.json"],
-  output: ".pi/goal/analyze-export/review.md",
-});
-```
-
-## Execution backend and progress
-
-The backend is chosen by environment, not by the caller: live panes in a dedicated `subagents` tab when running inside herdr, otherwise headless `pi` child processes. Either way each run surfaces as a spinner row in the Code Mode widget above the prompt, and as a nested call line in the `code_mode` tool result for a run that settles inside the program that launched it. Do not build a busy-wait loop around `agents.status()`: use `agents.wait`, which blocks properly.
-
-## Budget
-
-Each `code_mode` invocation is capped at `agents.maxPerExecution` agent calls (100 by default). Pass `agentBudget` on the tool call to lower it for one program. Exceeding the cap throws inside the sandbox.

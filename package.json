@@ -32,16 +32,11 @@
     ]
   },
   "dependencies": {
-    "@modelcontextprotocol/client": "^2.0.0",
-    "@napi-rs/keyring": "^2.0.0",
     "defuddle": "^0.19.1",
-    "diff": "^9.0.0",
     "linkedom": "^0.18.13",
     "parse5": "^8.0.0",
-    "shiki": "^4.3.1",
     "ws": "^8.21.0",
-    "yaml": "^2.9.0",
-    "@babariviere/code-mode": "git+https://github.com/babariviere/code-mode.git#ac5f6f1e0b78a2ebea4a64f36cb33ba395aa51b3"
+    "yaml": "^2.9.0"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.13",
@@ -51,13 +46,12 @@
     "tsx": "^4.19.2"
   },
   "peerDependencies": {
-    "@earendil-works/pi-ai": "*",
-    "@earendil-works/pi-coding-agent": "*",
-    "@earendil-works/pi-tui": "*",
+    "@earendil-works/pi-ai": ">=0.99.0",
+    "@earendil-works/pi-coding-agent": ">=0.99.0",
+    "@earendil-works/pi-tui": ">=0.99.0",
     "typebox": "*"
   },
   "scripts": {
-    "code-mode:evaluate": "tsx extensions/code-mode/evaluation/cli.ts",
     "pi-usage": "node cli/pi-usage.ts",
     "test": "node --import tsx --test 'extensions/**/*.test.ts' 'cli/**/*.test.ts'",
     "typecheck": "tsgo -p tsconfig.json",

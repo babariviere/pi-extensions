@@ -21,7 +21,7 @@ import {
 	truncateHead,
 } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
-import { Type } from "typebox";
+import { type Static, Type } from "typebox";
 import { browserFetch } from "./fetch/browser.ts";
 import { defuddleFetch, DefuddleError, type DefuddleResult } from "./fetch/defuddle.ts";
 import { isSoftNotFound, shouldEscalateToBrowser } from "./fetch/status.ts";
@@ -29,12 +29,32 @@ import { renderFoldableResult } from "./render.ts";
 import { DEFAULT_SETTINGS, type WebSettings } from "./settings.ts";
 import { cloneCachePath, type GitHubRepoRef, isRawGitHubUrl, parseGitHubRepoUrl, readTextCapped } from "./utils.ts";
 
-/** How the content was obtained. Human-only; never shown to the model. */
+/** How the content was obtained. Also available to programmatic callers. */
 type FetchSource = "defuddle" | "browser" | "raw" | "github";
 
 type FetchDetails = { source: FetchSource } | undefined;
 
-type TextResult = { content: { type: "text"; text: string }[]; details: FetchDetails };
+const FetchOutputSchema = Type.Object({
+	url: Type.String(),
+	text: Type.String({ description: "Full fetched text or repository summary, before display truncation" }),
+	source: Type.Optional(
+		Type.Union([Type.Literal("defuddle"), Type.Literal("browser"), Type.Literal("raw"), Type.Literal("github")]),
+	),
+	title: Type.Optional(Type.String()),
+	date: Type.Optional(Type.String()),
+	contentType: Type.Optional(Type.String()),
+	status: Type.Optional(Type.Number()),
+	repositoryPath: Type.Optional(Type.String()),
+	error: Type.Optional(Type.String()),
+});
+
+type FetchData = Omit<Static<typeof FetchOutputSchema>, "url">;
+type TextResult = {
+	content: { type: "text"; text: string }[];
+	details: FetchDetails;
+	structuredContent: FetchData;
+	isError?: boolean;
+};
 
 const SOURCE_LABELS: Record<FetchSource, string> = {
 	defuddle: "via defuddle",
@@ -43,10 +63,16 @@ const SOURCE_LABELS: Record<FetchSource, string> = {
 	github: "via git clone",
 };
 
-// isError is not part of AgentToolResult and is ignored by the runtime for
-// defineTool tools; failure context is carried in the message text itself.
-function text(body: string, details: FetchDetails = undefined): TextResult {
-	return { content: [{ type: "text", text: body }], details };
+function text(body: string, details: FetchDetails = undefined, data: Partial<FetchData> = {}): TextResult {
+	return {
+		content: [{ type: "text", text: body }],
+		details,
+		structuredContent: { text: body, ...details, ...data },
+	};
+}
+
+function failure(message: string, data: Partial<FetchData> = {}): TextResult {
+	return { ...text(message, undefined, { ...data, error: message }), isError: true };
 }
 
 /**
@@ -55,9 +81,10 @@ function text(body: string, details: FetchDetails = undefined): TextResult {
  * full content is written to a temp file and its path is appended in a footer so
  * the model can read the rest with the read tool.
  */
-function cappedText(body: string, details: FetchDetails = undefined): TextResult {
+function cappedText(body: string, details: FetchDetails = undefined, data: Partial<FetchData> = {}): TextResult {
+	const full = text(body, details, data);
 	const result = truncateHead(body);
-	if (!result.truncated) return text(body, details);
+	if (!result.truncated) return full;
 
 	const id = randomBytes(8).toString("hex");
 	const fullOutputPath = join(tmpdir(), `pi-fetch-${id}.md`);
@@ -65,7 +92,7 @@ function cappedText(body: string, details: FetchDetails = undefined): TextResult
 		writeFileSync(fullOutputPath, body);
 	} catch {
 		// If we cannot persist the full content, still return the truncated view.
-		return text(result.content, details);
+		return { ...full, content: [{ type: "text", text: result.content }] };
 	}
 
 	const footer =
@@ -74,13 +101,17 @@ function cappedText(body: string, details: FetchDetails = undefined): TextResult
 			: `[Showing first ${formatSize(result.outputBytes)} of ${formatSize(result.totalBytes)} (${formatSize(
 					result.maxBytes ?? DEFAULT_MAX_BYTES,
 				)} limit). Full content: ${fullOutputPath}]`;
-	return text(`${result.content}\n\n${footer}`, details);
+	return { ...full, content: [{ type: "text", text: `${result.content}\n\n${footer}` }] };
 }
 
 export function createFetchContentTool(settings: WebSettings = DEFAULT_SETTINGS) {
 	return defineTool({
 		name: "fetch_content",
 		label: "fetch content",
+		namespace: { name: "web", description: "Web search and content fetching" },
+		// Fetches may create clone caches, fresh temp files, and a browser profile.
+		annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+		outputSchema: FetchOutputSchema,
 		description:
 			"Fetch a URL as Markdown. GitHub repo URLs (root/tree/blob) are cloned locally and summarized " +
 			"so you can read/grep/ls the source; raw.githubusercontent.com is fetched directly; everything " +
@@ -110,21 +141,30 @@ export function createFetchContentTool(settings: WebSettings = DEFAULT_SETTINGS)
 		async execute(_toolCallId, params, signal) {
 			const timeout = params.timeout ?? settings.fetchTimeout;
 			const url = params.url.trim();
-
-			const repoRef = parseGitHubRepoUrl(url);
-			if (repoRef) {
-				const summary = await tryCloneAndSummarize(repoRef, settings, signal);
-				if (summary) return text(summary, { source: "github" });
-				// Private/unreachable repo: fall through to defuddle on the URL.
-			}
-
-			if (isRawGitHubUrl(url)) {
-				return await fetchRaw(url, timeout, signal);
-			}
-
-			return await fetchViaDefuddle(url, timeout, settings, signal);
+			const result = await fetchContent(url, timeout, settings, signal);
+			return { ...result, structuredContent: { url, ...result.structuredContent } };
 		},
 	});
+}
+
+async function fetchContent(
+	url: string,
+	timeout: number,
+	settings: WebSettings,
+	signal?: AbortSignal,
+): Promise<TextResult> {
+	const repoRef = parseGitHubRepoUrl(url);
+	if (repoRef) {
+		const summary = await tryCloneAndSummarize(repoRef, settings, signal);
+		if (summary) return text(summary, { source: "github" }, { repositoryPath: cloneCachePath(repoRef) });
+		// Private/unreachable repo: fall through to defuddle on the URL.
+	}
+
+	if (isRawGitHubUrl(url)) {
+		return await fetchRaw(url, timeout, signal);
+	}
+
+	return await fetchViaDefuddle(url, timeout, settings, signal);
 }
 
 // biome-ignore lint/suspicious/noExplicitAny: theme type is not exported
@@ -160,7 +200,7 @@ async function fetchViaDefuddle(
 			err instanceof DefuddleError
 				? err.message
 				: `fetch_content failed: ${err instanceof Error ? err.message : String(err)}`;
-		return text(message);
+		return failure(message, { status });
 	}
 
 	// Direct fetch reached the page but got nothing extractable (e.g. a
@@ -178,19 +218,21 @@ async function fetchViaDefuddle(
  */
 function renderFetched(url: string, result: DefuddleResult, source: FetchSource): TextResult {
 	if (result.status !== undefined && result.status >= 400) {
-		return text(`Failed to fetch ${url}: HTTP ${result.status}`);
+		return failure(`Failed to fetch ${url}: HTTP ${result.status}`, { status: result.status, source });
 	}
 	if (isSoftNotFound(result)) {
 		const titled = result.title ? ` (title: "${result.title}")` : "";
-		return text(
+		return failure(
 			`${url} returned HTTP ${result.status ?? 200} but the page is a "not found" placeholder${titled}. ` +
 				`The URL is likely wrong or the page has been removed.`,
+			{ status: result.status, title: result.title, source },
 		);
 	}
 	return renderDefuddle(result, source);
 }
 
 function renderDefuddle(result: DefuddleResult, source: FetchSource): TextResult {
+	const data = { title: result.title, date: result.date, contentType: result.contentType, status: result.status };
 	const header: string[] = [];
 	if (result.title) header.push(`# ${result.title}`);
 	if (result.date) header.push(`*${result.date}*`);
@@ -200,11 +242,11 @@ function renderDefuddle(result: DefuddleResult, source: FetchSource): TextResult
 		const note = result.contentType
 			? `No extractable content (content-type: ${result.contentType}).`
 			: "No extractable content.";
-		return text(meta ? `${meta}\n\n${note}` : note, { source });
+		return text(meta ? `${meta}\n\n${note}` : note, { source }, data);
 	}
 
 	const body = meta ? `${meta}\n\n${result.markdown}` : result.markdown;
-	return cappedText(body, { source });
+	return cappedText(body, { source }, data);
 }
 
 /** Attempt the browser fallback, swallowing failures so the caller can degrade. */
@@ -236,15 +278,23 @@ async function fetchRaw(url: string, timeout: number, signal?: AbortSignal): Pro
 			headers: { "User-Agent": "Mozilla/5.0 (compatible; pi-web-extension)" },
 			signal: controller.signal,
 		});
-		if (!res.ok) return text(`Failed to fetch raw content: HTTP ${res.status}`);
+		if (!res.ok)
+			return failure(`Failed to fetch raw content: HTTP ${res.status}`, { source: "raw", status: res.status });
 		const contentType = res.headers.get("content-type") ?? "unknown";
+		const data = { contentType, status: res.status };
 		if (/^image\/|application\/octet-stream|application\/pdf/i.test(contentType)) {
-			return text(`Binary content (content-type: ${contentType}); not rendered. URL: ${url}`, { source: "raw" });
+			return text(
+				`Binary content (content-type: ${contentType}); not rendered. URL: ${url}`,
+				{ source: "raw" },
+				data,
+			);
 		}
 		const body = await readTextCapped(res);
-		return cappedText(body, { source: "raw" });
+		return cappedText(body, { source: "raw" }, data);
 	} catch (err) {
-		return text(`Failed to fetch raw content: ${err instanceof Error ? err.message : String(err)}`);
+		return failure(`Failed to fetch raw content: ${err instanceof Error ? err.message : String(err)}`, {
+			source: "raw",
+		});
 	} finally {
 		clearTimeout(timer);
 		signal?.removeEventListener("abort", onAbort);

@@ -1,36 +1,39 @@
 ---
 name: code-mode
-description: Write or debug code_mode TypeScript tool calls in pi.
+description: Write or debug native pi codemode JavaScript scripts and call MCP or extension tools.
 ---
 
-# code_mode
+# Native codemode
 
-Run tool calls in a type-checked TypeScript program inside an isolated QuickJS sandbox.
+Pi 0.99+ owns the `codemode` tool, its QuickJS runtime, tool discovery and MCP. This package does not provide a competing execution tool.
 
 ## Execution essentials
 
-- Use `pi.*` for core tools. `pi.read`, `pi.find`, `pi.grep`, and `pi.ls` return text; mutating tools return `{ ok, output, details }`. Use `pi.exec({ argv: [program, ...args] })` for literal arguments and `pi.bash` for shell syntax. Both command tools reject on nonzero exit, although `pi.bash` supports `settle: true`.
-- Use `web.search({ query, limit? })` to search the web and `web.fetch({ url, timeout? })` to fetch a URL as Markdown when those captured capabilities are available.
-- Put multiline content, JSON blobs, long prose, and strings with literal `${...}` in `payloads`, then read them as `π.key`. JSON-encode structured payloads and decode with `JSON.parse(π.key)`.
-- Batch independent calls with `Promise.all`; use `mapLimit(items, fn, N)` for bounded concurrency. Keep dependent steps sequential.
-- Batch only genuinely independent operations. Scope exploration before fanning out; use focused checks at meaningful checkpoints rather than repeatedly scanning the same files or rerunning broad checks after every small change.
-- Only the program's `return` enters model context. Return compact results directly, not JSON strings. Oversized returns spill to a temp file whose path is reported; inspect it in smaller slices on subsequent calls. Keep intermediates local, use `τ` across calls, or files for durable data.
-- For a command that must outlive this program, use `jobs.start({ name, command })` in full code mode, then `jobs.status()`, `jobs.logs({ id })`, `jobs.wait({ id })`, or `jobs.stop({ id })`. A job ends on exit, stop, the two-hour cap, or session shutdown. Unclaimed terminal results wake the model; a terminal wait or stop suppresses the wake-up. For ordinary short commands, keep using `pi.exec` or `pi.bash`.
+- Write raw JavaScript, with top-level `await` and `return`. Do not write TypeScript annotations, markdown fences, or a JSON-encoded source string inside the script.
+- Call tools through `tools.<name>({ ... })`. Core tools use their native names, such as `tools.read` and `tools.bash`. Extension tools include `tools.todo_list`, `tools.agents_run`, `tools.jobs_start`, `tools.applyPatch`, `tools.web_search`, and `tools.fetch_content` when loaded.
+- Check `ALL_TOOLS`, `await searchTools(query)`, or `await describeTool(name)` for available tools and exact signatures. These discover tools, not repository files. Inactive direct tools are not callable; codemode/deferred tools are callable while registered.
+- Batch independent calls with `Promise.all` or `Promise.allSettled`; sequence dependent operations. For wider fan-out, implement a small bounded worker loop instead of starting every promise at once.
+- Return compact data. `return`, `text()` and `console.*` all reach the model, so avoid logging large intermediate results. Native output limits can spill full output to a temporary file.
+- Use `store(key, value)` and `load(key)` for JSON state across calls. Successful script writes persist on the session branch, including resume. A failed script does not save state, but already completed tool side effects are not undone.
+- There are no legacy `pi`, `web`, `mcp`, `agents`, `jobs`, `π`, `τ`, `mapLimit`, `process`, filesystem, network or timer globals. Use registered tools for all host work.
 
 ## Repository work
 
-- Locate files with `pi.find`, `pi.grep`, or `pi.ls`, then read relevant ranges with `pi.read({ path, offset, limit })`. `pi.read` does not truncate its value inside the program; only returned output is context-budgeted. Avoid loading large generated, vendored, log, or lock files unless the task needs them.
-- Use the editing route specified by the session's model-specific guidance. Never manually edit through Python, shell text utilities, or redirection; formatters, generators, migrations, builds, and tests are allowed. See [file editing](references/full-reference.md#file-editing) for syntax and recovery.
+- Prefer `tools.find` for file discovery and `tools.grep` for contents, when enabled. `pattern` in find is a glob; grep patterns are regexes unless `literal: true`. Use `tools.read({ path, offset, limit })` for targeted reads.
+- Native read results retain pi's ordinary truncation limits. Read large files in slices rather than assuming scripts receive the entire file.
+- Use `tools.edit({ path, edits: [{ oldText, newText }] })`, `tools.write({ path, content })`, or the separate `tools.applyPatch({ patch })` V4A tool. Follow session guidance for the preferred editing route. If an exact edit misses, reread and correct the match.
+- Never manually edit through Python, shell text utilities, or redirection; formatters, generators, migrations, builds, and tests are allowed.
+- Keep long documents in files where practical. Native codemode accepts only a `code` argument, not legacy payloads. Build strings with ordinary JavaScript quoting; do not accidentally interpolate literal `${...}` content.
+- Shell results are structured. Check `exit_code`; a nonzero shell exit is not necessarily a rejected tool promise. Do not hide a failed verification command in a successful script return.
 
 ## Read what the call needs
 
-Paths below are relative to this skill directory. Load the relevant reference when its API or failure mode is needed, not the entire set before each call.
+Resolve these paths relative to this skill directory.
 
 | Need | Reference |
-|------|-----------|
-| Core tool signatures, payloads, runtime limits, state, or argument-shape errors | [Core API](references/full-reference.md) |
-| Discover or call an extension tool | [Tool discovery](references/full-reference.md#tools--cross-provider-discovery--generic-dispatch-full-code-mode-only) |
-| Find or invoke a lazy MCP service | [MCP](references/mcp.md) |
-| Launch, wait for, or cancel subagents; optionally override a model for a specialized run | [Subagents](references/agents.md) |
+| --- | --- |
+| Native globals, core tools, file edits, output and errors | [Core API](references/full-reference.md) |
+| Discover/configure/call native MCP tools | [MCP](references/mcp.md) |
+| Launch, wait for or cancel standalone subagents | [Subagents](references/agents.md) |
 
-`tools.search({ query: "web search" })` discovers registered actions, not repository content or lazy MCP tools. Search files with `pi.find` or `pi.grep`; discover MCP services through `mcp.*`. If a call fails, use the error and the relevant signature to correct it rather than retrying guessed arguments.
+For commands that must outlive a script, use `tools.jobs_start({ name, command })`, then `tools.jobs_status`, `tools.jobs_logs`, `tools.jobs_wait`, or `tools.jobs_stop`. Jobs are session-owned, bounded, and unavailable in subagent children. Unclaimed terminal results wake the model; a terminal wait or stop suppresses that notification.

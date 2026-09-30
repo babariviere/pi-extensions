@@ -49,7 +49,7 @@ Known gaps:
 
 - **Injection** — prepends `eval "$(fnox export)"` to every bash tool call so secrets are available as env vars without hardcoding values
 - **`!` command injection** — also injects secrets into user `!` commands (respects `shellPath` from pi's `settings.json`)
-- **Output scrubbing** — replaces secrets in all tool results (bash, read, grep, etc.), including the `details` persisted to session files, using four layers:
+- **Output scrubbing** — replaces secrets in all tool results (bash, read, grep, etc.), including `details` persisted to session files and native codemode's `structuredContent`, using four layers:
   1. Exact fnox secret values
   2. 34 recognized provider patterns (GitHub, OpenAI, Anthropic, Stripe, AWS, Slack, GitLab, Google, etc.)
   3. URL-embedded secrets (`user:pass@host`, sensitive query params)
