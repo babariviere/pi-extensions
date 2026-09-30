@@ -1,11 +1,11 @@
 # pi-extensions
 
-Personal extensions, skills, and themes for [pi](https://github.com/earendil-works/pi).
+Personal extensions and themes for [pi](https://github.com/earendil-works/pi).
 This remains a collection of pi integrations, not a bundle of a separate application.
 
 ## What is packaged
 
-The manifest discovers `extensions/*/index.ts`, `skills/`, and `themes/*.json`.
+The manifest discovers `extensions/*/index.ts` and `themes/*.json`.
 
 | Extension | Purpose |
 | --- | --- |
@@ -29,7 +29,6 @@ The manifest discovers `extensions/*/index.ts`, `skills/`, and `themes/*.json`.
 | `web` | `web_search` searches Kagi; `fetch_content` fetches pages or summarizes Git repositories; `/kagi-status` checks credentials. |
 | `workspaces` | `/workspace` manages jj workspaces, with optional Herdr integration. |
 
-The bundled [code-mode skill](skills/code-mode/SKILL.md) describes **native pi codemode**.
 Themes include Catppuccin Frappé, Latte and Macchiato, plus Rosé Pine Dawn and Moon.
 
 ## Install and update
@@ -184,5 +183,4 @@ npm run fmt:check
 - [Guardrail](extensions/guardrail/README.md)
 - [Secrets](extensions/secrets/README.md)
 - [Usage](extensions/usage/README.md)
-- [Native codemode skill](skills/code-mode/SKILL.md)
 - [pi documentation](https://github.com/earendil-works/pi)

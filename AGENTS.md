@@ -2,7 +2,7 @@
 
 ## Project
 
-This repository contains personal [pi](https://github.com/earendil-works/pi) extensions, skills, and themes. Extension entry points are discovered from `extensions/*/index.ts`; skills are under `skills/`; themes are JSON files in `themes/`.
+This repository contains personal [pi](https://github.com/earendil-works/pi) extensions and themes. Extension entry points are discovered from `extensions/*/index.ts`; themes are JSON files in `themes/`.
 
 ## Working conventions
 

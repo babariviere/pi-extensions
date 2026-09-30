@@ -24,9 +24,6 @@
     "extensions": [
       "extensions/*/index.ts"
     ],
-    "skills": [
-      "skills"
-    ],
     "themes": [
       "themes/*.json"
     ]
