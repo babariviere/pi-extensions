@@ -1,149 +1,135 @@
 # Subagents
 
-Standalone child Pi sessions with bounded waiting, background completion delivery,
-process-group cancellation and optional Herdr panes. Requires Pi 1.0 or newer.
+Restart-resumable pi-durable conversations and checkpointed background tasks,
+with the native Pi tools, extensions, authentication, sandbox, secrets and MCP.
+Requires Pi 1.0 and a Node.js 24+ host. Durable execution is the only backend.
+There are no Herdr panes, CLI dialect probes or headless Pi launch fallbacks.
 
 ## Native tools
 
 | Tool | Purpose |
 | --- | --- |
 | `agents_list` | Discover markdown definitions. |
-| `agents_models` | List permitted model overrides and the generic agent default. |
-| `agents_run` | Launch one task and wait for the configured window. |
-| `agents_runAll` | Launch a parallel batch and wait for the window. |
-| `agents_start` | Launch one task or a batch without blocking. |
+| `agents_models` | List permitted model overrides and the generic default. |
+| `agents_run` | Start one task and wait for the configured window. |
+| `agents_runAll` | Start a parallel batch and wait for the window. |
+| `agents_start` | Start a task or batch without waiting. |
 | `agents_wait` | Claim results or keep waiting by `runId`. |
 | `agents_status` | List live and recent batches without their output. |
-| `agents_cancel` | Cancel one batch, or all live batches. |
+| `agents_cancel` | Explicitly abort one batch or every live batch. |
 
-All actions are callable through `codemode` and return structured results. Common
-actions use `codemode` exposure; `agents_models`, `agents_list`, `agents_status`,
-and `agents_cancel` are deferred so the inline tool listing stays concise. Deferred
-actions remain searchable and callable. Pi configuration controls whether
-`codemode` is active; this extension neither enables nor replaces it. Namespace
-workflow guidance is available with `describeNamespace("agents")`. A native
-script can use:
+All actions return structured results through native `codemode`. Models, list,
+status and cancel are deferred but remain searchable and callable. This extension
+does not activate or replace codemode. Read longer workflow guidance with
+`describeNamespace("agents")`.
 
 ```ts
 const run = await tools.agents_start({ task: "Review the test coverage" });
 return await tools.agents_wait({ runId: run.runId, waitMs: 1000 });
 ```
 
-A `running` result is a handle, not a failed task. Use `tools.agents_wait({ runId })`
-to resume waiting, or `tools.agents_cancel({ runId })` to stop it.
-`tools.agents_wait.timeoutMs` is a compatibility alias for its wait window;
-`waitMs` wins. Per-call child lifetime overrides are not accepted. A detached run
-survives its launching turn, but by default not session replacement, reload or shutdown.
-Attached runs are cancelled when their launching call is aborted. Unclaimed
-completions trigger one parent follow-up after it becomes idle. A terminal wait
-claims the result and suppresses that wake-up.
+A `running` result is a resumable handle, not a failure. `agents_wait.timeoutMs`
+is a compatibility alias for its wait window; `waitMs` wins. The host, not the
+caller, sets child lifetime. Terminal results include their stable Harness
+`conversationId` when available. The existing task/batch API remains unchanged.
 
-## Configuration
+## Configuration and definitions
 
 Read `~/.pi/agent/subagents.json` (or Pi's configured agent directory), then merge
-`<cwd>/.pi/subagents.json` only when the parent trusts the project. The former
-`code-mode.json` **agents block becomes the root object**:
+`<cwd>/.pi/subagents.json` only when the parent trusts the project:
 
 ```json
 {
   "maxPerExecution": 100,
   "timeoutMs": 7200000,
   "waitMs": 600000,
-  "defaultModel": "anthropic/your-model-id",
+  "defaultModel": "your-provider/your-model-id",
   "defaultThinking": "high"
 }
 ```
 
-- `maxPerExecution` limits launch action calls per enclosing native tool execution
-  (including nested codemode calls), not the number of tasks in a parallel batch.
-  Default 100, clamped to 1 through 1000.
-- `timeoutMs` bounds the children's lifetime. Default 2 hours, minimum 1 second,
-  maximum 24 hours.
+- `maxPerExecution` limits launch action calls per enclosing native tool execution,
+  including nested codemode calls, not tasks in a batch. Default 100, range 1 to 1000.
+- `timeoutMs` is the child's total wall-clock lifetime, including restart downtime.
+  Default 2 hours, range 1 second to 24 hours. Recovery does not reset it.
 - `waitMs` bounds each default blocking wait. Default 10 minutes, the same
-  configuration bounds as `timeoutMs`. A tool call may use `waitMs: 0` to detach.
-- Model/thinking defaults are optional. Agent definitions win over these defaults;
-  explicit per-task overrides win over agent definitions. Without a configured
-  model default, the generic agent inherits the live parent model.
-- `backend: "durable"` opts into the experimental reload-safe headless backend
-  described below. Omit it to retain automatic headless/Herdr selection.
-- No executor, MCP or native codemode settings are read here. Invalid JSON fails
-  explicitly; invalid field values fall back to defaults.
+  configuration bounds as lifetime. Per-call `waitMs: 0` detaches immediately.
+- Model/thinking defaults are optional. Agent definitions override defaults;
+  explicit task overrides override definitions. Generic tasks inherit the live
+  parent's physical model when there is no configured default.
+- The old `backend` field is ignored. There is no opt-out or fallback backend.
+  No executor, MCP or native codemode settings are read from this file.
+- Invalid JSON fails explicitly; invalid field values fall back to defaults.
 
-Definitions are discovered under `~/.pi/agent/agents/` and `<cwd>/.pi/agents/`,
-recursively. Project definitions override user definitions by name. Omit `agent`
-to use the generic `task` agent. Existing frontmatter supports `model`, `thinking`,
-`sandbox`, `output`, `defaultReads`, `systemPromptMode`, `inheritSkills` and
-`inheritProjectContext`. Final assistant messages are the result, not a submission
-tool. Results are persisted beside the parent session, or under the temporary
-`pi-subagents` directory if there is no session file.
+Definitions are discovered recursively under `~/.pi/agent/agents/` and
+`<cwd>/.pi/agents/`. Project names override user names. Omit `agent` to use the
+generic `task` agent. Frontmatter supports `model`, `thinking`, `sandbox`,
+`output`, `defaultReads`, `systemPromptMode`, `inheritSkills` and
+`inheritProjectContext`. Final assistant text is the result, not a submission tool.
 
-## Experimental durable backend
+## Architecture, reload and recovery
 
-Add this field to `subagents.json`, then run `/reload`:
+Each child runs a genuine `Harness` in an isolated worker. A persistent child
+conversation is owned by a background Anchor task. A checkpointed Reporter
+submits the task with a stable request ID, waits for its answer, and records an
+idempotent passive report. Pi-durable owns model turns, transcripts, tool intents
+and task checkpoints. A native SDK session acts only as the tool, prompt and
+provider kernel; it does not run a second model loop.
 
-```json
-{ "backend": "durable" }
-```
+- Requires a file-backed parent session. A second writer for its private journal,
+  or for a child Harness, is refused. There is no silent in-memory fallback.
+- `/reload` detaches old UI and tool contexts without cancelling admitted work.
+  The replacement reconnects to the process-owned supervisor. New launches use
+  the new implementation; existing workers keep theirs until restart.
+- Quit pauses workers and leaves their conversations/tasks pending. Resume the
+  same parent session to reopen the Harness and continue from its checkpoints.
+  A process crash also leaves resumable work. Switching to a new session,
+  resuming a different session or forking cancels the outgoing parent's live
+  batches. Explicit `agents_cancel` aborts, rather than pauses, work.
+- Repeated worker admission finds the original child and submission, not a new
+  agent. Reporter answer and report receipts commit atomically with their state.
+- **Native tools are replay-unsafe**, including codemode and nested calls. A
+  crash during a tool produces an interrupted tool result, then the model can
+  continue. The tool is not automatically rerun. A tool may already have changed
+  files or external systems before its result was committed. Recovery cannot
+  guarantee exactly-once external effects.
+- Workers disconnect and pause if the parent disappears. Shutdown and timeout
+  enforce bounded process-group teardown. A hard crash can still leave tool
+  subprocesses alive briefly; inspect external effects before repeating work.
+- Unclaimed results trigger a parent follow-up after it becomes idle. Waiting
+  for terminal results claims them and suppresses the wake-up. The native parent
+  is not a durable Harness conversation: its notification boundary remains
+  **at-most-once**, with possible lost wake-ups on crash or delivery failure.
+  `agents_status` and `agents_wait` still retrieve the committed result.
+- Old lifecycle-only CLI admissions have no conversation checkpoints. Interrupted
+  legacy records remain explicit failures; they are never replayed as new tasks.
 
-This uses pinned `@earendil-works/pi-durable` and `@earendil-works/chord` 1.0.0
-packages. It preserves the existing Pi CLI child runner and its sandbox,
-authentication, secrets, MCP, project-trust and model authorization boundaries.
-It does not introduce another model harness or scheduler. The `agents_*` API is
-unchanged. Durable mode requires a file-backed parent session and uses headless
-children even inside Herdr.
+## Permissions and storage
 
-- `/reload` disconnects the old UI and tool callbacks without cancelling admitted
-  runs. The new extension reconnects to the same process-owned supervisor. Chord
-  replaces the runner service for new launches; calls already running retain
-  their original implementation. There is no file watcher or automatic rebuild.
-- Quit, new session, resume, fork and opting out on reload cancel live batches.
-  Children retain the configured lifetime bound and process-group cancellation.
-- Pi-durable commits admissions before launch, cancellations before abort, and
-  terminal output before returning it. Claims and notification receipts persist
-  across reload and restart. A second writer for the same parent is refused.
-- After a process crash, unfinished runs become explicit interrupted failures.
-  They are **not automatically relaunched**. This is durable lifecycle history,
-  not crash-resumable shell work or exactly-once external effects. A child may
-  have performed effects before its terminal result was committed. Inspect its
-  session/output before deciding whether to rerun it. A crash can also leave an
-  external child or its tools alive; inspect and stop those before rerunning.
-- Automatic notifications are at-most-once. Their receipt commits before the
-  parent follow-up, so a crash or delivery error between those steps can lose
-  the wake-up. `agents_status` and `agents_wait` still retrieve the result.
-- The journal lives at `<parent-session-file>.subagents-durable/<identity>/`,
-  keyed by parent session ID and working directory. Directories are private
-  (0700) and databases private (0600). A separate SQLite ownership lease is
-  released by the OS on process exit. SQLite's normal WAL durability protects
-  process restarts, not every sudden power-loss scenario.
-- Task prompts and launch credentials are not journaled, but final output can
-  contain sensitive data. Protect these files like Pi session files. Claimed
-  history retains 50 recent batches; live and unclaimed records are preserved.
-  Database history is not securely erased by that pruning.
-
-Storage failure stops new admissions, aborts live children and reports an error
-rather than publishing uncommitted results. No user configuration is changed
-automatically.
-
-## Boundaries and operations
-
-- Child sessions and background attempts never receive agents or jobs tools.
-  The existing `PI_CODE_MODE_SUBAGENT=1` environment marker remains a compatibility
-  contract between runners and the standalone extensions.
-- `--code-mode-task-file` and `--code-mode-sandbox` retain their historical names.
-  Subagents registers/delivers the task-file flag even in children. Its small
-  injected child extension registers the sandbox flag, while standalone sandbox
-  enforces it as a floor. Sandboxed definitions require that extension to be loaded.
-- The parent's project-trust verdict is forwarded explicitly, so unattended
-  children never stop at a fresh-workspace trust prompt.
-- Model overrides stay within the parent provider, `enabledModels` and the
-  existing approved price ceiling. `agents_models` omits connection details.
-- Approved night tasks require `nightTodoId`; children receive isolated jj
-  workspaces, a durable deliverables directory and the night contract. Workspace
-  result paths are rewritten before release. Runner launch faults are journaled
-  and repeated identical faults trip the existing cause breaker.
-- Herdr is optional. Incompatible CLI dialects or repeated launch faults degrade
-  to headless child processes. Cancellation closes the Herdr tab or terminates
-  the headless process group. Session cleanup drains children for up to 5 seconds.
-- A compact progress widget appears only in interactive TUI mode. Disable it with
-  `--no-subagents-progress`. Non-interactive and RPC operation does not depend
-  on the widget.
+- The native kernel loads the configured Pi extension/tool stack, including
+  builtin codemode, tool search and MCP. Tool calls and nested calls retain native
+  argument validation, result transformations, structured output and policy hooks.
+- The parent's trust verdict is inherited. Sandboxed definitions retain their
+  non-loosenable floor and fail closed if the sandbox extension is unavailable.
+  The historical `--code-mode-sandbox` name remains an internal floor marker.
+- Children and background attempts cannot recursively launch agents or jobs.
+  The `PI_CODE_MODE_SUBAGENT=1` marker remains an internal compatibility contract.
+- Model overrides retain provider, enabled-model and price authorization.
+  Credentials are resolved at request time by the native provider runtime, never
+  stored in recovery inputs. Extension features that start their own model loop
+  or replace the native SDK session are not supported by this adapter.
+- Approved night tasks require `nightTodoId` and retain isolated jj workspaces,
+  their environment and deliverables. Pausing does not delete a pending task's
+  workspace. Completion/cancellation releases it and rewrites result paths.
+- Parent journal: `<parent-session-file>.subagents-durable/<identity>/`. Child
+  Harness: `subagent-runs/<parent-session-id>/<run-id>/<agent>-<index>.durable/`
+  beside the parent session. Directories are private (0700), databases 0600.
+- **Prompts, policy snapshots, transcripts and tool output are now persisted**, not
+  just lifecycle receipts. They may contain sensitive data. Protect these files
+  like native Pi sessions. Parent claimed history retains 50 recent batches;
+  live/unclaimed records and child Harness files are not automatically erased.
+  SQLite WAL protects process restarts, not every power-loss scenario. Pruning
+  journal history is not secure deletion.
+- A storage failure stops admissions and fails closed. No user settings are
+  changed automatically. The optional compact TUI widget is disabled with
+  `--no-subagents-progress`; non-interactive operation does not depend on it.

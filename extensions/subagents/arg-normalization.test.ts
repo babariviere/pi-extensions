@@ -13,7 +13,7 @@ const normalize = actionArgNormalizer(() => [
 				task: { type: "string" },
 				reads: { type: "array", items: { type: "string" } },
 				waitMs: { type: "number" },
-				mode: { type: "string", enum: ["headless", "pane"] },
+				thinking: { type: "string", enum: ["low", "high"] },
 			},
 			required: ["task"],
 			additionalProperties: false,
@@ -42,7 +42,7 @@ test("numeric strings coerce for declared numeric fields", () => {
 });
 
 test("enum value spellings repair to declared members", () => {
-	assert.deepEqual(normalize("run", { task: "x", mode: "Headless" }), { task: "x", mode: "headless" });
+	assert.deepEqual(normalize("run", { task: "x", thinking: "High" }), { task: "x", thinking: "high" });
 });
 
 test("nullish declared optionals are stripped", () => {

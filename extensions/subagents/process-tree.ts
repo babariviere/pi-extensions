@@ -1,5 +1,5 @@
 /**
- * Child-process teardown for the headless backend.
+ * Whole-process-group teardown for isolated subagent kernels and shell jobs.
  *
  * A subagent `pi` child spawns its own tool subprocesses (bash, test runners,
  * migrations). Signalling only the direct child leaves those orphaned: they keep

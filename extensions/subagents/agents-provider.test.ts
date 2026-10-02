@@ -44,12 +44,12 @@ const harness = (waitMs = 0): Harness => {
 	let runContext: RunContext | undefined;
 	let settle: (results: RunResult[]) => void = () => {};
 	let count = 0;
-	const headless: RunBackend = (reqs, ctx) => {
+	const durable: RunBackend = (reqs, ctx) => {
 		runContext = ctx;
 		count = reqs.length;
 		return new Promise<RunResult[]>((resolve) => {
 			settle = resolve;
-			// Both real backends resolve their runs when the context is aborted.
+			// The durable backend resolves its runs when the context is aborted.
 			ctx.signal?.addEventListener(
 				"abort",
 				() =>
@@ -59,7 +59,7 @@ const harness = (waitMs = 0): Harness => {
 							scope: req.agent.scope,
 							ok: false,
 							output: "",
-							backend: "headless" as const,
+							backend: "durable" as const,
 							error: "cancelled by the parent session",
 						})),
 					),
@@ -73,7 +73,7 @@ const harness = (waitMs = 0): Harness => {
 		new AgentRunRegistry(),
 		() => ({ timeoutMs: 60_000, waitMs }),
 		book,
-		new RunLauncher({ inHerdr: () => false, headless }),
+		new RunLauncher(durable),
 	);
 	return { provider, book, contextOf: () => runContext, settle: (results) => settle(results), count: () => count };
 };
@@ -83,7 +83,8 @@ const doneResult = (agent: string): RunResult => ({
 	scope: "user",
 	ok: true,
 	output: `${agent} finished`,
-	backend: "headless",
+	backend: "durable",
+	conversationId: `conversation-${agent}`,
 	exitCode: 0,
 });
 
@@ -99,25 +100,22 @@ test("provider close cancels and drains live children, then rejects new calls", 
 });
 
 test("session shutdown during adapter selection cannot launch an orphan child", async () => {
-	let release: (verdict: { compatible: boolean }) => void = () => {};
-	let probed: () => void = () => {};
+	let release: (selection: { backend: "durable" }) => void = () => {};
+	let selected: () => void = () => {};
 	const ready = new Promise<void>((resolve) => {
-		probed = resolve;
+		selected = resolve;
 	});
 	let spawned = 0;
-	const launcher = new RunLauncher({
-		inHerdr: () => true,
-		probe: () => {
-			probed();
-			return new Promise((resolve) => {
-				release = resolve;
-			});
-		},
-		headless: async () => {
-			spawned++;
-			return [];
-		},
+	const launcher = new RunLauncher(async () => {
+		spawned++;
+		return [];
 	});
+	launcher.selection = () => {
+		selected();
+		return new Promise((resolve) => {
+			release = resolve;
+		});
+	};
 	const provider = new AgentsProvider(
 		() => ({ sessionId: undefined, sessionFile: undefined, cwd: tmpdir() }),
 		new AgentRunRegistry(),
@@ -129,7 +127,7 @@ test("session shutdown during adapter selection cannot launch an orphan child", 
 	const rejected = assert.rejects(launched, /shutting down/);
 	await ready;
 	await provider.close();
-	release({ compatible: false });
+	release({ backend: "durable" });
 	await rejected;
 	assert.equal(spawned, 0);
 });
@@ -147,7 +145,7 @@ test("agent settings take precedence over runtime defaults unless the caller ove
 		writeFileSync(join(dir, "suffix.md"), "---\nname: suffix\nmodel: parent/reviewer:high\n---\nReview.");
 		writeFileSync(join(dir, "worker.md"), "---\nname: worker\n---\nWork.");
 		let received: RunRequest[] = [];
-		const headless: RunBackend = async (reqs) => {
+		const durable: RunBackend = async (reqs) => {
 			received = reqs;
 			return reqs.map((req) => doneResult(req.agent.config.name));
 		};
@@ -162,7 +160,7 @@ test("agent settings take precedence over runtime defaults unless the caller ove
 				defaultThinking: "medium",
 			}),
 			new AgentRunBook(),
-			new RunLauncher({ inHerdr: () => false, headless }),
+			new RunLauncher(durable),
 		);
 		await provider.invoke(
 			"runAll",
@@ -219,6 +217,9 @@ test("wait resumes a launched batch and returns its settled results", async () =
 	assert.equal(waited.state, "settled");
 	assert.equal(waited.results[0]?.state, "done");
 	assert.equal(waited.results[0]?.output, "task finished");
+	assert.equal(waited.results[0]?.conversationId, "conversation-task");
+	assert.equal(waited.results[0]?.exitCode, 0);
+	assert.equal("paneId" in waited.results[0]!, false);
 	assert.equal(waited.results[0]?.runId, handle.runId);
 });
 
@@ -373,7 +374,7 @@ test("every subagent action declares an output schema for its actual result shap
 		output: "failed",
 		state: "failed",
 		runId: "r",
-		paneId: "w1:p1",
+		conversationId: "conversation-1",
 		error: "launch failed",
 		failure: "launch",
 	};
@@ -401,6 +402,7 @@ test("every subagent action declares an output schema for its actual result shap
 	await accepts("run", running);
 	await accepts("run", settled);
 	await accepts("run", failed);
+	await rejects("run", { ...failed, paneId: "legacy-pane" });
 	await rejects("run", { ...running, ok: true });
 	await accepts("runAll", [running, settled]);
 	await accepts("start", { runId: "r", agents: ["task"], state: "running" });
@@ -439,8 +441,8 @@ test("a launch failure reaches the sandbox as its own class, not as prose", asyn
 			agent: "task",
 			scope: "user",
 			ok: false,
-			output: "(failed to run in herdr: timed out waiting for agent startup)",
-			backend: "herdr",
+			output: "(failed to start durable worker: timed out waiting for agent startup)",
+			backend: "durable",
 			error: "timed out waiting for agent startup",
 			failure: "launch",
 		},
@@ -455,15 +457,15 @@ test("a launch failure reaches the sandbox as its own class, not as prose", asyn
 
 test("the breaker refuses to relaunch into a cause that already failed twice", async () => {
 	let launches = 0;
-	const headless: RunBackend = async (reqs) => {
+	const durable: RunBackend = async (reqs) => {
 		launches++;
 		return reqs.map((req) => ({
 			agent: req.agent.config.name,
 			scope: "user",
 			ok: false,
 			output: "",
-			backend: "headless" as const,
-			error: `timed out waiting for agent startup (pane wA:p${launches})`,
+			backend: "durable" as const,
+			error: `timed out waiting for agent startup (worker ${launches})`,
 			failure: "launch" as const,
 		}));
 	};
@@ -472,7 +474,7 @@ test("the breaker refuses to relaunch into a cause that already failed twice", a
 		new AgentRunRegistry(),
 		() => ({ timeoutMs: 60_000, waitMs: 1_000 }),
 		new AgentRunBook({ announceDelayMs: 5 }),
-		new RunLauncher({ inHerdr: () => false, headless }),
+		new RunLauncher(durable),
 		new CauseBreaker({ limit: 2, retryAfterMs: 60_000, now: () => 1_000 }),
 	);
 
@@ -494,7 +496,7 @@ test("the breaker refuses to relaunch into a cause that already failed twice", a
 
 test("a run that reaches its child clears the breaker", async () => {
 	let launches = 0;
-	const headless: RunBackend = async (reqs) => {
+	const durable: RunBackend = async (reqs) => {
 		launches++;
 		return reqs.map((req) =>
 			launches === 1
@@ -503,7 +505,7 @@ test("a run that reaches its child clears the breaker", async () => {
 						scope: "user",
 						ok: false,
 						output: "",
-						backend: "headless" as const,
+						backend: "durable" as const,
 						error: "timed out waiting for agent startup",
 						failure: "launch" as const,
 					}
@@ -516,7 +518,7 @@ test("a run that reaches its child clears the breaker", async () => {
 		new AgentRunRegistry(),
 		() => ({ timeoutMs: 60_000, waitMs: 1_000 }),
 		new AgentRunBook({ announceDelayMs: 5 }),
-		new RunLauncher({ inHerdr: () => false, headless }),
+		new RunLauncher(durable),
 		breaker,
 	);
 	const run = async () => await provider.invoke("run", { task: "do a thing" }, invocationContext());

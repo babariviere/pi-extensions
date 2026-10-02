@@ -23,7 +23,11 @@ export function testHost() {
 		isProjectTrusted: () => false,
 		isIdle: () => idle,
 		modelRegistry: { getAvailable: async () => [] },
-		sessionManager: { getSessionId: () => "session", getSessionFile: () => undefined },
+		sessionManager: {
+			getSessionId: () => "session",
+			getSessionFile: () =>
+				process.env.PI_CODING_AGENT_DIR ? join(process.env.PI_CODING_AGENT_DIR, "parent.jsonl") : undefined,
+		},
 		ui: { setWidget: (_key: string, widget: unknown) => widgets.push(widget) },
 	} as unknown as ExtensionContext;
 	const api = {

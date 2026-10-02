@@ -1,12 +1,9 @@
-/**
- * `baseResult` is the one place both adapters assemble a result, so the rules
- * about failure classification are checked here rather than through a spawn.
- */
+/** Durable worker inputs and result helpers. */
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { ResolvedOutput } from "./output.ts";
-import { baseResult, withChildConfigHome, type RunRequest } from "./run.ts";
+import { baseResult, runCwd, withChildConfigHome, type RunContext, type RunRequest } from "./run.ts";
 
 const request = (): RunRequest => ({
 	agent: {
@@ -30,10 +27,10 @@ test("a private child config home preserves the rest of the environment", () => 
 });
 
 test("baseResult carries the failure class of a failed run", () => {
-	const result = baseResult(request(), resolved(false), "herdr never confirmed the child", "launch");
+	const result = baseResult(request(), resolved(false), "durable worker never started", "launch");
 	assert.equal(result.ok, false);
 	assert.equal(result.failure, "launch");
-	assert.equal(result.error, "herdr never confirmed the child");
+	assert.equal(result.error, "durable worker never started");
 });
 
 test("baseResult leaves no failure class on a run that produced its output", () => {
@@ -47,4 +44,11 @@ test("baseResult folds a write error into the reason without losing the class", 
 	const result = baseResult(request(), resolved(false, { writeError: "EACCES" }), "timed out", "timeout");
 	assert.equal(result.failure, "timeout");
 	assert.match(result.error ?? "", /timed out; EACCES/);
+});
+
+test("runCwd uses the host workspace override and otherwise the parent cwd", () => {
+	const req = request();
+	const ctx = { cwd: "/parent" } as RunContext;
+	assert.equal(runCwd(req, ctx), "/parent");
+	assert.equal(runCwd({ ...req, cwd: "/workspace" }, ctx), "/workspace");
 });

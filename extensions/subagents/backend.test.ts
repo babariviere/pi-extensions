@@ -1,232 +1,98 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { probeHerdrDialect, RunLauncher, type BackendSelection } from "./backend.ts";
-import type { HerdrCliResult } from "./herdr-parse.ts";
-import type { HerdrTransport } from "./herdr-transport.ts";
+import { RunLauncher } from "./backend.ts";
+import { builtinAgent } from "./discovery.ts";
 import type { RunBackend, RunContext, RunRequest, RunResult } from "./run.ts";
 
-/**
- * The launcher and the dialect probe, tested through their interfaces with an
- * in-memory transport and fake backends: no `herdr` binary and no child `pi`
- * processes are involved.
- */
-
-function scriptedTransport(result: (args: string[]) => HerdrCliResult): {
-	transport: HerdrTransport;
-	calls: string[][];
-} {
-	const calls: string[][] = [];
-	return {
-		calls,
-		transport: {
-			run: (args) => {
-				calls.push(args);
-				return Promise.resolve(result(args));
-			},
-		},
-	};
-}
-
-const PANE_HELP: HerdrCliResult = {
-	ok: true,
-	result: {},
-	stdout: "Commands: list, run, read",
-};
-const AGENT_HELP: HerdrCliResult = {
-	ok: true,
-	result: {},
-	stdout: "Commands: start, prompt, wait",
-};
-
-test("probe accepts the dialect the adapter speaks", async () => {
-	const { transport, calls } = scriptedTransport((args) => (args.includes("pane") ? PANE_HELP : AGENT_HELP));
-	const verdict = await probeHerdrDialect(transport);
-	assert.equal(verdict.compatible, true);
-	assert.equal(calls.length, 2);
-});
-
-test("probe rejects a CLI without pane run", async () => {
-	const { transport } = scriptedTransport((args) =>
-		args.includes("pane") ? { ok: true, result: {}, stdout: "Commands: list, read" } : AGENT_HELP,
-	);
-	const verdict = await probeHerdrDialect(transport);
-	assert.equal(verdict.compatible, false);
-	assert.match(verdict.reason ?? "", /pane run/);
-});
-
-test("probe rejects a CLI without agent wait", async () => {
-	const { transport } = scriptedTransport((args) =>
-		args.includes("pane") ? PANE_HELP : { ok: true, result: {}, stdout: "Commands: start, prompt" },
-	);
-	const verdict = await probeHerdrDialect(transport);
-	assert.equal(verdict.compatible, false);
-	assert.match(verdict.reason ?? "", /wait/);
-});
-
-test("probe rejects a CLI that cannot even show help", async () => {
-	const { transport } = scriptedTransport(() => ({ ok: false, error: "unknown option: --kind" }));
-	const verdict = await probeHerdrDialect(transport);
-	assert.equal(verdict.compatible, false);
-	assert.match(verdict.reason ?? "", /unavailable/);
-});
-
-/** A minimal request; the fake backends only read the agent name off it. */
-const runRequest = (): RunRequest => ({
-	agent: { scope: "user", config: { name: "task", body: "" } } as unknown as RunRequest["agent"],
-	task: "do a thing",
-	index: 0,
-});
-
-const emptyContext = (): RunContext => ({
-	sessionId: undefined,
-	sessionFile: undefined,
-	runId: "test-run",
+const request = (): RunRequest => ({ agent: builtinAgent(), task: "work", index: 0 });
+const context = (): RunContext => ({
+	sessionId: "parent",
+	sessionFile: "/tmp/parent.jsonl",
+	runId: "launcher-test",
 	cwd: process.cwd(),
-	timeoutMs: 1000,
+	timeoutMs: 1_000,
 });
 
-test("outside herdr the launcher picks headless and never probes", async () => {
-	const used: string[] = [];
-	let probes = 0;
-	const launcher = new RunLauncher({
-		inHerdr: () => false,
-		probe: () => {
-			probes++;
-			return Promise.resolve({ compatible: true });
+test("the launcher always selects durable and forwards requests and context unchanged", async () => {
+	const requests = [request()];
+	const ctx = context();
+	const results: RunResult[] = [
+		{
+			agent: "task",
+			scope: "builtin",
+			ok: true,
+			output: "done",
+			backend: "durable",
+			conversationId: "conversation-1",
 		},
-		herdr: (async () => {
-			used.push("herdr");
-			return [];
-		}) as RunBackend,
-		headless: (async () => {
-			used.push("headless");
-			return [];
-		}) as RunBackend,
+	];
+	let calls = 0;
+	const launcher = new RunLauncher(async (received, ambient) => {
+		calls++;
+		assert.equal(received, requests);
+		assert.equal(ambient, ctx);
+		return results;
 	});
-	const selection = await launcher.selection();
-	assert.deepEqual(selection, { backend: "headless" } satisfies BackendSelection);
-	await launcher.run([], emptyContext());
-	assert.deepEqual(used, ["headless"]);
-	assert.equal(probes, 0);
+	assert.deepEqual(await launcher.selection(), { backend: "durable" });
+	assert.equal(calls, 0, "selection must not execute a child");
+	assert.equal(await launcher.run(requests, ctx), results);
+	assert.equal(calls, 1);
 });
 
-test("a compatible herdr dialect selects the herdr adapter", async () => {
-	const used: string[] = [];
-	const launcher = new RunLauncher({
-		inHerdr: () => true,
-		probe: () => Promise.resolve({ compatible: true }),
-		herdr: (async () => {
-			used.push("herdr");
+test("replacement serves new calls while active calls finish on the original backend", async () => {
+	let finish!: (results: RunResult[]) => void;
+	const calls: string[] = [];
+	const first: RunBackend = () => {
+		calls.push("v1");
+		return new Promise((resolve) => {
+			finish = resolve;
+		});
+	};
+	const launcher = new RunLauncher(first);
+	const active = launcher.run([request()], context());
+	try {
+		launcher.replace(async () => {
+			calls.push("v2");
 			return [];
-		}) as RunBackend,
-		headless: (async () => {
-			used.push("headless");
-			return [];
-		}) as RunBackend,
-	});
-	const selection = await launcher.selection();
-	assert.deepEqual(selection, { backend: "herdr" } satisfies BackendSelection);
-	await launcher.run([], emptyContext());
-	assert.deepEqual(used, ["herdr"]);
+		});
+		assert.deepEqual(await launcher.run([request()], context()), []);
+		assert.deepEqual(calls, ["v1", "v2"]);
+		assert.deepEqual(await launcher.selection(), { backend: "durable" });
+	} finally {
+		finish([]);
+		await active;
+	}
 });
 
-test("a drifted herdr falls back to headless and probes only once", async () => {
-	const used: string[] = [];
-	let probes = 0;
-	const launcher = new RunLauncher({
-		inHerdr: () => true,
-		probe: () => {
-			probes++;
-			return Promise.resolve({ compatible: false, reason: "herdr agent start does not accept --kind" });
-		},
-		herdr: (async () => {
-			used.push("herdr");
-			return [];
-		}) as RunBackend,
-		headless: (async () => {
-			used.push("headless");
-			return [];
-		}) as RunBackend,
+test("backend rejection is surfaced without selecting or launching a fallback", async () => {
+	const failure = new Error("durable worker unavailable");
+	let calls = 0;
+	const launcher = new RunLauncher(async () => {
+		calls++;
+		throw failure;
 	});
-	const selection = await launcher.selection();
-	assert.equal(selection.backend, "headless");
-	assert.match(selection.degradedReason ?? "", /--kind/);
-	await launcher.run([], emptyContext());
-	await launcher.run([], emptyContext());
-	assert.deepEqual(used, ["headless", "headless"]);
-	assert.equal(probes, 1);
+	await assert.rejects(launcher.run([request()], context()), (error) => error === failure);
+	assert.deepEqual(await launcher.selection(), { backend: "durable" });
+	assert.equal(calls, 1);
 });
 
-test("a herdr that stops launching children is demoted to headless mid-session", async () => {
-	const used: string[] = [];
-	const launchFailure = (agent: string): RunResult => ({
-		agent,
-		scope: "user",
+test("launch failures remain durable results rather than triggering a legacy fallback", async () => {
+	const result: RunResult = {
+		agent: "task",
+		scope: "builtin",
 		ok: false,
-		output: "(failed to run in herdr: timed out waiting for agent startup)",
-		backend: "herdr",
-		error: "timed out waiting for agent startup",
+		output: "",
+		backend: "durable",
+		error: "worker failed to start",
 		failure: "launch",
+	};
+	let calls = 0;
+	const launcher = new RunLauncher(async () => {
+		calls++;
+		return [result];
 	});
-	const launcher = new RunLauncher({
-		inHerdr: () => true,
-		probe: () => Promise.resolve({ compatible: true }),
-		herdr: async (reqs) => {
-			used.push("herdr");
-			return reqs.map((req) => launchFailure(req.agent.config.name));
-		},
-		headless: async (reqs) => {
-			used.push("headless");
-			return reqs.map((req) => ({
-				agent: req.agent.config.name,
-				scope: "user",
-				ok: true,
-				output: "done",
-				backend: "headless" as const,
-			}));
-		},
-	});
-
-	for (let i = 0; i < 3; i++) await launcher.run([runRequest()], emptyContext());
-
-	// Two launch failures are enough; the third batch goes elsewhere.
-	assert.deepEqual(used, ["herdr", "herdr", "headless"]);
-	const selection = await launcher.selection();
-	assert.equal(selection.backend, "headless");
-	assert.match(selection.degradedReason ?? "", /failed to launch 2 children in a row/);
-	assert.match(selection.degradedReason ?? "", /waiting for agent startup/);
-});
-
-test("a run that actually ran clears the launch-failure streak", async () => {
-	const used: string[] = [];
-	let call = 0;
-	const launcher = new RunLauncher({
-		inHerdr: () => true,
-		probe: () => Promise.resolve({ compatible: true }),
-		herdr: async (reqs) => {
-			used.push("herdr");
-			call++;
-			// fail, ran-but-empty, fail, fail
-			const failure = call === 2 ? ("run" as const) : ("launch" as const);
-			return reqs.map((req) => ({
-				agent: req.agent.config.name,
-				scope: "user",
-				ok: false,
-				output: "",
-				backend: "herdr" as const,
-				failure,
-			}));
-		},
-		headless: async () => {
-			used.push("headless");
-			return [];
-		},
-	});
-
-	for (let i = 0; i < 4; i++) await launcher.run([runRequest()], emptyContext());
-
-	// The `run` failure in the middle resets the count, so the demotion only
-	// lands after the two that follow it.
-	assert.deepEqual(used, ["herdr", "herdr", "herdr", "herdr"]);
-	assert.equal((await launcher.selection()).backend, "headless");
+	assert.deepEqual(await launcher.run([request()], context()), [result]);
+	assert.deepEqual(await launcher.run([request()], context()), [result]);
+	assert.equal(calls, 2);
+	assert.deepEqual(await launcher.selection(), { backend: "durable" });
 });

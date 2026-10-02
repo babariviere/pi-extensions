@@ -5,8 +5,6 @@ export interface SubagentsConfig {
 	waitMs: number;
 	defaultModel?: string;
 	defaultThinking?: string;
-	/** Experimental committed run lifecycle and reload-stable runner. Omitted means automatic headless/Herdr. */
-	backend?: "durable";
 }
 
 export const MIN_AGENT_TIMEOUT_MS = 1_000;
@@ -40,6 +38,5 @@ export function normalizeSubagentsConfig(input: Record<string, unknown>): Subage
 		waitMs: bounded(input.waitMs, DEFAULT_SUBAGENTS_CONFIG.waitMs, MIN_AGENT_TIMEOUT_MS, MAX_AGENT_TIMEOUT_MS),
 		...(model ? { defaultModel: model } : {}),
 		...(thinking ? { defaultThinking: thinking } : {}),
-		...(input.backend === "durable" ? { backend: "durable" as const } : {}),
 	};
 }

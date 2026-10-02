@@ -1,4 +1,4 @@
-/** Journal-backed run history for subagent batches. Task bodies and launch credentials never enter this journal. */
+/** Journal-backed run history and recovery inputs. Credentials are resolved by native workers, never journaled. */
 
 import type { JsonValue } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
@@ -15,6 +15,7 @@ import {
 	SETTLED_HISTORY,
 } from "./agent-run-book.ts";
 import type { AgentRuns } from "./agent-runs.ts";
+import type { RecoveryPayload } from "./recovery.ts";
 
 const ANNOUNCE_DELAY_MS = 150;
 
@@ -27,6 +28,7 @@ interface StoredBatch extends JsonObject {
 	claimed: boolean;
 	announced: boolean;
 	results: JsonValue[] | null;
+	recovery: JsonValue | null;
 }
 
 interface DurableRunBookState extends JsonObject {
@@ -45,11 +47,13 @@ interface RuntimeBatch {
 	admitted: boolean;
 	completion?: AgentResult[];
 	cancel?: () => void;
+	pause?: () => void;
 	onDetach?: () => void;
 	waiters: number;
 	detached: boolean;
 	cancelCalled: boolean;
 	finished: Promise<void>;
+	execution: Promise<unknown>;
 	finish(): void;
 	fail(error: Error): void;
 	cancelled: Promise<void>;
@@ -59,6 +63,8 @@ interface RuntimeBatch {
 export interface DurableAgentRunBookOptions {
 	onError?: (error: Error) => void;
 	announceDelayMs?: number;
+	/** Reattach a persisted admission to its existing Harness worker state. */
+	resume?: (payload: RecoveryPayload, runId: string) => Omit<AgentBatchRegistration, "runId" | "agents">;
 }
 
 /**
@@ -97,7 +103,7 @@ export class DurableRunBook implements AgentRuns {
 		void this.#failed.catch(() => {});
 	}
 
-	/** Open the journal and convert records left running by a previous process into explicit failures. */
+	/** Reopen admitted durable conversations. Old CLI-only records cannot be resumed safely. */
 	static async open(storage: Storage, options: DurableAgentRunBookOptions = {}): Promise<DurableRunBook> {
 		const book = new DurableRunBook(storage, options);
 		try {
@@ -114,7 +120,7 @@ export class DurableRunBook implements AgentRuns {
 			const recovered = new Map(book.#records);
 			let changed = false;
 			for (const [runId, record] of recovered) {
-				if (record.state === "running") {
+				if (record.state === "running" && !(record.recovery && options.resume)) {
 					recovered.set(runId, {
 						...record,
 						state: "settled",
@@ -133,6 +139,11 @@ export class DurableRunBook implements AgentRuns {
 				}
 			}
 			if (changed) await book.#enqueue(() => book.#persistLocked(recovered));
+			for (const record of book.#records.values()) {
+				if (record.state !== "running" || !record.recovery || !options.resume) continue;
+				const resumed = options.resume(copyJson(record.recovery) as unknown as RecoveryPayload, record.runId);
+				book.#attach({ ...resumed, runId: record.runId, agents: record.agents }, true);
+			}
 			return book;
 		} catch (error) {
 			try {
@@ -164,41 +175,7 @@ export class DurableRunBook implements AgentRuns {
 			throw new Error(`Subagent run already registered: ${registration.runId}`);
 		}
 
-		let finish!: () => void;
-		let fail!: (error: Error) => void;
-		let wakeCancelled!: () => void;
-		const finished = new Promise<void>((resolve, reject) => {
-			finish = resolve;
-			fail = reject;
-		});
-		const cancelled = new Promise<void>((resolve) => {
-			wakeCancelled = resolve;
-		});
-		void finished.catch(() => {});
-		const runtime: RuntimeBatch = {
-			admission: Promise.resolve(),
-			admitted: false,
-			cancel: registration.cancel,
-			...(registration.onDetach ? { onDetach: registration.onDetach } : {}),
-			waiters: 0,
-			detached: false,
-			cancelCalled: false,
-			finished,
-			finish,
-			fail,
-			cancelled,
-			wakeCancelled,
-		};
-		this.#runtime.set(registration.runId, runtime);
-
-		// Attach both handlers now: a launcher may finish or reject before its admission commit.
-		void Promise.resolve(registration.promise)
-			.then(
-				(results) => this.#receivedResults(registration.runId, runtime, results),
-				(error: unknown) => this.#receivedResults(registration.runId, runtime, failureResult(registration, error)),
-			)
-			.catch((error: unknown) => this.#report(error));
-
+		const runtime = this.#attach(registration, false);
 		const record: StoredBatch = {
 			runId: registration.runId,
 			agents: [...registration.agents],
@@ -208,6 +185,7 @@ export class DurableRunBook implements AgentRuns {
 			claimed: false,
 			announced: false,
 			results: null,
+			recovery: registration.recovery ? (JSON.parse(JSON.stringify(registration.recovery)) as JsonValue) : null,
 		};
 		const admission = this.#enqueue(async () => {
 			const next = new Map(this.#records);
@@ -224,6 +202,47 @@ export class DurableRunBook implements AgentRuns {
 			this.#kill(runtime);
 			throw error;
 		}
+	}
+
+	#attach(registration: AgentBatchRegistration, admitted: boolean): RuntimeBatch {
+		let finish!: () => void;
+		let fail!: (error: Error) => void;
+		let wakeCancelled!: () => void;
+		const finished = new Promise<void>((resolve, reject) => {
+			finish = resolve;
+			fail = reject;
+		});
+		const cancelled = new Promise<void>((resolve) => {
+			wakeCancelled = resolve;
+		});
+		void finished.catch(() => {});
+		const runtime: RuntimeBatch = {
+			admission: Promise.resolve(),
+			admitted,
+			cancel: registration.cancel,
+			pause: registration.pause,
+			...(registration.onDetach ? { onDetach: registration.onDetach } : {}),
+			waiters: 0,
+			detached: false,
+			cancelCalled: false,
+			finished,
+			execution: registration.promise,
+			finish,
+			fail,
+			cancelled,
+			wakeCancelled,
+		};
+		this.#runtime.set(registration.runId, runtime);
+
+		// Attach both handlers now: a launcher may finish or reject before its admission commit.
+		void Promise.resolve(registration.promise)
+			.then(
+				(results) => this.#receivedResults(registration.runId, runtime, results),
+				(error: unknown) => this.#receivedResults(registration.runId, runtime, failureResult(registration, error)),
+			)
+			.catch((error: unknown) => this.#report(error));
+
+		return runtime;
 	}
 
 	async wait(runId: string, waitMs: number): Promise<AgentWaitOutcome> {
@@ -361,7 +380,7 @@ export class DurableRunBook implements AgentRuns {
 		}
 	}
 
-	close(): Promise<void> {
+	close(options: { preserveRuns?: boolean } = {}): Promise<void> {
 		if (this.#closePromise) return this.#closePromise;
 		this.#closing = true;
 		this.#sink = undefined;
@@ -370,6 +389,29 @@ export class DurableRunBook implements AgentRuns {
 		for (const runtime of this.#runtime.values()) this.#invokeDetach(runtime);
 		this.#closePromise = (async () => {
 			try {
+				if (options.preserveRuns && !this.#failure) {
+					// No cancellation receipt: the Harness resumes its pending tasks on reopen.
+					this.#closed = true;
+					for (const runtime of this.#runtime.values()) {
+						try {
+							runtime.pause?.();
+						} catch (error) {
+							this.#report(error);
+						}
+					}
+					let timer: ReturnType<typeof setTimeout> | undefined;
+					try {
+						await Promise.race([
+							Promise.allSettled([...this.#runtime.values()].map((runtime) => runtime.execution)),
+							new Promise<void>((resolve) => {
+								timer = setTimeout(resolve, 5_000);
+							}),
+						]);
+					} finally {
+						if (timer) clearTimeout(timer);
+					}
+					return;
+				}
 				if (!this.#failure) {
 					await this.cancel();
 					// The owner has already bounded its drain. Never join a runner
@@ -638,6 +680,7 @@ const copyStored = (record: StoredBatch): StoredBatch => ({
 	claimed: record.claimed,
 	announced: record.announced,
 	results: record.results === null ? null : record.results.map((result) => copyJson(result)),
+	recovery: record.recovery ? copyJson(record.recovery) : null,
 });
 
 const copyJson = (value: JsonValue): JsonValue => {

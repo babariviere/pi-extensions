@@ -15,6 +15,7 @@
  */
 
 import type { RunFailure } from "./run.ts";
+import type { RecoveryPayload } from "./recovery.ts";
 
 /** Structured value returned to the sandbox for a single run. */
 export interface AgentResult {
@@ -31,7 +32,8 @@ export interface AgentResult {
 	/** Where the result was persisted. Absent when nothing landed on disk. */
 	outputPath?: string;
 	exitCode?: number;
-	paneId?: string;
+	/** Stable Harness conversation identity, available on durable results. */
+	conversationId?: string;
 	error?: string;
 	/**
 	 * Why it failed, as a class (see `RunFailure`). `launch` in particular means
@@ -62,6 +64,10 @@ export interface AgentBatchRegistration {
 	promise: Promise<AgentResult[]>;
 	/** Tear the batch down (kills the children). */
 	cancel(): void;
+	/** Stop the worker without aborting its durable conversation. */
+	pause?(): void;
+	/** Private launch snapshot used to reopen pending Harness work after a restart. */
+	recovery?: RecoveryPayload;
 	/** Called once when the batch stops being awaited and keeps running. */
 	onDetach?(): void;
 }

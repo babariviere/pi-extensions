@@ -9,8 +9,8 @@ import { truncateHead } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import { actionContext, createActionTool } from "../shared/action-tools.ts";
 import { readExtensionConfig } from "../shared/config.ts";
-import { AgentRunBook, type AgentCompletionEvent } from "./agent-run-book.ts";
-import { AgentRunRegistry } from "./agent-run-monitor.ts";
+import type { AgentCompletionEvent } from "./agent-run-book.ts";
+import type { AgentRunRegistry } from "./agent-run-monitor.ts";
 import { AgentsProvider, type SessionRef } from "./agents-provider.ts";
 import type { DurableSupervisor } from "./durable-supervisor.ts";
 import type { AgentRuns } from "./agent-runs.ts";
@@ -66,7 +66,7 @@ export default function subagents(pi: ExtensionAPI, deps: SubagentExtensionDeps 
 	let context: ExtensionContext | undefined;
 	let provider: AgentsProvider | undefined;
 	let durable: DurableSupervisor | undefined;
-	let closeDurable: (() => Promise<void>) | undefined;
+	let closeDurable: ((preserveRuns?: boolean) => Promise<void>) | undefined;
 	let config = DEFAULT_SUBAGENTS_CONFIG;
 	let generation = 0;
 	let unsubscribe: (() => void) | undefined;
@@ -105,7 +105,7 @@ export default function subagents(pi: ExtensionAPI, deps: SubagentExtensionDeps 
 				await old?.close({ preserveRuns: supervisor !== undefined });
 			} finally {
 				if (preserveRuns) await supervisor?.suspend();
-				else await release?.();
+				else await release?.(reason === "quit");
 			}
 		})();
 		closing = pending;
@@ -137,7 +137,7 @@ export default function subagents(pi: ExtensionAPI, deps: SubagentExtensionDeps 
 		};
 		let registry: AgentRunRegistry;
 		let book: AgentRuns;
-		if (config.backend === "durable") {
+		{
 			const module = await import("./durable-supervisor.ts");
 			const supervisor = await (deps.acquireDurableSupervisor ?? module.acquireDurableSupervisor)(ref);
 			if (current !== generation) {
@@ -145,21 +145,10 @@ export default function subagents(pi: ExtensionAPI, deps: SubagentExtensionDeps 
 				return;
 			}
 			durable = supervisor;
-			closeDurable = () => module.closeDurableSupervisor(ref);
+			closeDurable = (preserveRuns) => module.closeDurableSupervisor(ref, { preserveRuns });
 			supervisor.setErrorHandler((error) => context?.ui.notify(`Subagents storage: ${String(error)}`, "error"));
 			registry = supervisor.registry;
 			book = supervisor.book;
-		} else {
-			// Opting out during a reload must not leave the retained supervisor alive.
-			if (
-				ref.sessionFile &&
-				ref.sessionId &&
-				Symbol.for("babariviere.pi-extensions.durable-supervisors.v1") in globalThis
-			) {
-				await (await import("./durable-supervisor.ts")).closeDurableSupervisor(ref);
-			}
-			registry = new AgentRunRegistry();
-			book = new AgentRunBook();
 		}
 		book.setAnnounceWhen(() => current === generation && !!context?.isIdle());
 		book.setSink((result) => announce(pi, result));

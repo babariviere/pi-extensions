@@ -1,6 +1,5 @@
 /** Exercise the real Pi extension loader and /reload lifecycle without any model requests. */
 import assert from "node:assert/strict";
-import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
@@ -21,7 +20,6 @@ test("real Pi reload reacquires the same durable supervisor through a freshly lo
 		const root = process.env.PI_CODING_AGENT_DIR!;
 		const beforeOffline = process.env.PI_OFFLINE;
 		process.env.PI_OFFLINE = "1";
-		writeFileSync(join(root, "subagents.json"), JSON.stringify({ backend: "durable" }));
 		const manager = SessionManager.create(root, join(root, "sessions"));
 		const ref = { cwd: root, sessionId: manager.getSessionId(), sessionFile: manager.getSessionFile() };
 		let captured: ExtensionContext | undefined;

@@ -1,15 +1,8 @@
-/**
- * Shared run types and output-file reading helpers used by both backends.
- */
+/** Shared durable worker inputs and result helpers. */
 
-import { writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { prepareConfigHome } from "../night-mode/sandbox-clone.ts";
-import { buildChildArgs, formatTaskMessage, type TaskFraming } from "./pi-args.ts";
-import { outputPathFor, type ResolvedOutput } from "./output.ts";
-import { ensureDir, runPaths, sanitizeSegment } from "./paths.ts";
+import { type ResolvedOutput } from "./output.ts";
 import { type DiscoveredAgent } from "./discovery.ts";
+import type { ActiveNightRun } from "../night-mode/night-run.ts";
 
 export interface RunRequest {
 	agent: DiscoveredAgent;
@@ -69,32 +62,29 @@ export type RunState = "spawning" | "running" | "done" | "failed";
 
 export interface RunStatusUpdate {
 	state: RunState;
-	paneId?: string;
 	outputPath?: string;
 }
 
 /**
- * Optional callback both backends invoke on lifecycle transitions so the tool
+ * Optional callback the durable backend invokes on lifecycle transitions so the tool
  * can stream a compact live indicator. `index` matches `RunRequest.index`.
  */
 export type OnStatus = (index: number, update: RunStatusUpdate) => void;
 
-/**
- * Ambient inputs a backend needs to run a batch: the parent session it belongs
- * to, a shared `runId`, the cwd, a per-run timeout, an abort signal, and the
- * status callback. Both adapters take the same context, so the tool builds it
- * once and hands it to the run launcher (`backend.ts`), which picks the
- * adapter and contains herdr CLI drift.
- */
+/** Parent identity, policy, lifetime and cancellation inputs for a durable batch. */
 export interface RunContext {
 	sessionId: string | undefined;
 	sessionFile: string | undefined;
 	runId: string;
 	cwd: string;
 	timeoutMs: number;
+	/** Admission-time deadline, retained on recovery instead of resetting the lifetime. */
+	deadlineAt?: number;
+	/** Host-only approved night contract retained with the admission across restart. */
+	nightRun?: ActiveNightRun;
 	/**
 	 * Whether the parent session trusts the project-local files at its cwd,
-	 * forwarded to the child as `--approve` / `--no-approve`. Inherited rather
+	 * inherited by the native resource loader. Inherited rather
 	 * than re-derived, because pi trusts by path: a child started in a fresh
 	 * working copy is untrusted and would stop on the prompt.
 	 */
@@ -108,13 +98,7 @@ export function withChildConfigHome(configHome: string | undefined, base: NodeJS
 	return configHome ? { ...base, XDG_CONFIG_HOME: configHome } : base;
 }
 
-/**
- * The run-backend seam: turn a batch of requests into results. Two adapters
- * implement it (headless child processes, live herdr panes); the run launcher
- * (see backend.ts) picks one by environment. Batch-shaped because the herdr
- * adapter needs the whole batch at once to tile its pane grid; the headless
- * adapter fans out with Promise.all internally.
- */
+/** Batch execution seam retained for supervisor reloads and offline tests. */
 export type RunBackend = (reqs: RunRequest[], ctx: RunContext) => Promise<RunResult[]>;
 
 /**
@@ -147,15 +131,8 @@ export interface RunResultBase {
 	failure?: RunFailure;
 }
 
-/**
- * A run's result. Backend-specific diagnostics live on the variant that
- * produces them (headless has an `exitCode`; herdr has a `paneId`), so a
- * consumer discriminates on `backend` rather than guessing which optional
- * field a result carries.
- */
-export type RunResult =
-	| (RunResultBase & { backend: "headless"; exitCode?: number })
-	| (RunResultBase & { backend: "herdr"; paneId?: string });
+/** Durable result and stable child conversation identity. */
+export type RunResult = RunResultBase & { backend: "durable"; conversationId?: string; exitCode?: number };
 
 /**
  * The fields every result shares, assembled from a run's request and its
@@ -183,102 +160,5 @@ export function baseResult(
 		...(reason ? { error: reason } : {}),
 		// A successful run has no failure class, whatever happened on the way.
 		...(!resolved.ok && failure ? { failure } : {}),
-	};
-}
-
-/** Write the agent's system-prompt body to disk so `pi` can load it. */
-export function writeSystemPrompt(promptPath: string, body: string): void {
-	writeFileSync(promptPath, body, { mode: 0o600 });
-}
-
-export function ensureRunDir(dir: string): void {
-	ensureDir(dir);
-}
-
-/** The child-run files and args, prepared identically for both backends. */
-export interface PreparedRun {
-	dir: string;
-	outputPath: string;
-	sessionPath: string;
-	promptPath: string;
-	hasPrompt: boolean;
-	childArgs: string[];
-	/** Private writable XDG config home for an ordinary sandboxed child. */
-	configHome?: string;
-	/** Where the task was written, when it is delivered as a file. */
-	taskPath?: string;
-}
-
-/** How a backend hands the task to its child. */
-export type TaskDelivery = "inline" | "file";
-
-/**
- * Prepare a single run's on-disk files and child `pi` args. This is the setup
- * both backends share: resolve the run dir, honor a per-run `output` override,
- * write the system prompt when present, and build the child args.
- *
- * The only per-backend knob is `taskDelivery`. The headless adapter inlines the
- * task as an argv entry, where any characters are safe. The Herdr adapter uses
- * a shell-backed `pane run` command, so it cannot safely carry
- * multi-line args, so the task is written to a file and the child's subagents extension
- * delivers it as the first user message (`task-delivery.ts`). Both paths frame
- * the task identically, through `formatTaskMessage`.
- */
-export function prepareChildRun(
-	req: RunRequest,
-	ctx: RunContext,
-	opts: { defaultProvider: string | undefined; taskDelivery: TaskDelivery },
-): PreparedRun {
-	const paths = runPaths(ctx.sessionFile, ctx.sessionId, ctx.runId, req.agent.config.name, req.index);
-	ensureRunDir(paths.dir);
-	const configHome = req.night
-		? undefined
-		: prepareConfigHome(
-				join(
-					tmpdir(),
-					"pi-subagent-xdg",
-					sanitizeSegment(ctx.sessionId ?? "no-session"),
-					sanitizeSegment(ctx.runId),
-				),
-			).path;
-
-	const outputPath = outputPathFor(ctx.cwd, paths.outputPath, req.output);
-
-	const hasPrompt = req.agent.systemPrompt.trim().length > 0;
-	if (hasPrompt) writeSystemPrompt(paths.promptPath, req.agent.systemPrompt);
-
-	// One framing for both delivery modes: the file and the inline arg carry the
-	// same text, so a subagent's first message does not depend on its backend.
-	const framing: TaskFraming = {
-		...(req.reads ? { reads: req.reads } : {}),
-		...(req.night ? { night: req.night } : {}),
-		...(req.cwd ? { workspacePath: req.cwd } : {}),
-		...(req.artifactsDir ? { artifactsDir: req.artifactsDir } : {}),
-	};
-	const taskPath = opts.taskDelivery === "file" ? paths.taskPath : undefined;
-	if (taskPath) writeFileSync(taskPath, formatTaskMessage(req.task, framing), { mode: 0o600 });
-
-	const childArgs = buildChildArgs(req.agent, req.task, {
-		sessionFile: paths.sessionPath,
-		systemPromptFile: hasPrompt ? paths.promptPath : undefined,
-		defaultProvider: opts.defaultProvider,
-		modelOverride: req.overrides?.model,
-		thinkingOverride: req.overrides?.thinking,
-		...framing,
-		// Forward the parent's project-trust verdict so the child never prompts.
-		projectTrusted: ctx.projectTrusted === true,
-		includeTask: opts.taskDelivery === "inline",
-		...(taskPath ? { taskFile: taskPath } : {}),
-	});
-
-	return {
-		dir: paths.dir,
-		outputPath,
-		sessionPath: paths.sessionPath,
-		promptPath: paths.promptPath,
-		hasPrompt,
-		childArgs,
-		...(configHome ? { configHome } : {}),
-		...(taskPath ? { taskPath } : {}),
 	};
 }

@@ -73,6 +73,17 @@ test("subagent launch-call budget belongs to the native parent execution", async
 	});
 });
 
+test("the default durable backend requires a file-backed parent instead of a CLI fallback", async () => {
+	await withParentSession(async () => {
+		const host = testHost();
+		Object.assign(host.ctx.sessionManager, { getSessionFile: () => undefined });
+		subagents(host.api);
+		await assert.rejects(host.emit("session_start", { reason: "startup" }), /file-backed parent session/);
+		assert.equal(host.tools.size, 0);
+		await host.emit("session_shutdown", { reason: "quit" });
+	});
+});
+
 test("child and background sessions retain task delivery flags but never agents tools", async () => {
 	await withParentSession(async () => {
 		for (const marker of ["PI_CODE_MODE_SUBAGENT", "PI_BACKGROUND_AGENT_ATTEMPT"]) {

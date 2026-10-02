@@ -1,45 +1,7 @@
-/**
- * Build the child `pi` CLI invocation from a discovered agent config.
- *
- * `pi` has no native `--agent <name>` flag, so we reconstruct the invocation
- * from the agent's frontmatter (model/thinking, sandbox, system prompt, skills)
- * the same way pi-subagents does. Keeping this in one module means switching to
- * a native flag later (if one appears) is a one-file change.
- *
- * System-prompt handling: we honor the agent's `systemPromptMode` -
- * `--system-prompt` (replace) or `--append-system-prompt` (append). Replace is
- * safe once the child runs on the intended provider: the earlier 400s came from
- * bare thinking-suffixed models resolving to Bedrock (see provider qualification
- * below), not from replacing the prompt. Inherited context/skills are controlled
- * with native flags (`--no-skills`, `--no-context-files`).
- *
- * Project trust: pi trusts project-local files by path, so a child spawned in a
- * fresh working copy would raise the trust prompt with no tty to answer it. The
- * parent's verdict travels down as `--approve` / `--no-approve` (see
- * `ChildInvocationOpts.projectTrusted`).
- *
- * Model provider: agent frontmatter often uses a bare model name. We qualify it
- * with the caller-resolved default provider (e.g. `anthropic/claude-opus-4-8`)
- * BEFORE the thinking suffix, because pi resolves a bare, thinking-suffixed name
- * to the wrong provider (Bedrock). See `settings.ts` and `qualifyModel`.
- */
-
-import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
+/** Model-name compatibility and durable task framing. */
 
 import { buildNightContract, readActiveNightRun } from "../night-mode/night-run.ts";
-import { SANDBOX_MODE_FLAG, TASK_FILE_FLAG } from "./constants.ts";
-import { type DiscoveredAgent } from "./discovery.ts";
 import { injectOutputInstruction } from "./paths.ts";
-
-/**
- * Absolute path to the child-side extension, next to this file. It only
- * registers the parent-set flags, so the parent loads it only when restricting
- * the agent's tools or its sandbox (see buildChildArgs).
- */
-export function childExtensionPath(): string {
-	return join(dirname(fileURLToPath(import.meta.url)), "child-extension.ts");
-}
 
 export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"];
 
@@ -71,54 +33,6 @@ export function qualifyModel(model: string | undefined, defaultProvider: string 
 	if (model.includes("/")) return model;
 	if (!defaultProvider) return model;
 	return `${defaultProvider}/${model}`;
-}
-
-export interface ChildInvocationOpts {
-	sessionFile: string;
-	/** Path the system-prompt body was written to (caller writes it before spawn). */
-	systemPromptFile?: string;
-	/** Provider used to qualify a bare agent model (resolved from settings). */
-	defaultProvider?: string;
-	/** Per-run model override; takes precedence over the agent's frontmatter model. */
-	modelOverride?: string;
-	/** Per-run thinking override; takes precedence over the agent's frontmatter thinking. */
-	thinkingOverride?: string;
-	/**
-	 * When false, omit the inline task message; the task travels in
-	 * {@link ChildInvocationOpts.taskFile} instead. Defaults to true (headless
-	 * spawn, where any characters are safe in an argv entry).
-	 */
-	includeTask?: boolean;
-	/**
-	 * Path to the file holding the framed task, delivered by the child's own
-	 * subagents extension as its first user message (see `task-delivery.ts`). Used by the
-	 * herdr backend, whose `agent start` types its args into a shell and so
-	 * cannot carry a multi-line task.
-	 */
-	taskFile?: string;
-	/** Files the child should read first for context; injected into the task. */
-	reads?: string[];
-	/** Inherit the night-mode contract (unattended run, no outbound messages, draft PRs). */
-	night?: boolean;
-	/**
-	 * Whether the parent session trusts the project-local files at the child's
-	 * cwd. Decided by the parent (`context.isProjectTrusted()`) and forwarded as
-	 * `--approve` / `--no-approve`; one of the two is always sent, so a child can
-	 * never sit on pi's trust prompt. Undefined means "not trusted", the safe
-	 * reading for a caller that could not tell.
-	 */
-	projectTrusted?: boolean;
-	/**
-	 * The child's own working copy, when the host gave it one. Changes what the
-	 * night contract tells it about where to work.
-	 */
-	workspacePath?: string;
-	/**
-	 * Durable directory for the child's deliverables, when the host gave it one.
-	 * Named in the task message, because the working copy above is deleted when
-	 * the run ends.
-	 */
-	artifactsDir?: string;
 }
 
 /** Prepend a read-first instruction listing the context files, if any. */
@@ -153,78 +67,4 @@ export function formatTaskMessage(task: string, framing: TaskFraming = {}): stri
 		...(framing.artifactsDir ? { artifactsDir: framing.artifactsDir } : {}),
 	});
 	return withNight(`Task: ${body}`, framing.night, framing.workspacePath);
-}
-
-/**
- * Produce the ordered `pi` args (excluding the `pi` binary itself). The final
- * element is the `Task: ...` prompt carrying the final-message instruction.
- */
-export function buildChildArgs(agent: DiscoveredAgent, task: string, opts: ChildInvocationOpts): string[] {
-	const args: string[] = ["--session", opts.sessionFile];
-
-	// Resolve the model and thinking level independently. Thinking travels via
-	// pi's dedicated `--thinking` flag rather than a model suffix, so an agent
-	// that declares only `thinking` (no `model`) still gets its level applied
-	// instead of silently falling back to the child's default thinking.
-	const baseModel = opts.modelOverride ?? agent.config.model;
-	const qualified = qualifyModel(baseModel, opts.defaultProvider);
-	const model = qualified ? stripThinkingSuffix(qualified) : undefined;
-	// Thinking precedence: explicit override, then a suffix embedded in the chosen
-	// model, then the agent's frontmatter thinking.
-	const thinking =
-		opts.thinkingOverride ?? (qualified ? extractThinkingSuffix(qualified) : undefined) ?? agent.config.thinking;
-	if (model) args.push("--model", model);
-	if (thinking && thinking !== "off") args.push("--thinking", thinking);
-
-	// A subagent keeps the parent's whole toolset. It is bounded by its sandbox
-	// mode instead, a floor the child cannot loosen (see
-	// `sandbox/agent-floor.ts`): the kernel refuses the writes while every read
-	// tool stays available. The injected child extension exists only to make pi
-	// accept the flag, so an agent with no `sandbox:` needs no extension at all.
-	if (agent.config.sandbox) {
-		args.push("--extension", childExtensionPath());
-		args.push(`--${SANDBOX_MODE_FLAG}`, agent.config.sandbox);
-	}
-
-	if (opts.systemPromptFile && agent.systemPrompt.trim().length > 0) {
-		const flag = agent.config.systemPromptMode === "append" ? "--append-system-prompt" : "--system-prompt";
-		args.push(flag, opts.systemPromptFile);
-	}
-
-	// The task as a path, not as text: a single-line arg `herdr agent start` can
-	// type. No `--extension` needed - Subagents registers this flag itself, so it
-	// works the same for an agent with no `sandbox:`.
-	if (opts.taskFile) {
-		args.push(`--${TASK_FILE_FLAG}`, opts.taskFile);
-	}
-
-	if (agent.config.inheritSkills === false) {
-		args.push("--no-skills");
-	}
-
-	if (agent.config.inheritProjectContext === false) {
-		args.push("--no-context-files");
-	}
-
-	// Project trust is per path, so a child started in a fresh clone or jj
-	// workspace is untrusted even when the original path was, and pi stops to ask.
-	// A subagent has no tty to answer with, so the parent's own verdict is
-	// forwarded and one of the two flags is always sent: never a prompt.
-	args.push(opts.projectTrusted ? "--approve" : "--no-approve");
-
-	// Deliver the task inline as the initial message (headless spawn: any chars
-	// are safe). The herdr backend omits it here and submits it via `agent prompt`
-	// instead, since `agent start` cannot encode multi-line shell args.
-	if (opts.includeTask !== false) {
-		args.push(
-			formatTaskMessage(task, {
-				...(opts.reads ? { reads: opts.reads } : {}),
-				...(opts.night ? { night: opts.night } : {}),
-				...(opts.workspacePath ? { workspacePath: opts.workspacePath } : {}),
-				...(opts.artifactsDir ? { artifactsDir: opts.artifactsDir } : {}),
-			}),
-		);
-	}
-
-	return args;
 }

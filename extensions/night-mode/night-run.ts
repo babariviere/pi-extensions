@@ -112,7 +112,12 @@ export function activeRunPath(): string {
 /** The currently active night run, or undefined. Never throws. */
 export function readActiveNightRun(): ActiveNightRun | undefined {
 	try {
-		const path = activeRunPath();
+		// Isolated durable workers retain their originally approved policy even
+		// after the global handshake is replaced or cleared. Never affect bystanders.
+		const path =
+			process.env.PI_CODE_MODE_SUBAGENT === "1" && process.env.PI_DURABLE_NIGHT_RUN_FILE
+				? process.env.PI_DURABLE_NIGHT_RUN_FILE
+				: activeRunPath();
 		if (!existsSync(path)) return undefined;
 		const parsed = JSON.parse(readFileSync(path, "utf-8"));
 		if (!parsed || typeof parsed !== "object") return undefined;

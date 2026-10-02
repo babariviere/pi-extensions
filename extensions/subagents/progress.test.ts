@@ -19,7 +19,7 @@ test("formatElapsed formats sub-minute and minute durations", () => {
 	assert.equal(formatElapsed(605_000), "10m05s");
 });
 
-test("renderProgress shows a spinner glyph, state, elapsed, pane and output per agent", () => {
+test("renderProgress shows a spinner glyph, state, elapsed and output per agent", () => {
 	const now = 100_000;
 	const model: AgentProgress[] = [
 		{
@@ -27,7 +27,6 @@ test("renderProgress shows a spinner glyph, state, elapsed, pane and output per 
 			scope: "user",
 			state: "running",
 			startedAt: now - 75_000,
-			paneId: "wA:p3",
 			outputPath: "/tmp/out/worker_0.md",
 		},
 		{ name: "reviewer", scope: "user", state: "spawning", startedAt: now },
@@ -37,7 +36,7 @@ test("renderProgress shows a spinner glyph, state, elapsed, pane and output per 
 		text,
 		[
 			"Running 2 subagents (2 active):",
-			`- ${SPINNER_FRAMES[0]} worker [running] \u00b7 1m15s \u00b7 pane wA:p3 \u00b7 output: /tmp/out/worker_0.md`,
+			`- ${SPINNER_FRAMES[0]} worker [running] \u00b7 1m15s \u00b7 output: /tmp/out/worker_0.md`,
 			`- ${SPINNER_FRAMES[0]} reviewer [spawning] \u00b7 0s`,
 		].join("\n"),
 	);
@@ -109,14 +108,13 @@ test("applyStatus updates the row at the given index and preserves others", () =
 		{ name: "worker", scope: "user", state: "spawning", startedAt: 0 },
 		{ name: "reviewer", scope: "user", state: "spawning", startedAt: 0 },
 	];
-	applyStatus(model, 1, { state: "running", paneId: "wA:p9", outputPath: "/tmp/r.md" });
+	applyStatus(model, 1, { state: "running", outputPath: "/tmp/r.md" });
 	assert.deepEqual(model[0], { name: "worker", scope: "user", state: "spawning", startedAt: 0 });
 	assert.deepEqual(model[1], {
 		name: "reviewer",
 		scope: "user",
 		state: "running",
 		startedAt: 0,
-		paneId: "wA:p9",
 		outputPath: "/tmp/r.md",
 	});
 });

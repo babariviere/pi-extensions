@@ -6,7 +6,7 @@ import subagents from "./index.ts";
 import { acquireDurableSupervisor, closeDurableSupervisor, durableDirectory } from "./durable-supervisor.ts";
 import type { SessionRef } from "./agents-provider.ts";
 import type { RunBackend, RunContext, RunRequest, RunResult } from "./run.ts";
-import { buildChildArgs } from "./pi-args.ts";
+import { DURABLE_PAUSE_REASON } from "./recovery.ts";
 import { testHost, withParentSession } from "./test-host.ts";
 
 function backend(version: string) {
@@ -19,7 +19,7 @@ function backend(version: string) {
 					scope: request.agent.scope,
 					ok: !cancelled,
 					output: cancelled ? "cancelled" : version,
-					backend: "headless",
+					backend: "durable",
 					...(cancelled ? { failure: "cancelled" as const, error: "cancelled" } : { exitCode: 0 }),
 				}));
 			context.signal?.addEventListener("abort", () => resolve(results(true)), { once: true });
@@ -57,10 +57,9 @@ function configuredHost(ref: SessionRef) {
 	return host;
 }
 
-test("durable reload reconnects run handles and replaces only the runner generation", async () => {
+test("durable reload reconnects run handles and replaces the backend only for new launches", async () => {
 	await withParentSession(async () => {
 		const root = process.env.PI_CODING_AGENT_DIR!;
-		writeFileSync(join(root, "subagents.json"), JSON.stringify({ backend: "durable" }));
 		const ref: SessionRef = { cwd: root, sessionId: "parent", sessionFile: join(root, "parent.jsonl") };
 		const v1 = backend("v1");
 		const v2 = backend("v2");
@@ -92,16 +91,87 @@ test("durable reload reconnects run handles and replaces only the runner generat
 			assert.equal(v2.calls.length, 1);
 			await second.emit("session_shutdown", { reason: "quit" });
 			assert.equal(v2.calls[0]?.context.signal?.aborted, true);
+			assert.equal(v2.calls[0]?.context.signal?.reason, DURABLE_PAUSE_REASON);
 		} finally {
 			await closeDurableSupervisor(ref);
 		}
 	});
 });
 
+test("quit pauses pending work and startup reopens its original handle and deadline", async () => {
+	await withParentSession(async () => {
+		const root = process.env.PI_CODING_AGENT_DIR!;
+		const ref: SessionRef = { cwd: root, sessionId: "paused", sessionFile: join(root, "paused.jsonl") };
+		const before = backend("before quit");
+		const after = backend("resumed");
+		const first = configuredHost(ref);
+		subagents(first.api, { acquireDurableSupervisor: (session) => acquireDurableSupervisor(session, before.run) });
+		try {
+			await first.emit("session_start", { reason: "startup" });
+			const handle = (await first.execute("agents_start", { task: "review" })).structuredContent as {
+				runId: string;
+			};
+			const original = before.calls[0]!;
+			await first.emit("session_shutdown", { reason: "quit" });
+			assert.equal(original.context.signal?.reason, DURABLE_PAUSE_REASON);
+
+			const next = configuredHost(ref);
+			subagents(next.api, { acquireDurableSupervisor: (session) => acquireDurableSupervisor(session, after.run) });
+			await next.emit("session_start", { reason: "startup" });
+			assert.equal(after.calls.length, 1);
+			assert.deepEqual(after.calls[0]?.requests, JSON.parse(JSON.stringify(original.requests)));
+			assert.equal(after.calls[0]?.context.runId, handle.runId);
+			assert.equal(after.calls[0]?.context.deadlineAt, original.context.deadlineAt);
+			assert.equal(after.calls[0]?.context.signal?.aborted, false);
+			const status = (await next.execute("agents_status", {})).structuredContent as Array<{
+				runId: string;
+				state: string;
+			}>;
+			assert.equal(status[0]?.runId, handle.runId);
+			assert.equal(status[0]?.state, "running", "pause must not persist a cancellation or terminal failure");
+			after.calls[0]!.finish();
+			const outcome = (await next.execute("agents_wait", { runId: handle.runId, waitMs: 1_000 }))
+				.structuredContent as { results: Array<{ output: string }> };
+			assert.equal(outcome.results[0]?.output, "resumed");
+			assert.equal(first.sent.length, 0);
+			await next.emit("session_shutdown", { reason: "quit" });
+		} finally {
+			await closeDurableSupervisor(ref);
+		}
+	});
+});
+
+for (const reason of ["new", "fork", "resume"] as const) {
+	test(`${reason} cancels pending durable work instead of pausing it`, async () => {
+		await withParentSession(async () => {
+			const root = process.env.PI_CODING_AGENT_DIR!;
+			const ref: SessionRef = { cwd: root, sessionId: reason, sessionFile: join(root, `${reason}.jsonl`) };
+			const fake = backend("cancelled on switch");
+			const host = configuredHost(ref);
+			subagents(host.api, { acquireDurableSupervisor: (session) => acquireDurableSupervisor(session, fake.run) });
+			try {
+				await host.emit("session_start", { reason: "startup" });
+				const handle = (await host.execute("agents_start", { task: "review" })).structuredContent as {
+					runId: string;
+				};
+				await host.emit("session_shutdown", { reason });
+				assert.equal(fake.calls[0]?.context.signal?.aborted, true);
+				assert.notEqual(fake.calls[0]?.context.signal?.reason, DURABLE_PAUSE_REASON);
+				const reopened = await acquireDurableSupervisor(ref, fake.run);
+				assert.equal(reopened.book.list()[0]?.state, "cancelled");
+				const outcome = await reopened.book.wait(handle.runId, 1_000);
+				assert.equal(outcome.results?.[0]?.failure, "cancelled");
+				assert.equal(fake.calls.length, 1, "cancelled work must not be reopened");
+			} finally {
+				await closeDurableSupervisor(ref);
+			}
+		});
+	});
+}
+
 test("durable runs keep agent sandbox, context inheritance and project trust policy", async () => {
 	await withParentSession(async () => {
 		const root = process.env.PI_CODING_AGENT_DIR!;
-		writeFileSync(join(root, "subagents.json"), JSON.stringify({ backend: "durable" }));
 		mkdirSync(join(root, "agents"));
 		writeFileSync(
 			join(root, "agents", "reader.md"),
@@ -124,14 +194,9 @@ test("durable runs keep agent sandbox, context inheritance and project trust pol
 			assert.equal(call.context.projectTrusted, false);
 			assert.deepEqual(call.requests[0]?.reads, ["README.md"]);
 			const request = call.requests[0]!;
-			const args = buildChildArgs(request.agent, request.task, {
-				sessionFile: "child.jsonl",
-				projectTrusted: call.context.projectTrusted,
-			});
-			assert.ok(args.includes("--no-approve"));
-			assert.ok(args.includes("--no-skills"));
-			assert.ok(args.includes("--no-context-files"));
-			assert.ok(args.includes("read-only"));
+			assert.equal(request.agent.config.inheritSkills, false);
+			assert.equal(request.agent.config.inheritProjectContext, false);
+			assert.equal(request.agent.config.sandbox, "read-only");
 			await host.emit("session_shutdown", { reason: "new" });
 			assert.equal(call.context.signal?.aborted, true);
 		} finally {
@@ -147,26 +212,28 @@ test("durable identities are file-backed and never share results across parents 
 	assert.notEqual(durableDirectory(ref), durableDirectory({ ...ref, cwd: "/other" }));
 });
 
-test("opting out during reload closes the retained durable supervisor", async () => {
+test("durable is the default and legacy backend configuration cannot opt out during reload", async () => {
 	await withParentSession(async () => {
 		const root = process.env.PI_CODING_AGENT_DIR!;
 		const config = join(root, "subagents.json");
-		writeFileSync(config, JSON.stringify({ backend: "durable" }));
-		const ref: SessionRef = { cwd: root, sessionId: "opt-out", sessionFile: join(root, "opt-out.jsonl") };
+		const ref: SessionRef = { cwd: root, sessionId: "default-only", sessionFile: join(root, "default-only.jsonl") };
 		const fake = backend("old");
 		const old = configuredHost(ref);
 		subagents(old.api, { acquireDurableSupervisor: (session) => acquireDurableSupervisor(session, fake.run) });
 		try {
 			await old.emit("session_start", { reason: "startup" });
-			await old.execute("agents_start", { task: "review" });
+			const handle = (await old.execute("agents_start", { task: "review" })).structuredContent as { runId: string };
 			await old.emit("session_shutdown", { reason: "reload" });
-			writeFileSync(config, "{}");
-			const next = configuredHost(ref);
-			subagents(next.api);
-			await next.emit("session_start", { reason: "reload" });
-			assert.equal(fake.calls[0]?.context.signal?.aborted, true);
-			assert.deepEqual((await next.execute("agents_status", {})).structuredContent, []);
-			await next.emit("session_shutdown", { reason: "quit" });
+			for (const backend of ["headless", "herdr", "durable"]) {
+				writeFileSync(config, JSON.stringify({ backend }));
+				const next = configuredHost(ref);
+				subagents(next.api, { acquireDurableSupervisor: (session) => acquireDurableSupervisor(session, fake.run) });
+				await next.emit("session_start", { reason: "reload" });
+				assert.equal(fake.calls[0]?.context.signal?.aborted, false);
+				const status = (await next.execute("agents_status", {})).structuredContent as Array<{ runId: string }>;
+				assert.equal(status[0]?.runId, handle.runId);
+				await next.emit("session_shutdown", { reason: "reload" });
+			}
 		} finally {
 			await closeDurableSupervisor(ref);
 		}

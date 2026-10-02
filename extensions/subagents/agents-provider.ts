@@ -6,6 +6,8 @@
  */
 
 import { RunLauncher } from "./backend.ts";
+import { runConversationBatch } from "./conversation-backend.ts";
+import { DURABLE_PAUSE_REASON } from "./recovery.ts";
 import { CauseBreaker, type CauseVerdict } from "./cause-breaker.ts";
 import { recordNightCapability } from "./night-journal.ts";
 import { BUILTIN_AGENT_NAME, discoverAgentsForCwd } from "./discovery.ts";
@@ -131,7 +133,7 @@ const agentResultProperties = {
 	runId: { type: "string" },
 	outputPath: { type: "string" },
 	exitCode: { type: "number" },
-	paneId: { type: "string" },
+	conversationId: { type: "string" },
 	error: { type: "string" },
 	failure: { enum: ["launch", "run", "timeout", "cancelled"] },
 };
@@ -355,8 +357,8 @@ const agentResult = (result: RunResult, runId: string): AgentResult => ({
 	state: result.ok ? "done" : "failed",
 	runId,
 	...(result.outputPath ? { outputPath: result.outputPath } : {}),
-	...(result.backend === "headless" && result.exitCode !== undefined ? { exitCode: result.exitCode } : {}),
-	...(result.backend === "herdr" && result.paneId ? { paneId: result.paneId } : {}),
+	...(result.exitCode !== undefined ? { exitCode: result.exitCode } : {}),
+	...(result.conversationId ? { conversationId: result.conversationId } : {}),
 	...(result.error ? { error: result.error } : {}),
 	...(result.failure ? { failure: result.failure } : {}),
 });
@@ -376,7 +378,7 @@ const refusedResult = (request: RunRequest, verdict: CauseVerdict, onStatus: OnS
 		scope: request.agent.scope,
 		ok: false,
 		output: `(${error})`,
-		backend: "headless",
+		backend: "durable",
 		error,
 		failure: "launch",
 	};
@@ -440,7 +442,7 @@ export function bindApprovedNightTasks(
 export class AgentsProvider implements ActionProvider {
 	readonly name = "agents";
 	readonly description =
-		"Custom markdown agents discovered on disk, run as child Pi sessions (headless, or live herdr panes)";
+		"Custom markdown agents running in restart-resumable durable conversations with the native Pi tool stack";
 	readonly instructions = [
 		"Use tools.agents_run for one task or tools.agents_runAll for a batch when waiting in this turn is appropriate. Their wait window is bounded by waitMs; a result with state 'running' is a live handle, not a failed task.",
 		"Use tools.agents_start to detach a task or batch immediately, then tools.agents_wait({ runId, waitMs }) to claim results or keep waiting. Use tools.agents_cancel({ runId }) to stop it. Unclaimed completions are delivered to the parent as a follow-up.",
@@ -455,8 +457,8 @@ export class AgentsProvider implements ActionProvider {
 		readonly runtimeConfig: () => AgentRuntimeConfig,
 		/** Live batches, so a run can outlive the program that started it. */
 		readonly runs: AgentRuns = new AgentRunBook(),
-		/** Adapter selection and herdr drift containment (see backend.ts). */
-		readonly launcher: RunLauncher = new RunLauncher(),
+		/** The sole durable execution path. */
+		readonly launcher: RunLauncher = new RunLauncher(runConversationBatch),
 		/** Refuses to relaunch into a fault that already proved itself. */
 		readonly breaker: CauseBreaker = new CauseBreaker(),
 	) {}
@@ -658,25 +660,16 @@ export class AgentsProvider implements ActionProvider {
 		// model; `cwd` is not part of the tool schema.
 		const workspaces = await allocateNightWorkspaces(requests, runId, ref.cwd);
 
-		// One selection per process (the herdr dialect probe runs at most once):
-		// a drifted herdr CLI degrades to headless instead of failing the batch.
-		let selection: Awaited<ReturnType<RunLauncher["selection"]>>;
+		// A launch admitted during shutdown must not retain a disposable workspace.
 		try {
 			if (this.#closing) throw new Error("Subagents session is shutting down");
-			selection = await this.launcher.selection();
+			await this.launcher.selection();
 			if (this.#closing) throw new Error("Subagents session is shutting down");
 		} catch (error) {
 			await releaseNightWorkspaces(workspaces);
 			throw error;
 		}
-		const note = selection.degradedReason
-			? `herdr degraded (${selection.degradedReason}); running headless`
-			: undefined;
-
-		const monitor = new RunProgressMonitor(
-			{ registry: this.registry, context, runId, ...(note ? { note } : {}) },
-			requests,
-		);
+		const monitor = new RunProgressMonitor({ registry: this.registry, context, runId }, requests);
 		monitor.start();
 
 		const controller = new AbortController();
@@ -687,6 +680,8 @@ export class AgentsProvider implements ActionProvider {
 		const unlink = (): void => parentSignal?.removeEventListener("abort", onParentAbort);
 
 		const configuredTimeoutMs = runtimeConfig.timeoutMs || DEFAULT_SUBAGENTS_CONFIG.timeoutMs;
+		const deadlineAt = Date.now() + configuredTimeoutMs;
+		const nightRun = requests.some((request) => request.night) ? readActiveNightRun() : undefined;
 		const runContext: RunContext = {
 			sessionId: ref.sessionId,
 			sessionFile: ref.sessionFile,
@@ -697,6 +692,8 @@ export class AgentsProvider implements ActionProvider {
 			projectTrusted: ref.projectTrusted === true,
 			// Child lifetime is host policy, not a per-call model choice.
 			timeoutMs: configuredTimeoutMs,
+			deadlineAt,
+			...(nightRun ? { nightRun } : {}),
 			signal: controller.signal,
 			onStatus: monitor.onStatus,
 		};
@@ -730,7 +727,7 @@ export class AgentsProvider implements ActionProvider {
 			} finally {
 				unlink();
 				monitor.stop();
-				await releaseNightWorkspaces(workspaces);
+				if (controller.signal.reason !== DURABLE_PAUSE_REASON) await releaseNightWorkspaces(workspaces);
 			}
 		};
 		// A durable book commits admission before any child process is launched.
@@ -748,6 +745,21 @@ export class AgentsProvider implements ActionProvider {
 				agents,
 				promise,
 				cancel: () => controller.abort(),
+				pause: () => controller.abort(DURABLE_PAUSE_REASON),
+				recovery: {
+					requests,
+					context: {
+						cwd: ref.cwd,
+						sessionId: ref.sessionId,
+						sessionFile: ref.sessionFile,
+						runId,
+						projectTrusted: ref.projectTrusted === true,
+						timeoutMs: configuredTimeoutMs,
+						...(nightRun ? { nightRun } : {}),
+					},
+					deadlineAt,
+					workspaces,
+				},
 				// Detaching drops the turn link and the ticker; the widget rows keep
 				// updating from the backend's status callback.
 				onDetach: () => {

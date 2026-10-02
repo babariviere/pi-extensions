@@ -15,7 +15,6 @@ export interface AgentProgress {
 	startedAt: number;
 	/** Stamped when the row reaches a terminal state so its elapsed freezes. */
 	endedAt?: number;
-	paneId?: string;
 	outputPath?: string;
 }
 
@@ -77,7 +76,6 @@ export function renderProgress(
 	for (const m of model) {
 		const elapsed = formatElapsed((m.endedAt ?? now) - m.startedAt);
 		const parts = [`[${STATE_LABEL[m.state]}]`, elapsed];
-		if (m.paneId) parts.push(`pane ${m.paneId}`);
 		if (m.outputPath) parts.push(`output: ${m.outputPath}`);
 		lines.push(
 			`- ${colorGlyph(stateGlyph(m.state, frame), m.state, opts.color)} ${m.name} ${parts.join(" \u00b7 ")}`,
@@ -102,7 +100,6 @@ export function applyStatus(model: AgentProgress[], index: number, update: RunSt
 	const row = model[index];
 	if (!row) return;
 	row.state = update.state;
-	if (update.paneId !== undefined) row.paneId = update.paneId;
 	if (update.outputPath !== undefined) row.outputPath = update.outputPath;
 	if ((update.state === "done" || update.state === "failed") && row.endedAt === undefined) {
 		row.endedAt = now;

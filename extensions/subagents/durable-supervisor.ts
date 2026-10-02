@@ -1,13 +1,15 @@
-/** Process-owned run state, separate from Pi's replaceable extension runtime. */
+/** Reload-stable owner of admissions and their resumable Harness workers. */
 import { createHash } from "node:crypto";
 import { resolve } from "node:path";
 import type { SessionRef } from "./agents-provider.ts";
 import { RunLauncher } from "./backend.ts";
 import { AgentRunRegistry } from "./agent-run-monitor.ts";
-import { ChordRunner } from "./chord-runner.ts";
+import type { AgentBatchRegistration, AgentResult } from "./agent-run-book.ts";
 import { DurableRunBook } from "./durable-run-book.ts";
 import { openDurableStorage } from "./durable-storage.ts";
-import { runHeadlessBatch } from "./headless.ts";
+import { runConversationBatch } from "./conversation-backend.ts";
+import { DURABLE_PAUSE_REASON, type RecoveryPayload } from "./recovery.ts";
+import { relocateWorkspacePaths, releaseNightWorkspaces } from "./night-workspace.ts";
 import type { RunBackend } from "./run.ts";
 
 export function durableDirectory(ref: SessionRef): string {
@@ -20,99 +22,105 @@ export function durableDirectory(ref: SessionRef): string {
 
 export class DurableSupervisor {
 	readonly registry = new AgentRunRegistry();
-	readonly launcher: RunLauncher;
 	#errorHandler: ((error: unknown) => void) | undefined;
 	#closing: Promise<void> | undefined;
-
 	private constructor(
 		readonly book: DurableRunBook,
-		readonly runner: ChordRunner,
+		readonly launcher: RunLauncher,
 		readonly release: () => void,
-	) {
-		// Durable orchestration intentionally retains the existing headless CLI
-		// runner, including the complete child extension and permission stack.
-		this.launcher = new RunLauncher({ inHerdr: () => false, headless: runner.run });
-	}
+	) {}
 
 	static async open(directory: string, backend: RunBackend): Promise<DurableSupervisor> {
 		const owned = await openDurableStorage(directory);
-		let book: DurableRunBook | undefined;
-		let runner: ChordRunner | undefined;
+		const launcher = new RunLauncher(backend);
 		let supervisor: DurableSupervisor | undefined;
 		try {
-			book = await DurableRunBook.open(owned.storage, {
-				onError: (error: unknown) => {
+			const book = await DurableRunBook.open(owned.storage, {
+				onError: (error) => {
 					if (supervisor) supervisor.#report(error);
 				},
+				resume: (payload, runId) => resumeBatch(launcher, payload, runId),
 			});
-			runner = await ChordRunner.open(backend);
-			supervisor = new DurableSupervisor(book, runner, owned.release);
+			supervisor = new DurableSupervisor(book, launcher, owned.release);
 			return supervisor;
 		} catch (error) {
-			try {
-				await runner?.dispose();
-				if (book) await book.close();
-				else await owned.storage.close((await import("@earendil-works/chord/context")).BACKGROUND_CONTEXT);
-			} finally {
-				owned.release();
-			}
+			owned.release();
 			throw error;
 		}
 	}
-
 	setErrorHandler(handler: ((error: unknown) => void) | undefined): void {
 		this.#errorHandler = handler;
 	}
-
 	#report(error: unknown): void {
 		try {
 			this.#errorHandler?.(error);
-		} catch {
-			// A warning observer cannot undo a durable commit or break cleanup.
-		}
+		} catch {}
 	}
-
 	async suspend(): Promise<void> {
 		this.#errorHandler = undefined;
 		await this.book.suspend();
 	}
-
-	close(): Promise<void> {
-		this.#closing ??= (async () => {
+	close(options: { preserveRuns?: boolean } = {}): Promise<void> {
+		return (this.#closing ??= (async () => {
 			this.#errorHandler = undefined;
 			try {
-				try {
-					await this.book.drain(5_000);
-				} finally {
-					await this.book.close();
-				}
+				if (!options.preserveRuns) await this.book.drain(5_000);
+				await this.book.close(options);
 			} finally {
-				try {
-					await this.runner.dispose();
-				} finally {
-					this.release();
-				}
+				this.release();
 			}
-		})();
-		return this.#closing;
+		})());
 	}
+}
+
+function resumeBatch(
+	launcher: RunLauncher,
+	payload: RecoveryPayload,
+	runId: string,
+): Omit<AgentBatchRegistration, "runId" | "agents"> {
+	const controller = new AbortController();
+	const promise = (async (): Promise<AgentResult[]> => {
+		try {
+			const results = await launcher.run(payload.requests, {
+				...payload.context,
+				runId,
+				deadlineAt: payload.deadlineAt,
+				signal: controller.signal,
+			});
+			return results.map((raw) => {
+				const result = relocateWorkspacePaths(raw, payload.workspaces);
+				return {
+					agent: result.agent,
+					ok: result.ok,
+					output: result.output,
+					state: result.ok ? "done" : "failed",
+					runId,
+					...(result.outputPath ? { outputPath: result.outputPath } : {}),
+					...(result.conversationId ? { conversationId: result.conversationId } : {}),
+					...(result.error ? { error: result.error } : {}),
+					...(result.failure ? { failure: result.failure } : {}),
+				};
+			});
+		} finally {
+			if (controller.signal.reason !== DURABLE_PAUSE_REASON) await releaseNightWorkspaces(payload.workspaces);
+		}
+	})();
+	return { promise, cancel: () => controller.abort(), pause: () => controller.abort(DURABLE_PAUSE_REASON) };
 }
 
 interface Slot {
 	entry: Promise<DurableSupervisor>;
 	closing?: Promise<void>;
 }
-const SUPERVISORS = Symbol.for("babariviere.pi-extensions.durable-supervisors.v1");
-
+const SUPERVISORS = Symbol.for("babariviere.pi-extensions.durable-supervisors.v2");
 function supervisors(): Map<string, Slot> {
-	const processState = globalThis as typeof globalThis & { [key: symbol]: Map<string, Slot> | undefined };
-	return (processState[SUPERVISORS] ??= new Map());
+	const state = globalThis as typeof globalThis & { [key: symbol]: Map<string, Slot> | undefined };
+	return (state[SUPERVISORS] ??= new Map());
 }
 
-/** Same-session reload reacquires committed runs and replaces only the runner generation. */
 export async function acquireDurableSupervisor(
 	ref: SessionRef,
-	backend: RunBackend = runHeadlessBatch,
+	backend: RunBackend = runConversationBatch,
 ): Promise<DurableSupervisor> {
 	const key = durableDirectory(ref);
 	const entries = supervisors();
@@ -124,12 +132,7 @@ export async function acquireDurableSupervisor(
 	if (existing) {
 		const active = await existing.entry;
 		if (existing.closing || entries.get(key) !== existing) return acquireDurableSupervisor(ref, backend);
-		try {
-			await active.runner.reload(backend);
-		} catch (error) {
-			if (!existing.closing) throw error;
-		}
-		if (existing.closing || entries.get(key) !== existing) return acquireDurableSupervisor(ref, backend);
+		active.launcher.replace(backend);
 		return active;
 	}
 	const slot: Slot = { entry: DurableSupervisor.open(key, backend) };
@@ -144,7 +147,7 @@ export async function acquireDurableSupervisor(
 	}
 }
 
-export async function closeDurableSupervisor(ref: SessionRef): Promise<void> {
+export async function closeDurableSupervisor(ref: SessionRef, options: { preserveRuns?: boolean } = {}): Promise<void> {
 	if (!ref.sessionFile || !ref.sessionId) return;
 	const key = durableDirectory(ref);
 	const entries = supervisors();
@@ -152,7 +155,7 @@ export async function closeDurableSupervisor(ref: SessionRef): Promise<void> {
 	if (!slot) return;
 	return (slot.closing ??= (async () => {
 		try {
-			await (await slot.entry).close();
+			await (await slot.entry).close(options);
 		} finally {
 			if (entries.get(key) === slot) entries.delete(key);
 		}

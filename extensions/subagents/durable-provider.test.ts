@@ -38,12 +38,9 @@ for (const fails of [false, true]) {
 			registry,
 			() => ({ timeoutMs: 1_000, waitMs: 0 }),
 			book,
-			new RunLauncher({
-				inHerdr: () => false,
-				headless: async () => {
-					calls++;
-					return [];
-				},
+			new RunLauncher(async () => {
+				calls++;
+				return [];
 			}),
 		);
 		let entered!: () => void;
