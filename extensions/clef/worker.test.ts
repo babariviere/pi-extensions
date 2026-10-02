@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { normalizeClefConfig } from "./config.ts";
 import { ClefWorker } from "./worker.ts";
+import { ClefSetup } from "./setup.ts";
 
 const fixture = fileURLToPath(new URL("./fixtures/worker.mjs", import.meta.url));
 const makeWorker = (idleTimeoutMs = 60_000) =>
@@ -166,4 +167,70 @@ test("unresponsive workers are force-killed during unloading", async (t) => {
 	await worker.unload();
 	assert.equal(alive(first.pid), false);
 	assert.equal(worker.status, "unloaded");
+});
+
+test("classification waits for shared preparation outside its inference deadline", async (t) => {
+	const config = normalizeClefConfig({ requestTimeoutMs: 1000 });
+	const setup = new ClefSetup(config, {
+		executable: process.execPath,
+		args: [fileURLToPath(new URL("./fixtures/setup.mjs", import.meta.url)), "delay", "1500"],
+	});
+	const worker = new ClefWorker(config, { executable: process.execPath, args: [fixture] }, setup);
+	t.after(() => worker.dispose());
+	const preparing = worker.prepare();
+	const first = request(worker, { first: true });
+	const second = request(worker, { second: true });
+	const aborted = new AbortController();
+	const cancelled = assert.rejects(worker.request({}, { signal: aborted.signal }), /aborted/);
+	aborted.abort();
+	assert.match(worker.status, /preparing/);
+	const replies = await Promise.all([first, second]);
+	await cancelled;
+	await preparing;
+	assert.equal(replies[0].pid, replies[1].pid);
+	assert.deepEqual(
+		replies.map((reply) => reply.sequence),
+		[1, 2],
+	);
+});
+
+test("failed preparation settles the queue and unloading cancels startup", async (t) => {
+	let reject: (error: Error) => void = () => {};
+	const preparation = new Promise<never>((_resolve, fail) => {
+		reject = fail;
+	});
+	const setup = {
+		status: "preparing",
+		prepare: () => preparation,
+		unload: async () => {
+			reject(new Error("Clef setup cancelled"));
+		},
+	};
+	const worker = new ClefWorker(normalizeClefConfig({}), { executable: process.execPath, args: [fixture] }, setup);
+	t.after(() => worker.dispose());
+	const first = assert.rejects(worker.request({}), /setup cancelled/);
+	const second = assert.rejects(worker.request({}), /setup cancelled/);
+	await sleep(0);
+	await setup.unload();
+	await Promise.all([first, second]);
+	await worker.dispose();
+	assert.equal(worker.status, "stopped");
+});
+
+test("worker unload cancels preparation and every waiting classification", async (t) => {
+	const config = normalizeClefConfig({});
+	const setup = new ClefSetup(config, {
+		executable: process.execPath,
+		args: [fileURLToPath(new URL("./fixtures/setup.mjs", import.meta.url)), "delay", "1500"],
+	});
+	const worker = new ClefWorker(config, { executable: process.execPath, args: [fixture] }, setup);
+	t.after(() => worker.dispose());
+	const first = assert.rejects(worker.request({}), /unloaded/);
+	const second = assert.rejects(worker.request({}), /unloaded/);
+	await waitFor(() => worker.status.startsWith("preparing"));
+	await worker.unload();
+	await Promise.all([first, second]);
+	assert.equal(worker.status, "unloaded");
+	await worker.dispose();
+	await assert.rejects(worker.prepare(), /stopped/);
 });

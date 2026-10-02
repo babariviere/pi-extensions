@@ -1,6 +1,7 @@
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { type ClefConfig, MODEL_SPECS } from "./config.ts";
+import { ClefSetup } from "./setup.ts";
 
 const MAX_BYTES = 4 * 1024 * 1024;
 const MAX_QUEUE = 16;
@@ -13,6 +14,7 @@ interface Pending {
 	timer?: NodeJS.Timeout;
 	signal?: AbortSignal;
 	abort: () => void;
+	timeout: number;
 }
 
 export interface WorkerRequestOptions {
@@ -20,7 +22,7 @@ export interface WorkerRequestOptions {
 	timeoutMs?: number;
 }
 
-/** No processes or timers exist until request(). One inference at a time, including cold startup. */
+/** Setup can prefetch at session startup; inference processes remain lazy and serialized. */
 export class ClefWorker {
 	private child?: ChildProcessWithoutNullStreams;
 	private queue: Pending[] = [];
@@ -34,25 +36,38 @@ export class ClefWorker {
 
 	constructor(
 		private config: ClefConfig,
-		private command = {
-			executable: config.python,
-			args: [
-				"-u",
-				fileURLToPath(new URL("./worker.py", import.meta.url)),
-				"--model",
-				config.modelPath ?? MODEL_SPECS[config.model].repo,
-				"--revision",
-				MODEL_SPECS[config.model].revision,
-				"--max-length",
-				String(config.maxLength),
-				"--memory-limit-gb",
-				String(config.memoryLimitGB),
-			],
-		},
+		private command?: { executable: string; args: string[] },
+		private setup: Pick<ClefSetup, "prepare" | "unload" | "status"> | undefined = command
+			? undefined
+			: new ClefSetup(config),
 	) {}
+
+	async prepare(): Promise<void> {
+		if (this.disposed) throw new Error("Clef worker is stopped");
+		const ready = await this.setup?.prepare();
+		if (ready && !this.command) {
+			this.command = {
+				executable: ready.python,
+				args: [
+					"-u",
+					fileURLToPath(new URL("./worker.py", import.meta.url)),
+					"--model",
+					ready.modelPath,
+					"--revision",
+					MODEL_SPECS[this.config.model].revision,
+					"--max-length",
+					String(this.config.maxLength),
+					"--memory-limit-gb",
+					String(this.config.memoryLimitGB),
+				],
+			};
+		}
+	}
 
 	get status(): string {
 		if (this.disposed) return "stopped";
+		if (this.setup && this.setup.status !== "prepared" && this.setup.status !== "not prepared")
+			return this.setup.status;
 		if (this.active) return `busy (${this.queue.length} queued)`;
 		if (this.retiring) return "unloading";
 		return this.child ? "ready" : "unloaded";
@@ -81,15 +96,20 @@ export class ClefWorker {
 				reject,
 				signal: options.signal,
 				abort: () => this.cancel(pending, new Error("Clef classification aborted")),
-			};
-			pending.timer = setTimeout(
-				() => this.cancel(pending, new Error(`Clef timed out after ${timeout} ms`)),
 				timeout,
-			);
+			};
+			if (!this.setup || this.setup.status === "prepared") this.startDeadline(pending);
 			pending.signal?.addEventListener("abort", pending.abort, { once: true });
 			this.queue.push(pending);
 			void this.pump();
 		});
+	}
+
+	private startDeadline(pending: Pending): void {
+		pending.timer ??= setTimeout(
+			() => this.cancel(pending, new Error(`Clef timed out after ${pending.timeout} ms`)),
+			pending.timeout,
+		);
 	}
 
 	private cancel(pending: Pending, error: Error): void {
@@ -115,6 +135,11 @@ export class ClefWorker {
 		try {
 			await this.retiring;
 			if (this.disposed) return;
+			if (this.queue.length) {
+				await this.prepare();
+				if (this.disposed) return;
+				for (const pending of this.queue) this.startDeadline(pending);
+			}
 			const pending = this.queue.shift();
 			if (!pending) {
 				if (this.child) {
@@ -129,7 +154,9 @@ export class ClefWorker {
 				if (error && this.active === pending) this.failTransport(new Error("Clef worker input closed"));
 			});
 		} catch (error) {
-			this.failTransport(error instanceof Error ? error : new Error("Cannot start Clef worker"));
+			const failure = error instanceof Error ? error : new Error("Cannot start Clef worker");
+			this.failTransport(failure);
+			for (const pending of [...this.queue]) this.finish(pending, undefined, failure);
 		} finally {
 			this.pumping = false;
 			if (!this.active && this.queue.length) void this.pump();
@@ -137,6 +164,7 @@ export class ClefWorker {
 	}
 
 	private start(): ChildProcessWithoutNullStreams {
+		if (!this.command) throw new Error("Clef setup has not completed");
 		const child = spawn(this.command.executable, this.command.args, {
 			stdio: ["pipe", "pipe", "pipe"],
 			env: {
@@ -232,6 +260,7 @@ export class ClefWorker {
 		this.retire();
 		for (const pending of [...(this.active ? [this.active] : []), ...this.queue])
 			this.finish(pending, undefined, new Error("Clef worker unloaded"));
+		await this.setup?.unload();
 		await this.retiring;
 	}
 

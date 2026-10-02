@@ -11,7 +11,7 @@ The manifest discovers `extensions/*/index.ts` and `themes/*.json`.
 | --- | --- |
 | `apply-patch` | Standalone `applyPatch` V4A file-editing tool, available directly and through native codemode. |
 | `ask` | `--ask` selects the cheapest priced scoped model and disables thinking for a one-shot question. |
-| `clef` | Local Clef Flash MLX classifier (optional full model), lazy-loaded with idle unloading; `/clef` shows status or unloads it. |
+| `clef` | Local Clef Flash MLX classifier (optional full model), automatic Python/model setup and lazy loading with idle unloading; `/clef` shows status, prepares, or unloads it. |
 | `context` | `/context` shows loaded resources, project context, tokens and cost. |
 | `footer` | Project, context, model, thinking, subscription usage and extension status. |
 | `guardrail` | `/guardrail` controls checks for obvious catastrophic shell commands and direct shell-edit patterns. |

@@ -13,8 +13,13 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { CLASSIFIER_API, MODEL_SPECS } from "./config.ts";
 import clef from "./index.ts";
+import { ClefWorker } from "./worker.ts";
 
-test("provider registers Flash without loading weights, full is opt-in, and invalid config fails closed", async () => {
+test("provider registers Flash without loading weights, full is opt-in, and invalid config fails closed", async (t) => {
+	let preparations = 0;
+	t.mock.method(ClefWorker.prototype, "prepare", async () => {
+		preparations++;
+	});
 	const cwd = mkdtempSync(join(tmpdir(), "clef-extension-"));
 	const previous = process.env.PI_CODING_AGENT_DIR;
 	process.env.PI_CODING_AGENT_DIR = cwd;
@@ -43,12 +48,16 @@ test("provider registers Flash without loading weights, full is opt-in, and inva
 		clef(pi);
 		assert.equal(providers[0].models?.[0].id, MODEL_SPECS.flash.id);
 		assert.equal(providers[0].models?.[0].type, "classifier");
+		assert.equal(preparations, 0, "discovery does not start setup");
 		await events.get("session_start")!({}, ctx);
+		assert.equal(preparations, 1, "session startup prepares the runtime");
 		await command!("status", ctx);
 		assert.match(notifications.at(-1)!, /clef-flash-4bit: unloaded/);
 		writeFileSync(join(cwd, "clef.json"), JSON.stringify({ model: "full" }));
 		await events.get("session_start")!({}, ctx);
 		assert.equal(providers.at(-1)?.models?.[0].id, MODEL_SPECS.full.id);
+		await command!("setup", ctx);
+		assert.match(notifications.at(-1)!, /environment and checkpoint are ready/);
 		await command!("unload", ctx);
 		assert.match(notifications.at(-1)!, /next classification loads/);
 		writeFileSync(join(cwd, "clef.json"), JSON.stringify({ python: "python -u" }));
@@ -77,7 +86,8 @@ test("provider registers Flash without loading weights, full is opt-in, and inva
 	}
 });
 
-test("trusted project settings select full; untrusted project settings are ignored", async () => {
+test("trusted project settings select full; untrusted project settings are ignored", async (t) => {
+	t.mock.method(ClefWorker.prototype, "prepare", async () => {});
 	const cwd = mkdtempSync(join(tmpdir(), "clef-config-"));
 	const agentDir = join(cwd, "agent");
 	const previous = process.env.PI_CODING_AGENT_DIR;
@@ -111,14 +121,68 @@ test("trusted project settings select full; untrusted project settings are ignor
 	}
 });
 
-test("Python worker protocol and adapter tests run without MLX or checkpoint downloads", (t) => {
-	const result = spawnSync("python3", ["-B", fileURLToPath(new URL("./worker_test.py", import.meta.url))], {
-		encoding: "utf8",
-		timeout: 30_000,
+test("startup preparation does not block the session, reports failure, and can be retried", {
+	timeout: 5000,
+}, async (t) => {
+	const cwd = mkdtempSync(join(tmpdir(), "clef-background-"));
+	const previous = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = cwd;
+	let reject: (error: Error) => void = () => {};
+	const pending = new Promise<void>((_resolve, fail) => {
+		reject = fail;
 	});
-	if (result.error && "code" in result.error && result.error.code === "ENOENT") {
-		t.skip("python3 is not installed; run worker_test.py during Python setup");
-		return;
+	let attempts = 0;
+	t.mock.method(ClefWorker.prototype, "prepare", () => (++attempts === 1 ? pending : Promise.resolve()));
+	const events = new Map<string, (event: unknown, ctx: ExtensionContext) => Promise<void>>();
+	const notifications: string[] = [];
+	const statuses: (string | undefined)[] = [];
+	let command: (args: string, ctx: ExtensionCommandContext) => Promise<void> = async () => {};
+	const ctx = {
+		cwd,
+		hasUI: true,
+		isProjectTrusted: () => false,
+		ui: {
+			notify: (message: string) => notifications.push(message),
+			setStatus: (_key: string, value: string | undefined) => statuses.push(value),
+		},
+	} as unknown as ExtensionCommandContext;
+	clef({
+		registerProvider: () => {},
+		on: (name: string, handler: (event: unknown, ctx: ExtensionContext) => Promise<void>) =>
+			events.set(name, handler),
+		registerCommand: (_name: string, definition: { handler: typeof command }) => {
+			command = definition.handler;
+		},
+	} as unknown as ExtensionAPI);
+	try {
+		await events.get("session_start")!({}, ctx);
+		assert.equal(attempts, 1);
+		assert.match(statuses.at(-1)!, /preparing/);
+		reject(new Error("Clef checkpoint download failed. Check network access."));
+		await new Promise((resolve) => setImmediate(resolve));
+		assert.match(notifications.at(-1)!, /download failed/);
+		assert.equal(statuses.at(-1), undefined);
+		await command("setup", ctx);
+		assert.equal(attempts, 2);
+		assert.match(notifications.at(-1)!, /environment and checkpoint are ready/);
+	} finally {
+		await events.get("session_shutdown")!({}, ctx);
+		if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previous;
+		rmSync(cwd, { recursive: true, force: true });
 	}
-	assert.equal(result.status, 0, result.stdout + result.stderr + (result.error?.message ?? ""));
+});
+
+test("Python setup, worker protocol and adapter tests run without MLX or checkpoint downloads", (t) => {
+	for (const script of ["worker_test.py", "setup_test.py"]) {
+		const result = spawnSync("python3", ["-B", fileURLToPath(new URL(`./${script}`, import.meta.url))], {
+			encoding: "utf8",
+			timeout: 30_000,
+		});
+		if (result.error && "code" in result.error && result.error.code === "ENOENT") {
+			t.skip("python3 is not installed; run the Python tests during setup");
+			return;
+		}
+		assert.equal(result.status, 0, result.stdout + result.stderr + (result.error?.message ?? ""));
+	}
 });

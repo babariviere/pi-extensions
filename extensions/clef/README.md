@@ -8,33 +8,35 @@ It answers Pi's `choice`, `bool`, and `score` questions about text/JSON state.
 It is not a chat model and does not appear in `/model` or change your chat model.
 LM Studio is not used: ordinary chat generation skips Clef's classification head.
 
-## Explicit setup
+## Automatic setup
 
-Requires Apple Silicon macOS, Python 3.11+, and a current `mlx-vlm` release
-supporting the checkpoint's backbone. Python packages are not installed by Pi.
-From the checkout, for example:
+Requires Apple Silicon macOS and Python 3.11+ on PATH. The extension handles the
+Python packages and model download automatically, in the background at session
+startup. Extension discovery alone does not start processes or download anything.
 
-```sh
-python3 -m venv ~/.local/share/pi-clef/venv
-~/.local/share/pi-clef/venv/bin/python -m pip install mlx-vlm huggingface_hub
-```
+If the configured Python already provides `mlx`, `mlx-vlm`, and `huggingface_hub`,
+it is reused. Otherwise, Clef creates an isolated virtualenv at
+`~/.local/share/pi-clef/venv` and installs `mlx-vlm` and `huggingface_hub` there.
+It never installs packages into your system or configured Python environment.
+Concurrent Pi sessions serialize virtualenv creation and installation.
 
-The loader is executable code supplied by the model repository. Review its
-`clef_mlx.py` before using it. The default snapshot is pinned to
+Enabling this extension permits Python package installation and downloading the
+configured checkpoint from Hugging Face. The loader is executable code supplied
+by the model repository and runs with host permissions. Review its `clef_mlx.py`
+before enabling the extension. The default snapshot is pinned to
 `d9ec324f7992383bdfb7a0b4eed8b4b9d10f81be`, not the mutable `main` branch.
-Download that snapshot once, explicitly (roughly **6.2 GB of weights**, plus
-metadata and cache storage):
+Missing checkpoints are downloaded once into the standard Hugging Face cache
+(roughly **6.2 GB of weights** for Flash, plus metadata and cache storage).
+Cached checkpoints are reused without network access. Interrupted downloads can
+resume on retry. A configured `modelPath` is validated locally instead of downloaded.
 
-```sh
-~/.local/share/pi-clef/venv/bin/python -c 'from huggingface_hub import snapshot_download; print(snapshot_download("mlx-community/clef-flash-4bit", revision="d9ec324f7992383bdfb7a0b4eed8b4b9d10f81be"))'
-```
-
-Set `python` in `<agent-dir>/clef.json` (normally `~/.pi/agent/clef.json`):
+No configuration is required. Optional settings go in `<agent-dir>/clef.json`
+(normally `~/.pi/agent/clef.json`):
 
 ```json
 {
   "model": "flash",
-  "python": "~/.local/share/pi-clef/venv/bin/python",
+  "python": "python3",
   "idleTimeoutMs": 600000,
   "requestTimeoutMs": 180000,
   "maxLength": 8192,
@@ -43,9 +45,15 @@ Set `python` in `<agent-dir>/clef.json` (normally `~/.pi/agent/clef.json`):
 ```
 
 The extension loads through the package manifest, or directly with
-`pi -e ./extensions/clef/index.ts`. Use `/reload` after setup/configuration changes.
-Nothing downloads or starts a worker during extension discovery or session startup.
-Inference uses the pinned snapshot already in the Hugging Face cache, offline.
+`pi -e ./extensions/clef/index.ts`. Use `/reload` after configuration changes.
+Session startup does not wait for preparation. `/clef status` shows preparation
+state; `/clef setup` waits for readiness or retries failed setup. Classification
+shares the same preparation and waits for it before its inference deadline begins.
+Preparation has a separate one-hour limit. Network/disk/install failures are
+reported without preventing the rest of Pi from starting.
+Weights are loaded only on classification. Inference remains offline and does
+not download or install anything. Prepopulate the virtualenv and pinned cache
+before starting Pi to use Clef without setup network access.
 
 ## Use from native codemode
 
@@ -89,26 +97,24 @@ fall back to a different interpreter or model.
 | Setting | Default | Meaning |
 | --- | --- | --- |
 | `model` | `"flash"` | `"flash"` registers `clef/clef-flash-4bit`; `"full"` registers `clef/clef-4bit` instead. Only the configured model is advertised. |
-| `python` | `python3` | Executable name on PATH or absolute path. `~/` expands. No shell command or argument string. |
+| `python` | `python3` | Python 3.11+ executable on PATH or absolute path, used for setup and reused for inference if dependencies are present. Otherwise inference uses the managed virtualenv. `~/` expands. No shell command or argument string. |
 | `modelPath` | Pinned Hugging Face cache snapshot | Optional absolute directory containing this model's weights and trusted `clef_mlx.py`. `~/` expands. Local paths bypass revision verification. |
 | `idleTimeoutMs` | `600000` | Unload ten minutes after the last completed call. Integer, 1 to 86400000. |
-| `requestTimeoutMs` | `180000` | Deadline including queue wait and cold loading. Integer, 1 to 3600000. |
+| `requestTimeoutMs` | `180000` | Deadline including queue wait and cold loading, after environment/checkpoint preparation. Integer, 1 to 3600000. |
 | `maxLength` | `8192` | Total state plus schema token limit, 128 to 16384. Oversized input fails, never silently truncates. |
 | `memoryLimitGB` | `16` for Flash, `24` for full | MLX allocation limit in GiB, integer, 4 to 128. Not a total-process or OS memory cap. |
 
 - `/clef` or `/clef status`: show worker state and limits without loading weights.
-- `/clef unload`: cancel active/queued calls and release the worker. The next call reloads.
+- `/clef setup`: wait for preparation or retry a failed install/download, without loading weights.
+- `/clef unload`: cancel preparation and active/queued calls, and release the worker. Installed packages and downloaded weights remain cached. The next call prepares/reloads as needed.
 
 ### Optional full model
 
 For higher overall benchmark quality at the expense of memory and latency,
 set `"model": "full"`, remove any explicit Flash `modelPath`, and either remove
 `memoryLimitGB` to use the full-model default (24 GiB), or set it explicitly.
-Download the full model's pinned snapshot before reloading:
-
-```sh
-~/.local/share/pi-clef/venv/bin/python -c 'from huggingface_hub import snapshot_download; print(snapshot_download("mlx-community/clef-4bit", revision="a1cc3c6d04beed778adbd53bad8899f91d3c0968"))'
-```
+On reload, Clef automatically prepares the full model's snapshot pinned to
+`a1cc3c6d04beed778adbd53bad8899f91d3c0968` (roughly **16.3 GB of weights**).
 
 Then use the classifier ID `clef-4bit` instead of `clef-flash-4bit`. A custom
 `modelPath` must contain the model selected by `model`, including its loader.
@@ -139,8 +145,10 @@ Then use the classifier ID `clef-4bit` instead of `clef-flash-4bit`. A custom
   still need memory. The defaults are a starting point, not a fit guarantee.
   Be careful simultaneously loading a large LM Studio model or running multiple
   Clef sessions. Reduce `maxLength` if memory is tight.
-- No listener, API credential, background service, automatic installation, or
-  automatic download. Offline environment flags disable standard Hub downloads;
+- No listener, API credential, or persistent background service. Preparation
+  uses network access only for missing packages/checkpoints and overrides inherited
+  Hub offline flags for that purpose. Session shutdown or unload terminates setup
+  and its subprocesses. Inference's offline flags disable standard Hub downloads;
   trusted checkpoint code and Python dependencies still execute with host
   permissions, outside the shell sandbox. They are not network-isolated by the OS.
   State is sent over local pipes, not intentionally persisted or logged. Library
@@ -151,10 +159,11 @@ Then use the classifier ID `clef-4bit` instead of `clef-flash-4bit`. A custom
 ```sh
 node --import tsx --test 'extensions/clef/*.test.ts'
 python3 -B extensions/clef/worker_test.py
+python3 -B extensions/clef/setup_test.py
 npm run typecheck
 npm test
 ```
 
-Tests use fake workers and pure Python protocol checks. They do not download
+Tests use fake workers and mocked Python setup/protocol checks. They do not download
 weights or prove end-to-end inference performance. Run the codemode example after
-explicit setup to verify the actual MLX runtime and available memory on your Mac.
+`/clef setup` completes to verify the actual MLX runtime and available memory on your Mac.
