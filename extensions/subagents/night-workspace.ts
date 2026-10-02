@@ -3,7 +3,7 @@
  * durable directory its deliverables end up in.
  *
  * The coordinator asks for a subagent; it does not get to say where the child
- * runs. `cwd` is absent from the tool schema and from `NormalizedItem`, so the
+ * runs. `cwd` is absent from the tool schema, so the
  * only way a run gets one is here, host side, from the active night run. The
  * same is true of `artifactsDir`.
  *
@@ -17,27 +17,57 @@ import {
 	type AgentWorkspace,
 	releaseAgentWorkspace,
 } from "../night-mode/agent-workspace.ts";
-import type { RunRequest } from "./run.ts";
+import { readActiveNightRun, type ActiveNightRun } from "../night-mode/night-run.ts";
+
+/** Host-only placement inputs, independent of the public subagent schema. */
+export interface NightWorkspaceRequest {
+	index: number;
+	night?: boolean;
+	cwd?: string;
+	artifactsDir?: string;
+}
+
+interface WorkspaceAllocator {
+	acquire?: typeof acquireNightAgentWorkspace;
+	release?: typeof releaseAgentWorkspace;
+}
 
 /**
- * Give every `night: true` request its own workspace, mutating its `cwd` and
- * `artifactsDir`. Sequential because `jj workspace add` takes the repository
- * lock. A request that cannot be given one keeps the parent's cwd, which is the
- * behaviour from before workspaces existed.
+ * Give participating requests their own workspace, using one run snapshot.
+ * Sequential because jj takes the repository lock. Placement is published
+ * only when the whole allocation succeeds; failure releases partial workspaces
+ * and never silently substitutes a shared working copy.
  */
 export async function allocateNightWorkspaces(
-	requests: RunRequest[],
+	requests: NightWorkspaceRequest[],
 	runId: string,
 	cwd: string,
+	run?: ActiveNightRun,
+	allocator: WorkspaceAllocator = {},
 ): Promise<AgentWorkspace[]> {
+	const snapshot = arguments.length >= 4 ? run : readActiveNightRun();
+	const acquire = allocator.acquire ?? acquireNightAgentWorkspace;
+	const release = allocator.release ?? releaseAgentWorkspace;
 	const acquired: AgentWorkspace[] = [];
-	for (const request of requests) {
-		if (!request.night) continue;
-		const workspace = await acquireNightAgentWorkspace(agentWorkspaceName(runId, request.index), cwd);
-		if (!workspace) continue;
+	const placements: Array<{ request: NightWorkspaceRequest; workspace: AgentWorkspace }> = [];
+	try {
+		for (const request of requests) {
+			if (!request.night) continue;
+			const workspace = await acquire(agentWorkspaceName(runId, request.index), cwd, snapshot);
+			if (!workspace) {
+				if (snapshot?.workspacePath) throw new Error("Night workspace isolation unavailable");
+				continue;
+			}
+			acquired.push(workspace);
+			placements.push({ request, workspace });
+		}
+	} catch (error) {
+		await Promise.allSettled(acquired.map(async (workspace) => release(workspace)));
+		throw error;
+	}
+	for (const { request, workspace } of placements) {
 		request.cwd = workspace.path;
 		request.artifactsDir = workspace.artifactsDir;
-		acquired.push(workspace);
 	}
 	return acquired;
 }

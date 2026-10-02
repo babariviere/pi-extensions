@@ -526,6 +526,7 @@ export default function (pi: ExtensionAPI): void {
 		};
 		const sessionId = ctx.sessionManager.getSessionId();
 		writeActiveNightRun({
+			phase: "planning",
 			startedAt: planning.startedAt.getTime(),
 			reportPath: reportPathFor(config, planning.startedAt, cwd),
 			maxPullRequests: config.maxPullRequests,
@@ -625,6 +626,7 @@ export default function (pi: ExtensionAPI): void {
 		// Written before the request is emitted: subagent processes read the policy
 		// from this file, so it has to be on disk before any child can start.
 		writeActiveNightRun({
+			phase: "execution",
 			startedAt: startedAt.getTime(),
 			reportPath,
 			maxPullRequests: config.maxPullRequests,

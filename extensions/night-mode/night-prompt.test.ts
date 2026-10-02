@@ -134,6 +134,11 @@ describe("composePlanningPrompt", () => {
 		});
 		assert.match(text, /Build a proposed plan only/);
 		assert.match(text, /spawn subagents to explore/);
+		assert.match(text, /automatically inherit the planning/);
+		assert.match(text, /ordinary names, not execution TODO names/);
+		assert.match(text, /No task approval is required/);
+		assert.match(text, /action: 'spawn'/);
+		assert.doesNotMatch(text, /night: true|agents_run|nightTodoId/);
 		assert.match(text, /tools\.night_plan/);
 		assert.doesNotMatch(text, /code_mode|night\.plan/);
 		assert.match(text, /Check documentation/);
@@ -206,10 +211,17 @@ describe("composeNightPrompt", () => {
 
 describe("orchestrator contract", () => {
 	it("names the delegation mechanics the coordinator has to use", () => {
-		assert.match(ORCHESTRATOR_CONTRACT, /night: true/);
-		assert.match(ORCHESTRATOR_CONTRACT, /nightTodoId/);
-		assert.match(ORCHESTRATOR_CONTRACT, /reads/);
-		assert.match(ORCHESTRATOR_CONTRACT, /output/);
+		assert.match(ORCHESTRATOR_CONTRACT, /tools\.subagent/);
+		assert.match(ORCHESTRATOR_CONTRACT, /action: 'spawn'/);
+		assert.match(ORCHESTRATOR_CONTRACT, /action: 'send'/);
+		assert.match(ORCHESTRATOR_CONTRACT, /action: 'status'/);
+		assert.match(ORCHESTRATOR_CONTRACT, /TODO-<approved id>/);
+		assert.match(ORCHESTRATOR_CONTRACT, /both spawn and send/);
+		assert.match(ORCHESTRATOR_CONTRACT, /in the message/);
+		assert.match(ORCHESTRATOR_CONTRACT, /lastAnswer/);
+		assert.match(ORCHESTRATOR_CONTRACT, /Answers arrive automatically/);
+		assert.match(ORCHESTRATOR_CONTRACT, /automatic result file/);
+		assert.doesNotMatch(ORCHESTRATOR_CONTRACT, /agents_run|nightTodoId|night: true|model:|thinking:/);
 		assert.match(ORCHESTRATOR_CONTRACT, /Evidence:/);
 	});
 
@@ -233,7 +245,10 @@ describe("orchestrator contract", () => {
 			maxAttempts: 3,
 		});
 		assert.match(nudge, /orchestrator/);
-		assert.match(nudge, /night: true/);
+		assert.match(nudge, /tools\.subagent/);
+		assert.match(nudge, /TODO-<approved id>/);
+		assert.match(nudge, /named status and lastAnswer/);
+		assert.doesNotMatch(nudge, /night: true|agents_run|nightTodoId/);
 	});
 });
 
@@ -330,9 +345,11 @@ describe("capability journal", () => {
 		assert.doesNotMatch(compose(), /Capability journal/);
 	});
 
-	it("tells the coordinator a launch failure is a runner fault, not a task fault", () => {
-		assert.match(ORCHESTRATOR_CONTRACT, /failure: 'launch'/);
-		assert.match(ORCHESTRATOR_CONTRACT, /never rewrite, shorten or re-persona the task/);
+	it("checks status before retrying a worker failure without rewriting approved scope", () => {
+		assert.match(ORCHESTRATOR_CONTRACT, /admission or worker failure/);
+		assert.match(ORCHESTRATOR_CONTRACT, /Inspect named status first/);
+		assert.match(ORCHESTRATOR_CONTRACT, /child may already have performed work/);
+		assert.match(ORCHESTRATOR_CONTRACT, /Never rewrite or shorten the approved scope/);
 	});
 });
 
@@ -353,10 +370,11 @@ describe("delegation rules earned from past nights", () => {
 		assert.match(ORCHESTRATOR_CONTRACT, /grades itself against what you wrote/);
 	});
 
-	it("sends retrieval-shaped children to the cheaper model", () => {
-		// 2026-08-28e #6, re-reported five passes running.
-		assert.match(ORCHESTRATOR_CONTRACT, /claude-sonnet-5/);
-		assert.match(ORCHESTRATOR_CONTRACT, /Keep the default for children that write code/);
+	it("leaves model selection to host policy and pins it at spawn", () => {
+		assert.match(ORCHESTRATOR_CONTRACT, /configured defaultModel/);
+		assert.match(ORCHESTRATOR_CONTRACT, /parent's physical model, pinned/);
+		assert.match(ORCHESTRATOR_CONTRACT, /Do not request a per-call model/);
+		assert.doesNotMatch(ORCHESTRATOR_CONTRACT, /claude-sonnet-5/);
 	});
 });
 

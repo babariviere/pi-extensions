@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, test } from "node:test";
 import {
 	acquireAgentWorkspace,
+	acquireNightAgentWorkspace,
 	agentArtifactsDir,
 	agentWorkspaceName,
 	agentWorkspacesRoot,
@@ -12,6 +13,7 @@ import {
 	parseChangedPaths,
 	releaseAgentWorkspace,
 } from "./agent-workspace.ts";
+import { writeActiveNightRun, type ActiveNightRun } from "./night-run.ts";
 
 describe("agentWorkspacesRoot", () => {
 	test("sits beside the clone, not inside it", () => {
@@ -60,13 +62,18 @@ describe("parseChangedPaths", () => {
 });
 
 let dir: string;
+let previousAgentDir: string | undefined;
 
 beforeEach(() => {
 	dir = mkdtempSync(join(tmpdir(), "night-agent-ws-"));
+	previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = dir;
 });
 
 afterEach(() => {
 	rmSync(dir, { recursive: true, force: true });
+	if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+	else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
 });
 
 describe("acquireAgentWorkspace", () => {
@@ -137,6 +144,117 @@ describe("acquireAgentWorkspace", () => {
 			},
 		});
 		assert.equal(workspace, undefined);
+	});
+
+	test("cleans a partially created workspace when jj add fails", async () => {
+		const base = join(dir, "clone");
+		mkdirSync(join(base, ".jj"), { recursive: true });
+		const path = join(agentWorkspacesRoot(base), "partial");
+		const calls: string[][] = [];
+		assert.equal(
+			await acquireAgentWorkspace({
+				base,
+				root: agentWorkspacesRoot(base),
+				name: "partial",
+				trust: false,
+				exec: (_command, args) => {
+					calls.push(args);
+					if (args[1] === "add") {
+						mkdirSync(path, { recursive: true });
+						throw new Error("partial add");
+					}
+				},
+			}),
+			undefined,
+		);
+		assert.equal(existsSync(path), false);
+		assert.deepEqual(calls[1], ["workspace", "forget", "partial"]);
+	});
+
+	test("does not delete an existing owner's workspace on collision", async () => {
+		const base = join(dir, "clone");
+		mkdirSync(join(base, ".jj"), { recursive: true });
+		const path = join(agentWorkspacesRoot(base), "owned");
+		mkdirSync(path, { recursive: true });
+		writeFileSync(join(path, "keep"), "owned");
+		assert.equal(
+			await acquireAgentWorkspace({
+				base,
+				root: agentWorkspacesRoot(base),
+				name: "owned",
+				exec: () => assert.fail("must not attempt a collision"),
+			}),
+			undefined,
+		);
+		assert.equal(readFileSync(join(path, "keep"), "utf8"), "owned");
+	});
+
+	test("rejects and cleans a workspace whose artifact directory cannot be created", async () => {
+		const base = join(dir, "clone");
+		mkdirSync(join(base, ".jj"), { recursive: true });
+		const root = agentWorkspacesRoot(base);
+		const path = join(root, "partial");
+		const artifactsDir = agentArtifactsDir(root, "partial");
+		const calls: string[][] = [];
+		assert.equal(
+			await acquireAgentWorkspace({
+				base,
+				root,
+				name: "partial",
+				trust: false,
+				exec: (_command, args) => {
+					calls.push(args);
+					if (args[1] === "add") {
+						mkdirSync(path, { recursive: true });
+						writeFileSync(artifactsDir, "blocks mkdir");
+					}
+				},
+			}),
+			undefined,
+		);
+		assert.equal(existsSync(path), false);
+		assert.equal(existsSync(artifactsDir), false);
+		assert.deepEqual(calls[1], ["workspace", "forget", "partial"]);
+	});
+
+	test("never advertises a missing working copy even if jj exits successfully", async () => {
+		const base = join(dir, "clone");
+		mkdirSync(join(base, ".jj"), { recursive: true });
+		assert.equal(
+			await acquireAgentWorkspace({
+				base,
+				root: agentWorkspacesRoot(base),
+				name: "missing",
+				trust: false,
+				exec: () => {},
+			}),
+			undefined,
+		);
+	});
+});
+
+describe("acquireNightAgentWorkspace snapshots", () => {
+	const run = (workspacePath?: string): ActiveNightRun => ({
+		startedAt: 1,
+		reportPath: "/report",
+		maxPullRequests: 0,
+		workspacePath,
+	});
+	test("a supplied absent or non-isolated run never adopts a global clone", async () => {
+		writeActiveNightRun(run(join(dir, "global")));
+		assert.equal(await acquireNightAgentWorkspace("test", dir, undefined), undefined);
+		assert.equal(await acquireNightAgentWorkspace("test", dir, run()), undefined);
+	});
+	test("a captured isolated run fails closed even when global state is absent", async () => {
+		await assert.rejects(
+			acquireNightAgentWorkspace("test", dir, run(join(dir, "captured"))),
+			/isolation unavailable.*captured/,
+		);
+	});
+	test("default callers still read the current handshake and fail closed for isolation", async () => {
+		assert.equal(await acquireNightAgentWorkspace("test", dir), undefined);
+		writeActiveNightRun(run(join(dir, "global")));
+		await assert.rejects(acquireNightAgentWorkspace("test", dir), /isolation unavailable.*global/);
 	});
 });
 

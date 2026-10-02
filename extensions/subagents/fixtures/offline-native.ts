@@ -11,9 +11,38 @@ export default async function offlineNative(pi: ExtensionAPI): Promise<void> {
 		new URL("../../../node_modules/@earendil-works/pi-ai/dist/providers/faux.js", import.meta.url).href
 	)) as typeof import("@earendil-works/pi-ai/providers/faux");
 	const provider = fauxProvider({ tokensPerSecond: 500 });
+	const count = (name: string) => {
+		const file = join(process.cwd(), name);
+		writeFileSync(file, String((existsSync(file) ? Number(readFileSync(file, "utf8")) : 0) + 1));
+	};
 	provider.setResponses(
-		Array.from({ length: 8 }, () => (request) => {
+		Array.from({ length: 20 }, () => (request) => {
+			count("generation-count");
 			const userText = JSON.stringify(request.messages.filter((message) => message.role === "user"));
+			const lastUser = JSON.stringify(request.messages.filter((message) => message.role === "user").at(-1));
+			if (
+				!userText.includes("recover forced") &&
+				!getCurrentSystemPrompt(request.messages).includes("Native prompt hook is active.")
+			)
+				return fauxAssistantMessage("Native prompt hook was lost");
+			if (lastUser.includes("once input"))
+				return fauxAssistantMessage(
+					userText.includes("native-transformed")
+						? `Native transformed input, user inputs: ${request.messages.filter((message) => message.role === "user").length}`
+						: "Native input transformation was lost",
+				);
+			if (lastUser.includes("memory remember")) return fauxAssistantMessage("Memory saved: cobalt-739");
+			if (lastUser.includes("memory recall")) {
+				const remembered = userText.includes("memory remember cobalt-739") ? "cobalt-739" : "missing";
+				const prior = request.messages.filter((message) => message.role === "assistant").at(-1);
+				const priorText =
+					prior?.role === "assistant"
+						? prior.content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("")
+						: "missing";
+				return fauxAssistantMessage(
+					`Memory recalled: ${remembered}; prior answer: ${priorText}; user inputs: ${request.messages.filter((message) => message.role === "user").length}`,
+				);
+			}
 			if (userText.includes("recover model") || userText.includes("recover forced")) {
 				const marker = join(process.cwd(), "model-started");
 				if (
@@ -72,6 +101,10 @@ export default async function offlineNative(pi: ExtensionAPI): Promise<void> {
 		}),
 	);
 	pi.registerProvider(provider.provider);
+	pi.on("input", (event) => {
+		count("input-count");
+		if (event.text === "once input") return { action: "transform", text: "once input native-transformed" };
+	});
 	pi.registerTool({
 		name: "native_echo",
 		label: "Native echo",

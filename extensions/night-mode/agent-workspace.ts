@@ -32,7 +32,7 @@ import { createHash } from "node:crypto";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { readNightConfig } from "./config.ts";
-import { readActiveNightRun } from "./night-run.ts";
+import { readActiveNightRun, type ActiveNightRun } from "./night-run.ts";
 import { copyLocalFiles, prepareWorkingCopy } from "./sandbox-clone.ts";
 
 const execFileAsync = promisify(execFile);
@@ -125,40 +125,45 @@ export interface AcquireInput {
 }
 
 /**
- * Add a jj workspace to the night clone. Returns undefined when the clone is
- * not a jj repository or the command fails: the caller then falls back to the
- * clone itself, which is the previous behaviour rather than a dead run.
+ * Add a jj workspace to the night clone. Returns undefined on failure, after
+ * cleaning up any partial allocation. Night callers must not fall back to a
+ * shared working copy when isolation was requested.
  */
 export async function acquireAgentWorkspace(input: AcquireInput): Promise<AgentWorkspace | undefined> {
 	if (!existsSync(join(input.base, ".jj"))) return undefined;
 	const exec = input.exec ?? defaultExec;
 	const path = join(input.root, input.name);
+	const artifactsDir = agentArtifactsDir(input.root, input.name);
+	// A collision belongs to an existing owner, not to this failed allocation.
+	if (existsSync(path) || existsSync(artifactsDir)) return undefined;
+	let attempted = false;
 	try {
 		mkdirSync(input.root, { recursive: true });
+		attempted = true;
 		await exec("jj", ["workspace", "add", "--name", input.name, path], input.base);
+		if (!statSync(path).isDirectory()) throw new Error("Workspace working copy unavailable");
+		copyLocalFiles(input.base, path, input.copyFiles ?? []);
+		await prepareWorkingCopy(path, { trust: input.trust ?? true });
+		// The advertised deliverable directory must exist before admission.
+		mkdirSync(artifactsDir, { recursive: true });
+		return { name: input.name, path, base: input.base, artifactsDir };
 	} catch {
+		if (attempted) {
+			try {
+				await exec("jj", ["workspace", "forget", input.name], input.base);
+			} catch {
+				// Best effort, but the caller must still refuse to launch.
+			}
+			for (const partial of [path, artifactsDir]) {
+				try {
+					rmSync(partial, { recursive: true, force: true });
+				} catch {
+					// Disk to reclaim, never permission to use a shared cwd.
+				}
+			}
+		}
 		return undefined;
 	}
-
-	// A fresh workspace holds tracked files only, so the untracked local config
-	// the clone exists to preserve has to be brought over explicitly.
-	copyLocalFiles(input.base, path, input.copyFiles ?? []);
-	// Trust the new path (mise and direnv trust by path). The returned problems
-	// are dropped on purpose: the only one a fresh workspace can raise is "this
-	// is a secondary jj workspace", which is the whole point here.
-	await prepareWorkingCopy(path, { trust: input.trust ?? true });
-
-	const artifactsDir = agentArtifactsDir(input.root, input.name);
-	// Created up front: the child is handed this path in its task message, and an
-	// instruction to write into a directory that does not exist invites it to
-	// give up and write next to itself instead.
-	try {
-		mkdirSync(artifactsDir, { recursive: true });
-	} catch {
-		// The copy on release recreates it per file; nothing to do here.
-	}
-
-	return { name: input.name, path, base: input.base, artifactsDir };
 }
 
 /** Statuses `jj diff --summary` uses for a path that exists in the workspace. */
@@ -276,17 +281,25 @@ export async function releaseAgentWorkspace(
 /**
  * Acquire a workspace for a subagent of the active night run, reading the clone
  * from the handshake and the copy/trust preferences from the night config.
- * Undefined when no run is active or the run has no clone.
+ * A supplied snapshot (including undefined) avoids reading the global run.
+ * Undefined when no run is active or the run has no clone. An isolated run
+ * whose workspace cannot be acquired fails closed.
  */
-export async function acquireNightAgentWorkspace(name: string, cwd: string): Promise<AgentWorkspace | undefined> {
-	const base = readActiveNightRun()?.workspacePath;
+export async function acquireNightAgentWorkspace(
+	name: string,
+	cwd: string,
+	run?: ActiveNightRun,
+): Promise<AgentWorkspace | undefined> {
+	const base = (arguments.length >= 3 ? run : readActiveNightRun())?.workspacePath;
 	if (!base) return undefined;
 	const config = readNightConfig(cwd);
-	return acquireAgentWorkspace({
+	const workspace = await acquireAgentWorkspace({
 		base,
 		root: agentWorkspacesRoot(base),
 		name,
 		copyFiles: config.sandboxCopyFiles,
 		trust: config.sandboxTrust,
 	});
+	if (!workspace) throw new Error(`Night workspace isolation unavailable for ${name} in ${base}`);
+	return workspace;
 }

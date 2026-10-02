@@ -23,7 +23,7 @@ The manifest discovers `extensions/*/index.ts` and `themes/*.json`.
 | `preview-system-prompt` | `/system-prompt` shows the assembled prompt. |
 | `sandbox` | `/sandbox` controls filesystem policy and native MCP read-only permissions for direct and codemode-nested calls. |
 | `secrets` | `/secret-list`; fnox shell injection and reversible secret references in text, structured results and persisted details. |
-| `subagents` | Native `agents_*` tools launch child agents with bounded waits and cancellation, plus opt-in durable history and Chord-backed reload. |
+| `subagents` | One native `subagent` tool manages named persistent background conversations, automatic answers, steering, stop and durable recovery. |
 | `todos` | Native `todo_*` tools manage file-backed todos; `/todos` provides the interactive manager. |
 | `tool-substitute` | Search guidance and jj-aware Git-write checks. |
 | `usage` | `/usage` polls Claude and Codex/ChatGPT subscription windows. |
@@ -45,11 +45,12 @@ loaded through pi's normal configuration.
 Requires Node.js `>=24.0.0` and pi `>=1.0.0`. The host supplies
 `@earendil-works/pi-ai`, `@earendil-works/pi-coding-agent`, `@earendil-works/pi-tui`
 and `typebox` as peer dependencies. This package no longer installs its own
-execution runtime, MCP SDK or keyring implementation.
+native Pi SDK, MCP SDK or keyring implementation.
 
-The experimental subagents durable backend bundles pinned pi-durable and Chord
-libraries for lifecycle storage and runner replacement, not a second model
-execution harness. See [Subagents](extensions/subagents/README.md#experimental-durable-backend).
+Subagents use bundled, pinned pi-durable and Chord libraries for persistent
+conversations and checkpointed tasks. Pi-durable owns the child model loop;
+isolated native Pi kernels preserve tools and policy. There is no optional legacy
+backend. See [Subagents](extensions/subagents/README.md).
 
 Optional integrations need their own tools and credentials, including Kagi,
 fnox, Linear, GitHub CLI, jj, Herdr and platform wake-lock facilities.
@@ -84,16 +85,39 @@ const page = await tools.fetch_content({ url: "https://example.com" });
 return { tasks: todos.length, page: page.text.slice(0, 1000) };
 ```
 
-Other capabilities include `tools.night_plan`, `tools.agents_run`, `tools.jobs_start`,
+Other capabilities include `tools.night_plan`, `tools.subagent`, `tools.jobs_start`,
 `tools.applyPatch`, and `tools.web_search`. Use native `searchTools()` and
 `describeTool()` for exact schemas and tools omitted from the inline catalog.
 Less frequently used extension actions use deferred exposure and remain callable
 by name or discoverable with `searchTools()`. Read namespace workflow instructions
-with `describeNamespace("agents")`, `describeNamespace("todo")`, or
-`describeNamespace("jobs")` when needed.
+with `describeNamespace("todo")` or `describeNamespace("jobs")` when needed;
+use `describeTool("subagent")` for the single persistent-conversation tool.
 There are no old `pi.*`, `web.*`, `mcp.*`, `agents.*`, `jobs.*`, `π` or `τ` globals.
 Use `store()`/`load()` for branch-aware state. Native core reads retain their
 ordinary truncation limits; read large files in slices.
+
+### Persistent subagents (breaking change)
+
+The exact API is `subagent({ action: "spawn" | "send" | "stop" | "status", name?, message?, followUp? })`:
+
+```js
+await tools.subagent({ action: "spawn", name: "review", message: "Review the changes without editing files." });
+return await tools.subagent({ action: "status", name: "review" });
+```
+
+Names identify conversations, not Markdown personas. `send` steers by default;
+`followUp: true` queues. `stop` aborts current/queued work but retains the
+conversation. Answers arrive automatically; named status exposes the latest
+completed `lastAnswer: { id, text }` non-destructively, while all-agent status
+stays compact. Model/thinking, deadlines and workspaces are host policy.
+
+The old `agents_*` tools, batch/wait handles, per-call `output`, `reads`, `task`,
+`model`, `thinking` and night arguments, and automatic Markdown outputs are removed.
+Put scope, briefs, permissions and requested deliverables in `message`. Approved
+night execution uses its approved `TODO-<id>` as the name; planning children
+automatically inherit read-only policy. Old handles cannot map to names: pending
+old jobs are safely retired and journals retained, not replayed. See the
+[upgrade and recovery caveats](extensions/subagents/README.md).
 
 ### Migration from our Code Mode extension
 
@@ -124,7 +148,7 @@ ordinary truncation limits; read large files in slices.
 | --- | --- |
 | `~/.pi/agent/settings.json` and trusted `.pi/settings.json` | Pi settings, resource paths and night-mode configuration. |
 | `~/.pi/agent/mcp.json` and trusted `.pi/mcp.json` | Native MCP servers. Native OAuth uses the agent directory's `mcp-auth.json`. |
-| `~/.pi/agent/subagents.json` and trusted `.pi/subagents.json` | Child limits, waits, default model/thinking and optional durable backend. |
+| `~/.pi/agent/subagents.json` and trusted `.pi/subagents.json` | `maxPerExecution`, `timeoutMs`, `defaultModel` and `defaultThinking` host policy. No `waitMs` or backend selection. |
 | `~/.pi/agent/router.json` and trusted `.pi/router.json` | Optional cheap, strong and direct physical models for `router/auto`. |
 | `~/.pi/agent/clef.json` and trusted `.pi/clef.json` | Local classifier interpreter, checkpoint, idle timeout and memory/input limits. |
 | `~/.pi/agent/sandbox.json` and trusted `.pi/sandbox.json` | Filesystem and native MCP permission policy. |
@@ -152,9 +176,13 @@ Pattern masking is defense in depth, not a guarantee against every indirect leak
   not isolation from malicious installed extensions.
 - Native codemode's QuickJS boundary does not sandbox the tools it calls. Trusted
   extension callbacks run with host permissions. Review the extensions you install.
-- Jobs require the sandbox extension, even when policy is off. Detached jobs and
-  default-backend children stop on shutdown or reload. Opt-in durable subagents
-  survive reload, but interrupted work is never automatically replayed after a crash.
+- Jobs require the sandbox extension, even when policy is off, and stop on shutdown
+  or reload. Persistent subagents survive reload; quit pauses them for same-session
+  recovery. Explicit stop cancels work but retains the conversation. Native tools
+  are replay-unsafe: interrupted calls are not automatically repeated after a crash.
+- Subagent answers use at-most-once parent notification; recover lost notifications
+  through named status. Private SQLite recovery directories under `subagent-runs/`
+  are not outputs, and persistent databases are not deleted by TTL.
 - The macOS pmset wake-lock backend changes a persistent sleep setting and may need
   narrowly scoped sudo. A crash can require manual restoration.
 - Workspace deletion, todo deletion, file patches, external CLIs and MCP tools have
@@ -167,6 +195,10 @@ branched records and uses recorded costs rather than repricing aliases. It inclu
 assistant and tool-result usage, cache-warming/other usage entries, compaction and
 branch summaries. Tool-side costs without model attribution are grouped by tool,
 and summary costs without attribution remain explicitly unknown.
+
+Durable subagent token usage stored in child SQLite databases is not automatically
+included in native-parent totals or this JSONL scanner, even though it scans native
+child session files.
 
 ```sh
 pi-usage daily

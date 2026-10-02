@@ -42,6 +42,8 @@ export interface NightMcpRequest {
 }
 
 export interface ActiveNightRun {
+	/** Explicit admission phase. Older handshakes are inferred conservatively. */
+	phase?: "planning" | "execution";
 	/** Epoch ms the run was started. */
 	startedAt: number;
 	/** Absolute path of the report every participant appends to. */
@@ -101,6 +103,22 @@ export interface ActiveNightRun {
 	 * `sandbox/night-mcp.ts`. Structural on purpose, like `sandbox`.
 	 */
 	mcp?: NightMcpRequest;
+}
+
+/** Only an unambiguously read-only legacy handshake may admit planning explorers. */
+export function activeNightRunPhase(run: ActiveNightRun): "planning" | "execution" {
+	if (run.phase === "planning" || run.phase === "execution") return run.phase;
+	if (
+		run.phase === undefined &&
+		run.approvedTaskIds === undefined &&
+		run.ledgerDir === undefined &&
+		run.sandbox?.mode === "read-only" &&
+		(run.sandbox.allowWrite === undefined ||
+			(Array.isArray(run.sandbox.allowWrite) && run.sandbox.allowWrite.length === 0)) &&
+		run.mcp?.readOnly === true
+	)
+		return "planning";
+	return "execution";
 }
 
 /** Next to the default prompt/report files, so one feature owns one directory. */

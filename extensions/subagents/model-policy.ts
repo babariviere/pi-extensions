@@ -8,7 +8,15 @@ const PRICE_CEILING_MODELS = ["claude-opus-5-5", "gpt-6.1-sol"];
 function rate(model: Model<any>): number | undefined {
 	const input = model.cost?.input;
 	const output = model.cost?.output;
-	if (typeof input !== "number" || typeof output !== "number" || input < 0 || output < 0) return undefined;
+	if (
+		typeof input !== "number" ||
+		typeof output !== "number" ||
+		!Number.isFinite(input) ||
+		!Number.isFinite(output) ||
+		input < 0 ||
+		output < 0
+	)
+		return undefined;
 	return input + output;
 }
 

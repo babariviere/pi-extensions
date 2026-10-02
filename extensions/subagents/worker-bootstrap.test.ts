@@ -7,8 +7,8 @@ import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { getPackageDir } from "@earendil-works/pi-coding-agent";
 import { builtinAgent } from "./discovery.ts";
-import type { WorkerLaunch } from "./conversation-backend.ts";
-import type { WorkerPacket } from "./conversation-worker.ts";
+import { signalProcessTree } from "./process-tree.ts";
+import type { WorkerCommand, WorkerPacket, WorkerSpec } from "./worker-protocol.ts";
 
 test("managed worker boots without host-provided SDK peers in its extension package", async () => {
 	const directory = await mkdtemp(join(tmpdir(), "durable-peerless-worker-"));
@@ -67,19 +67,41 @@ export default function(pi) {
 		child.stderr?.on("data", (chunk) => {
 			stderr = (stderr + String(chunk)).slice(-16_384);
 		});
-		let packet: WorkerPacket | undefined;
+		const packets: WorkerPacket[] = [];
 		child.on("message", (message) => {
-			packet = message as WorkerPacket;
+			packets.push(message as WorkerPacket);
 		});
 		const deadline = setTimeout(() => {
-			child.kill("SIGKILL");
+			signalProcessTree(child, "SIGKILL");
 		}, 20_000);
+		let ended = false;
 		const closed = new Promise<void>((resolve, reject) => {
 			child.once("error", reject);
-			child.once("close", () => resolve());
+			child.once("close", () => {
+				ended = true;
+				resolve();
+			});
 		});
-		const launch: WorkerLaunch = {
-			type: "start",
+		void closed.catch(() => {});
+		const waitPacket = async <T extends WorkerPacket["type"]>(
+			type: T,
+			id?: string,
+		): Promise<Extract<WorkerPacket, { type: T }>> => {
+			const until = Date.now() + 15_000;
+			while (true) {
+				const packet = packets.find(
+					(packet) => packet.type === type && (id === undefined || ("id" in packet && packet.id === id)),
+				);
+				if (packet) return packet as Extract<WorkerPacket, { type: T }>;
+				const error = packets.find((packet) => packet.type === "error");
+				if (error?.type === "error") assert.fail(error.error);
+				assert.ok(!ended && Date.now() < until, stderr || `Missing worker packet: ${type}`);
+				await new Promise((resolve) => setTimeout(resolve, 25));
+			}
+		};
+		const send = (command: WorkerCommand) => child.send(command);
+		const spec: WorkerSpec = {
+			name: "peerless",
 			request: {
 				agent: builtinAgent(),
 				task: "Reply with a confirmation",
@@ -95,19 +117,35 @@ export default function(pi) {
 				projectTrusted: false,
 			},
 			directory: join(directory, "harness"),
-			requestId: "peerless:0",
 		};
 		try {
-			child.send(launch);
+			send({ type: "start", spec });
+			const ready = await waitPacket("ready");
+			assert.equal(ready.status.working, false);
+			assert.equal(ready.status.lastAnswer, undefined);
+			assert.ok(ready.status.conversationId);
+			send({ type: "input", id: "peerless:0", message: "Reply with a confirmation", followUp: false });
+			const accepted = await waitPacket("accepted", "peerless:0");
+			assert.equal(accepted.status.conversationId, ready.status.conversationId);
+			const answer = await waitPacket("answer", "peerless:0");
+			assert.equal(answer.result.ok, true, answer.result.error ?? stderr);
+			assert.equal(answer.result.answer?.text, "PEERLESS_DURABLE_OK");
+			assert.ok(answer.result.answer?.id);
+			assert.equal("outputPath" in answer.result, false);
+			// Completing an input does not terminate a persistent worker.
+			send({ type: "status", id: "status" });
+			const status = (await waitPacket("status", "status")).status;
+			assert.equal(status.working, false);
+			assert.deepEqual(status.lastAnswer, answer.result.answer);
+			send({ type: "stop", id: "stop" });
+			assert.deepEqual((await waitPacket("stopped", "stop")).status, status);
+			send({ type: "pause" });
+			await waitPacket("paused");
 			await closed;
-			assert.equal(packet?.type, "result", stderr || "Worker produced no result");
-			if (packet?.type !== "result") assert.fail("Missing worker result");
-			assert.equal(packet.result.ok, true, packet.result.error ?? stderr);
-			assert.equal(packet.result.output, "PEERLESS_DURABLE_OK");
-			assert.ok(packet.result.conversationId);
+			await assert.rejects(access(join(directory, "harness", "output.md")));
 		} finally {
 			clearTimeout(deadline);
-			if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+			if (child.exitCode === null && child.signalCode === null) signalProcessTree(child, "SIGKILL");
 			await closed.catch(() => {});
 		}
 	} finally {

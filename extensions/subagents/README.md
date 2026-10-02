@@ -1,39 +1,41 @@
 # Subagents
 
-Restart-resumable pi-durable conversations and checkpointed background tasks,
-with the native Pi tools, extensions, authentication, sandbox, secrets and MCP.
-Requires Pi 1.0 and a Node.js 24+ host. Durable execution is the only backend.
-There are no Herdr panes, CLI dialect probes or headless Pi launch fallbacks.
+Named persistent pi-durable conversations with native Pi tools, extensions,
+authentication, trust, sandbox, secrets and MCP. Requires Pi 1.0 and Node.js 24+.
+Durable execution is the only backend, with no Herdr panes or headless CLI fallback.
 
-## Native tools
+## Single tool
 
-| Tool | Purpose |
+The exact input is `subagent({ action: "spawn" | "send" | "stop" | "status", name?, message?, followUp? })`.
+Call it from native codemode as `tools.subagent`; discover its schema with
+`describeTool("subagent")`. This extension does not replace or enable codemode.
+
+| Action | Inputs and behavior |
 | --- | --- |
-| `agents_list` | Discover markdown definitions. |
-| `agents_models` | List permitted model overrides and the generic default. |
-| `agents_run` | Start one task and wait for the configured window. |
-| `agents_runAll` | Start a parallel batch and wait for the window. |
-| `agents_start` | Start a task or batch without waiting. |
-| `agents_wait` | Claim results or keep waiting by `runId`. |
-| `agents_status` | List live and recent batches without their output. |
-| `agents_cancel` | Explicitly abort one batch or every live batch. |
+| `spawn` | Requires `name` and `message`. Creates a conversation and starts background work. An existing name is rejected; use `send`. |
+| `send` | Requires `name` and `message`. Steers current work by default; `followUp: true` queues a follow-up instead. An idle conversation resumes on the same transcript. |
+| `stop` | Requires `name`. Aborts current and queued work, but retains the conversation for later `send`. |
+| `status` | With `name`, returns state and the latest completed `lastAnswer: { id, text }`, when available. Without a name, returns compact summaries without answer text. |
 
-All actions return structured results through native `codemode`. Models, list,
-status and cancel are deferred but remain searchable and callable. This extension
-does not activate or replace codemode. Read longer workflow guidance with
-`describeNamespace("agents")`.
+Names identify conversations within the parent session, **not Markdown personas**.
+Names must be nonempty, at most 128 characters, and contain no control characters.
+Messages must be nonempty. Calls acknowledge admission, not completion. There are
+no batch tools, wait windows, result claims or job handles.
 
 ```ts
-const run = await tools.agents_start({ task: "Review the test coverage" });
-return await tools.agents_wait({ runId: run.runId, waitMs: 1000 });
+await tools.subagent({ action: "spawn", name: "coverage", message: "Review test coverage. Do not edit files." });
+await tools.subagent({ action: "send", name: "coverage", message: "Focus on crash recovery." });
+await tools.subagent({ action: "send", name: "coverage", message: "Then summarize missing tests.", followUp: true });
+return await tools.subagent({ action: "status", name: "coverage" });
 ```
 
-A `running` result is a resumable handle, not a failure. `agents_wait.timeoutMs`
-is a compatibility alias for its wait window; `waitMs` wins. The host, not the
-caller, sets child lifetime. Terminal results include their stable Harness
-`conversationId` when available. The existing task/batch API remains unchanged.
+Completed answers are delivered automatically to the parent as follow-ups when it
+is idle. Named status is a **non-destructive** recovery read, not a wait or claim:
+it retains the last completed answer even after notification, stop or failed work.
+No automatic Markdown output is written. Describe briefs to read, permissions,
+scope and any explicitly requested deliverables in `message`.
 
-## Configuration and definitions
+## Host configuration
 
 Read `~/.pi/agent/subagents.json` (or Pi's configured agent directory), then merge
 `<cwd>/.pi/subagents.json` only when the parent trusts the project:
@@ -42,98 +44,96 @@ Read `~/.pi/agent/subagents.json` (or Pi's configured agent directory), then mer
 {
   "maxPerExecution": 100,
   "timeoutMs": 7200000,
-  "waitMs": 600000,
   "defaultModel": "your-provider/your-model-id",
   "defaultThinking": "high"
 }
 ```
 
-- `maxPerExecution` limits launch action calls per enclosing native tool execution,
-  including nested codemode calls, not tasks in a batch. Default 100, range 1 to 1000.
-- `timeoutMs` is the child's total wall-clock lifetime, including restart downtime.
-  Default 2 hours, range 1 second to 24 hours. Recovery does not reset it.
-- `waitMs` bounds each default blocking wait. Default 10 minutes, the same
-  configuration bounds as lifetime. Per-call `waitMs: 0` detaches immediately.
-- Model/thinking defaults are optional. Agent definitions override defaults;
-  explicit task overrides override definitions. Generic tasks inherit the live
-  parent's physical model when there is no configured default.
-- The old `backend` field is ignored. There is no opt-out or fallback backend.
-  No executor, MCP or native codemode settings are read from this file.
-- Invalid JSON fails explicitly; invalid field values fall back to defaults.
+- `maxPerExecution` limits spawn calls per enclosing native tool execution,
+  including nested codemode calls. Default 100, range 1 to 1000.
+- `timeoutMs` bounds an active work cycle, not the persistent conversation's age.
+  Default 2 hours, range 1 second to 24 hours. Steering and recovery do not reset
+  an active deadline; restart downtime counts. New work after idle gets a new cycle.
+- The host selects `defaultModel`, otherwise the parent's resolved **physical**
+  model, and pins it at spawn for subsequent sends and recovery. `defaultThinking`
+  is host policy too. No persona or caller model/thinking overrides exist.
+- Selection must pass same-provider, `enabledModels`, catalog and price guards.
+  Unavailable/unpriced models or reference prices fail closed. The price ceiling
+  is the higher input-plus-output rate of `claude-opus-5-5` and `gpt-6.1-sol`.
+- `waitMs` and `backend` are retired. Invalid JSON fails explicitly; invalid
+  supported field values fall back to defaults. No user settings change automatically.
 
-Definitions are discovered recursively under `~/.pi/agent/agents/` and
-`<cwd>/.pi/agents/`. Project names override user names. Omit `agent` to use the
-generic `task` agent. Frontmatter supports `model`, `thinking`, `sandbox`,
-`output`, `defaultReads`, `systemPromptMode`, `inheritSkills` and
-`inheritProjectContext`. Final assistant text is the result, not a submission tool.
+## Reload, shutdown and recovery
 
-## Architecture, reload and recovery
+Each child has an isolated native SDK kernel for tools, prompts and provider
+access. Pi-durable alone owns its canonical conversation and model loop, with
+background Anchor ownership and checkpointed Reporter tasks. Idle workers may
+park without deleting their conversation. SDK peers resolve from the launching
+Pi host, including managed packages without a local SDK installation.
 
-Each child runs a genuine `Harness` in an isolated worker. A persistent child
-conversation is owned by a background Anchor task. A checkpointed Reporter
-submits the task with a stable request ID, waits for its answer, and records an
-idempotent passive report. Pi-durable owns model turns, transcripts, tool intents
-and task checkpoints. A native SDK session acts only as the tool, prompt and
-provider kernel; it does not run a second model loop.
-
-The worker uses Pi's supplied Jiti loader for TypeScript and resolves SDK peers
-from the launching Pi host. Managed extension packages do not need their own
-SDK installation.
-
-- Requires a file-backed parent session. A second writer for its private journal,
-  or for a child Harness, is refused. There is no silent in-memory fallback.
-- `/reload` detaches old UI and tool contexts without cancelling admitted work.
-  The replacement reconnects to the process-owned supervisor. New launches use
-  the new implementation; existing workers keep theirs until restart.
-- Quit pauses workers and leaves their conversations/tasks pending. Resume the
-  same parent session to reopen the Harness and continue from its checkpoints.
-  A process crash also leaves resumable work. Switching to a new session,
-  resuming a different session or forking cancels the outgoing parent's live
-  batches. Explicit `agents_cancel` aborts, rather than pauses, work.
-- Repeated worker admission finds the original child and submission, not a new
-  agent. Reporter answer and report receipts commit atomically with their state.
-- **Native tools are replay-unsafe**, including codemode and nested calls. A
-  crash during a tool produces an interrupted tool result, then the model can
-  continue. The tool is not automatically rerun. A tool may already have changed
-  files or external systems before its result was committed. Recovery cannot
-  guarantee exactly-once external effects.
-- Workers disconnect and pause if the parent disappears. Shutdown and timeout
-  enforce bounded process-group teardown. A hard crash can still leave tool
-  subprocesses alive briefly; inspect external effects before repeating work.
-- Unclaimed results trigger a parent follow-up after it becomes idle. Waiting
-  for terminal results claims them and suppresses the wake-up. The native parent
-  is not a durable Harness conversation: its notification boundary remains
-  **at-most-once**, with possible lost wake-ups on crash or delivery failure.
-  `agents_status` and `agents_wait` still retrieve the committed result.
-- Old lifecycle-only CLI admissions have no conversation checkpoints. Interrupted
-  legacy records remain explicit failures; they are never replayed as new tasks.
+- Requires a file-backed parent session. Single-writer ownership is enforced for
+  parent and child SQLite storage; storage failures stop admissions, not fall back
+  to memory.
+- `/reload` detaches old contexts without cancelling admitted work. The new
+  extension reconnects to the supervisor; existing workers retain their code
+  until restart. Ordinary parent-turn cancellation does not stop background work.
+- Quit pauses workers and preserves pending checkpoints. Resume the same parent
+  session to recover them. Switching, forking or resuming a different session
+  cancels outgoing work. Explicit `stop` aborts work, not the conversation.
+- Admissions and cancellation are persisted before execution. Stable input IDs
+  prevent retry duplication; completed answers are deduplicated by answer identity.
+- **Native tools are replay-unsafe**, including codemode and nested calls. A crash
+  during a tool yields an interrupted result, not automatic re-execution. A tool
+  may already have changed files or external systems. Exactly-once external effects
+  are not guaranteed; inspect them before repeating work.
+- Workers pause if the parent disappears. Shutdown and timeouts bound process
+  teardown, but a hard crash may briefly leave tool subprocesses alive.
+- Native-parent notification is **at-most-once**, not exactly-once. Its durable
+  receipt is consumed before delivery, so a crash, reload, failed delivery or
+  discarded queued follow-up may lose the notification. Named `status.lastAnswer`
+  still exposes the committed answer; reading it never consumes or resends it.
 
 ## Permissions and storage
 
-- The native kernel loads the configured Pi extension/tool stack, including
-  builtin codemode, tool search and MCP. Tool calls and nested calls retain native
-  argument validation, result transformations, structured output and policy hooks.
-- The parent's trust verdict is inherited. Sandboxed definitions retain their
-  non-loosenable floor and fail closed if the sandbox extension is unavailable.
-  The historical `--code-mode-sandbox` name remains an internal floor marker.
-- Children and background attempts cannot recursively launch agents or jobs.
-  The `PI_CODE_MODE_SUBAGENT=1` marker remains an internal compatibility contract.
-- Model overrides retain provider, enabled-model and price authorization.
-  Credentials are resolved at request time by the native provider runtime, never
-  stored in recovery inputs. Extension features that start their own model loop
-  or replace the native SDK session are not supported by this adapter.
-- Approved night tasks require `nightTodoId` and retain isolated jj workspaces,
-  their environment and deliverables. Pausing does not delete a pending task's
-  workspace. Completion/cancellation releases it and rewrites result paths.
+- Native argument validation, structured results, transformations and policy
+  hooks apply to direct and nested calls. Parent trust and sandbox floors remain
+  enforced; required sandbox enforcement fails closed if unavailable.
+- Children and background attempts cannot launch subagents or jobs. The internal
+  `PI_CODE_MODE_SUBAGENT` and sandbox markers are not caller options.
+- Authentication is resolved by the native provider runtime, not persisted as
+  credentials. Extensions that replace the SDK session or start their own model
+  loop are unsupported by this adapter.
+- Night planning children automatically inherit read-only filesystem/MCP policy.
+  Approved execution requires the approved `TODO-<id>` as `name` on both spawn
+  and send. Put the approved goal, permissions, outputs and brief paths in
+  `message`; these describe scope, not extra sandbox grants. Workspace placement
+  and lifecycle are host-controlled. Answer completion, stop, idle parking and
+  reload do not release a reusable conversation's workspace. Required isolation
+  fails closed on allocation failure. New messages cannot reuse a pre-night,
+  ended or replaced approval; a cancelling host lifecycle boundary retires night
+  conversations and preserves their deliverables before workspace release.
 - Parent journal: `<parent-session-file>.subagents-durable/<identity>/`. Child
-  Harness: `subagent-runs/<parent-session-id>/<run-id>/<agent>-<index>.durable/`
-  beside the parent session. Directories are private (0700), databases 0600.
-- **Prompts, policy snapshots, transcripts and tool output are now persisted**, not
-  just lifecycle receipts. They may contain sensitive data. Protect these files
-  like native Pi sessions. Parent claimed history retains 50 recent batches;
-  live/unclaimed records and child Harness files are not automatically erased.
-  SQLite WAL protects process restarts, not every power-loss scenario. Pruning
-  journal history is not secure deletion.
-- A storage failure stops admissions and fails closed. No user settings are
-  changed automatically. The optional compact TUI widget is disabled with
-  `--no-subagents-progress`; non-interactive operation does not depend on it.
+  Harness databases live in internal `subagent-runs/` directories beside the
+  parent session. These are recovery storage, **not output directories**.
+  Directories are private (0700), databases 0600.
+- Prompts, policy snapshots, transcripts and tool results may contain sensitive
+  data. Protect them like native Pi sessions. No TTL deletes persistent databases
+  or parked conversations. SQLite WAL supports process restart, not every
+  power-loss scenario; deleting history is not secure deletion.
+- Child token usage in durable SQLite is **not automatically included** in native
+  parent usage or JSONL-based `pi-usage` scanner totals. Status reads do not bill
+  those answers again.
+- Disable the optional TUI widget with `--no-subagents-progress`.
+
+## Breaking upgrade
+
+The prior `agents_*` tool API is removed, not aliased. Replace it with
+`tools.subagent`; `output`, `reads`, `task`, `model`, `thinking`, `night`,
+`nightTodoId`, batch and wait arguments are not accepted. Markdown definitions
+are no longer discovered as personas.
+
+Old job handles cannot map to persistent names. Pending old jobs are safely
+retired rather than replayed as new conversations; their journals are retained
+for inspection. Spawn a new named conversation explicitly after reviewing any
+interrupted effects. Updating packages or configuration does not translate old
+caller scripts automatically.

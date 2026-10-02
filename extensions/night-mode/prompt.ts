@@ -54,30 +54,33 @@ export const ORCHESTRATOR_CONTRACT = [
 	"",
 	"- Work only on the approved ledger items included below. Never add an executable task, even when you discover useful work.",
 	"  Record discoveries in the report for a future planning session.",
-	"- One approved ledger item is one subagent run. Delegate it with `tools.agents_run` in native codemode.",
-	"- Always pass both `night: true` and `nightTodoId: 'TODO-<id>'`. The tool rejects a launch whose id was not",
-	"  checked by the user, and injects the hard rules into the child.",
-	"- Omit `agent` (or pass `task`) unless a specific persona clearly fits. A generic subagent inherits your",
-	"  model, tools, skills and project context.",
-	"- Pass the how-to as `reads` instead of pasting it into the task: the child loads those files itself.",
-	"- Copy the approved output paths and operation permissions into every child task. Briefs cannot grant additional permissions.",
-	"- Pass an `output` path when the result is long, then append that file to the report without reading it.",
+	"- One approved ledger item is one persistent conversation. Use native codemode with",
+	"  `tools.subagent({ action: 'spawn', name: 'TODO-<approved id>', message: '<approved scope>' })`.",
+	"- During approved execution only, the name must match an authorized TODO id. The host checks approval on",
+	"  both spawn and send and injects the approved scope and inherited night policy. Never use arbitrary names",
+	"  or reuse a conversation from planning, another night, or an unapproved session for execution.",
+	"- Continue an existing approved conversation with `tools.subagent({ action: 'send', name: 'TODO-<approved id>', message: '<within approved scope>' })`.",
+	"  Send steers by default; set `followUp: true` only to queue a follow-up instead.",
+	"- Put task briefs (paths to read), findings, repository scope, approved output paths and operation permissions",
+	"  in the message. Briefs cannot grant additional permissions. Do not pass reads, output, or night arguments.",
+	"- Answers arrive automatically. If an answer notification is missing, inspect",
+	"  `tools.subagent({ action: 'status', name: 'TODO-<approved id>' })` and its latest completed `lastAnswer`.",
+	"  Status without a name is a compact overview. Do not wait on old run handles or expect an automatic result file.",
 	"- Every task message states: the goal, the repo and the base to branch from, the matching ledger item, the",
 	"  definition of done, and that the final message must end with an `Evidence:` line.",
 	"- The definition of done carries a number: how many tests must pass, which command must exit 0, how many call",
 	"  sites must be migrated, which file must exist. A child grades itself against what you wrote, so 'improve the",
 	"  error handling' comes back done with one `try` added.",
-	"- Pass `model: 'claude-sonnet-5'` for a retrieval-shaped child (reading, searching, summarising, a Slack or",
-	"  Linear pass, a triage question). Keep the default for children that write code. A night of retrieval on the",
-	"  expensive model is the single largest recurring cost in the usage insights.",
+	"- Model selection is host policy: configured defaultModel, otherwise the parent's physical model, pinned",
+	"  at spawn. Do not request a per-call model or thinking level, or use instance names as personas.",
 	"- Run one subagent at a time per repository. Two children creating changes in the same working copy fight.",
 	"- Every ledger item that depends on a capability (a database, loopback TCP, SSH, `gh`, a network) declares it",
 	"  in a `needs` field. Before claiming an item, check its `needs` against the capability journal: one recorded",
 	"  as `broken` means the item cannot finish tonight, so mark it `skipped` with `Reason: needs <capability>`",
 	"  and surface it for the morning. Half-doing it and opening a draft PR that cannot pass review is worse.",
-	"- A result with `failure: 'launch'` means the child never started. That is a runner fault, not a task fault:",
-	"  never rewrite, shorten or re-persona the task in response. Retry once, and if it fails the same way, record",
-	"  the cause in the ledger item and move to the next one.",
+	"- An admission or worker failure is not evidence that the task is impossible. Inspect named status first:",
+	"  the child may already have performed work. Never rewrite or shorten the approved scope in response.",
+	"  Retry once within that scope, then record the cause in the ledger item and move on.",
 	"- You own the report file exclusively. Subagents never write to it; you append from what they hand back.",
 	"- You may read files to triage and to write the report. Implementing a ledger item yourself, reading a",
 	"  source tree to fix something, or running a repo's tests is a delegation you skipped.",
@@ -93,8 +96,12 @@ export function composePlanningPrompt(input: {
 	return [
 		"[night-mode] Planning phase. Build a proposed plan only. Do not implement, edit files, create tickets, push, or open pull requests.",
 		"You are the planner in the current session. You may use read-only tools and spawn subagents to explore in parallel,",
-		"but every child is an explorer, never an implementer. Pass `night: true` to every explorer so it inherits the",
-		"planning session's read-only filesystem and MCP policy.",
+		"but every child is an explorer, never an implementer. Use native codemode with",
+		"`tools.subagent({ action: 'spawn', name: '<explorer name>', message: '<read-only exploration scope and briefs>' })`.",
+		"Planning explorers use ordinary names, not execution TODO names, and automatically inherit the planning",
+		"session's read-only filesystem and MCP policy. No task approval is required for read-only exploration.",
+		"Use action 'send' with the explorer's name to steer it. Answers arrive automatically; action 'status' with",
+		"that name exposes the latest completed lastAnswer if needed. Model selection follows host policy.",
 		"",
 		`Execution window after approval: ${input.windowLabel}.`,
 		`Execution MCP policy: ${input.mcpReadOnly !== false ? "read-only; propose candidate-only outputs instead of ticket creation or comments" : "writes available only within explicit task approval; Slack remains read-only"}.`,
@@ -202,11 +209,7 @@ export function composeNightPrompt(input: NightPromptInput): string {
 	return `${sections.join("\n")}\n`;
 }
 
-/**
- * The report file's initial content, written before the agent starts. Sections
- * come from `nightMode.reportSections`, so the skeleton matches whatever the
- * base prompt asks the agent to fill in.
- */
+/** The initial report skeleton, using the configured sections. */
 export function composeReportHeader(
 	startedAt: Date,
 	windowLabel: string,
@@ -249,8 +252,10 @@ export function composeNudge(input: {
 			"`commit <id> (repo: /abs/repo)`, `pr <url>`, `url <url>`, `none-with-reason <why>`). To drop one, set its " +
 			"status to `skipped` and put a `Reason:` line. The write is " +
 			"refused without one, and evidence that does not check out keeps the item open.",
-		"You are still the orchestrator: delegate the item to a subagent with `night: true` rather than implementing " +
-			"it yourself, and append to the report from what it hands back.",
+		"You are still the orchestrator: use tools.subagent with action 'spawn' or 'send' and the approved " +
+			"name 'TODO-<approved id>', rather than implementing it yourself. Put briefs, evidence requirements, " +
+			"outputs and permissions in message. Answers arrive automatically; inspect named status and lastAnswer " +
+			"if needed. No automatic result file is created. Model selection follows host policy.",
 		`Keep appending to \`${input.reportPath}\` as you go.`,
 		`(continuation ${input.attempt}/${input.maxAttempts})`,
 		"",

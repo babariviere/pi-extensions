@@ -104,14 +104,14 @@ The standalone sandbox extension supplies filesystem and read-only MCP guards.
 `/night start` has separate planning, approval, and execution phases.
 
 1. The current session switches to **gpt-6.1-sol** and receives a planning-only prompt.
-2. Sol reads the standing routine and one-off instructions. It may spawn read-only subagents to explore repositories and services, but neither Sol nor its children implement anything.
+2. Sol reads the standing routine and one-off instructions. It may spawn subagents with ordinary conversation names to explore repositories and services. Children automatically inherit planning's read-only filesystem and MCP policy; neither Sol nor its children implement anything.
 3. Sol submits structured candidates through the native `tools.night_plan` tool through Pi's `codemode`. Each task specifies `category`, `outputs`, and `permissions` (empty arrays for read-only work). Categories are `instructions`, `linear`, `ci`, `slack`, `daily-note`, `opportunistic`, `insights`, and `auto-improvement`. Every category needs a task or an `omissions` entry with `category` and a nonempty `reason`. For custom routines, mark unused categories not applicable. Validation errors allow revision and resubmission.
    Planning treats the configured prompt as an execution reference, not an instruction to stop discovering work. Extra instructions supplement the routine. Slack, daily-note, and insights passes are proposed unless excluded or blocked.
    The checklist shows omission reasons, task scope, outputs, and permissions. Users can still uncheck any task. Output and permission metadata survives into the ledger and execution prompt; it is a delegation contract, not a new OS permission grant. Declare `mcp-write` for MCP mutations: these tasks are rejected while `mcpReadOnly` is enabled, including after checklist edits. Filesystem capabilities still require the existing execution preflight; declared paths do not widen the sandbox. Legacy persisted handoffs remain readable.
 4. Night mode presents an interactive checklist. Tasks begin unchecked. They can be selected, edited as JSON, added, or deleted.
 5. Approval creates a fresh session with the planning session recorded as its parent. Only checked and refined tasks are placed in the new session state.
 6. If approval happens before **21:00 local time**, the fresh session waits until 21:00 that day. At or after 21:00, execution starts immediately. This is a calendar-day rule: approval at 02:00 also waits until 21:00. At execution time, **gpt-6.1-sol** creates the report and private working copy and materializes approved tasks through the todo extension's shared storage layer.
-7. Sol orchestrates those tasks through subagents. Every launch must carry the approved `nightTodoId`; the native subagent tool refuses unknown or unchecked ids.
+7. Sol orchestrates those tasks through `tools.subagent`. Both spawn and send use the approved `TODO-<id>` as `name`; unknown or unchecked ids are refused. The approved scope, permissions, outputs and brief paths belong in `message`, not extra tool arguments.
 8. The run handshake at `~/.pi/agent/night/active.json` carries the approved ids, sandbox policy, report path, ledger store, and working copy to every participant.
 
 The execution session does not inherit the planning transcript. It receives the approved task descriptions and the planner findings attached to them. New work discovered during execution is reported for a later planning session rather than executed.
@@ -169,9 +169,9 @@ than blocking the run. Set `sandboxRoot: ""` to disable cloning entirely.
 
 The clone keeps the run out of your checkout. It does not keep the run's own
 subagents out of each other: two children creating changes in one working copy
-fight over `@`. So every subagent spawned with `night: true` gets its own jj
-workspace, added to the clone under `<clone>.agents/agent-<runid>-<index>`, and
-its child `pi` process starts there.
+fight over `@`. The host allocates a private jj workspace for each approved
+execution conversation under `<clone>.agents/`, using an internal identifier,
+and starts its isolated worker there.
 
 `jj workspace add` is the right tool at *this* level, unlike at the clone level:
 the workspaces share the clone's store, so the coordinator sees every child's
@@ -180,38 +180,35 @@ remote. A fresh workspace still checks out tracked files only, so
 `sandboxCopyFiles` is replayed into it and the new path is trusted like any
 other copy.
 
-Placement is host side. `cwd` is not part of the `tools.agents_run` schema, so the
-coordinator can ask for a subagent but cannot choose where it runs. When the
-batch finishes, each workspace is snapshotted (`jj status`, so the child's edits
-reach the shared store), its files are copied to the deliverables directory
-below, and only then is it forgotten and its directory removed. A clone that is
-not a jj repository, or a `jj workspace add` that fails, degrades to "run in the
-clone", which is the behaviour from before workspaces existed.
+Placement and release are host-controlled. Neither `cwd` nor `artifactsDir` is
+part of the `tools.subagent` schema. Brief paths and requested outputs in
+`message` do not choose a workspace or widen the sandbox. Required isolation
+fails closed on allocation failure instead of silently using a shared copy.
+
+A completed answer is not teardown: a persistent conversation keeps its
+workspace across idle parking, stop, reload and resumable shutdown. A cancelling
+host lifecycle boundary retires the night conversation, snapshots the workspace
+(`jj status`), preserves deliverables, and then removes it. Do not manually delete
+a workspace still owned by a reusable conversation.
 
 ### Deliverables outlive the workspace
 
-The workspace directory is deleted on release, and a commit in the store is not
-a path anyone can open. A subagent that produced a 1,000-line write-up therefore
-reported the file it had written and the coordinator found the directory already
-gone; the document had to be regenerated by a second subagent.
-
-So each workspace has a deliverables directory beside it,
+Each workspace has a deliverables directory beside it,
 `<clone>.agents/agent-<hash>-<index>.artifacts`, created with the workspace and
 left alone when the workspace is removed. It sits under the same root, which is
 already in the run's writable set, so no extra sandbox grant is needed.
 
 Two mechanisms, in this order:
 
-1. The child is told the path in its task message: anything that has to outlive
-   the run is written there, and that is the only path it may cite as
-   `Evidence: file ...`. The rider that tells a child to ignore output paths is
-   scoped to the *result* (which always travels in the final message), so it no
-   longer reads as permission to ignore this directory.
+1. The host tells the child the deliverables path. Files that must outlive the
+   workspace go there, including `Evidence: file ...` artifacts. Answers travel
+   automatically as messages, not generated Markdown result files. Explicitly
+   approved documents are still deliverables; describe them in `message`.
 2. On release, every file `jj diff --summary -r @` reports as present in the
    workspace is copied there before the delete, keeping its relative layout and
    never overwriting a file the child put there itself. Paths the child
-   mentioned in its result are rewritten to the surviving copies, so a reported
-   path is a path that exists.
+   mentioned in its answer are relocated on release. Verify the surviving file
+   before relying on a path as ledger evidence.
 
 Ignored files are outside the snapshot and so outside the copy: a child that
 must keep one writes it to the deliverables directory directly. Files above 25
@@ -249,10 +246,9 @@ Internal error: Failed to determine the secure config for a repo
 
 The run therefore gets its own config home at `<clone>.agents/xdg` (jj copied,
 every sibling entry symlinked). Setting `XDG_CONFIG_HOME` on the coordinator
-process is not enough: a subagent spawned through a pane, or a session that
-reloads, never sees that process's environment, and the failure comes back one
-layer down. So the path is published in the handshake file (`configHome`) and
-adopted from there: `nightChildEnv` composes it into every `night: true` child's
+process is not enough: an isolated worker or a reloaded session needs the same
+environment. So the path is published in the handshake file (`configHome`) and
+adopted from there: `nightChildEnv` composes it into participating children's
 environment, and `applyNightRunEnv` sets it on any participant process that
 started without it, so the shells *it* spawns inherit it too.
 
@@ -420,7 +416,7 @@ Like the filesystem sandbox, the night request is a floor: `readOnly: false` in
 
 Only checklist selections are materialized as ledger entries. Each item carries `night`, `night-approved`, and the current `run:<id>` tag. The active run reads only that run id, so unresolved items from an older night cannot enter the execution queue.
 
-The native subagent tool also checks the active handshake before launching a child. During an approved run, every launch needs a `nightTodoId` present in `approvedTaskIds`. This is the enforcement boundary behind “only checked tasks,” rather than relying on prompt wording alone.
+The native subagent tool checks the participating parent's active approval on both spawn and send. During approved execution, `name` must be the approved ledger item's `TODO-<id>` present in `approvedTaskIds`. Stop and status remain available for cancellation and recovery. The name selects an approved item; it does not authorize arbitrary message text, a different repository, or broader permissions. Planning explorers use ordinary names and inherit read-only policy automatically.
 
 ## Ledger completion and evidence
 
@@ -442,10 +438,9 @@ A subagent that correctly wrote `Evidence:` wrote it into a directory that no
 longer exists, the coordinator read the item as still open, and the run ended as
 "stalled": indistinguishable from the lazy agent the ledger exists to catch.
 
-So the store is absolute, and every participant is pointed at it: the coordinator
-and its children through `PI_TODO_PATH`, and panes the spawn path cannot hand an
-environment to through `active.json`. Set `todoPath: ""` to go back to one ledger
-per repository.
+So the store is absolute, and every participant is pointed at it through
+`PI_TODO_PATH` and the `active.json` handshake. Set `todoPath: ""` to go back to
+one ledger per repository.
 
 Classification is deliberately suspicious, because marking everything done is the
 cheapest way for an agent to end its night:
@@ -560,34 +555,47 @@ at sunrise.
 ## Orchestrator contract
 
 The main session is the orchestrator: it triages, builds the ledger, delegates one
-ledger item per subagent run, and owns the report. `ORCHESTRATOR_CONTRACT` in
-`prompt.ts` states that in the composed prompt, and `composeNudge` restates it in
-every continuation, so an agent that started implementing inline gets pulled back.
+ledger item per named subagent conversation, and owns the report.
+`ORCHESTRATOR_CONTRACT` in `prompt.ts` states that in the composed prompt, and
+`composeNudge` restates it in every continuation, so an agent that started
+implementing inline gets pulled back.
 
 It lives in the extension rather than in the base prompt file for two reasons: it
 applies to every base prompt, and the orchestrator's context is the scarce
 resource of a long run. A base prompt that carries its per-task procedures inline
 spends that budget before any work starts. Keep the procedures in separate brief
-files and hand them to the child via `reads`, so only the subagent that needs a
-procedure ever loads it.
+files and name the brief paths with an instruction to read them in `message`,
+so only the subagent that needs a procedure loads it. Model and thinking choices
+come from host subagents configuration, not per-child tool arguments.
 
 ## Subagent contract
 
-While a night run is active, any subagent started with `night: true` gets a
-condensed contract prepended to its task message (no questions, no outbound
-messages, no push to the default branch, draft PRs only, PR cap, report path). It
-is prepended by the spawner rather than left to the agent definition, so picking
-an agent that knows nothing about night mode cannot skip it. With no active run
-the flag is a no-op.
+Participating execution children receive the host's night contract automatically
+(no questions, no outbound messages, no push to the default branch, draft PRs
+only, PR cap, report path). No `night` flag or Markdown persona is involved.
+Delegate the exact approved scope, permissions, outputs and briefs in `message`:
 
 ```ts
-await tools.agents_run({
-  agent: "worker",
-  task: "Fix the flaky login test",
-  night: true,
-  nightTodoId: "TODO-abcd1234", // Must be an approved task in the active run.
+await tools.subagent({
+  action: "spawn",
+  name: "TODO-abcd1234", // Must be approved for this execution run.
+  message: "Fix the flaky login test within the approved repository scope. " +
+    "Read /abs/briefs/login-tests.md. Permissions: local test/code edits and tests only. " +
+    "Outputs: the approved patch and typed ledger evidence. No push or external writes.",
 });
 ```
+
+Use `send` with the same approved name to steer, or `followUp: true` to queue
+additional work within that scope. `stop` aborts current/queued work without
+deleting the conversation. Answers arrive automatically; named `status` returns
+the latest completed `lastAnswer: { id, text }` without consuming it. All-agent
+status is compact. There are no wait handles or automatic Markdown outputs.
+
+Parent notifications are at-most-once, so recover a lost notification through
+named status. Child usage in durable SQLite is not automatically included in
+native-parent or JSONL scanner totals. See [Subagents](../subagents/README.md)
+for model guards, reload/quit recovery, unsafe-tool interruption, private storage
+and the breaking removal of the old `agents_*` API.
 
 ## Configuration
 
@@ -639,7 +647,7 @@ follows.
 | Command | Effect |
 |---------|--------|
 | `/night` or `/night status` | Window state, wake lock state, 5h and weekly usage, reset countdown, pause state, active run |
-| `/night start` | Switch the current session to Astra, build a read-only plan, and show its approval checklist. Checked tasks continue in a fresh Sol session |
+| `/night start` | Use the configured planner model to build a read-only plan and show its approval checklist. Checked tasks continue in a fresh execution session |
 | `/night report` | Path, wiki-link and size of tonight's report |
 | `/night todos` | The ledger: every item, its state and its evidence. Works outside a run |
 | `/night on` / `/night off` | Enable or disable the whole thing for this session |

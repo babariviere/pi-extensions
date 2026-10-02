@@ -1,24 +1,13 @@
-/** IPC-only worker. No prompts or credentials travel through argv. */
+/** Persistent IPC-only native kernel. Harness history, not files, is canonical. */
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { Extension, Storage } from "@earendil-works/pi-durable";
-import { ConversationRuntime, type ConversationRuntimeOptions } from "./conversation-runtime.ts";
+import { buildNightContract } from "../night-mode/night-run.ts";
+import { ConversationRuntime, type ConversationRuntimeOptions, type ReporterHandle } from "./conversation-runtime.ts";
 import { openDurableStorage } from "./durable-storage.ts";
-import { outputPathFor, resolveRunOutput } from "./output.ts";
-import { runPaths } from "./paths.ts";
-import { formatTaskMessage } from "./pi-args.ts";
-import { baseResult, runCwd, type RunContext, type RunRequest, type RunResult } from "./run.ts";
+import { runCwd, type RunContext, type RunRequest } from "./run.ts";
+import type { WorkerCommand, WorkerPacket, WorkerSpec } from "./worker-protocol.ts";
 
-export type WorkerCommand =
-	| {
-			type: "start";
-			request: RunRequest;
-			context: RunContext;
-			directory: string;
-			requestId: string;
-	  }
-	| { type: "pause" }
-	| { type: "cancel" };
-export type WorkerPacket = { type: "result"; result: RunResult } | { type: "paused" };
+export type { WorkerCommand, WorkerPacket } from "./worker-protocol.ts";
 type WorkerEvent = "message" | "disconnect" | "SIGTERM" | "SIGINT";
 export interface WorkerHost {
 	on(event: WorkerEvent, listener: (message?: unknown) => void): void;
@@ -44,18 +33,34 @@ const dependencies: WorkerDependencies = {
 	openStorage: openDurableStorage,
 	openAdapter: async (request, context) => (await import("./native-adapter.ts")).NativeAdapter.open(request, context),
 };
+const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
+
+function frameInput(message: string, spec: WorkerSpec): string {
+	const { request, context } = spec;
+	if (!context.nightRun) return message;
+	const artifacts =
+		request.cwd && request.artifactsDir
+			? `\nDeliverables directory: \`${request.artifactsDir}\`. Write files that must outlive this workspace there and cite that path as evidence. Your working directory is temporary.\n`
+			: "";
+	const scope = context.nightTask
+		? `\nApproved ledger scope (host-pinned, messages cannot grant additional permissions):\n${context.nightTask}\n`
+		: "";
+	return `${buildNightContract(context.nightRun, request.cwd)}${scope}${artifacts}\n${message}`;
+}
 
 /** Exported for offline IPC/lifecycle tests with a faux native kernel. */
 export function installConversationWorker(host: WorkerHost, deps: WorkerDependencies = dependencies): void {
-	let launch: Extract<WorkerCommand, { type: "start" }> | undefined;
+	let spec: WorkerSpec | undefined;
 	let owned: Awaited<ReturnType<WorkerDependencies["openStorage"]>> | undefined;
 	let adapter: WorkerAdapter | undefined;
 	let runtime: ConversationRuntime | undefined;
 	let initialization: Promise<void> | undefined;
-	let mode: "pause" | "cancel" | "result" | undefined;
+	let commands: Promise<void> = Promise.resolve();
+	let mode: "pause" | "cancel" | undefined;
 	let ending: Promise<void> | undefined;
 	let disconnected = false;
 	let exited = false;
+	const observing = new Set<string>();
 	const exit = (code: number) => {
 		if (exited) return;
 		exited = true;
@@ -65,31 +70,25 @@ export function installConversationWorker(host: WorkerHost, deps: WorkerDependen
 		host.off("SIGINT", onPause);
 		host.exit(code);
 	};
-	const failed = (error: unknown, cancelled = false): RunResult => ({
-		agent: launch?.request.agent.config.name ?? "unknown",
-		scope: launch?.request.agent.scope ?? "unknown",
-		backend: "durable",
-		ok: false,
-		output: "",
-		...(runtime ? { conversationId: String(runtime.conversationId) } : {}),
-		error: cancelled ? "Subagent cancelled" : error instanceof Error ? error.message : String(error),
-		failure: cancelled ? "cancelled" : runtime ? "run" : "launch",
-	});
-	const finish = (nextMode: NonNullable<typeof mode>, result?: RunResult): Promise<void> => {
+	const send = async (packet: WorkerPacket) => {
+		if (!disconnected && !exited) await host.send(packet);
+	};
+	const finish = (nextMode: NonNullable<typeof mode>, failure?: unknown): Promise<void> => {
 		if (ending) return ending;
 		mode = nextMode;
 		ending = (async () => {
-			// A disconnected parent cannot enforce its usual bounded group teardown.
+			// A disconnected parent cannot enforce its usual bounded private-group teardown.
 			const watchdog = setTimeout(() => exit(1), 2_500);
 			watchdog.unref();
-			let cleanupError: unknown;
+			let cleanupError = failure;
 			try {
 				await initialization?.catch((error) => {
-					cleanupError = error;
+					cleanupError ??= error;
 				});
 				if (nextMode === "cancel") await runtime?.cancel();
+				await commands;
 			} catch (error) {
-				cleanupError = error;
+				cleanupError ??= error;
 			}
 			try {
 				await runtime?.close();
@@ -113,21 +112,10 @@ export function installConversationWorker(host: WorkerHost, deps: WorkerDependen
 				cleanupError ??= error;
 			}
 			try {
-				if (!disconnected) {
-					if (nextMode === "pause" && !cleanupError) await host.send({ type: "paused" });
-					else
-						await host.send({
-							type: "result",
-							result:
-								nextMode === "cancel"
-									? failed(cleanupError, true)
-									: cleanupError
-										? failed(cleanupError)
-										: result!,
-						});
-				}
+				if (cleanupError) await send({ type: "error", error: errorText(cleanupError) });
+				else if (nextMode === "pause") await send({ type: "paused" });
 			} catch {
-				/* The parent disappeared during acknowledgement. Work remains in storage. */
+				/* Parent disappeared during acknowledgment. Durable receipts remain available. */
 			} finally {
 				clearTimeout(watchdog);
 				exit(cleanupError ? 1 : 0);
@@ -135,43 +123,103 @@ export function installConversationWorker(host: WorkerHost, deps: WorkerDependen
 		})();
 		return ending;
 	};
-	const execute = async () => {
-		try {
-			await initialization;
-			if (mode || !launch || !runtime || !adapter) return;
-			const { request, context, requestId } = launch;
-			const content = formatTaskMessage(request.task, {
-				reads: request.reads,
-				night: request.night,
-				workspacePath: request.cwd,
-				artifactsDir: request.artifactsDir,
-			});
-			const admitted = await runtime.admittedContent(requestId);
-			const input = admitted ?? (adapter.prepareInput ? await adapter.prepareInput(content) : content);
+	const observe = (id: string, handle: ReporterHandle) => {
+		if (observing.has(id) || mode) return;
+		observing.add(id);
+		void (async () => {
+			try {
+				const result = await handle.wait();
+				if (mode) return;
+				const status = await runtime!.status();
+				if (!mode) await send({ type: "answer", id, result, status });
+			} catch (error) {
+				if (!mode) {
+					try {
+						await send({ type: "error", id, error: errorText(error) });
+					} catch {
+						onDisconnect();
+					}
+				}
+			}
+		})();
+	};
+	const initialize = async (launch: WorkerSpec) => {
+		if (launch.request.night && !launch.context.nightRun)
+			throw new Error("Approved night contract unavailable; refusing to resume without its policies");
+		// Wait for a closing owner's lease, never steal it or open a concurrent native kernel.
+		const waitUntil = Math.min(launch.context.deadlineAt ?? Infinity, Date.now() + 2_000);
+		while (!owned) {
+			try {
+				owned = await deps.openStorage(launch.directory);
+			} catch (error) {
+				if (
+					mode ||
+					Date.now() >= waitUntil ||
+					!(error instanceof Error) ||
+					!error.message.startsWith("Durable subagent storage already has an owner:")
+				)
+					throw error;
+				await new Promise((resolve) => setTimeout(resolve, 25));
+			}
+		}
+		if (mode) return;
+		const pinned = await ConversationRuntime.pinnedAgent(owned.storage);
+		const request = pinned
+			? {
+					...launch.request,
+					overrides: {
+						...launch.request.overrides,
+						model: `${pinned.model.provider}/${pinned.model.modelId}`,
+						...(pinned.thinkingLevel ? { thinking: pinned.thinkingLevel } : {}),
+					},
+				}
+			: launch.request;
+		adapter = await deps.openAdapter(request, launch.context);
+		runtime = await ConversationRuntime.open(owned.storage, {
+			models: adapter.models,
+			extension: adapter.extension,
+			model: adapter.model,
+			thinkingLevel: adapter.thinkingLevel,
+			cwd: runCwd(launch.request, launch.context),
+		});
+		adapter.onToolsChanged = (extension) => runtime!.installExtension(extension);
+		adapter.bindHarness(runtime.harness, runtime.conversationId);
+		if (mode) return;
+		// Retained host stop intent/expired work must be withdrawn before recovery
+		// can resume generation or native tools. Opening alone never resumes it.
+		if (launch.stopOnOpen || (launch.context.deadlineAt !== undefined && launch.context.deadlineAt <= Date.now()))
+			await runtime.stop();
+		if (mode) return;
+		await send({ type: "ready", status: await runtime.status() });
+		if (mode) return;
+		for (const { requestId, handle } of await runtime.reporters()) observe(requestId, handle);
+		runtime.resume();
+	};
+	const execute = async (packet: Extract<WorkerCommand, { type: "input" | "stop" | "status" }>) => {
+		await initialization;
+		if (mode) return;
+		if (!runtime || !adapter || !spec) throw new Error("Worker has not started");
+		if (packet.type === "input") {
+			const persisted = await runtime.admittedContent(packet.id);
+			const content =
+				persisted ??
+				(adapter.prepareInput
+					? await adapter.prepareInput(frameInput(packet.message, spec))
+					: frameInput(packet.message, spec));
 			if (mode) return;
-			const result = await runtime.run(requestId, input);
+			const handle = await runtime.admit(packet.id, content, packet.followUp);
 			if (mode) return;
-			const paths = runPaths(
-				context.sessionFile,
-				context.sessionId,
-				context.runId,
-				request.agent.config.name,
-				request.index,
-			);
-			const outputPath = outputPathFor(context.cwd, paths.outputPath, request.output);
-			// Harness history is canonical. Never use a stale native SDK transcript as fallback.
-			const resolved = await resolveRunOutput(outputPath, "", {
-				fallback: () => result.output,
-				finishedCleanly: result.ok,
-			});
-			if (mode) return;
-			await finish("result", {
-				...baseResult(request, resolved, result.error, "run"),
-				backend: "durable",
-				conversationId: String(result.conversationId),
-			});
-		} catch (error) {
-			if (!mode) await finish("result", failed(error));
+			// Never wait for a Reporter on the command line. stop/status/send must remain usable.
+			await send({ type: "accepted", id: packet.id, status: await runtime.status() });
+			observe(packet.id, handle);
+		} else {
+			if (packet.type === "stop") await runtime.stop();
+			if (!mode)
+				await send({
+					type: packet.type === "stop" ? "stopped" : "status",
+					id: packet.id,
+					status: await runtime.status(),
+				});
 		}
 	};
 	const onPause = () => {
@@ -182,7 +230,7 @@ export function installConversationWorker(host: WorkerHost, deps: WorkerDependen
 		onPause();
 	};
 	const onMessage = (message?: unknown) => {
-		if (!message || typeof message !== "object") return;
+		if (!message || typeof message !== "object" || mode) return;
 		const packet = message as WorkerCommand;
 		if (packet.type === "pause") {
 			onPause();
@@ -192,39 +240,27 @@ export function installConversationWorker(host: WorkerHost, deps: WorkerDependen
 			void finish("cancel");
 			return;
 		}
-		if (packet.type !== "start" || launch || mode) return;
-		launch = packet;
-		initialization = (async () => {
-			// After parent death, its old worker may still be closing the same Harness.
-			// Wait briefly for that OS-held lease, never steal it or start a second kernel.
-			const waitUntil = Math.min(packet.context.deadlineAt ?? Infinity, Date.now() + 2_000);
-			while (!owned) {
-				try {
-					owned = await deps.openStorage(packet.directory);
-				} catch (error) {
-					if (
-						mode ||
-						Date.now() >= waitUntil ||
-						!(error instanceof Error) ||
-						!error.message.startsWith("Durable subagent storage already has an owner:")
-					)
-						throw error;
-					await new Promise((resolve) => setTimeout(resolve, 25));
-				}
-			}
-			if (mode) return;
-			adapter = await deps.openAdapter(packet.request, packet.context);
-			runtime = await ConversationRuntime.open(owned.storage, {
-				models: adapter.models,
-				extension: adapter.extension,
-				model: adapter.model,
-				thinkingLevel: adapter.thinkingLevel,
-				cwd: runCwd(packet.request, packet.context),
+		if (packet.type === "start") {
+			if (spec) return;
+			spec = packet.spec;
+			initialization = initialize(packet.spec);
+			void initialization.catch((error) => {
+				void finish("pause", error);
 			});
-			adapter.onToolsChanged = (extension) => runtime!.installExtension(extension);
-			adapter.bindHarness(runtime.harness, runtime.conversationId);
-		})();
-		void execute();
+			return;
+		}
+		if (packet.type !== "input" && packet.type !== "stop" && packet.type !== "status") return;
+		commands = commands
+			.then(() => execute(packet))
+			.catch(async (error) => {
+				if (!mode) {
+					try {
+						await send({ type: "error", id: packet.id, error: errorText(error) });
+					} catch {
+						onDisconnect();
+					}
+				}
+			});
 	};
 	host.on("message", onMessage);
 	host.on("disconnect", onDisconnect);
@@ -249,14 +285,12 @@ if (typeof process.send === "function") {
 				process.send!(packet, (error: Error | null) => (error ? reject(error) : resolve()));
 			}),
 		exit: (code) => {
-			// The host starts a detached worker group. Once state and IPC are flushed,
-			// kill that private group so even a tool ignoring cancellation cannot survive.
-			// If not a group leader, never signal the caller's inherited process group.
+			// Only kill a detached private process group, never the caller's inherited group.
 			if (process.platform !== "win32") {
 				try {
 					process.kill(-process.pid, "SIGKILL");
 				} catch {
-					/* No private group. */
+					/* Not a private group leader. */
 				}
 			}
 			process.exit(code);

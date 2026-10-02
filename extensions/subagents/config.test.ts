@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { DEFAULT_SUBAGENTS_CONFIG, MAX_AGENT_TIMEOUT_MS, normalizeSubagentsConfig } from "./config.ts";
 
 test("subagents defaults contain no executor or legacy agents wrapper", () => {
-	assert.deepEqual(normalizeSubagentsConfig({}), { maxPerExecution: 100, timeoutMs: 7_200_000, waitMs: 600_000 });
+	assert.deepEqual(normalizeSubagentsConfig({}), { maxPerExecution: 100, timeoutMs: 7_200_000 });
 	assert.deepEqual(
 		normalizeSubagentsConfig({ agents: { timeoutMs: 1 }, executor: { timeoutMs: 1 } }),
 		DEFAULT_SUBAGENTS_CONFIG,
@@ -14,7 +14,6 @@ test("subagent policy clamps integer limits and rejects malformed values", () =>
 	assert.deepEqual(normalizeSubagentsConfig({ maxPerExecution: 0, timeoutMs: 1, waitMs: 0 }), {
 		maxPerExecution: 1,
 		timeoutMs: 1_000,
-		waitMs: 1_000,
 	});
 	assert.deepEqual(
 		normalizeSubagentsConfig({
@@ -22,7 +21,7 @@ test("subagent policy clamps integer limits and rejects malformed values", () =>
 			timeoutMs: MAX_AGENT_TIMEOUT_MS + 1,
 			waitMs: MAX_AGENT_TIMEOUT_MS + 1,
 		}),
-		{ maxPerExecution: 1_000, timeoutMs: MAX_AGENT_TIMEOUT_MS, waitMs: MAX_AGENT_TIMEOUT_MS },
+		{ maxPerExecution: 1_000, timeoutMs: MAX_AGENT_TIMEOUT_MS },
 	);
 	for (const value of ["1000", null, NaN, Infinity, 1.5]) {
 		assert.deepEqual(
