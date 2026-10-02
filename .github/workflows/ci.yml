@@ -12,6 +12,9 @@ concurrency:
 jobs:
   check:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        pi-version: ["1.0.0", "latest"]
     steps:
       - uses: actions/checkout@v7
 
@@ -22,6 +25,15 @@ jobs:
 
       - run: npm ci
 
+      - name: Test the minimum and current Pi APIs
+        run: >-
+          npm install --no-save --ignore-scripts
+          @earendil-works/pi-ai@${{ matrix.pi-version }}
+          @earendil-works/pi-coding-agent@${{ matrix.pi-version }}
+          @earendil-works/pi-tui@${{ matrix.pi-version }}
+
       - run: npm run typecheck
 
       - run: npm test
+
+      - run: npm run fmt:check

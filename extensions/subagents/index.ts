@@ -10,6 +10,7 @@ import { AgentsProvider } from "./agents-provider.ts";
 import { normalizeSubagentsConfig, DEFAULT_SUBAGENTS_CONFIG } from "./config.ts";
 import { isChildSession } from "./constants.ts";
 import { formatElapsed } from "./progress.ts";
+import { inheritedParentModel } from "./parent-model.ts";
 import { registerTaskFileFlag, taskDeliveryFor } from "./task-delivery.ts";
 
 function announce(pi: ExtensionAPI, event: AgentCompletionEvent): void {
@@ -112,15 +113,18 @@ export default function subagents(pi: ExtensionAPI): void {
 				projectTrusted: ctx.isProjectTrusted(),
 			}),
 			registry,
-			() => ({
-				timeoutMs: config.timeoutMs,
-				waitMs: config.waitMs,
-				parentProvider: context?.model?.provider,
-				defaultModel:
-					config.defaultModel ?? (context?.model ? `${context.model.provider}/${context.model.id}` : undefined),
-				defaultThinking: config.defaultThinking,
-				models,
-			}),
+			() => {
+				const parentModel = inheritedParentModel(context ?? ctx);
+				return {
+					timeoutMs: config.timeoutMs,
+					waitMs: config.waitMs,
+					parentProvider: parentModel?.provider,
+					defaultModel:
+						config.defaultModel ?? (parentModel ? `${parentModel.provider}/${parentModel.id}` : undefined),
+					defaultThinking: config.defaultThinking,
+					models,
+				};
+			},
 			book,
 		);
 		provider = active;

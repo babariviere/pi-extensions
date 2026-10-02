@@ -116,12 +116,21 @@ The standalone sandbox extension supplies filesystem and read-only MCP guards.
 
 The execution session does not inherit the planning transcript. It receives the approved task descriptions and the planner findings attached to them. New work discovered during execution is reported for a later planning session rather than executed.
 
+If planning settles without a submitted plan, night-mode appends one visible
+reminder at Pi's `agent_before_settle` boundary and requests one continuation.
+It does not repeat that reminder indefinitely. Approval still hands off only at
+`agent_settled`; a dismissed review waits for the user's feedback.
+
 The scheduled timestamp is persisted in the execution session. Reloading or resuming it restores the schedule; an overdue schedule starts immediately once the session is idle. The footer and `/night status` show the scheduled time. `/night off` cancels a pending start, including across reloads. Keep pi running and the machine awake for an on-time start: the schedule does not launch pi or wake a sleeping machine. No execution prompt, report, working copy, or ledger is created while waiting. Legacy approved handoffs without a scheduled timestamp still start immediately.
 
 The instructions file is archived and truncated when the approved run *ends*, not during planning. Cancelling the checklist leaves it untouched and keeps the current session in read-only night planning with the same model and sandbox. The planner waits for feedback instead of reopening the checklist automatically. Ask for revisions and resubmit with `tools.night_plan`; execution starts only after approval. Use `/night off` to exit night mode explicitly.
 
 Pauses and resumes are appended to the report's `## Timeline`, so a report read
 in the morning shows where the 5h window bit.
+
+While an approved run is paused or outside its execution schedule, night-mode
+stops prompt-cache warming for that run. It leaves Pi's normal cache-warming
+decision unchanged in sessions with no active night run.
 
 ## Private working copy
 
@@ -509,15 +518,26 @@ start) alongside `night`. Without it `readLedger` returns every `night` todo the
 store ever held (52 of them on 2026-08-31), so carry-over mixed nights and listed
 the same leftover twice under two ids.
 
-On `agent_settled`, if the ledger still has open items, night-mode sends an
-automated continuation listing exactly what is left. Two brakes stop it spinning:
+At Pi's `agent_before_settle` boundary, a completed execution run with open
+ledger items gets a visible custom-message continuation listing exactly what is
+left. The boundary handler preserves entries proposed by other extensions and
+only requests continuation when the projected context can continue and there
+are no pending messages or another handler's continuation. Aborted and failed
+runs do not restart. A quota pause or closed schedule also suppresses this
+automatic path.
+
+`agent_settled` remains the final cleanup point: resolved, stalled, and capped
+runs are ended there, and the approved planning session is handed off there.
+Timer-driven quota resumes remain ordinary automated resume prompts, so a
+resumed run re-enters the same boundary checks after doing work. Two brakes stop
+ledger continuations spinning:
 
 - a hard cap of **10** continuations,
 - a **fingerprint check**: if a continuation changes nothing in the ledger, the
   run is stuck rather than slow, so it stops and writes "stalled" into the
   `## Needs you` section.
 
-An empty ledger on the first settle gets one reminder to build it.
+An empty ledger on the first completed boundary gets one reminder to build it.
 
 ## Carry-over
 

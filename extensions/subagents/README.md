@@ -1,7 +1,7 @@
 # Subagents
 
 Standalone child Pi sessions with bounded waiting, background completion delivery,
-process-group cancellation and optional Herdr panes. Requires Pi 0.99 or newer.
+process-group cancellation and optional Herdr panes. Requires Pi 1.0 or newer.
 
 ## Native tools
 
@@ -16,21 +16,27 @@ process-group cancellation and optional Herdr panes. Requires Pi 0.99 or newer.
 | `agents_status` | List live and recent batches without their output. |
 | `agents_cancel` | Cancel one batch, or all live batches. |
 
-Tools have native `codemode` exposure and structured results. Pi configuration
-controls whether `codemode` is active; this extension neither enables nor replaces
-it. For example, a native script can use:
+All actions are callable through `codemode` and return structured results. Common
+actions use `codemode` exposure; `agents_models`, `agents_list`, `agents_status`,
+and `agents_cancel` are deferred so the inline tool listing stays concise. Deferred
+actions remain searchable and callable. Pi configuration controls whether
+`codemode` is active; this extension neither enables nor replaces it. Namespace
+workflow guidance is available with `describeNamespace("agents")`. A native
+script can use:
 
 ```ts
 const run = await tools.agents_start({ task: "Review the test coverage" });
 return await tools.agents_wait({ runId: run.runId, waitMs: 1000 });
 ```
 
-A `running` result is a handle, not a failed task. `agents_wait.timeoutMs` is a
-compatibility alias for its wait window; `waitMs` wins. Per-call child lifetime
-overrides are not accepted. A detached run survives its launching turn, but not
-session replacement, reload or shutdown. Attached runs are cancelled when their
-launching call is aborted. Unclaimed completions trigger one parent follow-up
-after it becomes idle. A terminal wait claims the result and suppresses that wake-up.
+A `running` result is a handle, not a failed task. Use `tools.agents_wait({ runId })`
+to resume waiting, or `tools.agents_cancel({ runId })` to stop it.
+`tools.agents_wait.timeoutMs` is a compatibility alias for its wait window;
+`waitMs` wins. Per-call child lifetime overrides are not accepted. A detached run
+survives its launching turn, but not session replacement, reload or shutdown.
+Attached runs are cancelled when their launching call is aborted. Unclaimed
+completions trigger one parent follow-up after it becomes idle. A terminal wait
+claims the result and suppresses that wake-up.
 
 ## Configuration
 

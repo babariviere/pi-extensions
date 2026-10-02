@@ -9,6 +9,10 @@ Selecting an OpenAI provider or GPT model deactivates `edit` and `write`; native
 nested calls are blocked too. Switching away restores only tools disabled by this
 extension, not explicit user exclusions. To exclude them for every model (including
 virtual-model routes), add `-edit` and `-write` to pi's `defaultTools`.
+For virtual selections, the policy follows the latest successful physical response,
+including branch navigation. The first request of a new route can still declare
+edit/write before its physical response identifies OpenAI, but those calls are
+blocked before execution. Subsequent requests use the updated tool selection.
 
 Add, update, delete and move operations retain the existing Codex-compatible parser and change metadata. Direct calls receive a text summary; scripts receive `{ changes: [{ kind, path, moveTo? }] }`. Operations execute sequentially. A later error can leave earlier changes applied; there is no rollback.
 

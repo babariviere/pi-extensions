@@ -1,5 +1,5 @@
 /** Small tool-definition helpers shared by integrations. Pi owns dispatch and execution. */
-import type { ExtensionContext, ToolAnnotations, ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { ExtensionContext, ToolAnnotations, ToolDefinition, ToolExposure } from "@earendil-works/pi-coding-agent";
 import { truncateHead } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
@@ -9,6 +9,7 @@ export interface ActionDescriptor {
 	description: string;
 	inputSchema: Record<string, unknown>;
 	outputSchema?: Record<string, unknown>;
+	exposure?: ToolExposure;
 	annotations?: ToolAnnotations;
 }
 export interface ActionContext {
@@ -34,6 +35,8 @@ export interface ActionListRequest {
 export interface ActionProvider {
 	name: string;
 	description: string;
+	/** Longer usage guidance exposed through codemode's describeNamespace(). */
+	instructions?: string;
 	list(request: ActionListRequest, context: ActionContext): Promise<ActionDescriptor[]>;
 	describe(action: string, context: ActionContext): Promise<ActionDescriptor | undefined>;
 	prepareArguments?(
@@ -61,8 +64,12 @@ export function createActionTool(provider: ActionProvider, descriptor: ActionDes
 		description: descriptor.description,
 		parameters: Type.Unsafe(descriptor.inputSchema),
 		outputSchema: descriptor.outputSchema ? Type.Unsafe(descriptor.outputSchema) : Type.Unknown(),
-		exposure: "codemode",
-		namespace: { name: provider.name, description: provider.description },
+		exposure: descriptor.exposure ?? "codemode",
+		namespace: {
+			name: provider.name,
+			description: provider.description,
+			...(provider.instructions ? { instructions: provider.instructions } : {}),
+		},
 		annotations: descriptor.annotations,
 		async execute(id, params, signal, update, ctx) {
 			if (!params || typeof params !== "object" || Array.isArray(params))

@@ -1,6 +1,7 @@
 {
 	"$schema": "https://raw.githubusercontent.com/earendil-works/pi/main/packages/coding-agent/src/modes/interactive/theme/theme-schema.json",
 	"name": "catppuccin-frappe",
+	"appearance": "dark",
 	"vars": {
 		"rosewater": "#f2d5cf",
 		"flamingo": "#eebebe",
@@ -47,6 +48,10 @@
 		"text": "text",
 		"thinkingText": "subtext0",
 		"selectedBg": "surface1",
+		"scrollbarTrack": "surface1",
+		"scrollbarThumb": "overlay2",
+		"searchMatchBg": "mauve",
+		"searchMatchText": "crust",
 		"userMessageBg": "userMsgBg",
 		"userMessageText": "text",
 		"customMessageBg": "customMsgBg",

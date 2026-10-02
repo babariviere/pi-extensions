@@ -24,6 +24,7 @@ test("jobs are native codemode tools with sandbox service wrapping and shutdown 
 			assert.equal(tool.exposure, "codemode");
 			assert.ok(tool.annotations);
 			assert.ok(tool.outputSchema);
+			assert.match(tool.namespace?.instructions ?? "", /tools\.jobs_wait/);
 		}
 		await host.execute("jobs_start", { name: "child", command: "sleep 30" });
 		assert.equal(wrapped, 1);

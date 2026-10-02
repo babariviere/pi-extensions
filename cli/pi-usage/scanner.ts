@@ -2,6 +2,7 @@ import { createReadStream, type Dirent } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { basename, relative } from "node:path";
 import { createInterface } from "node:readline";
+import { extractAccountedUsage } from "../../extensions/shared/usage-accounting.ts";
 import type { ScanResult, UsageRecord } from "./types.ts";
 
 interface SessionState {
@@ -9,26 +10,12 @@ interface SessionState {
 	project: string;
 }
 
-const nonNegativeInteger = (value: unknown): number =>
-	typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.trunc(value)) : 0;
-
-function reportedCost(value: unknown): number | undefined {
-	if (typeof value !== "object" || value === null) return undefined;
-	const cost = value as Record<string, unknown>;
-	if (typeof cost.total === "number" && Number.isFinite(cost.total) && cost.total >= 0) return cost.total;
-	const components = [cost.input, cost.output, cost.cacheRead, cost.cacheWrite];
-	const present = components.filter(
-		(component): component is number => typeof component === "number" && Number.isFinite(component) && component >= 0,
-	);
-	return present.length > 0 ? present.reduce((sum, component) => sum + component, 0) : undefined;
-}
-
-function recordTimestamp(entry: Record<string, unknown>, message: Record<string, unknown>): number | undefined {
+function recordTimestamp(entry: Record<string, unknown>, message?: Record<string, unknown>): number | undefined {
 	if (typeof entry.timestamp === "string") {
 		const timestamp = Date.parse(entry.timestamp);
 		if (Number.isFinite(timestamp)) return timestamp;
 	}
-	if (typeof message.timestamp === "number" && Number.isFinite(message.timestamp)) return message.timestamp;
+	if (typeof message?.timestamp === "number" && Number.isFinite(message.timestamp)) return message.timestamp;
 	return undefined;
 }
 
@@ -36,22 +23,39 @@ function dedupKey(
 	entry: Record<string, unknown>,
 	message: Record<string, unknown>,
 	timestamp: number,
-	provider: string,
-	model: string,
-	usage: Record<string, unknown>,
+	usage: NonNullable<ReturnType<typeof extractAccountedUsage>>,
 ): string | undefined {
-	if (typeof message.responseId === "string" && message.responseId.length > 0) return `response:${message.responseId}`;
+	if (usage.source === "assistant" && typeof message.responseId === "string" && message.responseId.length > 0) {
+		return `response:${message.responseId}`;
+	}
 	if (typeof entry.id !== "string" || entry.id.length === 0) return undefined;
+	// Clones preserve the entry and usage. IDs alone are short and can collide
+	// across independent sessions, so include the billable record's identity.
+	if (usage.source !== "assistant")
+		return `entry:${JSON.stringify([
+			entry.type,
+			entry.id,
+			timestamp,
+			usage.source,
+			usage.kind,
+			usage.provider,
+			usage.model,
+			usage.input,
+			usage.output,
+			usage.cacheRead,
+			usage.cacheWrite,
+			usage.cost,
+		])}`;
 	return [
 		"message",
 		entry.id,
 		timestamp,
-		provider,
-		model,
-		nonNegativeInteger(usage.input),
-		nonNegativeInteger(usage.output),
-		nonNegativeInteger(usage.cacheRead),
-		nonNegativeInteger(usage.cacheWrite),
+		usage.provider,
+		usage.model,
+		usage.input,
+		usage.output,
+		usage.cacheRead,
+		usage.cacheWrite,
 	].join(":");
 }
 
@@ -97,7 +101,12 @@ export async function scanSessions(root: string): Promise<ScanResult> {
 			if (line.trim().length === 0) continue;
 			let entry: Record<string, unknown>;
 			try {
-				entry = JSON.parse(line) as Record<string, unknown>;
+				const parsed: unknown = JSON.parse(line);
+				if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+					invalidLines++;
+					continue;
+				}
+				entry = parsed as Record<string, unknown>;
 			} catch {
 				invalidLines++;
 				continue;
@@ -107,34 +116,35 @@ export async function scanSessions(root: string): Promise<ScanResult> {
 				if (typeof entry.cwd === "string" && entry.cwd.length > 0) state.project = basename(entry.cwd) || entry.cwd;
 				continue;
 			}
-			if (entry.type !== "message" || typeof entry.message !== "object" || entry.message === null) continue;
-			const message = entry.message as Record<string, unknown>;
-			if (message.role !== "assistant" || typeof message.usage !== "object" || message.usage === null) continue;
-			const usage = message.usage as Record<string, unknown>;
+			const message =
+				typeof entry.message === "object" && entry.message !== null
+					? (entry.message as Record<string, unknown>)
+					: {};
+			const usage = extractAccountedUsage(entry);
+			if (!usage) continue;
 			const timestamp = recordTimestamp(entry, message);
 			if (timestamp === undefined) continue;
-			const provider =
-				typeof message.provider === "string" && message.provider.length > 0 ? message.provider : "unknown";
-			const model = typeof message.model === "string" && message.model.length > 0 ? message.model : "unknown";
-			const key = dedupKey(entry, message, timestamp, provider, model, usage);
+			const key = dedupKey(entry, message, timestamp, usage);
 			if (key && seen.has(key)) {
 				duplicateRecords++;
 				continue;
 			}
 			if (key) seen.add(key);
-			const cost = reportedCost(usage.cost);
 			records.push({
 				id: key ?? `${path}:${lineNumber}`,
+				// Child-session records retain their own ID rather than being folded into the parent session.
 				sessionId: state.id,
 				project: state.project,
 				timestamp,
-				provider,
-				model,
-				inputTokens: nonNegativeInteger(usage.input),
-				outputTokens: nonNegativeInteger(usage.output),
-				cacheReadTokens: nonNegativeInteger(usage.cacheRead),
-				cacheWriteTokens: nonNegativeInteger(usage.cacheWrite),
-				...(cost === undefined ? {} : { cost }),
+				provider: usage.provider,
+				model: usage.model,
+				usageSource: usage.source,
+				...(usage.kind === undefined ? {} : { usageKind: usage.kind }),
+				inputTokens: usage.input,
+				outputTokens: usage.output,
+				cacheReadTokens: usage.cacheRead,
+				cacheWriteTokens: usage.cacheWrite,
+				...(usage.cost === undefined ? {} : { cost: usage.cost }),
 				sourcePath: path,
 			});
 		}

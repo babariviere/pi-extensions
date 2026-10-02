@@ -1,6 +1,6 @@
 # Background jobs
 
-Standalone session-owned shell jobs for Pi 0.99 or newer. The standalone sandbox
+Standalone session-owned shell jobs for Pi 1.0 or newer. The standalone sandbox
 extension is required, even when sandbox policy is off. Every launch requests a
 sandbox-wrapped command through `sandboxWrapCommand(pi, command)`; missing or
 failed policy services refuse launch rather than falling back to an unchecked shell.
@@ -17,7 +17,9 @@ failed policy services refuse launch rather than falling back to an unchecked sh
 These tools have native `codemode` exposure, annotation hints, output schemas and
 structured results. Pi configuration controls native codemode. This extension
 does not activate or override it and does not load an execution runtime or MCP
-transport. Example native script:
+transport. Full workflow instructions are available through
+`await describeNamespace("jobs")`. Example native script:
+
 
 ```ts
 const job = await tools.jobs_start({ name: "tests", command: "npm test" });

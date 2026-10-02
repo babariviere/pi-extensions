@@ -1,3 +1,5 @@
+import type { UsageSource } from "../../extensions/shared/usage-accounting.ts";
+
 export type ReportKind = "daily" | "monthly" | "session";
 
 export interface UsageRecord {
@@ -7,6 +9,8 @@ export interface UsageRecord {
 	timestamp: number;
 	provider: string;
 	model: string;
+	usageSource?: UsageSource;
+	usageKind?: string;
 	inputTokens: number;
 	outputTokens: number;
 	cacheReadTokens: number;

@@ -18,11 +18,11 @@ The manifest discovers `extensions/*/index.ts` and `themes/*.json`.
 | `linear` | `/linear` lists current-sprint issues or starts work on a ticket. |
 | `night-mode` | `/night` runs approved overnight tasks with a ledger, usage guards, reports, optional private working copies and wake locks. Native `night_plan` reviews the plan. |
 | `pr` | `/review-comments`, `/autofix`, and `/autofix-stop` integrate GitHub reviews and CI. |
+| `router` | Opt-in `router/auto` virtual model with scoped, authenticated, cost-aware physical routing. |
 | `preview-system-prompt` | `/system-prompt` shows the assembled prompt. |
 | `sandbox` | `/sandbox` controls filesystem policy and native MCP read-only permissions for direct and codemode-nested calls. |
 | `secrets` | `/secret-list`; fnox shell injection and reversible secret references in text, structured results and persisted details. |
 | `subagents` | Native `agents_*` tools launch markdown-defined child agents with bounded waits, cancellation, progress and completion notifications. |
-| `themes` | Theme selection helpers. |
 | `todos` | Native `todo_*` tools manage file-backed todos; `/todos` provides the interactive manager. |
 | `tool-substitute` | Search guidance and jj-aware Git-write checks. |
 | `usage` | `/usage` polls Claude and Codex/ChatGPT subscription windows. |
@@ -41,7 +41,7 @@ pi update --extensions
 For a local checkout, run `pi install ./`. Individual extension paths can also be
 loaded through pi's normal configuration.
 
-Requires Node.js `>=24.0.0` and pi `>=0.99.0`. The host supplies
+Requires Node.js `>=24.0.0` and pi `>=1.0.0`. The host supplies
 `@earendil-works/pi-ai`, `@earendil-works/pi-coding-agent`, `@earendil-works/pi-tui`
 and `typebox` as peer dependencies. This package no longer installs its own
 execution runtime, MCP SDK or keyring implementation.
@@ -82,6 +82,10 @@ return { tasks: todos.length, page: page.text.slice(0, 1000) };
 Other capabilities include `tools.night_plan`, `tools.agents_run`, `tools.jobs_start`,
 `tools.applyPatch`, and `tools.web_search`. Use native `searchTools()` and
 `describeTool()` for exact schemas and tools omitted from the inline catalog.
+Less frequently used extension actions use deferred exposure and remain callable
+by name or discoverable with `searchTools()`. Read namespace workflow instructions
+with `describeNamespace("agents")`, `describeNamespace("todo")`, or
+`describeNamespace("jobs")` when needed.
 There are no old `pi.*`, `web.*`, `mcp.*`, `agents.*`, `jobs.*`, `π` or `τ` globals.
 Use `store()`/`load()` for branch-aware state. Native core reads retain their
 ordinary truncation limits; read large files in slices.
@@ -116,6 +120,7 @@ ordinary truncation limits; read large files in slices.
 | `~/.pi/agent/settings.json` and trusted `.pi/settings.json` | Pi settings, resource paths and night-mode configuration. |
 | `~/.pi/agent/mcp.json` and trusted `.pi/mcp.json` | Native MCP servers. Native OAuth uses the agent directory's `mcp-auth.json`. |
 | `~/.pi/agent/subagents.json` and trusted `.pi/subagents.json` | Child limits, waits and default model/thinking. |
+| `~/.pi/agent/router.json` and trusted `.pi/router.json` | Optional cheap, strong and direct physical models for `router/auto`. |
 | `~/.pi/agent/sandbox.json` and trusted `.pi/sandbox.json` | Filesystem and native MCP permission policy. |
 | `~/.pi/agent/secrets.json` | Per-machine Kagi/Linear values, not the fnox secrets extension's source. |
 | Nearest `fnox.toml` | Source for shell secret injection and reversible references. |
@@ -151,7 +156,10 @@ Pattern masking is defense in depth, not a guarantee against every indirect leak
 ## Pi usage CLI
 
 `pi-usage` scans session files recursively, including child sessions, deduplicates
-branched records and uses recorded assistant costs rather than repricing aliases.
+branched records and uses recorded costs rather than repricing aliases. It includes
+assistant and tool-result usage, cache-warming/other usage entries, compaction and
+branch summaries. Tool-side costs without model attribution are grouped by tool,
+and summary costs without attribution remain explicitly unknown.
 
 ```sh
 pi-usage daily
@@ -172,6 +180,8 @@ npm run fmt:check
 ```
 
 `npm run fmt` applies Biome formatting. CI runs `npm ci`, typechecking and tests on Node 24.
+CI explicitly tests the minimum Pi 1.0.0 APIs and the current Pi release. The SDK
+packages remain host-provided peers, not bundled runtime dependencies.
 
 ## Documentation
 
@@ -183,4 +193,6 @@ npm run fmt:check
 - [Guardrail](extensions/guardrail/README.md)
 - [Secrets](extensions/secrets/README.md)
 - [Usage](extensions/usage/README.md)
+- [Model router](extensions/router/README.md)
+- [System prompt viewer](extensions/preview-system-prompt/README.md)
 - [pi documentation](https://github.com/earendil-works/pi)

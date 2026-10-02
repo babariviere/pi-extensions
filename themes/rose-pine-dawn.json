@@ -1,6 +1,7 @@
 {
 	"$schema": "https://raw.githubusercontent.com/earendil-works/pi/main/packages/coding-agent/src/modes/interactive/theme/theme-schema.json",
 	"name": "rose-pine-dawn",
+	"appearance": "light",
 	"vars": {
 		"base": "#faf4ed",
 		"surface": "#fffaf3",
@@ -36,6 +37,10 @@
 		"text": "text",
 		"thinkingText": "subtle",
 		"selectedBg": "highlightMed",
+		"scrollbarTrack": "highlightMed",
+		"scrollbarThumb": "muted",
+		"searchMatchBg": "iris",
+		"searchMatchText": "base",
 		"userMessageBg": "userMsgBg",
 		"userMessageText": "text",
 		"customMessageBg": "customMsgBg",

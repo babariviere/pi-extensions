@@ -15,7 +15,13 @@
  */
 
 import type { ExtensionAPI, Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { rgbColor, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import {
+	latestRoutedPhysicalModel,
+	routedPhysicalModelFromMessage,
+	sameRoutedModel,
+	type RoutedPhysicalModel,
+} from "../shared/routed-model.ts";
 import {
 	FIVE_HOUR_LABEL,
 	isAnthropicModel,
@@ -39,12 +45,10 @@ const USAGE_ERROR_THRESHOLD = 92;
 const BAR_FILLED = "━";
 const BAR_EMPTY = "─";
 
-// Provider colors as 24-bit ANSI foreground escapes.
-const ANTHROPIC_ORANGE = "\x1b[38;2;217;119;87m";
-const CODEX_BLUE = "\x1b[38;2;59;130;246m";
-const RESET = "\x1b[0m";
-const colorizeAnthropic = (text: string): string => `${ANTHROPIC_ORANGE}${text}${RESET}`;
-const colorizeCodex = (text: string): string => `${CODEX_BLUE}${text}${RESET}`;
+// Preserve provider brand colors as concrete values; theme.style converts
+// them to truecolor or 256-color output for the current terminal.
+const ANTHROPIC_ORANGE = rgbColor(217, 119, 87);
+const CODEX_BLUE = rgbColor(59, 130, 246);
 
 // ── Formatting helpers ──────────────────────────────────────────────────
 
@@ -127,7 +131,7 @@ export function renderUsageLine(snapshot: UsageSnapshot, theme: Theme): string {
 	const dim = (s: string) => theme.fg("dim", s);
 	const isCodex = snapshot.provider === "openai";
 	const provider = isCodex ? "Codex" : "Claude";
-	const coloredProvider = isCodex ? colorizeCodex(provider) : colorizeAnthropic(provider);
+	const coloredProvider = theme.style(provider, { fg: isCodex ? CODEX_BLUE : ANTHROPIC_ORANGE });
 	if (snapshot.error) return `${coloredProvider} ${dim(snapshot.error)}`;
 	if (snapshot.windows.length === 0) return "";
 
@@ -159,27 +163,49 @@ export function renderUsageLine(snapshot: UsageSnapshot, theme: Theme): string {
 	return segments.join(" ");
 }
 
-/** Build the right "model • thinking" segment. */
-function renderModel(
-	pi: ExtensionAPI,
-	ctx: { model?: { id?: string; provider?: string; reasoning?: unknown } },
+interface FooterModel {
+	provider?: string;
+	id?: string;
+	api?: string;
+	reasoning?: unknown;
+}
+
+function modelLabel(model: FooterModel, showProvider: boolean, theme: Theme): string {
+	const name = theme.fg("muted", model.id?.split("/").pop() || "no-model");
+	return model.provider && showProvider ? theme.fg("dim", `(${model.provider}) `) + name : name;
+}
+
+/** Build the right model segment, distinguishing the user's selection from the model that answered. */
+export function renderModel(
+	selected: FooterModel | undefined,
+	physical: RoutedPhysicalModel | undefined,
+	selectedThinkingLevel: string | undefined,
 	showProvider: boolean,
 	theme: Theme,
 ): string {
-	const modelName = ctx.model?.id?.split("/").pop() || "no-model";
-	let str = theme.fg("muted", modelName);
-
-	if (ctx.model && showProvider && ctx.model.provider) {
-		str = theme.fg("dim", `(${ctx.model.provider}) `) + str;
+	const selection: FooterModel = selected ?? {};
+	const selectedLabel = modelLabel(selection, showProvider, theme);
+	const isVirtual = selection.api === "pi-virtual";
+	const showsThinking = !!selection.reasoning || isVirtual;
+	const selectionLevel = showsThinking ? selectedThinkingLevel : undefined;
+	const routedPairDiffers =
+		physical &&
+		(!sameRoutedModel(selected, physical) ||
+			(selectionLevel !== undefined &&
+				physical.thinkingLevel !== undefined &&
+				selectionLevel !== physical.thinkingLevel));
+	if (isVirtual && physical && routedPairDiffers) {
+		const selectedSuffix = selectionLevel
+			? ` ${theme.fg("dim", "•")} ${theme.fg(selectionLevel === "off" ? "dim" : "accent", selectionLevel)}`
+			: "";
+		const physicalLabel = modelLabel(physical, showProvider, theme);
+		const physicalSuffix = physical.thinkingLevel
+			? ` ${theme.fg("dim", "•")} ${theme.fg(physical.thinkingLevel === "off" ? "dim" : "accent", physical.thinkingLevel)}`
+			: "";
+		return `${selectedLabel}${selectedSuffix} ${theme.fg("dim", "→")} ${physicalLabel}${physicalSuffix}`;
 	}
-
-	if (ctx.model?.reasoning) {
-		const thinkingLevel = pi.getThinkingLevel() || "off";
-		str += " " + theme.fg("dim", "•") + " ";
-		str += thinkingLevel === "off" ? theme.fg("dim", "thinking off") : theme.fg("accent", thinkingLevel);
-	}
-
-	return str;
+	if (!selectionLevel) return selectedLabel;
+	return `${selectedLabel} ${theme.fg("dim", "•")} ${selectionLevel === "off" ? theme.fg("dim", "thinking off") : theme.fg("accent", selectionLevel)}`;
 }
 
 /** Home-collapsed current working directory, e.g. `~/code/project`. */
@@ -244,7 +270,8 @@ export default function (pi: ExtensionAPI): void {
 
 	// Claude usage state, fed by the `usage` extension over the event bus.
 	let usageSnapshot: UsageSnapshot | undefined;
-	let lastModel: { provider?: string; id?: string } | undefined;
+	let lastModel: FooterModel | undefined;
+	let physicalModel: RoutedPhysicalModel | undefined;
 
 	pi.events.on(USAGE_SNAPSHOT_EVENT, (data) => {
 		if (!isUsageSnapshotEvent(data)) return;
@@ -252,10 +279,18 @@ export default function (pi: ExtensionAPI): void {
 		tuiRef?.requestRender();
 	});
 
+	pi.on("message_end", (event) => {
+		const latest = routedPhysicalModelFromMessage(event.message);
+		if (!latest) return;
+		physicalModel = latest;
+		tuiRef?.requestRender();
+	});
+
 	pi.on("session_start", async (_event, ctx) => {
-		if (!ctx.hasUI) return;
+		if (ctx.mode !== "tui") return;
 
 		lastModel = ctx.model;
+		physicalModel = latestRoutedPhysicalModel(ctx.sessionManager.getBranch());
 
 		// Clean up any previous footer to prevent leaks.
 		footerDisposeRef?.();
@@ -283,7 +318,15 @@ export default function (pi: ExtensionAPI): void {
 					const used = contextUsage?.tokens ?? Math.round((percent / 100) * contextWindow);
 
 					const contextSegment = renderContextGauge(percent, used, contextWindow, theme);
-					const modelSegment = renderModel(pi, ctx, footerData.getAvailableProviderCount() > 1, theme);
+					const selectedModel = ctx.model ?? lastModel;
+					const selectedThinkingLevel = ctx.thinkingLevel ?? pi.getThinkingLevel() ?? "off";
+					const modelSegment = renderModel(
+						selectedModel,
+						physicalModel,
+						selectedThinkingLevel,
+						footerData.getAvailableProviderCount() > 1,
+						theme,
+					);
 
 					// Build the left side: project path + context gauge. The project
 					// path is the expendable part, so reserve space for the context
@@ -301,7 +344,8 @@ export default function (pi: ExtensionAPI): void {
 
 					const lines: string[] = [layoutLine(leftSegment, modelSegment, width)];
 
-					const activeModel = ctx.model ?? lastModel;
+					const activeModel =
+						selectedModel?.api === "pi-virtual" ? (physicalModel ?? selectedModel) : selectedModel;
 					const showCodex = isOpenAIModel(activeModel);
 					const showClaude = isAnthropicModel(activeModel);
 					if (usageSnapshot && (usageSnapshot.provider === "openai" ? showCodex : showClaude)) {
@@ -328,6 +372,12 @@ export default function (pi: ExtensionAPI): void {
 
 	pi.on("model_select", async (event, ctx) => {
 		lastModel = event.model ?? ctx.model;
+		tuiRef?.requestRender();
+	});
+
+	pi.on("session_tree", async (_event, ctx) => {
+		lastModel = ctx.model;
+		physicalModel = latestRoutedPhysicalModel(ctx.sessionManager.getBranch());
 		tuiRef?.requestRender();
 	});
 

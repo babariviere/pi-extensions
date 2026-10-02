@@ -22,7 +22,12 @@
 
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type {
+	ExtensionAPI,
+	ExtensionCommandContext,
+	ExtensionContext,
+	SessionBoundaryDraft,
+} from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import {
 	FIVE_HOUR_LABEL,
@@ -125,9 +130,14 @@ const TICK_MS = 30_000;
 const STATUS_KEY = "night-mode";
 const PAUSE_ENTRY = "night-mode:pause";
 const STATE_EVENT = "night-mode:state";
+const CONTINUATION_MESSAGE = "night-mode:continuation";
 
 /** Hard cap on automated "you are not done" follow-ups in one night. */
 const MAX_CONTINUATIONS = 10;
+
+type PendingBoundaryAction =
+	| { kind: "planning-reminder" }
+	| { kind: "ledger-nudge"; fingerprint: string; openCount: number; attempt: number };
 
 export interface NightModeState {
 	enabled: boolean;
@@ -237,6 +247,12 @@ export default function (pi: ExtensionAPI): void {
 		| undefined;
 	/** Instructions file waiting to be archived once the agent settles. */
 	let pendingInstructionsClear: string | undefined;
+	/** A run-ending decision made before settlement, applied at agent_settled. */
+	let pendingRunEndReason: string | undefined;
+	/** Additional final-settlement note for a stalled or capped run. */
+	let pendingRunEndNote: string | undefined;
+	/** The first boundary handler's proposal, committed only if its projected context is runnable. */
+	let pendingBoundaryAction: PendingBoundaryAction | undefined;
 	/**
 	 * `PI_TODO_PATH` as it was before the run pointed it at the night ledger.
 	 * `undefined` means it was unset, which is not the same as empty.
@@ -366,6 +382,8 @@ export default function (pi: ExtensionAPI): void {
 		// so an interactive morning is not stuck inside the night's policy.
 		requestSandbox(null, "night run ended");
 		run = undefined;
+		pendingRunEndReason = undefined;
+		pendingRunEndNote = undefined;
 	}
 
 	/**
@@ -402,23 +420,31 @@ export default function (pi: ExtensionAPI): void {
 	 * Two brakes keep this from spinning: a hard cap on continuations, and a
 	 * fingerprint check, since a nudge that changes nothing is a stall.
 	 */
-	function maybeContinue(): void {
-		if (!run || !enabled || !inWindow || paused) return;
+	function maybeContinue():
+		| { endReason: string; endNote?: string }
+		| { message: string; fingerprint: string; openCount: number; attempt: number }
+		| undefined {
+		if (
+			!run ||
+			!enabled ||
+			!inWindow ||
+			!isWithinWindow(new Date(), currentWindow()) ||
+			paused ||
+			currentPauseReason()
+		)
+			return;
 
 		const items = currentLedger();
 		const open = unresolved(items);
 		if (items.length > 0 && open.length === 0) {
-			endRun("every ledger item resolved");
-			return;
+			return { endReason: "every ledger item resolved" };
 		}
 
 		if (run.nudges >= MAX_CONTINUATIONS) {
-			noteUnderHeading(
-				NEEDS_HUMAN_HEADING,
-				`night-mode gave up after ${MAX_CONTINUATIONS} automated continuations with work still open.`,
-			);
-			endRun("continuation cap reached");
-			return;
+			return {
+				endReason: "continuation cap reached",
+				endNote: `night-mode gave up after ${MAX_CONTINUATIONS} automated continuations with work still open.`,
+			};
 		}
 
 		const current = fingerprint(items);
@@ -430,29 +456,24 @@ export default function (pi: ExtensionAPI): void {
 				elapsedMs: Date.now() - run.startedAt.getTime(),
 			})
 		) {
-			noteUnderHeading(
-				NEEDS_HUMAN_HEADING,
-				"night-mode stopped: the last automated continuation changed nothing in the ledger, so the run is stuck.",
-			);
-			endRun("stalled, no progress since the last continuation");
-			return;
+			return {
+				endReason: "stalled, no progress since the last continuation",
+				endNote:
+					"night-mode stopped: the last automated continuation changed nothing in the ledger, so the run is stuck.",
+			};
 		}
 
-		run.lastFingerprint = current;
-		run.nudges += 1;
+		const attempt = run.nudges + 1;
 		const message =
 			items.length === 0
 				? composeLedgerReminder(run.reportPath)
 				: composeNudge({
 						unresolved: formatUnresolved(open),
 						reportPath: run.reportPath,
-						attempt: run.nudges,
+						attempt,
 						maxAttempts: MAX_CONTINUATIONS,
 					});
-		noteTimeline(
-			`night-mode: settled with ${open.length || "no"} ledger item(s) open, sending continuation ${run.nudges}/${MAX_CONTINUATIONS}`,
-		);
-		deliver(message);
+		return { message, fingerprint: current, openCount: open.length, attempt };
 	}
 
 	/** Switch to one configured model, failing before a phase starts. */
@@ -1219,8 +1240,90 @@ export default function (pi: ExtensionAPI): void {
 		evaluate();
 	});
 
-	// `agent_settled` (not `agent_end`) is the real "nothing left to do" signal: no
-	// retry, compaction or queued continuation will follow.
+	function mayOfferBoundaryContinuation(event: {
+		outcome: string;
+		continue: boolean;
+		context: { pendingMessages: unknown[] };
+	}): boolean {
+		return (
+			event.outcome === "completed" &&
+			!event.continue &&
+			event.context.pendingMessages.length === 0 &&
+			enabled &&
+			inWindow &&
+			isWithinWindow(new Date(), currentWindow()) &&
+			!paused &&
+			!currentPauseReason()
+		);
+	}
+
+	// The first callback appends a context-bearing message. Pi projects the returned
+	// drafts before dispatching the next callback, which can then guard against an
+	// invalid continuation using the updated context.canContinue value.
+	pi.on("agent_before_settle", (event) => {
+		pendingBoundaryAction = undefined;
+		pendingRunEndReason = undefined;
+		pendingRunEndNote = undefined;
+		if (!mayOfferBoundaryContinuation(event)) return;
+
+		let message: string | undefined;
+		if (planning) {
+			// A dismissed review withholds approval, it does not invite an automatic retry.
+			if (planning.reviewDismissed || planning.approved?.length || planning.reminded) return;
+			pendingBoundaryAction = { kind: "planning-reminder" };
+			message =
+				"[night-mode] Planning is not complete. Submit the proposed tasks with `tools.night_plan` in native codemode, then stop.";
+		} else {
+			const decision = maybeContinue();
+			if (!decision) return;
+			if ("endReason" in decision) {
+				pendingRunEndReason = decision.endReason;
+				pendingRunEndNote = decision.endNote;
+				return;
+			}
+			message = decision.message;
+			pendingBoundaryAction = {
+				kind: "ledger-nudge",
+				fingerprint: decision.fingerprint,
+				openCount: decision.openCount,
+				attempt: decision.attempt,
+			};
+		}
+
+		if (!message) {
+			pendingBoundaryAction = undefined;
+			return;
+		}
+		const reminder: SessionBoundaryDraft = {
+			type: "custom_message",
+			customType: CONTINUATION_MESSAGE,
+			content: message,
+			display: true,
+		};
+		return { entries: [...event.entries, reminder] };
+	});
+
+	pi.on("agent_before_settle", (event) => {
+		const action = pendingBoundaryAction;
+		pendingBoundaryAction = undefined;
+		if (!action) return;
+		if (!mayOfferBoundaryContinuation(event) || !event.context.canContinue) return;
+		if (action.kind === "planning-reminder") {
+			if (!planning) return;
+			planning.reminded = true;
+		} else {
+			if (!run) return;
+			run.lastFingerprint = action.fingerprint;
+			run.nudges = action.attempt;
+			noteTimeline(
+				`night-mode: boundary reached with ${action.openCount || "no"} ledger item(s) open, sending continuation ${action.attempt}/${MAX_CONTINUATIONS}`,
+			);
+		}
+		return { continue: true };
+	});
+
+	// `agent_settled` is final and notification/cleanup-only. Any ledger decision
+	// made at the actionable boundary is applied here, after Pi has finished work.
 	pi.on("agent_settled", async (_event, ctx) => {
 		agentBusy = false;
 		evaluate();
@@ -1232,14 +1335,9 @@ export default function (pi: ExtensionAPI): void {
 				await handoffApprovedPlan(planning.commandContext);
 				return;
 			}
-			if (!planning.reminded) {
-				planning.reminded = true;
-				deliver(
-					"[night-mode] Planning is not complete. Submit the proposed tasks with `tools.night_plan` in native codemode, then stop.",
-					ctx,
-				);
-				return;
-			}
+			// Without an actionable-boundary reminder (for example, after abort/error),
+			// leave planning available for explicit user feedback instead of restarting.
+			if (!planning.reminded) return;
 			const previous = planning.previousModel;
 			requestSandbox(null, "night planning stalled");
 			clearActiveNightRun();
@@ -1251,8 +1349,22 @@ export default function (pi: ExtensionAPI): void {
 			ctx.ui.notify("night-mode: planning stopped after Astra failed to submit a plan twice", "error");
 			return;
 		}
-		// The orchestrator thinks it is done. The approved ledger decides whether it really is.
-		maybeContinue();
+		const endReason = pendingRunEndReason;
+		const endNote = pendingRunEndNote;
+		pendingRunEndReason = undefined;
+		pendingRunEndNote = undefined;
+		if (endReason) {
+			if (endNote) noteUnderHeading(NEEDS_HUMAN_HEADING, endNote);
+			endRun(endReason);
+		}
+	});
+
+	pi.on("cache_warming_decision", () => {
+		if (
+			run &&
+			(!enabled || !inWindow || !isWithinWindow(new Date(), currentWindow()) || paused || currentPauseReason())
+		)
+			return { action: "stop" };
 	});
 
 	pi.on("tool_call", (_event, ctx) => {

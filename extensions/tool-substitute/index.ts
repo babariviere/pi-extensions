@@ -3,7 +3,7 @@
  *
  * Keeps history mutations on jj and guides repository searches to Pi tools.
  * - git -> jj (Jujutsu VCS) [enforced only for writes inside a jj repo]
- * - pi.find and pi.grep are preferred for repository searches [suggestion only]
+ * - Native find and grep tools are preferred when reachable [suggestion only]
  *
  * git policy:
  * - Outside a jj repo, git is fully allowed (nothing to substitute with).
@@ -29,7 +29,7 @@
 
 import { existsSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ToolInfo } from "@earendil-works/pi-coding-agent";
 
 const replacements: Record<string, string> = {
 	git: "jj",
@@ -261,27 +261,68 @@ const gitConvertRegex = new RegExp(
 	"g",
 );
 
-const systemPromptAddition = `
-## Search Tool Rules
-- Prefer \`pi.find\` for file discovery. Its \`pattern\` is a file glob, for example
-  \`pi.find({ pattern: "*.test.ts", path: "extensions" })\`.
-- Prefer \`pi.grep\` for content search. Its \`pattern\` is a regex by default;
-  use \`literal: true\` for exact text containing characters such as parentheses,
-  for example \`pi.grep({ pattern: "setModel(", path: "src", literal: true })\`.
-  The optional \`glob\` filters file paths and does not change the content pattern.
-- Only when Pi search APIs lack required options or output formatting, use
-  \`pi.bash\` with quoted patterns: \`rg --fixed-strings --glob '*.ts' 'setModel('\`
-  for literal content, or \`fd --glob '*.test.ts'\` for file discovery.
+function reachableTool(name: string, allTools: ToolInfo[], activeTools: Set<string>): ToolInfo | undefined {
+	const tool = allTools.find((candidate) => candidate.name === name);
+	if (!tool) return;
+	switch (tool.exposure ?? "direct") {
+		case "direct":
+		case "model-only":
+			return activeTools.has(tool.name) ? tool : undefined;
+		case "codemode":
+		case "deferred":
+			return activeTools.has(tool.name) || activeTools.has("codemode") ? tool : undefined;
+		default:
+			return;
+	}
+}
 
-Version control: inside a jj (Jujutsu) repository, use \`jj\` for anything that
-modifies the repository (commit, rebase, branch, reset, ...); read-only \`git\`
-commands are fine. Outside a jj repository, \`git\` can be used normally.
-`;
+/** Build accurate search guidance from the tools the current loadout can reach. */
+export function buildToolSubstituteSection(allTools: ToolInfo[], activeToolNames: string[]): string {
+	const active = new Set(activeToolNames);
+	const find = reachableTool("find", allTools, active);
+	const grep = reachableTool("grep", allTools, active);
+	const bash = reachableTool("bash", allTools, active);
+	const reference = (tool: ToolInfo) =>
+		active.has("codemode") && tool.exposure !== "model-only" ? `tools.${tool.name}` : tool.name;
+	const lines: string[] = [];
+
+	if (find || grep) {
+		lines.push("## Search Tool Rules");
+		if (find) {
+			lines.push(
+				`- Prefer the native \`find\` tool for file discovery. Its \`pattern\` is a file glob, for example \`${reference(find)}({ pattern: "*.test.ts", path: "extensions" })\`.`,
+			);
+		}
+		if (grep) {
+			lines.push(
+				`- Prefer the native \`grep\` tool for content search. Its \`pattern\` is a regex by default; use \`literal: true\` for exact text such as \`${reference(grep)}({ pattern: "setModel(", path: "src", literal: true })\`. The optional \`glob\` filters file paths, not the content pattern.`,
+			);
+		}
+		if (bash) {
+			lines.push(
+				`- Only when Pi search APIs lack required options or output formatting, use \`${reference(bash)}\` with quoted patterns such as \`rg --fixed-strings --glob '*.ts' 'setModel('\` or \`fd --glob '*.test.ts'\`.`,
+			);
+		}
+	} else if (bash) {
+		lines.push(
+			"## Search Tool Rules",
+			`- No Pi file-discovery or content-search tool is currently reachable. Use \`${reference(bash)}\` with quoted \`fd\` or \`rg\` patterns for repository searches.`,
+		);
+	}
+
+	lines.push(
+		"Version control: inside a jj (Jujutsu) repository, use `jj` for anything that modifies the repository (commit, rebase, branch, reset, ...); read-only `git` commands are fine. Outside a jj repository, `git` can be used normally.",
+	);
+	return lines.join("\n");
+}
 
 export default function (pi: ExtensionAPI) {
 	// Inject substitution rules into system prompt on each turn
-	pi.on("before_agent_start", async (event, _ctx) => {
-		return { systemPrompt: event.systemPrompt + systemPromptAddition };
+	pi.on("before_agent_start", (event) => {
+		event.systemPromptOptions.sections.tool_substitute = buildToolSubstituteSection(
+			pi.getAllTools(),
+			pi.getActiveTools(),
+		);
 	});
 
 	// Block git writes inside jj repos; rewrite where a clean mapping exists.

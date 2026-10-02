@@ -58,6 +58,7 @@ import {
 	type TodoFrontMatter,
 	type TodoRecord,
 } from "./storage.ts";
+import { updateTodoPromptSection } from "./todo-prompt.ts";
 import { validateClosure } from "../night-mode/evidence.ts";
 import { NIGHT_TAG } from "../night-mode/ledger.ts";
 import { isNightRunParticipant, readActiveNightRun } from "../night-mode/night-run.ts";
@@ -1472,6 +1473,7 @@ const todoActionDescriptors: ActionDescriptor[] = [
 		description: "List all todos, including closed todos",
 		inputSchema: emptyInputSchema,
 		outputSchema: { type: "array", items: todoFrontMatterSchema },
+		exposure: "deferred",
 	},
 	{
 		name: "get",
@@ -1531,6 +1533,7 @@ const todoActionDescriptors: ActionDescriptor[] = [
 		description: "Delete a todo and return the deleted record",
 		inputSchema: idInputSchema,
 		outputSchema: todoRecordSchema,
+		exposure: "deferred",
 	},
 	{
 		name: "claim",
@@ -1543,6 +1546,7 @@ const todoActionDescriptors: ActionDescriptor[] = [
 		description: "Release a todo from its assigned session",
 		inputSchema: assignmentInputSchema,
 		outputSchema: todoRecordSchema,
+		exposure: "deferred",
 	},
 ];
 
@@ -1579,8 +1583,14 @@ function todoRecordOrThrow(result: TodoRecord | { error: string }): TodoRecord {
 function createTodoActions(pi: ExtensionAPI): ActionProvider {
 	return {
 		name: "todo",
-		description:
-			"Manage file-based todos. Claim tasks before working on them, append progress or blockers, and close them when complete.",
+		description: "Manage file-based todos stored under .pi/todos.",
+		instructions: [
+			"Use todo tools for durable multi-step or multi-session task state instead of ad-hoc plan or scratch files.",
+			"Call tools.todo_claim({ id }) before working on an assigned task. If it is already assigned to another session, ask before forcing a claim.",
+			'Call tools.todo_append({ id, body }) to record progress or blockers, and tools.todo_update({ id, status: "closed" }) only when the work is complete.',
+			"Use tools.todo_list() for open items, tools.todo_listAll() when closed items matter, and tools.todo_get({ id }) for the full body.",
+			"IDs may be TODO-<hex> or the raw hex filename. Mutation results are structured todo records; errors are returned as tool errors.",
+		].join("\n"),
 
 		async list(request) {
 			const query = request.query?.trim().toLowerCase();
@@ -1728,17 +1738,9 @@ export default function todosExtension(pi: ExtensionAPI) {
 	pi.on("before_agent_start", (event, ctx) => {
 		const todosDir = getTodosDir(ctx.cwd);
 		const open = listTodosSync(todosDir).filter((todo) => !isTodoClosed(getTodoStatus(todo)));
-		if (open.length === 0) return;
 		const sessionId = ctx.sessionManager.getSessionId();
 		const mine = open.filter((todo) => todo.assigned_to_session === sessionId);
-		const plural = open.length === 1 ? "" : "s";
-		const guidance = [
-			"",
-			"## Todo tracking",
-			`There ${open.length === 1 ? "is" : "are"} ${open.length} open todo${plural} in ${TODO_DIR_NAME} for this repo${mine.length ? `, ${mine.length} assigned to this session` : ""}.`,
-			'Use the native todo tools through `codemode` to track multi-step or multi-session work: call `tools.todo_claim({ id })` before working, `tools.todo_append({ id, body })` for progress or blockers, and `tools.todo_update({ id, status: "closed" })` when done. Prefer todos over ad-hoc plan/scratch files for durable task state.',
-		].join("\n");
-		return { systemPrompt: event.systemPrompt + "\n" + guidance };
+		updateTodoPromptSection(event.systemPromptOptions.sections, open.length, mine.length);
 	});
 
 	const todoActions = createTodoActions(pi);

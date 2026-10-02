@@ -28,9 +28,12 @@ test("standalone agents register only native codemode tools at session_start", a
 			].sort(),
 		);
 		for (const definition of host.tools.values()) {
-			assert.equal(definition.exposure, "codemode");
+			const deferred = ["agents_models", "agents_list", "agents_status", "agents_cancel"].includes(definition.name);
+			assert.equal(definition.exposure, deferred ? "deferred" : "codemode");
 			assert.ok(definition.outputSchema);
 			assert.ok(definition.annotations);
+			assert.equal(definition.namespace?.name, "agents");
+			assert.ok(definition.namespace?.instructions?.includes("tools.agents_wait"));
 		}
 		assert.deepEqual((await host.execute("agents_status", {})).structuredContent, []);
 		await host.emit("session_start", { reason: "new" });

@@ -25,6 +25,7 @@ import type { ExtensionAPI, ToolCallEvent } from "@earendil-works/pi-coding-agen
 import { createLocalBashOperations, isToolCallEventType } from "@earendil-works/pi-coding-agent";
 import { applySecretPolicy } from "./secret-policy";
 import { scrubToolResult, type SecretEntry } from "./secret-mask";
+import { updateSecretPromptSection } from "./secret-prompt";
 import { REF_KEY_ENV, SecretRefRegistry } from "./secret-ref";
 
 /**
@@ -174,20 +175,7 @@ export default function (pi: ExtensionAPI) {
 	// Inject secret names into system prompt so the LLM knows what's available
 	pi.on("before_agent_start", async (event) => {
 		const secrets = await getSecrets();
-		if (secrets.length === 0) return;
-
-		const names = secrets.map((s) => s.name).join(", ");
-		const instruction = [
-			"\n## secrets — Secret Management",
-			`Available secrets (injected as env vars in bash): ${names}`,
-			"Use $SECRET_NAME in bash commands to reference secrets. Never ask the user for secret values.",
-			"Secret values never appear in tool output. They are replaced by references of the form `<secret:type:id>`.",
-			"Copy a reference verbatim. Written to a file with write, edit, or applyPatch, it expands to the real value; in bash it becomes the matching variable.",
-			"To place a secret you have never seen into a file, write `<secret:NAME>` using a name from the list above.",
-			"Never transcribe a partially masked value: that destroys the secret. Use the reference.",
-		].join("\n");
-
-		return { systemPrompt: event.systemPrompt + instruction };
+		updateSecretPromptSection(event.systemPromptOptions.sections, secrets);
 	});
 
 	// Command to list secrets (names only, never values)

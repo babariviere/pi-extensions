@@ -44,9 +44,9 @@ export function renderReport(report: UsageReport, breakdown: boolean): string {
 	}
 	rows.push(values("Total", report.totals));
 	const notes = [
-		`${report.files} session files, ${report.duplicateRecords} duplicate messages ignored`,
+		`${report.files} session files, ${report.duplicateRecords} duplicate usage records ignored`,
 		report.totals.unknownCostRecords > 0
-			? `* ${report.totals.unknownCostRecords} messages had no recorded cost and contribute $0.00`
+			? `* ${report.totals.unknownCostRecords} usage records had no recorded cost and contribute $0.00`
 			: undefined,
 		report.invalidLines > 0 ? `${report.invalidLines} invalid JSONL lines ignored` : undefined,
 	].filter((note): note is string => note !== undefined);

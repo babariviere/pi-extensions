@@ -62,11 +62,46 @@ test("OpenAI edit policy covers startup, model switches and nested tool calls", 
 		}
 	}
 	assert.equal(handlers.get("tool_call")!({ toolName: "applyPatch" }, openai), undefined);
-	handlers.get("model_select")!({ model: { provider: "anthropic" } });
+	handlers.get("model_select")!({ model: { provider: "anthropic" } }, { model: { provider: "anthropic" } });
 	assert.ok(active.includes("edit") && active.includes("write"));
 	assert.equal(handlers.get("tool_call")!({ toolName: "write" }, { model: { provider: "anthropic" } }), undefined);
 	handlers.get("before_agent_start")!({}, openai);
 	assert.deepEqual(active, ["read", "bash", "codemode"]);
+});
+
+test("virtual OpenAI routes block edits before execution and restore them on an Anthropic route", () => {
+	let active = ["read", "bash", "edit", "write", "codemode"];
+	const handlers = new Map<string, (...args: any[]) => any>();
+	extension({
+		registerTool: () => {},
+		getActiveTools: () => active,
+		setActiveTools: (names: string[]) => {
+			active = names;
+		},
+		on: (name: string, handler: (...args: any[]) => any) => {
+			handlers.set(name, handler);
+			return () => {};
+		},
+	} as unknown as ExtensionAPI);
+	let messages: unknown[] = [];
+	const ctx = {
+		model: { provider: "router", id: "auto", api: "pi-virtual" },
+		sessionManager: { getBranch: () => messages.map((message) => ({ type: "message", message })) },
+	};
+	handlers.get("session_start")!({}, ctx);
+	const openai = { role: "assistant", provider: "openai-codex", model: "gpt-6.1-sol", stopReason: "toolUse" };
+	messages = [openai];
+	handlers.get("message_end")!({ message: openai }, ctx);
+	assert.ok(!active.includes("edit") && !active.includes("write"));
+	assert.equal(handlers.get("tool_call")!({ toolName: "write", parentToolCallId: "codemode" }, ctx).block, true);
+	const anthropic = { role: "assistant", provider: "anthropic", model: "claude-sonnet", stopReason: "toolUse" };
+	messages = [openai, anthropic];
+	handlers.get("message_end")!({ message: anthropic }, ctx);
+	assert.ok(active.includes("edit") && active.includes("write"));
+	assert.equal(handlers.get("tool_call")!({ toolName: "edit" }, ctx), undefined);
+	messages = [openai];
+	handlers.get("session_tree")!({}, ctx);
+	assert.ok(!active.includes("edit"));
 });
 
 test("native codemode calls the standalone V4A tool and receives change metadata", async (t) => {

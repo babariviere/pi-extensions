@@ -340,6 +340,97 @@ test("every descriptor schema accepts supported native tool payloads", async () 
 	await rejects("wait", {});
 });
 
+test("every subagent action declares an output schema for its actual result shapes", async () => {
+	const { provider } = harness();
+	const outputSchemaOf = async (action: string): Promise<Record<string, unknown>> => {
+		const descriptor = await provider.describe(action, invocationContext());
+		assert.ok(descriptor, `missing descriptor: ${action}`);
+		assert.ok(descriptor.outputSchema, `missing output schema: ${action}`);
+		return descriptor.outputSchema;
+	};
+	const accepts = async (action: string, result: unknown) => {
+		const schema = await outputSchemaOf(action);
+		assert.ok(Value.Check(schema, result), `${action} rejected ${JSON.stringify(result)}`);
+	};
+	const rejects = async (action: string, result: unknown) => {
+		const schema = await outputSchemaOf(action);
+		assert.ok(!Value.Check(schema, result), `${action} accepted ${JSON.stringify(result)}`);
+	};
+
+	const running = { agent: "task", ok: false, output: "still working", state: "running", runId: "r" };
+	const settled = {
+		agent: "task",
+		ok: true,
+		output: "done",
+		state: "done",
+		runId: "r",
+		outputPath: "/tmp/result.md",
+		exitCode: 0,
+	};
+	const failed = {
+		agent: "task",
+		ok: false,
+		output: "failed",
+		state: "failed",
+		runId: "r",
+		paneId: "w1:p1",
+		error: "launch failed",
+		failure: "launch",
+	};
+	const models = {
+		defaultModel: null,
+		models: [
+			{ id: "provider/model", name: "Model", provider: "provider" },
+			{
+				id: "provider/vision",
+				name: "Vision",
+				provider: "provider",
+				reasoning: true,
+				input: ["text", "image"],
+				contextWindow: 100_000,
+				maxTokens: 8_000,
+			},
+		],
+	};
+	await accepts("models", models);
+	await rejects("models", { defaultModel: null, models: [{ id: "x", name: "X", provider: "p", input: [1] }] });
+	await accepts("list", [
+		{ name: "reviewer", scope: "project" },
+		{ name: "task", scope: "builtin", description: "Generic" },
+	]);
+	await accepts("run", running);
+	await accepts("run", settled);
+	await accepts("run", failed);
+	await rejects("run", { ...running, ok: true });
+	await accepts("runAll", [running, settled]);
+	await accepts("start", { runId: "r", agents: ["task"], state: "running" });
+	await accepts("wait", {
+		runId: "r",
+		state: "running",
+		elapsedMs: 10,
+		agents: ["task"],
+		results: [running],
+	});
+	await accepts("wait", {
+		runId: "r",
+		state: "settled",
+		elapsedMs: 20,
+		agents: ["task"],
+		results: [settled],
+	});
+	await accepts("wait", {
+		runId: "r",
+		state: "cancelled",
+		elapsedMs: 20,
+		agents: ["task"],
+		results: [running],
+	});
+	await accepts("status", [
+		{ runId: "r", agents: ["task"], state: "settled", startedAt: 1, elapsedMs: 2, detached: true },
+	]);
+	await accepts("cancel", { cancelled: ["r"] });
+});
+
 test("a launch failure reaches the sandbox as its own class, not as prose", async () => {
 	const { provider, settle } = harness();
 	const handle = (await provider.invoke("start", { task: "do a thing" }, invocationContext())) as { runId: string };

@@ -36,7 +36,7 @@ export interface SessionRef {
 
 /** What the caller is told when a wait window expires on a live batch. */
 const PENDING_NOTE =
-	"still running in the background: resume waiting with agents_wait({ runId }), or stop it with agents_cancel({ runId }). " +
+	"still running in the background: resume waiting with tools.agents_wait({ runId }), or stop it with tools.agents_cancel({ runId }). " +
 	"Its result is delivered to this session as a follow-up message if nobody claims it.";
 
 export interface AgentRuntimeConfig {
@@ -107,28 +107,132 @@ const startSchema = {
 	additionalProperties: false,
 };
 
+const modelCatalogEntrySchema = {
+	type: "object",
+	properties: {
+		id: { type: "string" },
+		name: { type: "string" },
+		provider: { type: "string" },
+		reasoning: { type: "boolean" },
+		input: { type: "array", items: { type: "string" } },
+		contextWindow: { type: "number" },
+		maxTokens: { type: "number" },
+	},
+	required: ["id", "name", "provider"],
+	additionalProperties: false,
+};
+
+const agentResultProperties = {
+	agent: { type: "string" },
+	ok: { type: "boolean" },
+	output: { type: "string" },
+	state: { enum: ["done", "failed", "running"] },
+	runId: { type: "string" },
+	outputPath: { type: "string" },
+	exitCode: { type: "number" },
+	paneId: { type: "string" },
+	error: { type: "string" },
+	failure: { enum: ["launch", "run", "timeout", "cancelled"] },
+};
+
+const agentResultRequired = ["agent", "ok", "output", "state", "runId"];
+const agentResultSchema = {
+	oneOf: [
+		{
+			type: "object",
+			properties: {
+				...agentResultProperties,
+				ok: { const: false },
+				state: { const: "running" },
+			},
+			required: agentResultRequired,
+			additionalProperties: false,
+		},
+		{
+			type: "object",
+			properties: {
+				...agentResultProperties,
+				ok: { const: true },
+				state: { const: "done" },
+			},
+			required: agentResultRequired,
+			additionalProperties: false,
+		},
+		{
+			type: "object",
+			properties: {
+				...agentResultProperties,
+				ok: { const: false },
+				state: { const: "failed" },
+			},
+			required: agentResultRequired,
+			additionalProperties: false,
+		},
+	],
+};
+
+const agentNamesSchema = { type: "array", items: { type: "string" } };
+
+const batchStateSchema = { enum: ["running", "settled", "cancelled"] };
+
+const agentBatchSnapshotSchema = {
+	type: "object",
+	properties: {
+		runId: { type: "string" },
+		agents: agentNamesSchema,
+		state: batchStateSchema,
+		startedAt: { type: "number" },
+		elapsedMs: { type: "number" },
+		detached: { type: "boolean" },
+	},
+	required: ["runId", "agents", "state", "startedAt", "elapsedMs", "detached"],
+	additionalProperties: false,
+};
+
 const descriptors: ActionDescriptor[] = [
 	{
 		name: "models",
-		description:
-			"List available subagent model overrides permitted by the caller provider, enabledModels and price ceiling, plus the generic agent default. Use returned IDs as model overrides. Does not check provider reachability.",
+		description: "List permitted model overrides and the generic agent default.",
 		inputSchema: { type: "object", properties: {}, additionalProperties: false },
+		outputSchema: {
+			type: "object",
+			properties: {
+				defaultModel: { type: ["string", "null"] },
+				models: { type: "array", items: modelCatalogEntrySchema },
+			},
+			required: ["defaultModel", "models"],
+			additionalProperties: false,
+		},
+		exposure: "deferred",
 	},
 	{
 		name: "list",
-		description: "List custom agent definitions discovered under ~/.pi/agent/agents and <cwd>/.pi/agents",
+		description: "List discoverable custom and generic agent definitions.",
 		inputSchema: { type: "object", properties: {}, additionalProperties: false },
+		outputSchema: {
+			type: "array",
+			items: {
+				type: "object",
+				properties: {
+					name: { type: "string" },
+					scope: { enum: ["user", "project", "builtin"] },
+					description: { type: "string" },
+				},
+				required: ["name", "scope"],
+				additionalProperties: false,
+			},
+		},
+		exposure: "deferred",
 	},
 	{
 		name: "run",
-		description:
-			"Run a subagent on a task and wait for its result. `agent` is optional: omit it to run a generic subagent that inherits the parent model, tools, skills and project context. Optional per-run model/thinking overrides, an `output` path for the submitted result, `reads` for read-first context files, and `night: true` to inherit the night-mode contract of an unattended overnight run. Blocks for at most `waitMs`; if the run is still going the result carries `state: 'running'` and a `runId` to resume with agents.wait.",
+		description: "Run one task and wait up to `waitMs` for its result or a running handle.",
 		inputSchema: runItemSchema,
+		outputSchema: agentResultSchema,
 	},
 	{
 		name: "runAll",
-		description:
-			"Run several subagents in parallel and wait for all of them. Each item's `agent` is optional. `waitMs` applies to the whole batch. Same bounded wait as agents.run: results may come back with `state: 'running'` and a shared `runId`.",
+		description: "Run tasks in parallel and wait up to `waitMs` for results or running handles.",
 		inputSchema: {
 			type: "object",
 			properties: {
@@ -138,39 +242,63 @@ const descriptors: ActionDescriptor[] = [
 			required: ["tasks"],
 			additionalProperties: false,
 		},
+		outputSchema: { type: "array", items: agentResultSchema },
 	},
 	{
 		name: "start",
-		description:
-			"Launch one subagent (or a batch, with `tasks`) without blocking. Returns a `runId` to poll with agents.wait. The run is not tied to this turn: it survives until it finishes, is cancelled, or the session ends.",
+		description: "Launch a task or batch without waiting and return its run handle.",
 		inputSchema: startSchema,
+		outputSchema: {
+			type: "object",
+			properties: { runId: { type: "string" }, agents: agentNamesSchema, state: { const: "running" } },
+			required: ["runId", "agents", "state"],
+			additionalProperties: false,
+		},
 	},
 	{
 		name: "wait",
-		description:
-			"Resume waiting on a launched batch for at most `waitMs`. Returns `{ state: 'running' }` when the window expires again (not an error), or the settled results. `timeoutMs` is also accepted here as an alias for `waitMs`.",
+		description: "Wait up to `waitMs` for a run, returning running placeholders or terminal results.",
 		inputSchema: {
 			type: "object",
 			properties: { runId: { type: "string" }, waitMs: waitMsProperty, timeoutMs: waitTimeoutMsAliasProperty },
 			required: ["runId"],
 			additionalProperties: false,
 		},
+		outputSchema: {
+			type: "object",
+			properties: {
+				runId: { type: "string" },
+				state: batchStateSchema,
+				elapsedMs: { type: "number" },
+				agents: agentNamesSchema,
+				results: { type: "array", items: agentResultSchema },
+			},
+			required: ["runId", "state", "elapsedMs", "agents", "results"],
+			additionalProperties: false,
+		},
 	},
 	{
 		name: "status",
-		description:
-			"List live and recently finished subagent batches with their runId, state and elapsed time. Outputs are not included: read them with agents_wait({ runId }).",
+		description: "List live and recent batches without their outputs.",
 		inputSchema: { type: "object", properties: {}, additionalProperties: false },
+		outputSchema: { type: "array", items: agentBatchSnapshotSchema },
+		exposure: "deferred",
 	},
 	{
 		name: "cancel",
-		description:
-			"Cancel a batch by `runId`, or every live batch when omitted. Headless children are torn down process-group wide; a herdr batch has its pane tab closed.",
+		description: "Cancel one batch by `runId`, or all live batches when omitted.",
 		inputSchema: {
 			type: "object",
 			properties: { runId: { type: "string" } },
 			additionalProperties: false,
 		},
+		outputSchema: {
+			type: "object",
+			properties: { cancelled: agentNamesSchema },
+			required: ["cancelled"],
+			additionalProperties: false,
+		},
+		exposure: "deferred",
 	},
 ];
 
@@ -312,6 +440,13 @@ export class AgentsProvider implements ActionProvider {
 	readonly name = "agents";
 	readonly description =
 		"Custom markdown agents discovered on disk, run as child Pi sessions (headless, or live herdr panes)";
+	readonly instructions = [
+		"Use tools.agents_run for one task or tools.agents_runAll for a batch when waiting in this turn is appropriate. Their wait window is bounded by waitMs; a result with state 'running' is a live handle, not a failed task.",
+		"Use tools.agents_start to detach a task or batch immediately, then tools.agents_wait({ runId, waitMs }) to claim results or keep waiting. Use tools.agents_cancel({ runId }) to stop it. Unclaimed completions are delivered to the parent as a follow-up.",
+		"Omit agent to use the generic task agent, which inherits the parent model, tools, skills and project context. tools.agents_list discovers named definitions; tools.agents_models lists permitted model override IDs and the generic default.",
+		"A task accepts optional model, thinking, output, reads, night, and nightTodoId fields. Batch timing belongs to the action, not each task. tools.agents_wait also accepts timeoutMs as an alias for waitMs, with waitMs taking precedence.",
+		"The child lifetime and model authorization are host policy. Do not pass a working directory or attempt to bypass the configured provider, enabled-model, or price restrictions.",
+	].join("\n");
 
 	constructor(
 		readonly session: () => SessionRef,

@@ -1,6 +1,7 @@
-import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { sandboxGuardWrite } from "../sandbox/service.ts";
+import { latestRoutedPhysicalModel, routedPhysicalModelFromMessage } from "../shared/routed-model.ts";
 import { createApplyPatchToolDefinition } from "./apply-patch.ts";
 
 export function isOpenAIModel(model: { provider?: string; id?: string } | undefined): boolean {
@@ -52,6 +53,8 @@ export function createApplyPatchTool(cwd: string, guard?: (path: string) => void
 
 export default function applyPatch(pi: ExtensionAPI): void {
 	const edits = new OpenAIEditToolPolicy(pi);
+	const policyModel = (ctx: ExtensionContext, selected = ctx.model) =>
+		selected?.api === "pi-virtual" ? latestRoutedPhysicalModel(ctx.sessionManager.getBranch()) : selected;
 	// Resolve cwd per execution, including after /new, /resume and workspace changes.
 	pi.registerTool({
 		...createApplyPatchTool(process.cwd()),
@@ -65,11 +68,20 @@ export default function applyPatch(pi: ExtensionAPI): void {
 			);
 		},
 	});
-	pi.on("session_start", (_event, ctx) => edits.apply(ctx.model));
-	pi.on("model_select", (event) => edits.apply(event.model));
-	pi.on("before_agent_start", (_event, ctx) => edits.apply(ctx.model));
+	pi.on("session_start", (_event, ctx) => edits.apply(policyModel(ctx)));
+	pi.on("model_select", (event, ctx) => edits.apply(policyModel(ctx, event.model)));
+	pi.on("before_agent_start", (_event, ctx) => edits.apply(policyModel(ctx)));
+	pi.on("session_tree", (_event, ctx) => edits.apply(policyModel(ctx)));
+	pi.on("message_end", (event, ctx) => {
+		if (ctx.model?.api !== "pi-virtual") return;
+		const physical = routedPhysicalModelFromMessage(event.message);
+		if (physical) edits.apply(physical);
+	});
 	pi.on("tool_call", (event, ctx) => {
-		if ((event.toolName === "edit" || event.toolName === "write") && (edits.openai || isOpenAIModel(ctx.model)))
+		if (
+			(event.toolName === "edit" || event.toolName === "write") &&
+			(edits.openai || isOpenAIModel(policyModel(ctx)))
+		)
 			return { block: true, reason: "OpenAI sessions use applyPatch for file changes; edit and write are disabled" };
 	});
 }

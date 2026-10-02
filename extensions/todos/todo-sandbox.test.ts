@@ -59,11 +59,13 @@ test("native todo tools can manage the store while direct child access is denied
 		assert.deepEqual(listeners, []);
 		assert.deepEqual(emissions, []);
 		for (const tool of tools.values()) {
-			assert.equal(tool.exposure, "codemode");
+			const deferred = ["todo_listAll", "todo_delete", "todo_release"].includes(tool.name);
+			assert.equal(tool.exposure, deferred ? "deferred" : "codemode");
 			assert.equal(tool.namespace?.name, "todo");
 			assert.ok(tool.outputSchema);
 			assert.equal(tool.annotations?.readOnlyHint, ["todo_list", "todo_listAll", "todo_get"].includes(tool.name));
 		}
+		assert.ok(tools.get("todo_claim")?.namespace?.instructions?.includes("tools.todo_claim"));
 		assert.equal(tools.has("todo_list-all"), false);
 
 		const ctx = {
@@ -94,6 +96,13 @@ test("native todo tools can manage the store while direct child access is denied
 		assert.throws(() => assertReadAllowed(policy, directPath), /denied by mode/);
 		assert.throws(() => assertWriteAllowed(policy, directPath), /denied by mode/);
 
+		const promptEvent = {
+			systemPrompt: "Base prompt",
+			systemPromptOptions: { sections: { todo_tracking: "stale" } },
+		};
+		handlers.get("before_agent_start")?.(promptEvent, ctx);
+		assert.equal(Object.hasOwn(promptEvent.systemPromptOptions.sections, "todo_tracking"), false);
+
 		const created = await invoke("todo_create", {
 			title: "Native todo tools remain available",
 			tags: ["test"],
@@ -103,11 +112,10 @@ test("native todo tools can manage the store while direct child access is denied
 		assert.equal(created.title, "Native todo tools remain available");
 		assert.equal(readdirSync(store).filter((entry) => entry.endsWith(".md")).length, 1);
 		assert.equal(existsSync(directPath), false);
-		const guidance = handlers.get("before_agent_start")?.({ systemPrompt: "Base prompt" }, ctx).systemPrompt;
-		assert.match(guidance, /tools\.todo_claim/);
-		assert.match(guidance, /tools\.todo_append/);
-		assert.match(guidance, /tools\.todo_update/);
-		assert.doesNotMatch(guidance, /code_mode|todo\.claim/);
+		const createdPromptEvent = { ...promptEvent, systemPromptOptions: { sections: {} as Record<string, string> } };
+		handlers.get("before_agent_start")?.(createdPromptEvent, ctx);
+		assert.match(createdPromptEvent.systemPromptOptions.sections.todo_tracking, /tools/);
+		assert.match(createdPromptEvent.systemPromptOptions.sections.todo_tracking, /1 open todo/);
 
 		const appended = await invoke("todo_append", { id: created.id, body: "Progress" });
 		assert.equal(appended.body, "Initial\n\nProgress\n");

@@ -3,8 +3,8 @@ import { mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import toolSubstitute, { findGitWrites, findJjRoot, gitSubcommand } from "./index.ts";
+import type { ExtensionAPI, ToolInfo } from "@earendil-works/pi-coding-agent";
+import toolSubstitute, { buildToolSubstituteSection, findGitWrites, findJjRoot, gitSubcommand } from "./index.ts";
 
 const BASE = "/repo";
 
@@ -73,23 +73,56 @@ test("findJjRoot walks up to the .jj directory", () => {
 	assert.equal(findJjRoot(plain), undefined);
 });
 
-test("emits explicit search syntax guidance", async () => {
-	type Hook = (event: { systemPrompt: string }, context: unknown) => Promise<{ systemPrompt: string }>;
+test("search guidance includes only active direct tools and reachable codemode tools", () => {
+	const info = (name: string, exposure: ToolInfo["exposure"]) => ({ name, exposure }) as ToolInfo;
+	const section = buildToolSubstituteSection(
+		[info("find", "direct"), info("grep", "direct"), info("bash", "direct")],
+		["find", "bash"],
+	);
+	assert.match(section, /find\(\{ pattern: "\*\.test\.ts", path: "extensions" \}\)/);
+	assert.doesNotMatch(section, /tools\.|pi\.|`grep`/);
+	assert.match(section, /rg --fixed-strings --glob '\*\.ts' 'setModel\('/);
+	assert.match(section, /Only when Pi search APIs lack required options or output formatting/);
+	assert.match(section, /Version control: inside a jj/);
+
+	const codemode = buildToolSubstituteSection([info("grep", "deferred"), info("codemode", "direct")], ["codemode"]);
+	assert.match(codemode, /tools\.grep/);
+	assert.doesNotMatch(codemode, /tools\.find|pi\./);
+	const activatedDeferred = buildToolSubstituteSection([info("grep", "deferred")], ["grep"]);
+	assert.match(activatedDeferred, /grep\(\{/);
+	assert.doesNotMatch(activatedDeferred, /tools\.|pi\./);
+});
+
+test("does not recommend disabled or unregistered search tools", () => {
+	const info = (name: string, exposure: ToolInfo["exposure"]) => ({ name, exposure }) as ToolInfo;
+	const section = buildToolSubstituteSection(
+		[info("find", "direct"), info("grep", "direct"), info("bash", "direct")],
+		["bash"],
+	);
+	assert.doesNotMatch(section, /tools\.find|tools\.grep|pi\./);
+	assert.match(section, /No Pi file-discovery or content-search tool is currently reachable/);
+	assert.match(section, /`bash`/);
+});
+
+test("before_agent_start writes search guidance to a named mutable prompt section", () => {
+	type Hook = (event: { systemPrompt: string; systemPromptOptions: { sections: Record<string, string> } }) => void;
 	let hook: Hook | undefined;
 	const pi = {
 		on(name: string, handler: unknown) {
 			if (name === "before_agent_start") hook = handler as Hook;
 		},
+		getAllTools: () => [{ name: "find", exposure: "direct" }],
+		getActiveTools: () => ["find"],
 	} as unknown as ExtensionAPI;
 
 	toolSubstitute(pi);
 	assert.ok(hook);
-	const result = await hook({ systemPrompt: "base prompt" }, undefined);
-
-	assert.match(result.systemPrompt, /pi\.find\(\{ pattern: "\*\.test\.ts", path: "extensions" \}\)/);
-	assert.match(result.systemPrompt, /pi\.grep\(\{ pattern: "setModel\(", path: "src", literal: true \}\)/);
-	assert.match(result.systemPrompt, /optional `glob` filters file paths and does not change the content pattern/);
-	assert.match(result.systemPrompt, /rg --fixed-strings --glob '\*\.ts' 'setModel\('/);
-	assert.match(result.systemPrompt, /fd --glob '\*\.test\.ts'/);
-	assert.match(result.systemPrompt, /Only when Pi search APIs lack required options or output formatting/);
+	const event = {
+		systemPrompt: "base prompt",
+		systemPromptOptions: { sections: { preamble: "Base" } as Record<string, string> },
+	};
+	hook(event);
+	assert.equal(event.systemPromptOptions.sections.preamble, "Base");
+	assert.match(event.systemPromptOptions.sections.tool_substitute, /`find`/);
+	assert.match(event.systemPromptOptions.sections.tool_substitute, /Version control/);
 });

@@ -7,6 +7,7 @@ test("native action definitions return structured JSON and reject invalid prepar
 	const provider: ActionProvider = {
 		name: "example",
 		description: "Example",
+		instructions: "Longer example workflow.",
 		list: async () => [],
 		describe: async () => undefined,
 		invoke: async (_action, args, ctx) => ({ value: args.value, cwd: ctx.cwd }),
@@ -18,6 +19,11 @@ test("native action definitions return structured JSON and reject invalid prepar
 	});
 	assert.equal(tool.name, "example_get");
 	assert.equal(tool.exposure, "codemode");
+	assert.deepEqual(tool.namespace, {
+		name: "example",
+		description: "Example",
+		instructions: "Longer example workflow.",
+	});
 	const result = await tool.execute("call", { value: 42 }, undefined, undefined, { cwd: "/workspace" } as never);
 	assert.deepEqual(result.structuredContent, { value: 42, cwd: "/workspace" });
 	await assert.rejects(
@@ -29,4 +35,23 @@ test("native action definitions return structured JSON and reject invalid prepar
 	await assert.rejects(
 		tool.execute("call", { value: 1 }, controller.signal, undefined, { cwd: "/workspace" } as never),
 	);
+});
+
+test("an action descriptor can defer an uncommon tool without making it uncallable", async () => {
+	const provider: ActionProvider = {
+		name: "example",
+		description: "Example",
+		list: async () => [],
+		describe: async () => undefined,
+		invoke: async () => ({ ok: true }),
+	};
+	const tool = createActionTool(provider, {
+		name: "rare",
+		description: "An uncommon action",
+		inputSchema: { type: "object", properties: {}, additionalProperties: false },
+		exposure: "deferred",
+	});
+	assert.equal(tool.exposure, "deferred");
+	const result = await tool.execute("call", {}, undefined, undefined, { cwd: "/workspace" } as never);
+	assert.deepEqual(result.structuredContent, { ok: true });
 });

@@ -1,6 +1,7 @@
 {
 	"$schema": "https://raw.githubusercontent.com/earendil-works/pi/main/packages/coding-agent/src/modes/interactive/theme/theme-schema.json",
 	"name": "rose-pine-moon",
+	"appearance": "dark",
 	"vars": {
 		"base": "#232136",
 		"surface": "#2a273f",
@@ -36,6 +37,10 @@
 		"text": "text",
 		"thinkingText": "subtle",
 		"selectedBg": "highlightMed",
+		"scrollbarTrack": "highlightMed",
+		"scrollbarThumb": "subtle",
+		"searchMatchBg": "iris",
+		"searchMatchText": "base",
 		"userMessageBg": "userMsgBg",
 		"userMessageText": "text",
 		"customMessageBg": "customMsgBg",
