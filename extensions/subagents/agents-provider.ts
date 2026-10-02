@@ -19,6 +19,7 @@ import { DEFAULT_SUBAGENTS_CONFIG, MAX_AGENT_TIMEOUT_MS } from "./config.ts";
 import type { ActionDescriptor, ActionContext, ActionProvider, ActionListRequest } from "../shared/action-tools.ts";
 import { actionArgNormalizer } from "./arg-normalization.ts";
 import { AgentRunBook, type AgentWaitOutcome, type AgentResult } from "./agent-run-book.ts";
+import type { AgentRuns } from "./agent-runs.ts";
 import { RunProgressMonitor, AgentRunRegistry } from "./agent-run-monitor.ts";
 import { isNightRunParticipant, type ActiveNightRun, readActiveNightRun } from "../night-mode/night-run.ts";
 
@@ -453,7 +454,7 @@ export class AgentsProvider implements ActionProvider {
 		readonly registry: AgentRunRegistry,
 		readonly runtimeConfig: () => AgentRuntimeConfig,
 		/** Live batches, so a run can outlive the program that started it. */
-		readonly runs: AgentRunBook = new AgentRunBook(),
+		readonly runs: AgentRuns = new AgentRunBook(),
 		/** Adapter selection and herdr drift containment (see backend.ts). */
 		readonly launcher: RunLauncher = new RunLauncher(),
 		/** Refuses to relaunch into a fault that already proved itself. */
@@ -464,9 +465,13 @@ export class AgentsProvider implements ActionProvider {
 	#launchBroken = false;
 	#closing = false;
 
-	async close(): Promise<void> {
+	async close(options: { preserveRuns?: boolean } = {}): Promise<void> {
 		this.#closing = true;
 		this.runs.setSink(undefined);
+		if (options.preserveRuns && this.runs.suspend) {
+			await this.runs.suspend();
+			return;
+		}
 		await this.runs.drain(5_000);
 	}
 
@@ -558,9 +563,9 @@ export class AgentsProvider implements ActionProvider {
 				};
 			}
 			case "status":
-				return this.runs.list();
+				return await this.runs.list();
 			case "cancel":
-				return { cancelled: this.runs.cancel(stringOrUndefined(args.runId)) };
+				return { cancelled: await this.runs.cancel(stringOrUndefined(args.runId)) };
 			default:
 				throw new Error(`Unknown agents action: agents.${actionName}`);
 		}
@@ -677,7 +682,7 @@ export class AgentsProvider implements ActionProvider {
 		const controller = new AbortController();
 		const parentSignal = options.attach ? context.signal : undefined;
 		const onParentAbort = (): void => {
-			this.runs.cancel(runId);
+			void Promise.resolve(this.runs.cancel(runId)).catch(() => controller.abort());
 		};
 		const unlink = (): void => parentSignal?.removeEventListener("abort", onParentAbort);
 
@@ -696,8 +701,19 @@ export class AgentsProvider implements ActionProvider {
 			onStatus: monitor.onStatus,
 		};
 
-		const promise = (async (): Promise<AgentResult[]> => {
+		const execute = async (): Promise<AgentResult[]> => {
 			try {
+				if (controller.signal.aborted) {
+					return requests.map((request) => ({
+						agent: request.agent.config.name,
+						ok: false,
+						output: "(cancelled before launch)",
+						state: "failed" as const,
+						runId,
+						error: "cancelled before launch",
+						failure: "cancelled" as const,
+					}));
+				}
 				// A cause that has already failed the last N launches is not paid for
 				// again: the batch is refused on the spot with the recorded reason, so a
 				// broken runner costs one timeout instead of a whole night of them. The
@@ -716,27 +732,48 @@ export class AgentsProvider implements ActionProvider {
 				monitor.stop();
 				await releaseNightWorkspaces(workspaces);
 			}
-		})();
+		};
+		// A durable book commits admission before any child process is launched.
+		let resolve!: (results: AgentResult[]) => void;
+		let reject!: (error: unknown) => void;
+		const promise = new Promise<AgentResult[]>((accept, fail) => {
+			resolve = accept;
+			reject = fail;
+		});
 
 		const agents = requests.map((request) => request.agent.config.name);
-		this.runs.register({
-			runId,
-			agents,
-			promise,
-			cancel: () => controller.abort(),
-			// Detaching drops the turn link and the ticker; the widget rows keep
-			// updating from the backend's status callback.
-			onDetach: () => {
-				unlink();
-				monitor.stop();
-			},
-		});
+		try {
+			await this.runs.register({
+				runId,
+				agents,
+				promise,
+				cancel: () => controller.abort(),
+				// Detaching drops the turn link and the ticker; the widget rows keep
+				// updating from the backend's status callback.
+				onDetach: () => {
+					unlink();
+					monitor.stop();
+				},
+			});
+		} catch (error) {
+			unlink();
+			monitor.stop();
+			await releaseNightWorkspaces(workspaces);
+			throw error;
+		}
 
 		// The batch is registered before the link is armed, so the cancel path
 		// always finds it. No await separates the two.
-		if (parentSignal?.aborted) this.runs.cancel(runId);
-		else parentSignal?.addEventListener("abort", onParentAbort, { once: true });
-		if (!options.attach) monitor.stop();
+		try {
+			if (this.#closing || parentSignal?.aborted) await this.runs.cancel(runId);
+			else parentSignal?.addEventListener("abort", onParentAbort, { once: true });
+			if (!options.attach) monitor.stop();
+		} catch (error) {
+			controller.abort();
+			void execute().then(resolve, reject);
+			throw error;
+		}
+		void execute().then(resolve, reject);
 
 		return { runId, agents };
 	}

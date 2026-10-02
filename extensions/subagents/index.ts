@@ -1,12 +1,19 @@
 /** Standalone child-session runners. Pi owns native codemode, discovery and execution. */
-import type { ExtensionAPI, ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type {
+	ExtensionAPI,
+	ExtensionContext,
+	SessionShutdownEvent,
+	ToolDefinition,
+} from "@earendil-works/pi-coding-agent";
 import { truncateHead } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import { actionContext, createActionTool } from "../shared/action-tools.ts";
 import { readExtensionConfig } from "../shared/config.ts";
 import { AgentRunBook, type AgentCompletionEvent } from "./agent-run-book.ts";
 import { AgentRunRegistry } from "./agent-run-monitor.ts";
-import { AgentsProvider } from "./agents-provider.ts";
+import { AgentsProvider, type SessionRef } from "./agents-provider.ts";
+import type { DurableSupervisor } from "./durable-supervisor.ts";
+import type { AgentRuns } from "./agent-runs.ts";
 import { normalizeSubagentsConfig, DEFAULT_SUBAGENTS_CONFIG } from "./config.ts";
 import { isChildSession } from "./constants.ts";
 import { formatElapsed } from "./progress.ts";
@@ -43,7 +50,12 @@ function announce(pi: ExtensionAPI, event: AgentCompletionEvent): void {
 	);
 }
 
-export default function subagents(pi: ExtensionAPI): void {
+export interface SubagentExtensionDeps {
+	/** Offline lifecycle tests can supply a runner without launching Pi. */
+	acquireDurableSupervisor?: (ref: SessionRef) => Promise<DurableSupervisor>;
+}
+
+export default function subagents(pi: ExtensionAPI, deps: SubagentExtensionDeps = {}): void {
 	registerTaskFileFlag(pi);
 	pi.registerFlag("no-subagents-progress", {
 		type: "boolean",
@@ -53,6 +65,8 @@ export default function subagents(pi: ExtensionAPI): void {
 	const deliverTask = taskDeliveryFor(pi);
 	let context: ExtensionContext | undefined;
 	let provider: AgentsProvider | undefined;
+	let durable: DurableSupervisor | undefined;
+	let closeDurable: (() => Promise<void>) | undefined;
 	let config = DEFAULT_SUBAGENTS_CONFIG;
 	let generation = 0;
 	let unsubscribe: (() => void) | undefined;
@@ -62,11 +76,15 @@ export default function subagents(pi: ExtensionAPI): void {
 	const calls = new Map<string, number>();
 	const tools = new Map<string, ToolDefinition<any, any>>();
 
-	function shutdown(): Promise<void> {
+	function shutdown(reason?: SessionShutdownEvent["reason"]): Promise<void> {
 		if (closing) return closing;
 		generation++;
 		const old = provider;
 		provider = undefined;
+		const supervisor = durable;
+		durable = undefined;
+		const release = closeDurable;
+		closeDurable = undefined;
 		const previous = context;
 		context = undefined;
 		unsubscribe?.();
@@ -79,7 +97,17 @@ export default function subagents(pi: ExtensionAPI): void {
 		previous?.ui.setWidget("subagents-progress", undefined);
 		for (const definition of tools.values()) pi.registerTool({ ...definition, exposure: "hidden" });
 		tools.clear();
-		const pending = old?.close() ?? Promise.resolve();
+		const preserveRuns = reason === "reload" && supervisor !== undefined;
+		const pending = (async () => {
+			try {
+				// The durable owner drains once below. Disconnect the provider now
+				// without adding a second five-second drain on normal shutdown.
+				await old?.close({ preserveRuns: supervisor !== undefined });
+			} finally {
+				if (preserveRuns) await supervisor?.suspend();
+				else await release?.();
+			}
+		})();
 		closing = pending;
 		void pending
 			.finally(() => {
@@ -101,20 +129,50 @@ export default function subagents(pi: ExtensionAPI): void {
 			? ctx.scopedModels.map((entry) => entry.model)
 			: await ctx.modelRegistry.getAvailable();
 		if (current !== generation) return;
-		const registry = new AgentRunRegistry();
-		const book = new AgentRunBook();
+		const ref: SessionRef = {
+			cwd: ctx.cwd,
+			sessionId: ctx.sessionManager.getSessionId() || undefined,
+			sessionFile: ctx.sessionManager.getSessionFile() || undefined,
+			projectTrusted: ctx.isProjectTrusted(),
+		};
+		let registry: AgentRunRegistry;
+		let book: AgentRuns;
+		if (config.backend === "durable") {
+			const module = await import("./durable-supervisor.ts");
+			const supervisor = await (deps.acquireDurableSupervisor ?? module.acquireDurableSupervisor)(ref);
+			if (current !== generation) {
+				await module.closeDurableSupervisor(ref);
+				return;
+			}
+			durable = supervisor;
+			closeDurable = () => module.closeDurableSupervisor(ref);
+			supervisor.setErrorHandler((error) => context?.ui.notify(`Subagents storage: ${String(error)}`, "error"));
+			registry = supervisor.registry;
+			book = supervisor.book;
+		} else {
+			// Opting out during a reload must not leave the retained supervisor alive.
+			if (
+				ref.sessionFile &&
+				ref.sessionId &&
+				Symbol.for("babariviere.pi-extensions.durable-supervisors.v1") in globalThis
+			) {
+				await (await import("./durable-supervisor.ts")).closeDurableSupervisor(ref);
+			}
+			registry = new AgentRunRegistry();
+			book = new AgentRunBook();
+		}
 		book.setAnnounceWhen(() => current === generation && !!context?.isIdle());
 		book.setSink((result) => announce(pi, result));
 		const active = new AgentsProvider(
 			() => ({
-				cwd: context?.cwd ?? ctx.cwd,
-				sessionId: ctx.sessionManager.getSessionId() || undefined,
-				sessionFile: ctx.sessionManager.getSessionFile() || undefined,
-				projectTrusted: ctx.isProjectTrusted(),
+				...ref,
+				cwd: context?.cwd ?? ref.cwd,
+				projectTrusted: context?.isProjectTrusted() ?? ref.projectTrusted,
 			}),
 			registry,
 			() => {
-				const parentModel = inheritedParentModel(context ?? ctx);
+				if (!context) throw new Error("Subagents session is not initialized");
+				const parentModel = inheritedParentModel(context);
 				return {
 					timeoutMs: config.timeoutMs,
 					waitMs: config.waitMs,
@@ -126,6 +184,7 @@ export default function subagents(pi: ExtensionAPI): void {
 				};
 			},
 			book,
+			durable?.launcher,
 		);
 		provider = active;
 		if (ctx.mode === "tui" && ctx.hasUI && pi.getFlag("no-subagents-progress") !== true) {
@@ -181,11 +240,11 @@ export default function subagents(pi: ExtensionAPI): void {
 	pi.on("tool_execution_end", (event) => {
 		calls.delete(event.toolCallId);
 	});
-	pi.on("agent_settled", () => {
-		provider?.runs.flushCompletions();
+	pi.on("agent_settled", async () => {
+		await provider?.runs.flushCompletions();
 	});
-	pi.on("session_shutdown", async () => {
+	pi.on("session_shutdown", async (event) => {
 		deliverTask.cancel();
-		await shutdown();
+		await shutdown(event.reason);
 	});
 }

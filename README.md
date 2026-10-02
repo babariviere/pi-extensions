@@ -22,7 +22,7 @@ The manifest discovers `extensions/*/index.ts` and `themes/*.json`.
 | `preview-system-prompt` | `/system-prompt` shows the assembled prompt. |
 | `sandbox` | `/sandbox` controls filesystem policy and native MCP read-only permissions for direct and codemode-nested calls. |
 | `secrets` | `/secret-list`; fnox shell injection and reversible secret references in text, structured results and persisted details. |
-| `subagents` | Native `agents_*` tools launch markdown-defined child agents with bounded waits, cancellation, progress and completion notifications. |
+| `subagents` | Native `agents_*` tools launch child agents with bounded waits and cancellation, plus opt-in durable history and Chord-backed reload. |
 | `todos` | Native `todo_*` tools manage file-backed todos; `/todos` provides the interactive manager. |
 | `tool-substitute` | Search guidance and jj-aware Git-write checks. |
 | `usage` | `/usage` polls Claude and Codex/ChatGPT subscription windows. |
@@ -45,6 +45,10 @@ Requires Node.js `>=24.0.0` and pi `>=1.0.0`. The host supplies
 `@earendil-works/pi-ai`, `@earendil-works/pi-coding-agent`, `@earendil-works/pi-tui`
 and `typebox` as peer dependencies. This package no longer installs its own
 execution runtime, MCP SDK or keyring implementation.
+
+The experimental subagents durable backend bundles pinned pi-durable and Chord
+libraries for lifecycle storage and runner replacement, not a second model
+execution harness. See [Subagents](extensions/subagents/README.md#experimental-durable-backend).
 
 Optional integrations need their own tools and credentials, including Kagi,
 fnox, Linear, GitHub CLI, jj, Herdr and platform wake-lock facilities.
@@ -119,7 +123,7 @@ ordinary truncation limits; read large files in slices.
 | --- | --- |
 | `~/.pi/agent/settings.json` and trusted `.pi/settings.json` | Pi settings, resource paths and night-mode configuration. |
 | `~/.pi/agent/mcp.json` and trusted `.pi/mcp.json` | Native MCP servers. Native OAuth uses the agent directory's `mcp-auth.json`. |
-| `~/.pi/agent/subagents.json` and trusted `.pi/subagents.json` | Child limits, waits and default model/thinking. |
+| `~/.pi/agent/subagents.json` and trusted `.pi/subagents.json` | Child limits, waits, default model/thinking and optional durable backend. |
 | `~/.pi/agent/router.json` and trusted `.pi/router.json` | Optional cheap, strong and direct physical models for `router/auto`. |
 | `~/.pi/agent/sandbox.json` and trusted `.pi/sandbox.json` | Filesystem and native MCP permission policy. |
 | `~/.pi/agent/secrets.json` | Per-machine Kagi/Linear values, not the fnox secrets extension's source. |
@@ -147,7 +151,8 @@ Pattern masking is defense in depth, not a guarantee against every indirect leak
 - Native codemode's QuickJS boundary does not sandbox the tools it calls. Trusted
   extension callbacks run with host permissions. Review the extensions you install.
 - Jobs require the sandbox extension, even when policy is off. Detached jobs and
-  children are session-owned and stopped on shutdown or reload, not durable queues.
+  default-backend children stop on shutdown or reload. Opt-in durable subagents
+  survive reload, but interrupted work is never automatically replayed after a crash.
 - The macOS pmset wake-lock backend changes a persistent sleep setting and may need
   narrowly scoped sudo. A crash can require manual restoration.
 - Workspace deletion, todo deletion, file patches, external CLIs and MCP tools have

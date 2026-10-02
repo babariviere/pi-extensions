@@ -76,7 +76,8 @@ export class AgentRunRegistry {
  */
 export class RunProgressMonitor {
 	readonly #registry: AgentRunRegistry;
-	readonly #context: ActionContext;
+	#context: ActionContext | undefined;
+	readonly #parentToolCallId: string | undefined;
 	readonly #runId: string;
 	readonly #progress: AgentProgress[];
 	readonly #ids: string[];
@@ -97,6 +98,7 @@ export class RunProgressMonitor {
 	) {
 		this.#registry = deps.registry;
 		this.#context = deps.context;
+		this.#parentToolCallId = deps.context.parentToolCallId;
 		this.#runId = deps.runId;
 		this.#note = deps.note === undefined ? undefined : deps.note.slice(0, 120);
 		const startedAt = Date.now();
@@ -112,7 +114,7 @@ export class RunProgressMonitor {
 	/** Emit the entity rows, publish the first frame, and start the ticker. */
 	start(): void {
 		for (const [index, row] of this.#progress.entries()) {
-			this.#context.activity?.({
+			this.#context?.activity?.({
 				type: "entity",
 				id: this.#idAt(index),
 				kind: "agent",
@@ -137,6 +139,8 @@ export class RunProgressMonitor {
 	/** Stop the ticker and publish one final (registry-only) frame. */
 	stop(): void {
 		this.#live = false;
+		// A durable run may outlive a reload. Never retain old tool callbacks.
+		this.#context = undefined;
 		if (this.#ticker) {
 			clearInterval(this.#ticker);
 			this.#ticker = undefined;
@@ -159,7 +163,7 @@ export class RunProgressMonitor {
 				updatedAt: row.endedAt ?? now,
 				// The activity run id is the native tool call id, so the
 				// widget can associate these rows with the running program.
-				runId: this.#context.parentToolCallId,
+				runId: this.#parentToolCallId,
 				...(row.state === "spawning" || row.state === "running" ? { currentTool: row.state } : {}),
 			});
 		}
@@ -168,7 +172,7 @@ export class RunProgressMonitor {
 		// subagent progress line compact instead of dumping an ANSI block.
 		let message = renderProgress(this.#progress, now, { frame: this.#frame }).split("\n").join(" · ");
 		if (this.#note) message = `${this.#note} · ${message}`;
-		this.#context.update(message);
-		this.#context.activity?.({ type: "progress", message });
+		this.#context?.update(message);
+		this.#context?.activity?.({ type: "progress", message });
 	}
 }

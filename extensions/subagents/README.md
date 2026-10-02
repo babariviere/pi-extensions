@@ -33,7 +33,7 @@ A `running` result is a handle, not a failed task. Use `tools.agents_wait({ runI
 to resume waiting, or `tools.agents_cancel({ runId })` to stop it.
 `tools.agents_wait.timeoutMs` is a compatibility alias for its wait window;
 `waitMs` wins. Per-call child lifetime overrides are not accepted. A detached run
-survives its launching turn, but not session replacement, reload or shutdown.
+survives its launching turn, but by default not session replacement, reload or shutdown.
 Attached runs are cancelled when their launching call is aborted. Unclaimed
 completions trigger one parent follow-up after it becomes idle. A terminal wait
 claims the result and suppresses that wake-up.
@@ -64,6 +64,8 @@ Read `~/.pi/agent/subagents.json` (or Pi's configured agent directory), then mer
 - Model/thinking defaults are optional. Agent definitions win over these defaults;
   explicit per-task overrides win over agent definitions. Without a configured
   model default, the generic agent inherits the live parent model.
+- `backend: "durable"` opts into the experimental reload-safe headless backend
+  described below. Omit it to retain automatic headless/Herdr selection.
 - No executor, MCP or native codemode settings are read here. Invalid JSON fails
   explicitly; invalid field values fall back to defaults.
 
@@ -74,6 +76,53 @@ to use the generic `task` agent. Existing frontmatter supports `model`, `thinkin
 `inheritProjectContext`. Final assistant messages are the result, not a submission
 tool. Results are persisted beside the parent session, or under the temporary
 `pi-subagents` directory if there is no session file.
+
+## Experimental durable backend
+
+Add this field to `subagents.json`, then run `/reload`:
+
+```json
+{ "backend": "durable" }
+```
+
+This uses pinned `@earendil-works/pi-durable` and `@earendil-works/chord` 1.0.0
+packages. It preserves the existing Pi CLI child runner and its sandbox,
+authentication, secrets, MCP, project-trust and model authorization boundaries.
+It does not introduce another model harness or scheduler. The `agents_*` API is
+unchanged. Durable mode requires a file-backed parent session and uses headless
+children even inside Herdr.
+
+- `/reload` disconnects the old UI and tool callbacks without cancelling admitted
+  runs. The new extension reconnects to the same process-owned supervisor. Chord
+  replaces the runner service for new launches; calls already running retain
+  their original implementation. There is no file watcher or automatic rebuild.
+- Quit, new session, resume, fork and opting out on reload cancel live batches.
+  Children retain the configured lifetime bound and process-group cancellation.
+- Pi-durable commits admissions before launch, cancellations before abort, and
+  terminal output before returning it. Claims and notification receipts persist
+  across reload and restart. A second writer for the same parent is refused.
+- After a process crash, unfinished runs become explicit interrupted failures.
+  They are **not automatically relaunched**. This is durable lifecycle history,
+  not crash-resumable shell work or exactly-once external effects. A child may
+  have performed effects before its terminal result was committed. Inspect its
+  session/output before deciding whether to rerun it. A crash can also leave an
+  external child or its tools alive; inspect and stop those before rerunning.
+- Automatic notifications are at-most-once. Their receipt commits before the
+  parent follow-up, so a crash or delivery error between those steps can lose
+  the wake-up. `agents_status` and `agents_wait` still retrieve the result.
+- The journal lives at `<parent-session-file>.subagents-durable/<identity>/`,
+  keyed by parent session ID and working directory. Directories are private
+  (0700) and databases private (0600). A separate SQLite ownership lease is
+  released by the OS on process exit. SQLite's normal WAL durability protects
+  process restarts, not every sudden power-loss scenario.
+- Task prompts and launch credentials are not journaled, but final output can
+  contain sensitive data. Protect these files like Pi session files. Claimed
+  history retains 50 recent batches; live and unclaimed records are preserved.
+  Database history is not securely erased by that pruning.
+
+Storage failure stops new admissions, aborts live children and reports an error
+rather than publishing uncommitted results. No user configuration is changed
+automatically.
 
 ## Boundaries and operations
 

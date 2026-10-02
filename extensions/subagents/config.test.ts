@@ -43,3 +43,13 @@ test("subagents model and thinking defaults are optional and validated", () => {
 		DEFAULT_SUBAGENTS_CONFIG,
 	);
 });
+
+test("durable orchestration is explicitly opt-in", () => {
+	assert.deepEqual(normalizeSubagentsConfig({ backend: "durable" }), {
+		...DEFAULT_SUBAGENTS_CONFIG,
+		backend: "durable",
+	});
+	for (const backend of [undefined, "auto", "headless", "Durable", true]) {
+		assert.deepEqual(normalizeSubagentsConfig({ backend }), DEFAULT_SUBAGENTS_CONFIG);
+	}
+});
