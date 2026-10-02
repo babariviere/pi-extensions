@@ -1,12 +1,12 @@
 /** Displays the effective system prompt in a responsive, scrollable TUI view. */
 
 import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
-import { Key, ScrollView, Text, VStack, matchesKey } from "@earendil-works/pi-tui";
-import type { KeybindingsManager, TUI } from "@earendil-works/pi-tui";
+import { Key, ScrollView, Text, matchesKey, truncateToWidth } from "@earendil-works/pi-tui";
+import type { Component, KeybindingsManager, TUI, TuiMouseEvent, TuiMouseEventResult } from "@earendil-works/pi-tui";
 
 const VIEWER_HELP = "↑/↓ scroll • PgUp/PgDn page • Home/End jump • Enter/Esc close";
 
-class PromptViewer extends VStack {
+class PromptViewer implements Component {
 	private readonly body: Text;
 	private readonly header: Text;
 	private readonly footer: Text;
@@ -31,7 +31,6 @@ class PromptViewer extends VStack {
 			scrollbarThumbStyle: (text) => theme.fg("scrollbarThumb", text),
 		});
 		const footer = new Text("", 0, 0);
-		super([header, { component: scrollView, basis: "auto", grow: 1, shrink: 1, minSize: 1 }, footer]);
 		this.body = body;
 		this.header = header;
 		this.footer = footer;
@@ -58,16 +57,13 @@ class PromptViewer extends VStack {
 		this.footer.setText(this.theme.fg("dim", VIEWER_HELP));
 	}
 
-	override invalidate(): void {
-		super.invalidate();
+	invalidate(): void {
 		this.rebuildThemedText();
 	}
 
-	override render(width: number): string[] {
-		if (this.tui.mode !== "regular") return super.render(width);
-
-		// Regular mode uses terminal scrollback rather than viewport layout. Keep a
-		// keyboard-scrollable window sized from the current terminal rows instead.
+	render(width: number): string[] {
+		// Custom screens and overlays use render(width), not native viewport layout.
+		// Explicitly size the ScrollView in both regular and fullscreen modes.
 		const bodyWidth = this.scrollView.getContentWidth(width);
 		const content = this.body.render(bodyWidth);
 		const terminalRows = Math.max(1, this.tui.terminal.rows);
@@ -84,10 +80,18 @@ class PromptViewer extends VStack {
 		);
 		const thumbTop = maxOffset === 0 ? 0 : Math.round((offset / maxOffset) * (viewportHeight - thumbHeight));
 		const scrolled = visible.map((line, index) => {
+			if (width <= 1) return line;
 			const thumb = index >= thumbTop && index < thumbTop + thumbHeight;
 			return `${line}${this.theme.fg(thumb ? "scrollbarThumb" : "scrollbarTrack", thumb ? "█" : "│")}`;
 		});
-		return [...header, ...scrolled, ...footer];
+		return [...header, ...scrolled, ...footer].map((line) => truncateToWidth(line, width, ""));
+	}
+
+	handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+		if (event.type !== "wheel") return undefined;
+		this.scrollView.scrollBy(event.wheelDelta ?? 0);
+		this.tui.requestRender();
+		return { handled: true };
 	}
 
 	handleInput(data: string): void {
@@ -126,6 +130,11 @@ export default function (pi: ExtensionAPI): void {
 
 			await ctx.ui.custom<null>(
 				(tui, theme, keybindings, done) => new PromptViewer(prompt, tui, theme, keybindings, () => done(null)),
+				{
+					// A capturing overlay keeps fullscreen page/jump keys out of the transcript.
+					overlay: true,
+					overlayOptions: { width: "100%", maxHeight: "100%", anchor: "top-left" },
+				},
 			);
 		},
 	});
