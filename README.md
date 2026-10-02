@@ -11,6 +11,7 @@ The manifest discovers `extensions/*/index.ts` and `themes/*.json`.
 | --- | --- |
 | `apply-patch` | Standalone `applyPatch` V4A file-editing tool, available directly and through native codemode. |
 | `ask` | `--ask` selects the cheapest priced scoped model and disables thinking for a one-shot question. |
+| `clef` | Local Clef Flash MLX classifier (optional full model), lazy-loaded with idle unloading; `/clef` shows status or unloads it. |
 | `context` | `/context` shows loaded resources, project context, tokens and cost. |
 | `footer` | Project, context, model, thinking, subscription usage and extension status. |
 | `guardrail` | `/guardrail` controls checks for obvious catastrophic shell commands and direct shell-edit patterns. |
@@ -125,6 +126,7 @@ ordinary truncation limits; read large files in slices.
 | `~/.pi/agent/mcp.json` and trusted `.pi/mcp.json` | Native MCP servers. Native OAuth uses the agent directory's `mcp-auth.json`. |
 | `~/.pi/agent/subagents.json` and trusted `.pi/subagents.json` | Child limits, waits, default model/thinking and optional durable backend. |
 | `~/.pi/agent/router.json` and trusted `.pi/router.json` | Optional cheap, strong and direct physical models for `router/auto`. |
+| `~/.pi/agent/clef.json` and trusted `.pi/clef.json` | Local classifier interpreter, checkpoint, idle timeout and memory/input limits. |
 | `~/.pi/agent/sandbox.json` and trusted `.pi/sandbox.json` | Filesystem and native MCP permission policy. |
 | `~/.pi/agent/secrets.json` | Per-machine Kagi/Linear values, not the fnox secrets extension's source. |
 | Nearest `fnox.toml` | Source for shell secret injection and reversible references. |
@@ -199,5 +201,6 @@ packages remain host-provided peers, not bundled runtime dependencies.
 - [Secrets](extensions/secrets/README.md)
 - [Usage](extensions/usage/README.md)
 - [Model router](extensions/router/README.md)
+- [Local Clef classifier](extensions/clef/README.md)
 - [System prompt viewer](extensions/preview-system-prompt/README.md)
 - [pi documentation](https://github.com/earendil-works/pi)
