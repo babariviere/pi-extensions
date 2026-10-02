@@ -76,6 +76,10 @@ idempotent passive report. Pi-durable owns model turns, transcripts, tool intent
 and task checkpoints. A native SDK session acts only as the tool, prompt and
 provider kernel; it does not run a second model loop.
 
+The worker uses Pi's supplied Jiti loader for TypeScript and resolves SDK peers
+from the launching Pi host. Managed extension packages do not need their own
+SDK installation.
+
 - Requires a file-backed parent session. A second writer for its private journal,
   or for a child Harness, is refused. There is no silent in-memory fallback.
 - `/reload` detaches old UI and tool contexts without cancelling admitted work.

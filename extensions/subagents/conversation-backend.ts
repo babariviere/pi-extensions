@@ -3,6 +3,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { mkdirSync, writeFileSync } from "node:fs";
+import { getPackageDir } from "@earendil-works/pi-coding-agent";
 import { nightChildEnv, readActiveNightRun } from "../night-mode/night-run.ts";
 import { prepareConfigHome } from "../night-mode/sandbox-clone.ts";
 import { runPaths, sanitizeSegment } from "./paths.ts";
@@ -74,6 +75,8 @@ function runConversation(request: RunRequest, context: RunContext): Promise<RunR
 			...withChildConfigHome(configHome, base),
 			...(nightSnapshot ? { PI_DURABLE_NIGHT_RUN_FILE: nightSnapshot } : {}),
 			PI_CODE_MODE_SUBAGENT: "1",
+			// Managed extension packages deliberately omit host-supplied SDK peers.
+			PI_SUBAGENT_HOST_PACKAGE_DIR: getPackageDir(),
 		},
 	});
 	return watchWorker(child, request, nightRun ? { ...context, nightRun } : context, directory, deadlineAt, failure);
