@@ -39,6 +39,34 @@ class RuntimeTests(unittest.TestCase):
             self.assertEqual(setup.select_runtime(self.venv), Path(sys.executable).absolute())
             install.assert_not_called()
 
+    def test_readiness_check_uses_configured_python_without_creating_files(self):
+        with patch("setup.has_dependencies", return_value=True), patch("setup.run_install") as install:
+            self.assertEqual(setup.select_runtime(self.venv, install=False), Path(sys.executable).absolute())
+            install.assert_not_called()
+        self.assertEqual(list(Path(self.temp.name).iterdir()), [])
+
+    def test_readiness_check_uses_managed_runtime_without_a_lock_or_install(self):
+        self.existing_venv()
+        with patch("setup.has_dependencies", side_effect=[False, True]), patch("setup.run_install") as install:
+            self.assertEqual(setup.select_runtime(self.venv, install=False), self.runtime)
+            install.assert_not_called()
+        self.assertFalse((self.venv.parent / "venv.lock").exists())
+
+    def test_missing_environment_check_does_not_create_or_install_anything(self):
+        with patch("setup.has_dependencies", return_value=False), patch("setup.run_install") as install, \
+                self.assertRaisesRegex(setup.SetupError, "/clef install"):
+            setup.select_runtime(self.venv, install=False)
+        install.assert_not_called()
+        self.assertEqual(list(Path(self.temp.name).iterdir()), [])
+
+    def test_broken_managed_environment_check_does_not_repair_it(self):
+        self.existing_venv()
+        with patch("setup.has_dependencies", return_value=False), patch("setup.run_install") as install, \
+                self.assertRaisesRegex(setup.SetupError, "/clef install"):
+            setup.select_runtime(self.venv, install=False)
+        install.assert_not_called()
+        self.assertFalse((self.venv.parent / "venv.lock").exists())
+
     def test_managed_runtime_is_reused_without_installation(self):
         self.existing_venv()
         with patch("setup.has_dependencies", side_effect=[False, True]), patch("setup.run_install") as install:
@@ -126,6 +154,18 @@ class CheckpointTests(unittest.TestCase):
         self.assertEqual(self.download.call_count, 2)
         self.assertEqual(self.download.call_args.kwargs, {"revision": "pinned"})
 
+    def test_readiness_check_only_reads_pinned_cache(self):
+        self.assertEqual(setup.resolve_checkpoint("repo", "pinned", install=False), self.path)
+        self.download.assert_called_once_with("repo", revision="pinned", local_files_only=True)
+
+    def test_missing_or_incomplete_checkpoint_check_never_downloads(self):
+        for result in (RuntimeError("private-token"), str(Path(self.temp.name) / "missing")):
+            self.download.reset_mock()
+            self.download.side_effect = [result]
+            with self.assertRaisesRegex(setup.SetupError, "/clef install"):
+                setup.resolve_checkpoint("repo", "pinned", install=False)
+            self.download.assert_called_once_with("repo", revision="pinned", local_files_only=True)
+
     def test_incomplete_cache_downloads_missing_files(self):
         incomplete = Path(self.temp.name) / "incomplete"
         incomplete.mkdir()
@@ -201,6 +241,28 @@ class CliTests(unittest.TestCase):
             args = ["--model", "/no-such-clef-model", "--revision", "pinned", "--venv", "/managed/venv"]
             self.assertEqual(setup.main(args), 1)
             self.assertIn("modelPath", json.loads(output.getvalue())["error"])
+            select.assert_not_called()
+
+    def test_check_mode_passes_offline_flags_and_cannot_install(self):
+        with patch("setup.check_platform"), patch("setup.select_runtime", return_value=Path("/managed/bin/python")) as select, \
+                patch("setup.subprocess.call", return_value=0) as run:
+            self.assertEqual(setup.main(self.args + ["--check"]), 0)
+            select.assert_called_once_with("/managed/venv", install=False)
+            self.assertIn("--check", run.call_args.args[0])
+            self.assertEqual(run.call_args.kwargs["env"]["HF_HUB_OFFLINE"], "1")
+            self.assertEqual(run.call_args.kwargs["env"]["TRANSFORMERS_OFFLINE"], "1")
+
+    def test_runtime_check_keeps_hub_offline_and_resolves_without_installing(self):
+        def resolve(*args, **kwargs):
+            self.assertEqual(os.environ["HF_HUB_OFFLINE"], "1")
+            self.assertEqual(os.environ["TRANSFORMERS_OFFLINE"], "1")
+            self.assertEqual(kwargs, {"install": False})
+            return Path("/snapshot")
+        with patch("setup.check_platform"), patch("setup.select_runtime") as select, \
+                patch("setup.resolve_checkpoint", side_effect=resolve), patch.dict(os.environ), \
+                contextlib.redirect_stdout(io.StringIO()) as output:
+            self.assertEqual(setup.main(self.args + ["--runtime", "--check"]), 0)
+            self.assertEqual(json.loads(output.getvalue())["modelPath"], "/snapshot")
             select.assert_not_called()
 
     def test_unexpected_errors_do_not_leak_arbitrary_details(self):

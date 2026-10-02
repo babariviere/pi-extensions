@@ -8,19 +8,21 @@ It answers Pi's `choice`, `bool`, and `score` questions about text/JSON state.
 It is not a chat model and does not appear in `/model` or change your chat model.
 LM Studio is not used: ordinary chat generation skips Clef's classification head.
 
-## Automatic setup
+## Readiness checks and installation
 
-Requires Apple Silicon macOS and Python 3.11+ on PATH. The extension handles the
-Python packages and model download automatically, in the background at session
-startup. Extension discovery alone does not start processes or download anything.
+Requires Apple Silicon macOS and Python 3.11+ on PATH. Session startup checks the
+Python environment and cached checkpoint offline, without installing or downloading
+anything. Ready environments stay silent. If something is missing or broken, Pi
+shows a warning directing you to **`/clef install`**. There is no Clef footer status.
+Extension discovery alone does not start processes or download anything.
 
 If the configured Python already provides `mlx`, `mlx-vlm`, and `huggingface_hub`,
-it is reused. Otherwise, Clef creates an isolated virtualenv at
+it is reused. Otherwise, `/clef install` creates an isolated virtualenv at
 `~/.local/share/pi-clef/venv` and installs `mlx-vlm` and `huggingface_hub` there.
 It never installs packages into your system or configured Python environment.
 Concurrent Pi sessions serialize virtualenv creation and installation.
 
-Enabling this extension permits Python package installation and downloading the
+Running `/clef install` permits Python package installation and downloading the
 configured checkpoint from Hugging Face. The loader is executable code supplied
 by the model repository and runs with host permissions. Review its `clef_mlx.py`
 before enabling the extension. The default snapshot is pinned to
@@ -46,11 +48,12 @@ No configuration is required. Optional settings go in `<agent-dir>/clef.json`
 
 The extension loads through the package manifest, or directly with
 `pi -e ./extensions/clef/index.ts`. Use `/reload` after configuration changes.
-Session startup does not wait for preparation. `/clef status` shows preparation
-state; `/clef setup` waits for readiness or retries failed setup. Classification
-shares the same preparation and waits for it before its inference deadline begins.
-Preparation has a separate one-hour limit. Network/disk/install failures are
-reported without preventing the rest of Pi from starting.
+Session startup does not wait for the readiness check. `/clef status` shows state;
+`/clef install` prepares the environment and checkpoint or retries a failed install.
+`/clef setup` remains an alias for `/clef install`. Classification shares preparation
+and waits for it before its inference deadline begins, but never initiates installation
+or downloads itself. Readiness checks have a 30-second limit; installation has a
+separate one-hour limit. Readiness issues are warnings and do not prevent Pi from starting.
 Weights are loaded only on classification. Inference remains offline and does
 not download or install anything. Prepopulate the virtualenv and pinned cache
 before starting Pi to use Clef without setup network access.
@@ -105,15 +108,16 @@ fall back to a different interpreter or model.
 | `memoryLimitGB` | `16` for Flash, `24` for full | MLX allocation limit in GiB, integer, 4 to 128. Not a total-process or OS memory cap. |
 
 - `/clef` or `/clef status`: show worker state and limits without loading weights.
-- `/clef setup`: wait for preparation or retry a failed install/download, without loading weights.
-- `/clef unload`: cancel preparation and active/queued calls, and release the worker. Installed packages and downloaded weights remain cached. The next call prepares/reloads as needed.
+- `/clef install`: install missing Python dependencies and download the pinned checkpoint, without loading weights.
+- `/clef setup`: compatibility alias for `/clef install`.
+- `/clef unload`: cancel checks/installation and active/queued calls, and release the worker. Installed packages and downloaded weights remain cached. The next call checks readiness and reloads as needed.
 
 ### Optional full model
 
 For higher overall benchmark quality at the expense of memory and latency,
 set `"model": "full"`, remove any explicit Flash `modelPath`, and either remove
 `memoryLimitGB` to use the full-model default (24 GiB), or set it explicitly.
-On reload, Clef automatically prepares the full model's snapshot pinned to
+After reload, run `/clef install` to prepare the full model's snapshot pinned to
 `a1cc3c6d04beed778adbd53bad8899f91d3c0968` (roughly **16.3 GB of weights**).
 
 Then use the classifier ID `clef-4bit` instead of `clef-flash-4bit`. A custom
@@ -145,7 +149,7 @@ Then use the classifier ID `clef-4bit` instead of `clef-flash-4bit`. A custom
   still need memory. The defaults are a starting point, not a fit guarantee.
   Be careful simultaneously loading a large LM Studio model or running multiple
   Clef sessions. Reduce `maxLength` if memory is tight.
-- No listener, API credential, or persistent background service. Preparation
+- No listener, API credential, or persistent background service. `/clef install`
   uses network access only for missing packages/checkpoints and overrides inherited
   Hub offline flags for that purpose. Session shutdown or unload terminates setup
   and its subprocesses. Inference's offline flags disable standard Hub downloads;
@@ -166,4 +170,4 @@ npm test
 
 Tests use fake workers and mocked Python setup/protocol checks. They do not download
 weights or prove end-to-end inference performance. Run the codemode example after
-`/clef setup` completes to verify the actual MLX runtime and available memory on your Mac.
+`/clef install` completes to verify the actual MLX runtime and available memory on your Mac.

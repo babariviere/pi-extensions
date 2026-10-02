@@ -17,8 +17,10 @@ import { ClefWorker } from "./worker.ts";
 
 test("provider registers Flash without loading weights, full is opt-in, and invalid config fails closed", async (t) => {
 	let preparations = 0;
-	t.mock.method(ClefWorker.prototype, "prepare", async () => {
+	const installs: boolean[] = [];
+	t.mock.method(ClefWorker.prototype, "prepare", async (install = false) => {
 		preparations++;
+		installs.push(install);
 	});
 	const cwd = mkdtempSync(join(tmpdir(), "clef-extension-"));
 	const previous = process.env.PI_CODING_AGENT_DIR;
@@ -26,6 +28,8 @@ test("provider registers Flash without loading weights, full is opt-in, and inva
 	const providers: ProviderConfig[] = [];
 	const events = new Map<string, (event: unknown, ctx: ExtensionContext) => Promise<void>>();
 	const notifications: string[] = [];
+	const levels: string[] = [];
+	const statuses: (string | undefined)[] = [];
 	let command: ((args: string, ctx: ExtensionCommandContext) => Promise<void>) | undefined;
 	const pi = {
 		registerProvider: (name: string, config: ProviderConfig) => {
@@ -41,8 +45,15 @@ test("provider registers Flash without loading weights, full is opt-in, and inva
 	} as unknown as ExtensionAPI;
 	const ctx = {
 		cwd,
+		hasUI: true,
 		isProjectTrusted: () => false,
-		ui: { notify: (message: string) => notifications.push(message) },
+		ui: {
+			notify: (message: string, level: string) => {
+				notifications.push(message);
+				levels.push(level);
+			},
+			setStatus: (_key: string, value: string | undefined) => statuses.push(value),
+		},
 	} as unknown as ExtensionCommandContext;
 	try {
 		clef(pi);
@@ -50,19 +61,27 @@ test("provider registers Flash without loading weights, full is opt-in, and inva
 		assert.equal(providers[0].models?.[0].type, "classifier");
 		assert.equal(preparations, 0, "discovery does not start setup");
 		await events.get("session_start")!({}, ctx);
-		assert.equal(preparations, 1, "session startup prepares the runtime");
+		assert.equal(preparations, 1, "session startup checks the runtime");
+		assert.deepEqual(installs, [false], "startup never installs");
+		assert.deepEqual(statuses, [], "successful startup does not display a footer status");
+		assert.deepEqual(notifications, [], "successful startup does not display a notification");
 		await command!("status", ctx);
 		assert.match(notifications.at(-1)!, /clef-flash-4bit: unloaded/);
 		writeFileSync(join(cwd, "clef.json"), JSON.stringify({ model: "full" }));
 		await events.get("session_start")!({}, ctx);
 		assert.equal(providers.at(-1)?.models?.[0].id, MODEL_SPECS.full.id);
 		await command!("setup", ctx);
+		assert.deepEqual(installs, [false, false, true], "setup remains an explicit install alias");
 		assert.match(notifications.at(-1)!, /environment and checkpoint are ready/);
+		assert.deepEqual(statuses, [], "explicit setup does not display a footer status");
 		await command!("unload", ctx);
 		assert.match(notifications.at(-1)!, /next classification loads/);
 		writeFileSync(join(cwd, "clef.json"), JSON.stringify({ python: "python -u" }));
 		await events.get("session_start")!({}, ctx);
 		assert.match(notifications.at(-1)!, /python must/);
+		assert.equal(levels.at(-1), "warning", "invalid startup configuration is a warning");
+		await command!("status", ctx);
+		assert.equal(levels.at(-1), "warning", "status also warns about invalid configuration");
 		const latest = providers.at(-1)!;
 		const definition = latest.models![0];
 		const result = await latest.classifiers![CLASSIFIER_API]!.classify(
@@ -121,7 +140,7 @@ test("trusted project settings select full; untrusted project settings are ignor
 	}
 });
 
-test("startup preparation does not block the session, reports failure, and can be retried", {
+test("startup checks stay silent and nonblocking, warn on issues, and offer explicit install", {
 	timeout: 5000,
 }, async (t) => {
 	const cwd = mkdtempSync(join(tmpdir(), "clef-background-"));
@@ -132,9 +151,14 @@ test("startup preparation does not block the session, reports failure, and can b
 		reject = fail;
 	});
 	let attempts = 0;
-	t.mock.method(ClefWorker.prototype, "prepare", () => (++attempts === 1 ? pending : Promise.resolve()));
+	const installs: boolean[] = [];
+	t.mock.method(ClefWorker.prototype, "prepare", (install = false) => {
+		installs.push(install);
+		return ++attempts === 1 ? pending : Promise.resolve();
+	});
 	const events = new Map<string, (event: unknown, ctx: ExtensionContext) => Promise<void>>();
 	const notifications: string[] = [];
+	const levels: string[] = [];
 	const statuses: (string | undefined)[] = [];
 	let command: (args: string, ctx: ExtensionCommandContext) => Promise<void> = async () => {};
 	const ctx = {
@@ -142,7 +166,10 @@ test("startup preparation does not block the session, reports failure, and can b
 		hasUI: true,
 		isProjectTrusted: () => false,
 		ui: {
-			notify: (message: string) => notifications.push(message),
+			notify: (message: string, level: string) => {
+				notifications.push(message);
+				levels.push(level);
+			},
 			setStatus: (_key: string, value: string | undefined) => statuses.push(value),
 		},
 	} as unknown as ExtensionCommandContext;
@@ -157,14 +184,19 @@ test("startup preparation does not block the session, reports failure, and can b
 	try {
 		await events.get("session_start")!({}, ctx);
 		assert.equal(attempts, 1);
-		assert.match(statuses.at(-1)!, /preparing/);
-		reject(new Error("Clef checkpoint download failed. Check network access."));
+		assert.deepEqual(statuses, [], "pending startup preparation does not display a footer status");
+		assert.deepEqual(notifications, []);
+		reject(new Error("Clef Python dependencies are missing."));
 		await new Promise((resolve) => setImmediate(resolve));
-		assert.match(notifications.at(-1)!, /download failed/);
-		assert.equal(statuses.at(-1), undefined);
-		await command("setup", ctx);
+		assert.match(notifications.at(-1)!, /dependencies are missing.*\/clef install/);
+		assert.equal(levels.at(-1), "warning");
+		assert.deepEqual(statuses, []);
+		await command("install", ctx);
 		assert.equal(attempts, 2);
+		assert.deepEqual(installs, [false, true]);
 		assert.match(notifications.at(-1)!, /environment and checkpoint are ready/);
+		assert.equal(levels.at(-1), "info");
+		assert.deepEqual(statuses, []);
 	} finally {
 		await events.get("session_shutdown")!({}, ctx);
 		if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;

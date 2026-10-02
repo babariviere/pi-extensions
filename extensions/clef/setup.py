@@ -58,7 +58,18 @@ def run_install(command, message):
         raise SetupError(message) from None
 
 
-def select_runtime(venv):
+def select_runtime(venv, install=True):
+    # Readiness checks must not create a virtualenv, lock file, or install packages.
+    if not install:
+        current = Path(sys.executable).absolute()
+        if has_dependencies(current):
+            return current
+        venv = Path(venv).expanduser().absolute()
+        runtime = venv / "bin/python"
+        if runtime.is_file() and (venv / "pyvenv.cfg").is_file() and has_dependencies(runtime):
+            return runtime
+        raise SetupError("Clef Python dependencies are missing or unavailable. Run /clef install.")
+
     import fcntl
 
     venv = Path(venv).expanduser().absolute()
@@ -80,7 +91,7 @@ def select_runtime(venv):
             run_install([str(runtime), "-m", "ensurepip", "--upgrade"],
                         "Cannot bootstrap pip in Clef's virtualenv. Check Python's ensurepip support.")
             run_install([str(runtime), "-m", "pip", "install", "--upgrade", "mlx-vlm", "huggingface_hub"],
-                        "Cannot install Clef dependencies. Check network access, free disk space, and Python compatibility. Retry /clef setup.")
+                        "Cannot install Clef dependencies. Check network access, free disk space, and Python compatibility. Retry /clef install.")
             if not has_dependencies(runtime):
                 raise SetupError("Clef dependencies could not be imported after installation. Check Python/MLX compatibility.")
         return runtime
@@ -108,7 +119,7 @@ def complete_checkpoint(path):
     return True
 
 
-def resolve_checkpoint(model, revision):
+def resolve_checkpoint(model, revision, install=True):
     if Path(model).is_absolute():
         path = Path(model)
         if not complete_checkpoint(path):
@@ -122,13 +133,15 @@ def resolve_checkpoint(model, revision):
             return path
     except Exception:
         pass
+    if not install:
+        raise SetupError("Clef checkpoint is missing or incomplete. Run /clef install.")
     print("Downloading Clef's pinned checkpoint (several GB)...", file=sys.stderr)
     try:
         path = Path(snapshot_download(model, revision=revision))
     except Exception:
-        raise SetupError("Cannot download Clef's pinned checkpoint. Check network access and free disk space. Retry /clef setup.") from None
+        raise SetupError("Cannot download Clef's pinned checkpoint. Check network access and free disk space. Retry /clef install.") from None
     if not complete_checkpoint(path):
-        raise SetupError("Clef's downloaded checkpoint is incomplete. Check free disk space and retry /clef setup.")
+        raise SetupError("Clef's downloaded checkpoint is incomplete. Check free disk space and retry /clef install.")
     return path
 
 
@@ -137,6 +150,7 @@ def main(argv=None):
     parser.add_argument("--model", required=True)
     parser.add_argument("--revision", required=True)
     parser.add_argument("--venv", required=True)
+    parser.add_argument("--check", action="store_true", help="Check readiness without installing or downloading")
     parser.add_argument("--runtime", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     try:
@@ -145,20 +159,24 @@ def main(argv=None):
         if Path(args.model).is_absolute() and not complete_checkpoint(args.model):
             raise SetupError("Clef modelPath is missing or incomplete. Check its weights, tokenizer, and loader files.")
         if not args.runtime:
-            runtime = select_runtime(args.venv)
+            runtime = select_runtime(args.venv, install=not args.check)
             if runtime != Path(sys.executable).absolute():
                 return subprocess.call([
                     str(runtime), "-B", str(Path(__file__).absolute()),
                     "--runtime", "--model", args.model, "--revision", args.revision, "--venv", args.venv,
-                ], env=environment())
-        # Hub reads offline flags at import time. Only the preparation process goes online.
-        os.environ.pop("HF_HUB_OFFLINE", None)
-        os.environ.pop("TRANSFORMERS_OFFLINE", None)
-        path = resolve_checkpoint(args.model, args.revision)
+                    *(["--check"] if args.check else []),
+                ], env=environment(offline=args.check))
+        # Hub reads offline flags at import time. Only explicit installation goes online.
+        for key in ("HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE"):
+            if args.check:
+                os.environ[key] = "1"
+            else:
+                os.environ.pop(key, None)
+        path = resolve_checkpoint(args.model, args.revision, install=not args.check)
         print(json.dumps({"python": str(Path(sys.executable).absolute()), "modelPath": str(path.absolute())}))
         return 0
     except Exception as error:
-        message = str(error) if isinstance(error, SetupError) else "Clef setup failed. Check Python, network access, and free disk space. Retry /clef setup."
+        message = str(error) if isinstance(error, SetupError) else "Clef setup failed. Check Python, network access, and free disk space. Retry /clef install."
         print(json.dumps({"error": message}))
         return 1
 

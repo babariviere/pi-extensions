@@ -63,7 +63,7 @@ def resolve_checkpoint(model, revision):
             path = Path(snapshot_download(model, revision=revision, local_files_only=True))
         except Exception:
             raise WorkerError(
-                "Clef checkpoint is not cached at the pinned revision. Retry /clef setup.",
+                "Clef checkpoint is not cached at the pinned revision. Retry /clef install.",
                 fatal=True,
             ) from None
     for filename in ("clef_mlx.py", "config.json", "joint_head.safetensors", "joint_head_config.json"):
@@ -83,7 +83,7 @@ def create_infer(args):
             try:
                 import mlx.core as mx
             except ImportError:
-                raise WorkerError("Clef Python dependencies are unavailable after setup. Retry /clef setup.", fatal=True) from None
+                raise WorkerError("Clef Python dependencies are unavailable after setup. Retry /clef install.", fatal=True) from None
             path = resolve_checkpoint(args.model, args.revision)
             try:
                 mx.set_memory_limit(args.memory_limit_gb * 1024**3)

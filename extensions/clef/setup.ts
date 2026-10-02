@@ -16,6 +16,7 @@ export class ClefSetup {
 	private child?: ChildProcessWithoutNullStreams;
 	private stop?: () => void;
 	private error?: Error;
+	private installing = false;
 
 	constructor(
 		config: ClefConfig,
@@ -36,20 +37,36 @@ export class ClefSetup {
 	) {}
 
 	get status(): string {
-		if (this.pending) return "preparing Python environment and checkpoint";
+		if (this.pending)
+			return this.installing
+				? "preparing Python environment and checkpoint"
+				: "checking Python environment and checkpoint";
 		if (this.error) return `setup failed: ${this.error.message}`;
 		return this.ready ? "prepared" : "not prepared";
 	}
 
-	prepare(): Promise<PreparedClef> {
+	prepare(install = false): Promise<PreparedClef> {
 		if (this.ready) return Promise.resolve(this.ready);
-		if (this.pending) return this.pending;
+		if (this.pending) {
+			if (install && !this.installing)
+				return this.pending.catch((error: Error) => {
+					if (error.message.includes("cancelled")) throw error;
+					return this.prepare(true);
+				});
+			return this.pending;
+		}
 		this.error = undefined;
+		this.installing = install;
 		const env: NodeJS.ProcessEnv = { ...process.env, HF_HUB_DISABLE_TELEMETRY: "1", PYTHONDONTWRITEBYTECODE: "1" };
-		delete env.HF_HUB_OFFLINE;
-		delete env.TRANSFORMERS_OFFLINE;
+		if (install) {
+			delete env.HF_HUB_OFFLINE;
+			delete env.TRANSFORMERS_OFFLINE;
+		} else {
+			env.HF_HUB_OFFLINE = "1";
+			env.TRANSFORMERS_OFFLINE = "1";
+		}
 		const grouped = process.platform !== "win32";
-		const child = spawn(this.command.executable, this.command.args, {
+		const child = spawn(this.command.executable, [...this.command.args, ...(install ? [] : ["--check"])], {
 			stdio: ["pipe", "pipe", "pipe"],
 			env,
 			detached: grouped,
@@ -75,8 +92,15 @@ export class ClefSetup {
 			};
 			this.stop = () => stop(new Error("Clef setup cancelled"));
 			const timer = setTimeout(
-				() => stop(new Error("Clef setup timed out after one hour. Retry /clef setup.")),
-				this.timeoutMs,
+				() =>
+					stop(
+						new Error(
+							install
+								? "Clef setup timed out. Retry /clef install."
+								: "Clef readiness check timed out. Run /clef install.",
+						),
+					),
+				install ? this.timeoutMs : Math.min(this.timeoutMs, 30_000),
 			);
 			child.stdin.end();
 			child.stdin.on("error", () => {});
@@ -105,7 +129,7 @@ export class ClefSetup {
 						throw new Error(
 							typeof result?.error === "string"
 								? result.error.slice(0, 2000)
-								: "Clef setup failed. Check network access and free disk space, then retry /clef setup.",
+								: "Clef setup failed. Check network access and free disk space, then retry /clef install.",
 						);
 					}
 					if (

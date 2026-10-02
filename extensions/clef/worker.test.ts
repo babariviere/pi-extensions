@@ -169,6 +169,22 @@ test("unresponsive workers are force-killed during unloading", async (t) => {
 	assert.equal(worker.status, "unloaded");
 });
 
+test("classification checks readiness without authorizing installation", async (t) => {
+	const modes: boolean[] = [];
+	const setup = {
+		status: "not prepared",
+		prepare: async (install = false) => {
+			modes.push(install);
+			throw new Error("Clef dependencies are missing. Run /clef install.");
+		},
+		unload: async () => {},
+	};
+	const worker = new ClefWorker(normalizeClefConfig({}), undefined, setup);
+	t.after(() => worker.dispose());
+	await assert.rejects(worker.request({}), /\/clef install/);
+	assert.deepEqual(modes, [false]);
+});
+
 test("classification waits for shared preparation outside its inference deadline", async (t) => {
 	const config = normalizeClefConfig({ requestTimeoutMs: 1000 });
 	const setup = new ClefSetup(config, {
@@ -183,7 +199,7 @@ test("classification waits for shared preparation outside its inference deadline
 	const aborted = new AbortController();
 	const cancelled = assert.rejects(worker.request({}, { signal: aborted.signal }), /aborted/);
 	aborted.abort();
-	assert.match(worker.status, /preparing/);
+	assert.match(worker.status, /checking/);
 	const replies = await Promise.all([first, second]);
 	await cancelled;
 	await preparing;
@@ -227,7 +243,7 @@ test("worker unload cancels preparation and every waiting classification", async
 	t.after(() => worker.dispose());
 	const first = assert.rejects(worker.request({}), /unloaded/);
 	const second = assert.rejects(worker.request({}), /unloaded/);
-	await waitFor(() => worker.status.startsWith("preparing"));
+	await waitFor(() => worker.status.startsWith("checking"));
 	await worker.unload();
 	await Promise.all([first, second]);
 	assert.equal(worker.status, "unloaded");

@@ -12,6 +12,46 @@ const fixture = fileURLToPath(new URL("./fixtures/setup.mjs", import.meta.url));
 const makeSetup = (args: string[] = [], timeoutMs = 5000) =>
 	new ClefSetup(normalizeClefConfig({}), { executable: process.execPath, args: [fixture, ...args] }, timeoutMs);
 
+test("default preparation checks offline, shares readiness, and never starts installation", async (t) => {
+	const setup = makeSetup(["delay", "40"]);
+	t.after(() => setup.unload());
+	const checking = setup.prepare();
+	assert.equal(setup.prepare(), checking);
+	assert.match(setup.status, /checking/);
+	const ready = await checking;
+	assert.equal(ready.python, process.execPath);
+	assert.equal(setup.status, "prepared");
+	assert.deepEqual(await setup.prepare(), ready);
+});
+
+test("missing environment checks fail until installation is explicitly requested", async (t) => {
+	const setup = makeSetup(["checkThenInstall"]);
+	t.after(() => setup.unload());
+	await assert.rejects(setup.prepare(), /\/clef install/);
+	await assert.rejects(setup.prepare(), /\/clef install/);
+	assert.equal((await setup.prepare(true)).python, process.execPath);
+	assert.equal(setup.status, "prepared");
+});
+
+test("explicit install during a pending check retries in install mode when the check fails", async (t) => {
+	const setup = makeSetup(["checkThenInstall"]);
+	t.after(() => setup.unload());
+	const checking = assert.rejects(setup.prepare(), /\/clef install/);
+	const installing = setup.prepare(true);
+	await checking;
+	assert.equal((await installing).python, process.execPath);
+});
+
+test("unload cancels a pending check and an install waiting for it without restarting", async (t) => {
+	const setup = makeSetup(["delay", "1000"]);
+	t.after(() => setup.unload());
+	const checking = assert.rejects(setup.prepare(), /cancelled/);
+	const installing = assert.rejects(setup.prepare(true), /cancelled/);
+	await setup.unload();
+	await Promise.all([checking, installing]);
+	assert.equal(setup.status, "not prepared");
+});
+
 test("preparation is lazy, shared, cached, and online even in an offline host", async (t) => {
 	const previous = {
 		HF_HUB_OFFLINE: process.env.HF_HUB_OFFLINE,
@@ -28,14 +68,14 @@ test("preparation is lazy, shared, cached, and online even in an offline host", 
 	const setup = makeSetup(["delay", "40"]);
 	t.after(() => setup.unload());
 	assert.equal(setup.status, "not prepared");
-	const first = setup.prepare();
-	assert.equal(setup.prepare(), first);
+	const first = setup.prepare(true);
+	assert.equal(setup.prepare(true), first);
 	assert.match(setup.status, /preparing/);
 	const ready = await first;
 	assert.equal(ready.python, process.execPath);
 	assert.equal(setup.status, "prepared");
 	await setup.unload();
-	assert.deepEqual(await setup.prepare(), ready, "unloading does not delete installed packages or weights");
+	assert.deepEqual(await setup.prepare(true), ready, "unloading does not delete installed packages or weights");
 });
 
 test("setup failures are actionable and retryable", async (t) => {
@@ -43,9 +83,9 @@ test("setup failures are actionable and retryable", async (t) => {
 	t.after(() => rmSync(dir, { recursive: true, force: true }));
 	const setup = makeSetup(["retry", join(dir, "attempt")]);
 	t.after(() => setup.unload());
-	await assert.rejects(setup.prepare(), /Checkpoint download failed/);
+	await assert.rejects(setup.prepare(true), /Checkpoint download failed/);
 	assert.match(setup.status, /setup failed/);
-	assert.equal((await setup.prepare()).python, process.execPath);
+	assert.equal((await setup.prepare(true)).python, process.execPath);
 	assert.equal(setup.status, "prepared");
 });
 
@@ -53,17 +93,17 @@ test("bad responses and missing Python fail without leaking arbitrary output", a
 	for (const mode of ["malformed", "oversize", "relative"]) {
 		const setup = makeSetup([mode]);
 		t.after(() => setup.unload());
-		await assert.rejects(setup.prepare(), /invalid response|oversized response/);
+		await assert.rejects(setup.prepare(true), /invalid response|oversized response/);
 	}
 	const setup = new ClefSetup(normalizeClefConfig({}), { executable: "/no-such-python", args: [] });
 	t.after(() => setup.unload());
-	await assert.rejects(setup.prepare(), /Install Python 3.11/);
+	await assert.rejects(setup.prepare(true), /Install Python 3.11/);
 });
 
 test("setup timeout is bounded", async (t) => {
 	const setup = makeSetup(["delay", "1000"], 30);
 	t.after(() => setup.unload());
-	await assert.rejects(setup.prepare(), /setup timed out/);
+	await assert.rejects(setup.prepare(true), /setup timed out/);
 });
 
 test("unloading preparation terminates its subprocess group and settles waiters", async (t) => {
@@ -73,7 +113,7 @@ test("unloading preparation terminates its subprocess group and settles waiters"
 	const marker = join(dir, "pids");
 	const setup = makeSetup(["hang", marker]);
 	t.after(() => setup.unload());
-	const rejected = assert.rejects(setup.prepare(), /cancelled/);
+	const rejected = assert.rejects(setup.prepare(true), /cancelled/);
 	for (let i = 0; i < 300 && !existsSync(marker); i++) await sleep(10);
 	const pids = JSON.parse(readFileSync(marker, "utf8"));
 	await setup.unload();
@@ -99,7 +139,7 @@ test("unresponsive preparation is force-killed", async (t) => {
 	const marker = join(dir, "pids");
 	const setup = makeSetup(["ignoreTerm", marker]);
 	t.after(() => setup.unload());
-	const rejected = assert.rejects(setup.prepare(), /cancelled/);
+	const rejected = assert.rejects(setup.prepare(true), /cancelled/);
 	for (let i = 0; i < 300 && !existsSync(marker); i++) await sleep(10);
 	const { parent } = JSON.parse(readFileSync(marker, "utf8"));
 	await setup.unload();

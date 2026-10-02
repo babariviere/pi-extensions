@@ -22,7 +22,7 @@ export interface WorkerRequestOptions {
 	timeoutMs?: number;
 }
 
-/** Setup can prefetch at session startup; inference processes remain lazy and serialized. */
+/** Startup and inference check readiness; only explicit installation can fetch dependencies. */
 export class ClefWorker {
 	private child?: ChildProcessWithoutNullStreams;
 	private queue: Pending[] = [];
@@ -42,9 +42,9 @@ export class ClefWorker {
 			: new ClefSetup(config),
 	) {}
 
-	async prepare(): Promise<void> {
+	async prepare(install = false): Promise<void> {
 		if (this.disposed) throw new Error("Clef worker is stopped");
-		const ready = await this.setup?.prepare();
+		const ready = await this.setup?.prepare(install);
 		if (ready && !this.command) {
 			this.command = {
 				executable: ready.python,
