@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { rm } from "node:fs/promises";
 import { test } from "node:test";
 import { JobsProvider, type JobSnapshot } from "./jobs-provider.ts";
 import { Value } from "typebox/value";
@@ -8,6 +9,16 @@ const context = { cwd: process.cwd() } as never;
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const start = (provider: JobsProvider, command: string) =>
 	provider.invoke("start", { name: "test", command }, context) as Promise<JobSnapshot>;
+
+async function waitForExit(provider: JobsProvider, id: string): Promise<void> {
+	const deadline = Date.now() + 3_000;
+	while (Date.now() < deadline) {
+		const jobs = (await provider.invoke("status", {}, context)) as JobSnapshot[];
+		if (jobs.find((job) => job.id === id)?.endedAt) return;
+		await sleep(10);
+	}
+	assert.fail("Job did not exit in time");
+}
 
 test("a running job remains running across calls, then wakes only when unclaimed", async () => {
 	const sent: JobSnapshot[] = [];
@@ -84,6 +95,66 @@ test("a completion during an active turn stays pending until wait claims it", as
 		idle = true;
 		jobs.flushCompletions();
 		assert.deepEqual(sent, []);
+	} finally {
+		await jobs.close();
+	}
+});
+
+for (const { exitCode, missingOutput } of [
+	{ exitCode: 0, missingOutput: false },
+	{ exitCode: 7, missingOutput: false },
+	{ exitCode: 0, missingOutput: true },
+]) {
+	test(`terminal logs claim an exit ${exitCode} result during an active turn (missing output: ${missingOutput})`, async () => {
+		const sent: JobSnapshot[] = [];
+		let idle = false;
+		const jobs = new JobsProvider(
+			async (command) => command,
+			(job) => sent.push(job),
+			() => idle,
+		);
+		try {
+			const started = await start(jobs, `echo claimed-through-logs; exit ${exitCode}`);
+			await waitForExit(jobs, started.id);
+			if (missingOutput) await rm(started.outputPath);
+			const result = (await jobs.invoke("logs", { id: started.id }, context)) as JobSnapshot & { text: string };
+			assert.equal(result.state, exitCode === 0 ? "done" : "failed");
+			assert.equal(result.exitCode, exitCode);
+			if (missingOutput) assert.equal(result.text, "");
+			else assert.match(result.text, /claimed-through-logs/);
+			idle = true;
+			jobs.flushCompletions();
+			await sleep(250);
+			jobs.flushCompletions();
+			assert.deepEqual(sent, []);
+		} finally {
+			await jobs.close();
+		}
+	});
+}
+
+test("reading running logs does not claim a later completion", async () => {
+	const sent: JobSnapshot[] = [];
+	let idle = false;
+	const jobs = new JobsProvider(
+		async (command) => command,
+		(job) => sent.push(job),
+		() => idle,
+	);
+	try {
+		const started = await start(jobs, "sleep 0.3; echo completed-later");
+		const result = (await jobs.invoke("logs", { id: started.id }, context)) as JobSnapshot;
+		assert.equal(result.state, "running");
+		await waitForExit(jobs, started.id);
+		await sleep(250);
+		assert.equal(sent.length, 0);
+		idle = true;
+		jobs.flushCompletions();
+		jobs.flushCompletions();
+		assert.deepEqual(
+			sent.map((job) => job.id),
+			[started.id],
+		);
 	} finally {
 		await jobs.close();
 	}

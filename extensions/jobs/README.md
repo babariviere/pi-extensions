@@ -11,7 +11,7 @@ failed policy services refuse launch rather than falling back to an unchecked sh
 - `jobs_status({})`: list live and recent handles without output.
 - `jobs_wait({ id, waitMs? })`: wait up to 30 seconds by default, maximum 120 seconds.
 - `jobs_logs({ id, maxChars? })`: read the output tail, default 4000 characters,
-  maximum 20000.
+  maximum 20000. A terminal result suppresses the completion notification.
 - `jobs_stop({ id })`: cancel the job and its subprocess group.
 
 These tools have native `codemode` exposure, annotation hints, output schemas and
@@ -34,9 +34,10 @@ the 2-hour lifetime cap. Child sessions and background agent attempts never
 register jobs tools, preventing recursive background workflows.
 
 An unclaimed completion sends one follow-up message when the parent is idle.
-A terminal wait claims its result and suppresses that wake-up. Stopped jobs never
-wake the model. Use `jobs_logs` to inspect completion output; notifications contain
-the handle and output path, not an unbounded log.
+A terminal wait or log read claims its result and suppresses that wake-up. Reading
+logs while the job is still running does not claim its later completion. Stopped
+jobs never wake the model. Use `jobs_logs` to inspect completion output;
+notifications contain the handle and output path, not an unbounded log.
 
 Defaults are unchanged and are not configurable: maximum 20 live jobs, 50 recent
 terminal handles, 8 MiB captured output per job, and the limits above. `cwd` must

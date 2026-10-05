@@ -73,6 +73,45 @@ test("unclaimed job completions trigger a follow-up only after the parent settle
 	});
 });
 
+test("terminal jobs_logs suppress the follow-up when the parent settles", async () => {
+	await withParentSession(async () => {
+		const host = testHost();
+		host.api.events.on(SANDBOX_WRAP_COMMAND_EVENT, (payload) => {
+			const request = payload as WrapCommandRequest;
+			request.result = Promise.resolve(request.command);
+		});
+		jobs(host.api);
+		await host.emit("session_start");
+		try {
+			host.setIdle(false);
+			const started = (await host.execute("jobs_start", { name: "read", command: "echo already-read" }))
+				.structuredContent as { id: string };
+			const deadline = Date.now() + 3_000;
+			let state: string | undefined;
+			do {
+				const statuses = (await host.execute("jobs_status", {})).structuredContent as Array<{ state: string }>;
+				state = statuses[0]?.state;
+				if (state !== "running") break;
+				await new Promise((resolve) => setTimeout(resolve, 10));
+			} while (Date.now() < deadline);
+			assert.equal(state, "done");
+			const result = (await host.execute("jobs_logs", { id: started.id })).structuredContent as {
+				state: string;
+				text: string;
+			};
+			assert.equal(result.state, "done");
+			assert.match(result.text, /already-read/);
+			host.setIdle(true);
+			await host.emit("agent_settled");
+			await new Promise((resolve) => setTimeout(resolve, 250));
+			await host.emit("agent_settled");
+			assert.deepEqual(host.sent, []);
+		} finally {
+			await host.emit("session_shutdown");
+		}
+	});
+});
+
 test("children and background attempts never register jobs tools", async () => {
 	await withParentSession(async () => {
 		for (const marker of ["PI_CODE_MODE_SUBAGENT", "PI_BACKGROUND_AGENT_ATTEMPT"]) {

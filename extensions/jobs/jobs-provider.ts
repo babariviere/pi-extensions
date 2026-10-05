@@ -89,7 +89,8 @@ const descriptors: ActionDescriptor[] = [
 	},
 	{
 		name: "logs",
-		description: "Read the last maxChars of a job's output (default 4000, max 20000).",
+		description:
+			"Read the last maxChars of a job's output (default 4000, max 20000). A terminal log read claims its result and suppresses the completion wake-up.",
 		inputSchema: {
 			type: "object",
 			properties: { id: { type: "string" }, maxChars: { type: "number" } },
@@ -135,7 +136,7 @@ export class JobsProvider implements ActionProvider {
 		"Use tools.jobs_start({ name, command, cwd? }) for shell work that should outlive a tool call.",
 		"Jobs remain owned by this session and stop on shutdown/reload, cancellation, exit, or the two-hour cap.",
 		"Use tools.jobs_wait({ id, waitMs? }) to await completion and claim its result, then tools.jobs_logs({ id }) for output.",
-		"Unclaimed completions wake the idle parent once. Terminal waits suppress that wake-up; stopped jobs never wake it.",
+		"Unclaimed completions wake the idle parent once. Terminal waits and log reads suppress that wake-up; running log reads do not. Stopped jobs never wake it.",
 		"Output files are temporary and disappear during session cleanup. The sandbox extension is required for every launch.",
 	].join("\n");
 	readonly #jobs = new Map<string, Job>();
@@ -312,21 +313,24 @@ export class JobsProvider implements ActionProvider {
 				if (error.code === "ENOENT") return undefined;
 				throw error;
 			});
-			if (!file) return { ...this.#snapshot(job), text: "", truncated: false };
-			try {
-				const size = (await file.stat()).size;
-				const offset = Math.max(0, size - max * 4);
-				const buffer = Buffer.alloc(size - offset);
-				const { bytesRead } = await file.read(buffer, 0, buffer.length, offset);
-				const text = buffer.subarray(0, bytesRead).toString("utf8");
-				return {
-					...this.#snapshot(job),
-					text: text.slice(-max),
-					truncated: Boolean(job.logTruncated) || offset > 0 || text.length > max,
-				};
-			} finally {
-				await file.close();
+			let text = "";
+			let truncated = false;
+			if (file) {
+				try {
+					const size = (await file.stat()).size;
+					const offset = Math.max(0, size - max * 4);
+					const buffer = Buffer.alloc(size - offset);
+					const { bytesRead } = await file.read(buffer, 0, buffer.length, offset);
+					const tail = buffer.subarray(0, bytesRead).toString("utf8");
+					text = tail.slice(-max);
+					truncated = Boolean(job.logTruncated) || offset > 0 || tail.length > max;
+				} finally {
+					await file.close();
+				}
 			}
+			// Claim only the terminal result actually returned, not a running read or a failed read.
+			if (job.endedAt) job.claimed = true;
+			return { ...this.#snapshot(job), text, truncated };
 		}
 		throw new Error(`Unknown jobs action: ${name}`);
 	}
