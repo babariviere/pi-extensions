@@ -102,11 +102,14 @@ const Reporter = defineTask<ReporterInput, ReporterState, WorkerAnswer>({
 					};
 					admission.answer = settled.answer;
 				} else {
+					// Model failures keep their provider diagnostic in the settlement detail.
+					let error = "No answer";
+					if (settled.status === "unanswered") {
+						error = typeof settled.detail === "string" && settled.detail.trim() ? settled.detail : settled.reason;
+					}
 					result = {
 						ok: false,
-						...(settled.status === "unanswered" && settled.reason === "aborted"
-							? { aborted: true }
-							: { error: settled.status === "unanswered" ? settled.reason : "No answer" }),
+						...(settled.status === "unanswered" && settled.reason === "aborted" ? { aborted: true } : { error }),
 					};
 				}
 				// The answer and report decision checkpoint are one atomic durable write.

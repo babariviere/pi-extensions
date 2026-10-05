@@ -108,8 +108,9 @@ return await tools.subagent({ action: "status", name: "review" });
 Names identify conversations, not Markdown personas. `send` steers by default;
 `followUp: true` queues. `stop` aborts current/queued work but retains the
 conversation. Answers arrive automatically; named status exposes the latest
-completed `lastAnswer: { id, text }` non-destructively, while all-agent status
-stays compact. Model/thinking, deadlines and workspaces are host policy.
+completed `lastAnswer: { id, text }` and acknowledges its pending notification,
+without deleting the answer. All-agent status stays compact and acknowledges
+nothing. Model/thinking, deadlines and workspaces are host policy.
 
 The old `agents_*` tools, batch/wait handles, per-call `output`, `reads`, `task`,
 `model`, `thinking` and night arguments, and automatic Markdown outputs are removed.

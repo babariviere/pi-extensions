@@ -44,6 +44,8 @@ interface NamedRecord {
 	deadlineAt?: number;
 	stopRequested?: string;
 	notices: Notice[];
+	/** Exact answer IDs returned by named status, including receipts not yet received. */
+	observedAnswers?: string[];
 	workspaces: AgentWorkspace[];
 	retired?: boolean;
 }
@@ -135,7 +137,7 @@ export function approvedNightForName(
 }
 
 export class DurableSupervisor {
-	readonly format = "named-conversations-v1";
+	readonly format = "named-conversations-v2";
 	readonly #session;
 	#records = new Map<string, NamedRecord>();
 	#workers = new Map<string, LiveWorker>();
@@ -381,7 +383,7 @@ export class DurableSupervisor {
 			this.#healthy();
 			if (this.#closing) throw new Error("Subagents are shutting down");
 			const record = this.#record(name);
-			if (record.retired) return asStatus(record);
+			if (record.retired) return this.#readStatus(name);
 			try {
 				await this.#dispatch(record);
 				const worker = this.#workers.get(record.id);
@@ -389,7 +391,21 @@ export class DurableSupervisor {
 			} catch (error) {
 				this.#report(error);
 			}
-			return asStatus(this.#record(name));
+			return this.#readStatus(name);
+		});
+	}
+
+	#readStatus(name: string): Promise<SubagentStatus> {
+		return this.#change((records) => {
+			const record = records.get(keyOf(name))!;
+			const id = record.lastAnswer?.id;
+			if (id) {
+				const observed = (record.observedAnswers ??= []);
+				if (!observed.includes(id)) observed.push(id);
+				for (const notice of record.notices) if (notice.id === id) notice.announced = true;
+			}
+			// Keep the answer available. Only its pending automatic notification is acknowledged.
+			return asStatus(record);
 		});
 	}
 
@@ -502,7 +518,11 @@ export class DurableSupervisor {
 				mergeStatus(record, { ...status, lastAnswer: result.answer });
 				record.error = undefined;
 				if (!record.notices.some((notice) => notice.id === result.answer!.id))
-					record.notices.push({ id: result.answer.id, text: result.answer.text, announced: false });
+					record.notices.push({
+						id: result.answer.id,
+						text: result.answer.text,
+						announced: record.observedAnswers?.includes(result.answer.id) ?? false,
+					});
 			} else if (!result.aborted && result.error) {
 				record.error = result.error;
 				if (!record.notices.some((notice) => notice.id === `failure:${id}`))
@@ -590,29 +610,32 @@ export class DurableSupervisor {
 	async flushReports(): Promise<void> {
 		for (const record of [...this.#records.values()]) {
 			for (const notice of record.notices.filter((item) => !item.announced)) {
-				const sink = this.#sink;
-				if (!sink || this.#closing || !this.#readyToAnnounce()) return;
-				const report = await this.#change((records) => {
-					const current = records.get(keyOf(record.name))!;
-					const latest = current.notices.find((item) => item.id === notice.id)!;
-					if (latest.announced) return undefined;
-					latest.announced = true;
-					return {
-						name: current.name,
-						conversationId: current.conversationId,
-						answerId: latest.id,
-						text: latest.text,
-						error: latest.error,
-					};
-				});
-				// Native parent delivery is at-most-once. Named status still exposes the durable last answer.
-				if (report && this.#sink === sink && !this.#closing && this.#readyToAnnounce()) {
-					try {
-						sink(report);
-					} catch (error) {
-						this.#report(error);
+				// A named status already in progress wins over a pending notification.
+				await this.#locked(record.name, async () => {
+					const sink = this.#sink;
+					if (!sink || this.#closing || !this.#readyToAnnounce()) return;
+					const report = await this.#change((records) => {
+						const current = records.get(keyOf(record.name))!;
+						const latest = current.notices.find((item) => item.id === notice.id)!;
+						if (latest.announced) return undefined;
+						latest.announced = true;
+						return {
+							name: current.name,
+							conversationId: current.conversationId,
+							answerId: latest.id,
+							text: latest.text,
+							error: latest.error,
+						};
+					});
+					// Native delivery is at-most-once; the durable answer stays readable.
+					if (report && this.#sink === sink && !this.#closing && this.#readyToAnnounce()) {
+						try {
+							sink(report);
+						} catch (error) {
+							this.#report(error);
+						}
 					}
-				}
+				});
 			}
 		}
 	}
@@ -709,11 +732,13 @@ export async function acquireDurableSupervisor(
 	if (existing) {
 		const active = await existing.entry;
 		if (existing.closing || entries.get(key) !== existing) return acquireDurableSupervisor(ref, factory);
-		if (active.format !== "named-conversations-v1") {
-			// Old job handles cannot become reusable named conversations. Retire safely, never replay them.
+		const format = (active as { format?: string }).format;
+		if (format !== "named-conversations-v2") {
+			// Compatible named-conversation upgrades pause and reopen the same journal.
+			// Old job handles cannot become names, so those owners still retire their work.
 			existing.closing = (async () => {
 				try {
-					await active.close();
+					await active.close({ preserveRuns: format === "named-conversations-v1" });
 				} finally {
 					if (entries.get(key) === existing) entries.delete(key);
 				}

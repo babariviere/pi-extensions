@@ -588,8 +588,9 @@ await tools.subagent({
 Use `send` with the same approved name to steer, or `followUp: true` to queue
 additional work within that scope. `stop` aborts current/queued work without
 deleting the conversation. Answers arrive automatically; named `status` returns
-the latest completed `lastAnswer: { id, text }` without consuming it. All-agent
-status is compact. There are no wait handles or automatic Markdown outputs.
+the latest completed `lastAnswer: { id, text }` and acknowledges that answer's
+pending notification without deleting the answer. All-agent status is compact
+and acknowledges nothing. There are no wait handles or automatic Markdown outputs.
 
 Parent notifications are at-most-once, so recover a lost notification through
 named status. Child usage in durable SQLite is not automatically included in

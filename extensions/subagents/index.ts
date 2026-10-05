@@ -134,7 +134,7 @@ export default function subagents(pi: ExtensionAPI, deps: SubagentExtensionDeps 
 			label: "Subagent",
 			exposure: "codemode",
 			description:
-				"Manage persistent background subagents. spawn needs name and message; send needs name and message and steers unless followUp is true; stop aborts current/queued work but keeps the conversation usable; status takes a name for its latest completed answer, or no name for compact summaries. Answers arrive automatically. Names identify conversations, not Markdown agent definitions. Model/thinking and lifetime are host policy. During approved night execution use the approved TODO-<id> as the name. Children cannot launch subagents or jobs.",
+				"Manage persistent background subagents. spawn needs name and message; send needs name and message and steers unless followUp is true; stop aborts current/queued work but keeps the conversation usable; status takes a name for its latest completed answer and acknowledges that answer's pending notification, or no name for compact summaries. Unread answers arrive automatically. Names identify conversations, not Markdown agent definitions. Model/thinking and lifetime are host policy. During approved night execution use the approved TODO-<id> as the name. Children cannot launch subagents or jobs.",
 			parameters: SubagentParameters,
 			annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
 			execute: async (callId, args, signal) => {

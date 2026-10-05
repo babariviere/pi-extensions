@@ -15,7 +15,7 @@ Call it from native codemode as `tools.subagent`; discover its schema with
 | `spawn` | Requires `name` and `message`. Creates a conversation and starts background work. An existing name is rejected; use `send`. |
 | `send` | Requires `name` and `message`. Steers current work by default; `followUp: true` queues a follow-up instead. An idle conversation resumes on the same transcript. |
 | `stop` | Requires `name`. Aborts current and queued work, but retains the conversation for later `send`. |
-| `status` | With `name`, returns state and the latest completed `lastAnswer: { id, text }`, when available. Without a name, returns compact summaries without answer text. |
+| `status` | With `name`, returns state and the latest completed `lastAnswer: { id, text }`, when available, acknowledging that answer's pending notification. Without a name, returns compact summaries without answer text or acknowledgements. |
 
 Names identify conversations within the parent session, **not Markdown personas**.
 Names must be nonempty, at most 128 characters, and contain no control characters.
@@ -29,9 +29,14 @@ await tools.subagent({ action: "send", name: "coverage", message: "Then summariz
 return await tools.subagent({ action: "status", name: "coverage" });
 ```
 
-Completed answers are delivered automatically to the parent as follow-ups when it
-is idle. Named status is a **non-destructive** recovery read, not a wait or claim:
-it retains the last completed answer even after notification, stop or failed work.
+Unread completed answers are delivered automatically to the parent as follow-ups
+when it is idle. Named status acknowledges the exact `lastAnswer` it returns, so
+that answer will not also produce a pending notification. The answer stays
+available for repeated reads, including after notification, stop or failed work.
+The all-agent overview acknowledges nothing. Other unread answers and failures
+still notify. Notifications already delivered or queued cannot be retracted.
+Failed work exposes the provider's textual diagnostic in named status and failure
+notifications when available, rather than only a generic reason such as `model_error`.
 No automatic Markdown output is written. Describe briefs to read, permissions,
 scope and any explicitly requested deliverables in `message`.
 
@@ -76,7 +81,9 @@ Pi host, including managed packages without a local SDK installation.
   to memory.
 - `/reload` detaches old contexts without cancelling admitted work. The new
   extension reconnects to the supervisor; existing workers retain their code
-  until restart. Ordinary parent-turn cancellation does not stop background work.
+  until restart. Compatible supervisor upgrades pause workers and reopen their
+  durable conversations without cancelling pending work. Ordinary parent-turn
+  cancellation does not stop background work.
 - Quit pauses workers and preserves pending checkpoints. Resume the same parent
   session to recover them. Switching, forking or resuming a different session
   cancels outgoing work. Explicit `stop` aborts work, not the conversation.
@@ -91,7 +98,8 @@ Pi host, including managed packages without a local SDK installation.
 - Native-parent notification is **at-most-once**, not exactly-once. Its durable
   receipt is consumed before delivery, so a crash, reload, failed delivery or
   discarded queued follow-up may lose the notification. Named `status.lastAnswer`
-  still exposes the committed answer; reading it never consumes or resends it.
+  still exposes the committed answer. Reading it acknowledges its pending
+  notification, not the answer itself, and never resends it.
 
 ## Permissions and storage
 

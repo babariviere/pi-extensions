@@ -84,6 +84,68 @@ test("deduplicates concurrent admission, passively reports once, and keeps child
 	}
 });
 
+test("provider diagnostics survive Reporter delivery and SQLite reopen without another model call", async () => {
+	const directory = await mkdtemp(join(tmpdir(), "conversation-provider-error-"));
+	const file = join(directory, "session.sqlite");
+	const { faux, options } = setup();
+	const error = "Codex error: Request was rejected by the provider.";
+	faux.setResponses([fauxAssistantMessage("", { stopReason: "error", errorMessage: error })]);
+	let runtime = await ConversationRuntime.open(await openNodeSqliteStorage(file), options);
+	try {
+		const result = await runtime.run("provider-error", "work");
+		assert.deepEqual(result, { ok: false, error });
+		assert.deepEqual((await entries(runtime, true))[0]?.data, { requestId: "provider-error", ...result });
+		assert.equal((await runtime.status()).lastAnswer, undefined);
+		await runtime.close();
+		runtime = await ConversationRuntime.open(await openNodeSqliteStorage(file), options);
+		assert.deepEqual(await runtime.run("provider-error", "work"), result);
+		assert.equal(faux.state.callCount, 1);
+		assert.equal((await entries(runtime, true)).length, 1);
+	} finally {
+		await runtime.close();
+		await rm(directory, { recursive: true, force: true });
+	}
+});
+
+test("settled failures use textual diagnostics, safely fall back, and preserve abort semantics", async () => {
+	const { faux, options } = setup();
+	const runtime = await ConversationRuntime.open(new MemoryStorage(), options);
+	const overload = "Codex error: Our servers are currently overloaded. Please try again later.";
+	const cases = [
+		{ reason: "model_error", detail: overload, expected: { ok: false, error: overload } },
+		{ reason: "model_error", expected: { ok: false, error: "model_error" } },
+		{ reason: "model_error", detail: "  \n", expected: { ok: false, error: "model_error" } },
+		{
+			reason: "model_error",
+			detail: { privateDiagnostic: "not for publication" },
+			expected: { ok: false, error: "model_error" },
+		},
+		{ reason: "model_error", detail: 42, expected: { ok: false, error: "model_error" } },
+		{ reason: "aborted", detail: overload, expected: { ok: false, aborted: true } },
+	];
+	try {
+		for (const [index, { reason, detail, expected }] of cases.entries()) {
+			const requestId = `settled-${index}`;
+			await runtime.child.commit(
+				(tx) =>
+					tx.createSubmission({
+						conversationId: runtime.conversationId,
+						requestId,
+						type: "input",
+						status: "unanswered",
+						reason,
+						...(detail === undefined ? {} : { detail }),
+					}),
+				ctx,
+			);
+			assert.deepEqual(await runtime.run(requestId, "work"), expected);
+		}
+		assert.equal(faux.state.callCount, 0, "settled failures never regenerate");
+	} finally {
+		await runtime.close();
+	}
+});
+
 test("SQLite reopen resumes an unfinished model request, retaining child and Reporter identity", async () => {
 	const directory = await mkdtemp(join(tmpdir(), "conversation-reopen-"));
 	const file = join(directory, "session.sqlite");

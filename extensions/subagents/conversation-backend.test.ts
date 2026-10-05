@@ -215,6 +215,22 @@ test("native input transformation runs once per receipt, including reopen", asyn
 	});
 });
 
+test("provider diagnostics reach the parent through native worker IPC and survive replacement", async () => {
+	await withOfflineWorkers(async ({ directory, open }) => {
+		const first = open();
+		await first.worker.ready;
+		await first.worker.input("error", "provider error", false);
+		const { result } = await first.answer("error");
+		assert.deepEqual(result, { ok: false, error: "Provider error: Request was rejected by the provider." });
+		assert.equal((await first.worker.status()).lastAnswer, undefined);
+		await first.worker.pause();
+		const reopened = open();
+		await reopened.worker.ready;
+		assert.deepEqual((await reopened.answer("error")).result, result);
+		assert.equal(await readFile(join(directory, "generation-count"), "utf8"), "1");
+	});
+});
+
 test("a named conversation remembers earlier inputs and answers across worker replacement", async () => {
 	await withOfflineWorkers(async ({ directory, spec, open }) => {
 		const named = { ...spec, name: "researcher" };

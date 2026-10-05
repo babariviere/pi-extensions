@@ -147,13 +147,14 @@ test("coalesced and late Reporter receipts never regress lastAnswer or duplicate
 		assert.equal(reports.length, 0);
 		idle = true;
 		await Promise.all([owner.flushReports(), owner.flushReports()]);
-		assert.equal(reports.length, 2);
+		assert.equal(reports.length, 1);
+		assert.equal(reports[0]!.answerId, "10", "only the unobserved shared answer should notify");
 		fake.answer(kernel, "one", "10", "shared");
 		await owner.flushReports();
-		assert.equal(reports.length, 2);
+		assert.equal(reports.length, 1);
 		await owner.status("research");
 		await owner.status("research");
-		assert.equal(reports.length, 2, "status is non-destructive");
+		assert.equal(reports.length, 1, "status keeps the answer and does not resend it");
 	});
 });
 
@@ -495,6 +496,183 @@ test("planning explorers inherit read-only policies and are retired at a cancell
 			}
 		} finally {
 			clearActiveNightRun();
+		}
+	});
+});
+
+test("named status acknowledges its exact pending answer and keeps repeated reads available", async () => {
+	await fixture(async (_ref, fake, owner) => {
+		await owner.spawn("observed", "work", "one", policy);
+		const reports: SubagentReport[] = [];
+		let idle = false;
+		owner.setSink(
+			(report) => reports.push(report),
+			() => idle,
+		);
+		fake.answer(fake.opened[0]!, "one", "10", "seen");
+		await until(() => owner.list()[0]?.state === "idle");
+		assert.equal((await owner.status("observed")).lastAnswer?.text, "seen");
+		assert.equal((await owner.status("observed")).lastAnswer?.text, "seen");
+		idle = true;
+		await owner.flushReports();
+		assert.equal(reports.length, 0);
+		await owner.send("observed", "new work", false, "two");
+		fake.answer(fake.opened[0]!, "two", "20", "unread");
+		await until(() => reports.length === 1);
+		assert.equal(reports[0]!.answerId, "20", "a later unread answer must still notify");
+	});
+});
+
+test("observing before a Reporter receipt survives restart and suppresses its late notification", async () => {
+	await fixture(async (ref, fake, owner) => {
+		await owner.spawn("late-receipt", "work", "one", policy);
+		const first = fake.opened[0]!;
+		first.status = { conversationId: "8", working: false, lastAnswer: { id: "10", text: "canonical answer" } };
+		assert.equal((await owner.status("late-receipt")).lastAnswer?.id, "10");
+		assert.equal(owner.list()[0]!.state, "working", "the parent has not received the Reporter yet");
+		await owner.close({ preserveRuns: true });
+		const reopened = await DurableSupervisor.open(ref, fake.factory);
+		try {
+			const reports: SubagentReport[] = [];
+			reopened.setSink((report) => reports.push(report));
+			await until(() => fake.opened.length === 2 && fake.opened[1]!.inputs.length === 1);
+			fake.answer(fake.opened[1]!, "one", "10", "canonical answer");
+			await until(() => reopened.list()[0]?.state === "idle");
+			await reopened.flushReports();
+			assert.equal(reports.length, 0);
+			assert.equal((await reopened.status("late-receipt")).lastAnswer?.text, "canonical answer");
+		} finally {
+			await reopened.close();
+		}
+	});
+});
+
+test("compact status acknowledges nothing and named status without an answer cannot suppress future work", async () => {
+	await fixture(async (_ref, fake, owner) => {
+		await owner.spawn("compact", "work", "one", policy);
+		const reports: SubagentReport[] = [];
+		let idle = false;
+		owner.setSink(
+			(report) => reports.push(report),
+			() => idle,
+		);
+		assert.equal((await owner.status("compact")).lastAnswer, undefined);
+		fake.answer(fake.opened[0]!, "one", "10", "unread");
+		await until(() => owner.list()[0]?.state === "idle");
+		assert.equal("lastAnswer" in owner.list()[0]!, false);
+		idle = true;
+		await owner.flushReports();
+		assert.equal(reports.length, 1);
+		assert.equal(reports[0]!.text, "unread");
+	});
+});
+
+test("observations are per child and do not silence another child with the same local answer ID", async () => {
+	await fixture(async (_ref, fake, owner) => {
+		await owner.spawn("seen-child", "a", "a", policy);
+		await owner.spawn("unseen-child", "b", "b", policy);
+		const reports: SubagentReport[] = [];
+		let idle = false;
+		owner.setSink(
+			(report) => reports.push(report),
+			() => idle,
+		);
+		fake.answer(fake.opened[0]!, "a", "10", "seen");
+		fake.answer(fake.opened[1]!, "b", "10", "unseen");
+		await until(() => owner.list().every((status) => status.state === "idle"));
+		await owner.status("seen-child");
+		idle = true;
+		await owner.flushReports();
+		assert.deepEqual(
+			reports.map((report) => report.name),
+			["unseen-child"],
+		);
+	});
+});
+
+test("in-progress named status wins the notification race against a newly received answer", async () => {
+	await fixture(async (_ref, fake, owner) => {
+		await owner.spawn("status-race", "work", "one", policy);
+		const kernel = fake.opened[0]!;
+		const reports: SubagentReport[] = [];
+		owner.setSink((report) => reports.push(report));
+		let statusStarted = false;
+		let resolveStatus!: (status: WorkerStatus) => void;
+		kernel.connection.status = () => {
+			statusStarted = true;
+			return new Promise((resolve) => {
+				resolveStatus = resolve;
+			});
+		};
+		const read = owner.status("status-race");
+		await until(() => statusStarted);
+		fake.answer(kernel, "one", "10", "completed during read");
+		await until(() => owner.list()[0]?.state === "idle");
+		assert.equal(reports.length, 0, "notification waits behind the in-progress read");
+		resolveStatus(kernel.status);
+		assert.equal((await read).lastAnswer?.id, "10");
+		await owner.flushReports();
+		assert.equal(reports.length, 0);
+	});
+});
+
+test("reading a previous answer does not acknowledge a later failure", async () => {
+	await fixture(async (_ref, fake, owner) => {
+		await owner.spawn("failure", "work", "one", policy);
+		const kernel = fake.opened[0]!;
+		const reports: SubagentReport[] = [];
+		let idle = false;
+		owner.setSink(
+			(report) => reports.push(report),
+			() => idle,
+		);
+		fake.answer(kernel, "one", "10", "previous answer");
+		await until(() => owner.list()[0]?.state === "idle");
+		await owner.status("failure");
+		await owner.send("failure", "fails", false, "two");
+		const error = "Codex error: Our servers are currently overloaded. Please try again later.";
+		kernel.callbacks.answer("two", { ok: false, error }, kernel.status);
+		await until(() => owner.list()[0]?.state === "idle");
+		const status = await owner.status("failure");
+		assert.equal(status.lastAnswer?.text, "previous answer");
+		assert.equal(status.error, error);
+		idle = true;
+		await owner.flushReports();
+		assert.equal(reports.length, 1);
+		assert.equal(reports[0]!.error, error);
+	});
+});
+
+test("compatible supervisor reload adopts acknowledgements without cancelling pending work", async () => {
+	await fixture(async (ref, fake, owner) => {
+		await owner.spawn("upgrade", "work", "one", policy);
+		const first = fake.opened[0]!;
+		first.status = { conversationId: "8", working: false, lastAnswer: { id: "10", text: "seen before reload" } };
+		await owner.status("upgrade");
+		Object.defineProperty(owner, "format", { value: "named-conversations-v1" });
+		const symbol = Symbol.for("babariviere.pi-extensions.durable-supervisors.v2");
+		const state = globalThis as unknown as Record<symbol, Map<string, { entry: Promise<unknown> }>>;
+		const map = (state[symbol] ??= new Map());
+		map.set(durableDirectory(ref), { entry: Promise.resolve(owner) });
+		try {
+			const upgraded = await acquireDurableSupervisor(ref, fake.factory);
+			assert.notEqual(upgraded, owner);
+			assert.equal(upgraded.format, "named-conversations-v2");
+			assert.equal(first.pauses, 1);
+			assert.equal(first.cancels, 0);
+			await until(() => fake.opened.length === 2 && fake.opened[1]!.inputs.length === 1);
+			const reports: SubagentReport[] = [];
+			upgraded.setSink((report) => reports.push(report));
+			fake.answer(fake.opened[1]!, "one", "10", "seen before reload");
+			await until(() => upgraded.list()[0]?.state === "idle");
+			await upgraded.flushReports();
+			assert.equal(reports.length, 0);
+			assert.equal((await upgraded.status("upgrade")).lastAnswer?.text, "seen before reload");
+			await upgraded.send("upgrade", "next", false, "two");
+			assert.equal(fake.opened[1]!.inputs.at(-1)?.id, "two");
+		} finally {
+			await closeDurableSupervisor(ref);
+			map.delete(durableDirectory(ref));
 		}
 	});
 });

@@ -31,6 +31,11 @@ export default async function offlineNative(pi: ExtensionAPI): Promise<void> {
 						? `Native transformed input, user inputs: ${request.messages.filter((message) => message.role === "user").length}`
 						: "Native input transformation was lost",
 				);
+			if (lastUser.includes("provider error"))
+				return fauxAssistantMessage("", {
+					stopReason: "error",
+					errorMessage: "Provider error: Request was rejected by the provider.",
+				});
 			if (lastUser.includes("memory remember")) return fauxAssistantMessage("Memory saved: cobalt-739");
 			if (lastUser.includes("memory recall")) {
 				const remembered = userText.includes("memory remember cobalt-739") ? "cobalt-739" : "missing";
