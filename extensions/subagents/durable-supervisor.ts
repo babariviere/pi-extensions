@@ -21,6 +21,7 @@ import { sanitizeSegment } from "./paths.ts";
 import { validateHostModel, type HostModel } from "./persistent-model.ts";
 import type { LastAnswer, WorkerAnswer, WorkerSpec, WorkerStatus } from "./worker-protocol.ts";
 import type { SessionRef } from "./session-ref.ts";
+import { resolveSpawnDirectory } from "./spawn-directory.ts";
 
 const ctx = BACKGROUND_CONTEXT;
 const RegistryDoc = defineDoc<{ agents: Record<string, JsonValue> }>({
@@ -137,7 +138,7 @@ export function approvedNightForName(
 }
 
 export class DurableSupervisor {
-	readonly format = "named-conversations-v2";
+	readonly format = "named-conversations-v3";
 	readonly #session;
 	#records = new Map<string, NamedRecord>();
 	#workers = new Map<string, LiveWorker>();
@@ -259,17 +260,24 @@ export class DurableSupervisor {
 		return result;
 	}
 
-	spawn(name: string, message: string, callId: string, policy: SpawnPolicy): Promise<SubagentStatus> {
+	spawn(name: string, message: string, callId: string, policy: SpawnPolicy, cwd?: string): Promise<SubagentStatus> {
 		return this.#locked(name, async () => {
 			this.#healthy();
 			if (this.#closing) throw new Error("Subagents are shutting down");
+			const night = approvedNightForName(name, this.ref);
+			if (night && cwd !== undefined)
+				throw new Error("Night subagent placement is host-controlled; cwd is not allowed");
+			const placement = await resolveSpawnDirectory(cwd, this.ref);
 			const existing = this.#records.get(keyOf(name));
 			if (existing) {
-				if (existing.spawnCallId === callId && existing.inputs[0]?.message === message) return asStatus(existing);
+				if (existing.spawnCallId === callId && existing.inputs[0]?.message === message) {
+					if (resolve(existing.spec.context.cwd) !== resolve(placement.cwd))
+						throw new Error("Spawn input ID reused with a different cwd");
+					return asStatus(existing);
+				}
 				throw new Error(`${name} already exists; use send.`);
 			}
 			const model = validateHostModel(policy, this.ref.cwd, this.ref.projectTrusted);
-			const night = approvedNightForName(name, this.ref);
 			let nightTask: string | undefined;
 			if (night && activeNightRunPhase(night) === "execution") {
 				const taskId = name.replace(/^TODO-/i, "").toLowerCase();
@@ -314,6 +322,7 @@ export class DurableSupervisor {
 					),
 					context: {
 						...this.ref,
+						...placement,
 						sessionId: this.ref.sessionId,
 						sessionFile: this.ref.sessionFile,
 						runId: id,
@@ -733,12 +742,14 @@ export async function acquireDurableSupervisor(
 		const active = await existing.entry;
 		if (existing.closing || entries.get(key) !== existing) return acquireDurableSupervisor(ref, factory);
 		const format = (active as { format?: string }).format;
-		if (format !== "named-conversations-v2") {
+		if (format !== "named-conversations-v3") {
 			// Compatible named-conversation upgrades pause and reopen the same journal.
 			// Old job handles cannot become names, so those owners still retire their work.
 			existing.closing = (async () => {
 				try {
-					await active.close({ preserveRuns: format === "named-conversations-v1" });
+					await active.close({
+						preserveRuns: format === "named-conversations-v1" || format === "named-conversations-v2",
+					});
 				} finally {
 					if (entries.get(key) === existing) entries.delete(key);
 				}

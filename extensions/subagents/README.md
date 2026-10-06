@@ -6,13 +6,13 @@ Durable execution is the only backend, with no Herdr panes or headless CLI fallb
 
 ## Single tool
 
-The exact input is `subagent({ action: "spawn" | "send" | "stop" | "status", name?, message?, followUp? })`.
+The exact input is `subagent({ action: "spawn" | "send" | "stop" | "status", name?, message?, followUp?, cwd? })`.
 Call it from native codemode as `tools.subagent`; discover its schema with
 `describeTool("subagent")`. This extension does not replace or enable codemode.
 
 | Action | Inputs and behavior |
 | --- | --- |
-| `spawn` | Requires `name` and `message`. Creates a conversation and starts background work. An existing name is rejected; use `send`. |
+| `spawn` | Requires `name` and `message`. Optional `cwd` selects the working directory. Creates a conversation and starts background work. An existing name is rejected; use `send`. |
 | `send` | Requires `name` and `message`. Steers current work by default; `followUp: true` queues a follow-up instead. An idle conversation resumes on the same transcript. |
 | `stop` | Requires `name`. Aborts current and queued work, but retains the conversation for later `send`. |
 | `status` | With `name`, returns state and the latest completed `lastAnswer: { id, text }`, when available, acknowledging that answer's pending notification. Without a name, returns compact summaries without answer text or acknowledgements. |
@@ -24,10 +24,32 @@ no batch tools, wait windows, result claims or job handles.
 
 ```ts
 await tools.subagent({ action: "spawn", name: "coverage", message: "Review test coverage. Do not edit files." });
+await tools.subagent({ action: "spawn", name: "other-project", cwd: "../other-project", message: "Review this project. Do not edit files." });
 await tools.subagent({ action: "send", name: "coverage", message: "Focus on crash recovery." });
 await tools.subagent({ action: "send", name: "coverage", message: "Then summarize missing tests.", followUp: true });
 return await tools.subagent({ action: "status", name: "coverage" });
 ```
+
+`cwd` is spawn-only and defaults to the parent's directory. Relative paths resolve
+against the parent directory; absolute paths and leading `~` or `~/` are supported.
+It must name an existing directory. Explicit paths are canonicalized, including
+symlinks, and pinned in durable storage for sends, stop/resume, reload and recovery.
+Spawn retries cannot change the directory. To work elsewhere, spawn another name.
+
+The selected directory controls native tool paths, shell cwd, context files and
+project configuration. The same canonical directory inherits parent project trust.
+A different directory uses Pi's saved trust decision (including parent-folder
+decisions), or global `defaultProjectTrust` when none is saved. It never inherits
+session-only approval for another directory, never prompts or saves trust, and an
+untrusted parent cannot grant a child project trust. Without target trust, project
+extensions, settings and MCP configuration are skipped; context files still load.
+User sandbox configuration and existing worker floors still apply. Project-local
+sandbox configuration belongs to the selected trusted directory, not the parent's
+project; `cwd` does not provide additional sandbox exemptions.
+
+Night planning and approved execution reject explicit `cwd`, even `"."`, because
+workspace placement remains host-controlled. Recovery storage stays beside the
+parent session, not in the selected working directory.
 
 Unread completed answers are delivered automatically to the parent as follow-ups
 when it is idle. Named status acknowledges the exact `lastAnswer` it returns, so

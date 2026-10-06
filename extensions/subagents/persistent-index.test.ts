@@ -73,7 +73,13 @@ test("only the upstream single tool schema is registered without legacy caller f
 		const { host, definition } = await setup();
 		assert.deepEqual([...host.tools.keys()], ["subagent"]);
 		assert.equal(definition.exposure, "codemode");
-		assert.deepEqual(Object.keys(SubagentParameters.properties).sort(), ["action", "followUp", "message", "name"]);
+		assert.deepEqual(Object.keys(SubagentParameters.properties).sort(), [
+			"action",
+			"cwd",
+			"followUp",
+			"message",
+			"name",
+		]);
 		assert.deepEqual(SubagentParameters.required, ["action"]);
 		assert.equal((SubagentParameters as unknown as { additionalProperties: boolean }).additionalProperties, false);
 		assert.deepEqual(
@@ -107,6 +113,21 @@ test("spawn pins host model/thinking/lifetime and send defaults to steer or queu
 		assert.deepEqual(fake.calls[2]!.args, ["review", "next", true, "next"]);
 		await execute({ action: "stop", name: "review" });
 		assert.equal(fake.calls.at(-1)!.action, "stop");
+		await host.emit("session_shutdown", { reason: "quit" });
+	});
+});
+
+test("cwd is forwarded only on spawn and rejected on send, stop and status", async () => {
+	await withParentSession(async () => {
+		const { host, fake, execute } = await setup();
+		await execute({ action: "spawn", name: "other", message: "work", cwd: "../other" });
+		assert.equal(fake.calls[0]!.args[4], "../other");
+		for (const action of ["send", "stop", "status"])
+			await assert.rejects(
+				execute({ action, name: "other", message: "work", cwd: "." }),
+				/only supported for spawn/,
+			);
+		assert.equal(fake.calls.length, 1);
 		await host.emit("session_shutdown", { reason: "quit" });
 	});
 });

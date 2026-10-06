@@ -26,6 +26,12 @@ export const SubagentParameters = Type.Object(
 		name: Type.Optional(Type.String()),
 		message: Type.Optional(Type.String()),
 		followUp: Type.Optional(Type.Boolean()),
+		cwd: Type.Optional(
+			Type.String({
+				description:
+					"Spawn only. Existing directory, relative to the parent cwd or absolute. Defaults to the parent cwd. Fixed for sends and recovery; unavailable during night runs.",
+			}),
+		),
 	},
 	{ additionalProperties: false },
 );
@@ -134,13 +140,14 @@ export default function subagents(pi: ExtensionAPI, deps: SubagentExtensionDeps 
 			label: "Subagent",
 			exposure: "codemode",
 			description:
-				"Manage persistent background subagents. spawn needs name and message; send needs name and message and steers unless followUp is true; stop aborts current/queued work but keeps the conversation usable; status takes a name for its latest completed answer and acknowledges that answer's pending notification, or no name for compact summaries. Unread answers arrive automatically. Names identify conversations, not Markdown agent definitions. Model/thinking and lifetime are host policy. During approved night execution use the approved TODO-<id> as the name. Children cannot launch subagents or jobs.",
+				"Manage persistent background subagents. spawn needs name and message and accepts an optional cwd (relative to the parent or absolute, fixed for this conversation); send needs name and message and steers unless followUp is true; stop aborts current/queued work but keeps the conversation usable; status takes a name for its latest completed answer and acknowledges that answer's pending notification, or no name for compact summaries. Unread answers arrive automatically. Names identify conversations, not Markdown agent definitions. Model/thinking and lifetime are host policy. Night runs control placement and reject cwd; during approved night execution use the approved TODO-<id> as the name. Children cannot launch subagents or jobs.",
 			parameters: SubagentParameters,
 			annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
 			execute: async (callId, args, signal) => {
 				if (current !== generation || supervisor !== owner) throw new Error("Subagents session is not initialized");
 				signal?.throwIfAborted();
 				if (!["spawn", "send", "stop", "status"].includes(args.action)) throw new Error("Unknown subagent action");
+				if (args.cwd !== undefined && args.action !== "spawn") throw new Error("cwd is only supported for spawn");
 				let result: unknown;
 				let text: string;
 				if (args.action === "status" && args.name === undefined) {
@@ -163,13 +170,19 @@ export default function subagents(pi: ExtensionAPI, deps: SubagentExtensionDeps 
 						if (args.action === "spawn") {
 							if (!context) throw new Error("Subagents session is not initialized");
 							const parent = inheritedParentModel(context);
-							result = await owner.spawn(name, args.message, callId, {
-								model: config.defaultModel ?? (parent ? `${parent.provider}/${parent.id}` : undefined),
-								thinking: config.defaultThinking,
-								parentProvider: parent?.provider,
-								models,
-								timeoutMs: config.timeoutMs,
-							});
+							result = await owner.spawn(
+								name,
+								args.message,
+								callId,
+								{
+									model: config.defaultModel ?? (parent ? `${parent.provider}/${parent.id}` : undefined),
+									thinking: config.defaultThinking,
+									parentProvider: parent?.provider,
+									models,
+									timeoutMs: config.timeoutMs,
+								},
+								args.cwd,
+							);
 							text = `Started ${name}.`;
 						} else {
 							result = await owner.send(name, args.message, args.followUp === true, callId);
