@@ -43,6 +43,7 @@ Known gaps:
 - The session key is exported as `PI_SECRETS_REF_KEY` so subagents parse parent references. Every child process sees it, so treat it as a session identifier rather than a secret: it does not resolve a reference on its own, since hydration only expands ids this session minted.
 - Subagents inherit the key but not the values behind detected references; a child re-derives fnox secrets on its own and refuses what it cannot resolve.
 - Per-chunk scrubbing of streamed `!` output is not implemented; only agent tool results are covered.
+- Image payloads are opaque: base64 `data` in image blocks and `{ data, mimeType: "image/..." }` objects is preserved, including inside `details` and `structuredContent`. Text and image metadata are still scrubbed; credentials visible in image pixels are not detected.
 - A grep or diff gutter (`path:line:`, `+`) prevents the env-assignment layer from matching, so a secret detected only by its variable name can still appear in that output.
 
 ## Features
