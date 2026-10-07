@@ -7,7 +7,7 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { writeActiveNightRun, clearActiveNightRun, type ActiveNightRun } from "../night-mode/night-run.ts";
 import type { WorkerCallbacks, WorkerConnection, WorkerFactory } from "./conversation-backend.ts";
 import {
-	approvedNightForName,
+	activeNightForSession,
 	acquireDurableSupervisor,
 	closeDurableSupervisor,
 	durableDirectory,
@@ -350,7 +350,7 @@ test("closing wins over not-yet-started admissions without launching a child", a
 	});
 });
 
-test("night planning inherits read-only protection while execution requires an approved TODO name", () => {
+test("night participants inherit a host policy snapshot without name or ledger restrictions", () => {
 	const ref = { cwd: "/repo", sessionId: "parent" };
 	const base: ActiveNightRun = {
 		startedAt: 1,
@@ -360,15 +360,31 @@ test("night planning inherits read-only protection while execution requires an a
 		sandbox: { mode: "read-only", allowWrite: [], denyRead: [] },
 		mcp: { readOnly: true },
 	};
-	assert.deepEqual(approvedNightForName("research", ref, base), base);
-	assert.throws(
-		() => approvedNightForName("research", ref, { ...base, phase: "planning", sandbox: { mode: "off" } }),
-		/read-only/,
-	);
-	assert.throws(() => approvedNightForName("research", ref, { ...base, phase: "execution" }), /approved ledger/);
-	assert.throws(() => approvedNightForName("TODO-bad", ref, { ...base, approvedTaskIds: ["abc"] }), /approved ledger/);
-	assert.equal(approvedNightForName("TODO-abc", ref, { ...base, approvedTaskIds: ["abc"] })?.startedAt, 1);
-	assert.equal(approvedNightForName("research", { ...ref, sessionId: "other" }, base), undefined);
+	const snapshot = activeNightForSession(ref, base);
+	assert.deepEqual(snapshot, base);
+	base.sandbox!.denyRead!.push("/private");
+	assert.deepEqual(snapshot?.sandbox?.denyRead, [], "admission pins a copy of the host policy");
+	const writable = { ...base, sandbox: { mode: "workspace-write" as const } };
+	assert.deepEqual(activeNightForSession(ref, writable), writable);
+	assert.equal(activeNightForSession({ ...ref, sessionId: "other" }, base), undefined);
+});
+
+test("missing active night contracts refuse spawn and send before admitting new work", async () => {
+	await fixture(async (_ref, fake, owner) => {
+		await owner.spawn("existing", "before night", "before", policy);
+		const old = process.env.PI_NIGHT_RUN;
+		process.env.PI_NIGHT_RUN = "1";
+		try {
+			await assert.rejects(owner.spawn("unprotected", "work", "spawn", policy), /Active night contract unavailable/);
+			await assert.rejects(owner.send("existing", "work", false, "send"), /Active night contract unavailable/);
+			assert.equal(owner.list().length, 1);
+			assert.equal(fake.opened.length, 1);
+			assert.equal(fake.opened[0]!.inputs.length, 1);
+		} finally {
+			if (old === undefined) delete process.env.PI_NIGHT_RUN;
+			else process.env.PI_NIGHT_RUN = old;
+		}
+	});
 });
 
 test("failed notification sinks consume one durable receipt without losing named status", async () => {
@@ -461,57 +477,46 @@ test("unacknowledged stop keeps durable intent and a later send aborts before ad
 	});
 });
 
-test("night binding pins ledger scope and rejects pre-night, ended and replaced policies on send", async () => {
+test("direct night runs admit named workers and reject pre-night, ended and replaced policies on send", async () => {
 	await fixture(async (ref, fake, owner) => {
-		await owner.spawn("TODO-abc", "before night", "before", policy);
+		await owner.spawn("before-night", "before night", "before", policy);
 		const run: ActiveNightRun = {
-			phase: "execution",
 			startedAt: 1,
 			sessionId: ref.sessionId,
 			reportPath: "/report",
 			maxPullRequests: 1,
-			approvedTaskIds: ["abc", "def"],
-			ledgerDir: join(ref.cwd, "ledger"),
+			sandbox: { mode: "workspace-write" },
 			mcp: { readOnly: true },
 		};
-		await mkdir(run.ledgerDir!);
-		const scope =
-			JSON.stringify({ id: "def", title: "Read CI", tags: ["night", "approved"], status: "open" }) +
-			"\n\n## Goal\nRead CI only.\nApproved operations: read-only\n";
-		await writeFile(join(run.ledgerDir!, "def.md"), scope);
 		writeActiveNightRun(run);
 		try {
-			await assert.rejects(owner.spawn("TODO-def", "work", "cwd", policy, "."), /host-controlled/);
+			await assert.rejects(owner.spawn("read-ci", "work", "cwd", policy, "."), /host-controlled/);
 			await assert.rejects(
-				owner.send("TODO-abc", "cannot reuse pre-night", false, "denied"),
-				/different night approval/,
+				owner.send("before-night", "cannot reuse pre-night", false, "denied"),
+				/different night run/,
 			);
-			await owner.spawn("TODO-def", "perform approved scope", "approved", policy);
+			await owner.spawn("read-ci", "read CI", "admitted", policy);
 			const kernel = fake.opened.at(-1)!;
-			assert.equal(kernel.spec.context.nightTask, scope);
-			await writeFile(join(run.ledgerDir!, "def.md"), scope + "Caller tried to change ledger later.");
-			await owner.send("TODO-def", "follow-up within scope", true, "allowed");
-			assert.equal(
-				kernel.spec.context.nightTask,
-				scope,
-				"host scope stays pinned, not reread from a mutable ledger",
-			);
+			assert.deepEqual(kernel.spec.context.nightRun, run);
+			writeActiveNightRun({ ...run, mcp: { readOnly: false } });
+			await assert.rejects(owner.send("read-ci", "changed policy", false, "changed"), /different night run/);
+			writeActiveNightRun(run);
+			await owner.send("read-ci", "follow-up", true, "allowed");
 			clearActiveNightRun();
-			await assert.rejects(owner.send("TODO-def", "ended", false, "ended"), /different night approval/);
+			await assert.rejects(owner.send("read-ci", "ended", false, "ended"), /different night run/);
 			writeActiveNightRun({ ...run, startedAt: 2 });
-			await assert.rejects(owner.send("TODO-def", "replaced", false, "replaced"), /different night approval/);
+			await assert.rejects(owner.send("read-ci", "replaced", false, "replaced"), /different night run/);
 			assert.equal(kernel.inputs.length, 2);
-			await owner.stop("TODO-def");
+			await owner.stop("read-ci");
 		} finally {
 			clearActiveNightRun();
 		}
 	});
 });
 
-test("planning explorers inherit read-only policies and are retired at a cancelling host boundary", async () => {
+test("night workers inherit read-only policies and are retired at a cancelling host boundary", async () => {
 	await fixture(async (ref, fake, owner) => {
 		const run: ActiveNightRun = {
-			phase: "planning",
 			startedAt: 1,
 			sessionId: ref.sessionId,
 			reportPath: "/report",
@@ -528,7 +533,7 @@ test("planning explorers inherit read-only policies and are retired at a cancell
 			await owner.close();
 			const reopened = await DurableSupervisor.open(ref, fake.factory);
 			try {
-				await assert.rejects(reopened.send("explorer", "retired", false, "two"), /different night approval/);
+				await assert.rejects(reopened.send("explorer", "retired", false, "two"), /different night run/);
 				assert.equal((await reopened.status("explorer")).state, "idle");
 				assert.equal(fake.opened.length, 1, "retired kernel must not reopen in a released workspace");
 			} finally {

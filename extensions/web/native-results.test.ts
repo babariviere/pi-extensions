@@ -3,9 +3,10 @@ import { randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Value } from "typebox/value";
-import { createFetchContentTool } from "./fetch.ts";
-import { createWebSearchTool } from "./search.ts";
+import webExtension from "./index.ts";
+import { createWebTool } from "./tool.ts";
 import { DEFAULT_SETTINGS } from "./settings.ts";
 import { cloneCachePath, MAX_RESPONSE_BYTES, parseGitHubRepoUrl } from "./utils.ts";
 
@@ -16,23 +17,63 @@ function structured(result: { structuredContent?: unknown }): Record<string, unk
 	return result.structuredContent as Record<string, unknown>;
 }
 
-test("web tools retain direct names/input contracts and expose native metadata", () => {
-	const search = createWebSearchTool(settings);
-	const fetch = createFetchContentTool(settings);
-	assert.equal(search.name, "web_search");
-	assert.equal(fetch.name, "fetch_content");
-	assert.deepEqual(Object.keys(search.parameters.properties), ["query", "limit"]);
-	assert.deepEqual(Object.keys(fetch.parameters.properties), ["url", "timeout"]);
-	for (const tool of [search, fetch]) {
-		assert.equal(tool.exposure ?? "direct", "direct");
-		assert.equal(tool.namespace?.name, "web");
-		assert.equal(tool.annotations?.destructiveHint, false);
-		assert.equal(tool.annotations?.openWorldHint, true);
-		assert.ok(tool.outputSchema);
-	}
-	assert.equal(search.annotations?.readOnlyHint, true);
-	assert.equal(fetch.annotations?.readOnlyHint, false, "fetch can create local clone caches and files");
-	assert.equal(fetch.annotations?.idempotentHint, false, "repeated large fetches create fresh temp files");
+test("web registers one direct tool, no legacy aliases, and conservative native metadata", () => {
+	const registered: string[] = [];
+	webExtension({
+		registerTool(tool: { name: string }) {
+			registered.push(tool.name);
+		},
+		registerCommand() {},
+	} as unknown as ExtensionAPI);
+	assert.deepEqual(registered, ["web"]);
+	const tool = createWebTool(settings);
+	assert.equal(tool.name, "web");
+	assert.equal(tool.exposure ?? "direct", "direct");
+	assert.equal(tool.namespace?.name, "web");
+	assert.equal(tool.annotations?.destructiveHint, false);
+	assert.equal(tool.annotations?.openWorldHint, true);
+	assert.equal(tool.annotations?.readOnlyHint, false, "fetch can create local clone caches and files");
+	assert.equal(tool.annotations?.idempotentHint, false, "repeated large fetches create fresh temp files");
+	assert.ok(tool.outputSchema);
+});
+
+test("web has a flat object input schema and validates the selected action before execution", async (t) => {
+	const tool = createWebTool(settings);
+	const schema = tool.parameters;
+	assert.equal(schema.type, "object");
+	assert.deepEqual(Object.keys(schema.properties), ["action", "query", "limit", "url", "timeout"]);
+	let calls = 0;
+	t.mock.method(globalThis, "fetch", async () => {
+		calls++;
+		throw new Error("No network expected");
+	});
+	for (const input of [
+		{ action: "search", query: "fixture" },
+		{ action: "search", query: "fixture", limit: 20 },
+		{ action: "fetch", url: "https://example.com" },
+		{ action: "fetch", url: "https://example.com", timeout: 1000 },
+	])
+		assert.ok(Value.Check(schema, input), JSON.stringify(input));
+	for (const input of [
+		{},
+		{ query: "fixture" },
+		{ url: "https://example.com" },
+		{ action: "other", query: "fixture" },
+		{ action: "search", url: "https://example.com" },
+		{ action: "fetch", query: "fixture" },
+		{ action: "search", query: "fixture", url: "https://example.com" },
+		{ action: "fetch", url: "https://example.com", query: "fixture" },
+		{ action: "search", query: "fixture", extra: true },
+		{ action: "search", query: "fixture", limit: 0 },
+		{ action: "search", query: "fixture", limit: 21 },
+		{ action: "fetch", url: "https://example.com", timeout: 999 },
+	])
+		await assert.rejects(
+			tool.execute("invalid", input as never, undefined, undefined, {} as never),
+			/Invalid web arguments/,
+			JSON.stringify(input),
+		);
+	assert.equal(calls, 0);
 });
 
 test("search returns ranked structured links alongside unchanged Markdown", async (t) => {
@@ -47,8 +88,14 @@ test("search returns ranked structured links alongside unchanged Markdown", asyn
 	const previous = process.env.KAGI_SESSION_TOKEN;
 	process.env.KAGI_SESSION_TOKEN = "test-session";
 	try {
-		const tool = createWebSearchTool(settings);
-		const result = await tool.execute("search", { query: "fixture", limit: 1 }, undefined, undefined, {} as never);
+		const tool = createWebTool(settings);
+		const result = await tool.execute(
+			"search",
+			{ action: "search", query: "fixture", limit: 1 },
+			undefined,
+			undefined,
+			{} as never,
+		);
 		assert.deepEqual(result.content, [{ type: "text", text: "1. [Title](https://example.com/)\n   Snippet" }]);
 		assert.deepEqual(result.structuredContent, {
 			query: "fixture",
@@ -68,8 +115,14 @@ test("search failures carry structured data and the native isError flag", async 
 	const previous = process.env.KAGI_SESSION_TOKEN;
 	process.env.KAGI_SESSION_TOKEN = "test-session";
 	try {
-		const tool = createWebSearchTool(settings);
-		const result = await tool.execute("search", { query: "fixture" }, undefined, undefined, {} as never);
+		const tool = createWebTool(settings);
+		const result = await tool.execute(
+			"search",
+			{ action: "search", query: "fixture" },
+			undefined,
+			undefined,
+			{} as never,
+		);
 		assert.equal(result.isError, true);
 		const data = structured(result);
 		assert.match(String(data.error), /Kagi rejected.*401/);
@@ -85,9 +138,15 @@ test("search failures carry structured data and the native isError flag", async 
 test("fetch keeps full structured text while direct output is truncated", async (t) => {
 	const body = Array.from({ length: 2100 }, (_, i) => `line ${i}`).join("\n");
 	t.mock.method(globalThis, "fetch", async () => new Response(body, { headers: { "content-type": "text/plain" } }));
-	const tool = createFetchContentTool(settings);
+	const tool = createWebTool(settings);
 	for (const url of ["https://raw.githubusercontent.com/example/repo/main/file.txt", "https://example.com/file.txt"]) {
-		const result = await tool.execute("fetch", { url: ` ${url} ` }, undefined, undefined, {} as never);
+		const result = await tool.execute(
+			"fetch",
+			{ action: "fetch", url: ` ${url} ` },
+			undefined,
+			undefined,
+			{} as never,
+		);
 		const data = structured(result);
 		assert.equal(data.url, url);
 		assert.equal(data.text, body);
@@ -111,10 +170,10 @@ test("fetch keeps full structured text while direct output is truncated", async 
 });
 
 test("fetch HTTP and transport failures propagate as native errors with useful data", async (t) => {
-	const tool = createFetchContentTool(settings);
+	const tool = createWebTool(settings);
 	t.mock.method(globalThis, "fetch", async () => new Response("missing", { status: 404 }));
 	for (const url of ["https://raw.githubusercontent.com/example/repo/main/missing", "https://example.com/missing"]) {
-		const result = await tool.execute("fetch", { url }, undefined, undefined, {} as never);
+		const result = await tool.execute("fetch", { action: "fetch", url }, undefined, undefined, {} as never);
 		assert.equal(result.isError, true);
 		const data = structured(result);
 		assert.equal(data.url, url);
@@ -126,17 +185,23 @@ test("fetch HTTP and transport failures propagate as native errors with useful d
 	t.mock.method(globalThis, "fetch", async () => {
 		throw new Error("offline");
 	});
-	const result = await tool.execute("fetch", { url: "https://example.com/page" }, undefined, undefined, {} as never);
+	const result = await tool.execute(
+		"fetch",
+		{ action: "fetch", url: "https://example.com/page" },
+		undefined,
+		undefined,
+		{} as never,
+	);
 	assert.equal(result.isError, true);
 	assert.match(String(structured(result).error), /offline/);
 });
 
 test("fetch does not expose oversized network bodies as structured data", async (t) => {
 	t.mock.method(globalThis, "fetch", async () => new Response("x".repeat(MAX_RESPONSE_BYTES + 1)));
-	const tool = createFetchContentTool(settings);
+	const tool = createWebTool(settings);
 	const result = await tool.execute(
 		"fetch",
-		{ url: "https://raw.githubusercontent.com/example/repo/main/huge" },
+		{ action: "fetch", url: "https://raw.githubusercontent.com/example/repo/main/huge" },
 		undefined,
 		undefined,
 		{} as never,
@@ -153,8 +218,14 @@ test("soft not-found pages produce structured errors even with HTTP 200", async 
 		async () =>
 			new Response("# Page not found\n\nThis page was removed.", { headers: { "content-type": "text/plain" } }),
 	);
-	const tool = createFetchContentTool(settings);
-	const result = await tool.execute("fetch", { url: "https://example.com/gone" }, undefined, undefined, {} as never);
+	const tool = createWebTool(settings);
+	const result = await tool.execute(
+		"fetch",
+		{ action: "fetch", url: "https://example.com/gone" },
+		undefined,
+		undefined,
+		{} as never,
+	);
 	assert.equal(result.isError, true);
 	assert.equal(structured(result).status, 200);
 	assert.match(String(structured(result).error), /not found.*placeholder/);
@@ -168,8 +239,8 @@ test("binary raw responses preserve the direct diagnostic without exposing bytes
 		async () => new Response("binary bytes", { headers: { "content-type": "application/pdf" } }),
 	);
 	const url = "https://raw.githubusercontent.com/example/repo/main/file.pdf";
-	const tool = createFetchContentTool(settings);
-	const result = await tool.execute("fetch", { url }, undefined, undefined, {} as never);
+	const tool = createWebTool(settings);
+	const result = await tool.execute("fetch", { action: "fetch", url }, undefined, undefined, {} as never);
 	assert.notEqual(result.isError, true);
 	assert.equal(structured(result).contentType, "application/pdf");
 	assert.equal(structured(result).text, `Binary content (content-type: application/pdf); not rendered. URL: ${url}`);
@@ -187,8 +258,8 @@ test("cached GitHub summaries expose a structured repository path without networ
 	t.mock.method(globalThis, "fetch", async () => {
 		throw new Error("No network expected");
 	});
-	const tool = createFetchContentTool(settings);
-	const result = await tool.execute("fetch", { url }, undefined, undefined, {} as never);
+	const tool = createWebTool(settings);
+	const result = await tool.execute("fetch", { action: "fetch", url }, undefined, undefined, {} as never);
 	const data = structured(result);
 	assert.equal(data.repositoryPath, dir);
 	assert.equal(data.source, "github");

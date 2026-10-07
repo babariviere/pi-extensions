@@ -5,38 +5,41 @@ extension is required, even when sandbox policy is off. Every launch requests a
 sandbox-wrapped command through `sandboxWrapCommand(pi, command)`; missing or
 failed policy services refuse launch rather than falling back to an unchecked shell.
 
-## Native tools
+## Native tool
 
-- `jobs_start({ name, command, cwd? })`: launch a named Bash command.
-- `jobs_status({})`: list live and recent handles without output.
-- `jobs_wait({ id, waitMs? })`: wait up to 30 seconds by default, maximum 120 seconds.
-- `jobs_logs({ id, maxChars? })`: read the output tail, default 4000 characters,
+- `jobs({ action: "start", name, command, cwd? })`: launch a named Bash command.
+- `jobs({ action: "status" })`: list live and recent handles without output.
+- `jobs({ action: "wait", id, waitMs? })`: wait up to 30 seconds by default, maximum 120 seconds.
+- `jobs({ action: "logs", id, maxChars? })`: read the output tail, default 4000 characters,
   maximum 20000. A terminal result suppresses the completion notification.
-- `jobs_stop({ id })`: cancel the job and its subprocess group.
+- `jobs({ action: "stop", id })`: cancel the job and its subprocess group.
 
-These tools have native `codemode` exposure, annotation hints, output schemas and
+This tool has native `codemode` exposure, annotation hints, output schemas and
 structured results. Pi configuration controls native codemode. This extension
 does not activate or override it and does not load an execution runtime or MCP
 transport. Full workflow instructions are available through
 `await describeNamespace("jobs")`. Example native script:
 
-
 ```ts
-const job = await tools.jobs_start({ name: "tests", command: "npm test" });
-return await tools.jobs_wait({ id: job.id });
+const job = await tools.jobs({ action: "start", name: "tests", command: "npm test" });
+return await tools.jobs({ action: "wait", id: job.id });
 ```
+
+The `action` parameter is required, with arguments validated for that action.
+The old `jobs_*` tool names are no longer registered. Annotation hints
+conservatively cover all actions, including shell launches and cancellations.
 
 ## Lifetime and limits
 
 Jobs are owned by the session, not a script, turn or tool-call abort signal.
-They finish on command exit, `jobs_stop`, session replacement/reload/shutdown, or
+They finish on command exit, `jobs({ action: "stop", id })`, session replacement/reload/shutdown, or
 the 2-hour lifetime cap. Child sessions and background agent attempts never
 register jobs tools, preventing recursive background workflows.
 
 An unclaimed completion sends one follow-up message when the parent is idle.
 A terminal wait or log read claims its result and suppresses that wake-up. Reading
 logs while the job is still running does not claim its later completion. Stopped
-jobs never wake the model. Use `jobs_logs` to inspect completion output;
+jobs never wake the model. Use `jobs({ action: "logs", id })` to inspect completion output;
 notifications contain the handle and output path, not an unbounded log.
 
 Defaults are unchanged and are not configurable: maximum 20 live jobs, 50 recent

@@ -16,7 +16,6 @@ import { join } from "node:path";
 import { afterEach, beforeEach, test } from "node:test";
 import {
 	activeRunPath,
-	activeNightRunPhase,
 	applyNightRunEnv,
 	buildNightContract,
 	type ActiveNightRun,
@@ -24,43 +23,6 @@ import {
 	readActiveNightRun,
 	writeActiveNightRun,
 } from "./night-run.ts";
-
-test("explicit night phases round-trip and override legacy inference", () => {
-	for (const phase of ["planning", "execution"] as const) {
-		writeActiveNightRun(run({ phase }));
-		assert.equal(readActiveNightRun()?.phase, phase);
-		assert.equal(activeNightRunPhase(run({ phase })), phase);
-	}
-});
-
-test("only an unambiguous legacy read-only handshake infers planning", () => {
-	const planning = run({ ledgerDir: undefined, sandbox: { mode: "read-only" }, mcp: { readOnly: true } });
-	assert.equal(activeNightRunPhase(planning), "planning");
-	for (const overrides of [
-		{ approvedTaskIds: [] },
-		{ approvedTaskIds: ["approved"] },
-		{ ledgerDir: "/ledger" },
-		{ ledgerDir: "" },
-		{ sandbox: undefined },
-		{ sandbox: { mode: "workspace-write" as const } },
-		{ sandbox: { mode: "read-only" as const, allowWrite: ["/repo"] } },
-		{ mcp: undefined },
-		{ mcp: { readOnly: false } },
-		{ phase: "execution" as const },
-	])
-		assert.equal(activeNightRunPhase({ ...planning, ...overrides }), "execution");
-	assert.equal(activeNightRunPhase(run()), "execution");
-});
-
-test("malformed phase and approval data never infer planning", () => {
-	for (const invalid of [{ phase: "unknown" }, { approvedTaskIds: null }, { ledgerDir: null }]) {
-		const malformed = {
-			...run({ ledgerDir: undefined, sandbox: { mode: "read-only" }, mcp: { readOnly: true } }),
-			...invalid,
-		};
-		assert.equal(activeNightRunPhase(malformed as ActiveNightRun), "execution");
-	}
-});
 
 const run = (overrides: Partial<ActiveNightRun> = {}): ActiveNightRun => ({
 	startedAt: 1_700_000_000_000,

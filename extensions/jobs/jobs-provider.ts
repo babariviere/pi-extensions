@@ -133,9 +133,9 @@ export class JobsProvider implements ActionProvider {
 	readonly name = "jobs";
 	readonly description = "Session-owned background shell jobs";
 	readonly instructions = [
-		"Use tools.jobs_start({ name, command, cwd? }) for shell work that should outlive a tool call.",
+		'Use tools.jobs({ action: "start", name, command, cwd? }) for shell work that should outlive a tool call.',
 		"Jobs remain owned by this session and stop on shutdown/reload, cancellation, exit, or the two-hour cap.",
-		"Use tools.jobs_wait({ id, waitMs? }) to await completion and claim its result, then tools.jobs_logs({ id }) for output.",
+		'Use tools.jobs({ action: "wait", id, waitMs? }) to await completion and claim its result, then tools.jobs({ action: "logs", id }) for output.',
 		"Unclaimed completions wake the idle parent once. Terminal waits and log reads suppress that wake-up; running log reads do not. Stopped jobs never wake it.",
 		"Output files are temporary and disappear during session cleanup. The sandbox extension is required for every launch.",
 	].join("\n");

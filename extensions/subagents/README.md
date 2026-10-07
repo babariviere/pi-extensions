@@ -47,7 +47,7 @@ User sandbox configuration and existing worker floors still apply. Project-local
 sandbox configuration belongs to the selected trusted directory, not the parent's
 project; `cwd` does not provide additional sandbox exemptions.
 
-Night planning and approved execution reject explicit `cwd`, even `"."`, because
+Active night runs reject explicit `cwd`, even `"."`, because
 workspace placement remains host-controlled. Recovery storage stays beside the
 parent session, not in the selected working directory.
 
@@ -133,14 +133,14 @@ Pi host, including managed packages without a local SDK installation.
 - Authentication is resolved by the native provider runtime, not persisted as
   credentials. Extensions that replace the SDK session or start their own model
   loop are unsupported by this adapter.
-- Night planning children automatically inherit read-only filesystem/MCP policy.
-  Approved execution requires the approved `TODO-<id>` as `name` on both spawn
-  and send. Put the approved goal, permissions, outputs and brief paths in
+- Night children automatically inherit the active run's filesystem/MCP policy.
+  Spawn and send use ordinary conversation names, with no TODO whitelist or
+  planning phase. Put the goal, permissions, outputs and brief paths in
   `message`; these describe scope, not extra sandbox grants. Workspace placement
   and lifecycle are host-controlled. Answer completion, stop, idle parking and
   reload do not release a reusable conversation's workspace. Required isolation
   fails closed on allocation failure. New messages cannot reuse a pre-night,
-  ended or replaced approval; a cancelling host lifecycle boundary retires night
+  ended or replaced run; a cancelling host lifecycle boundary retires night
   conversations and preserves their deliverables before workspace release.
 - Parent journal: `<parent-session-file>.subagents-durable/<identity>/`. Child
   Harness databases live in internal `subagent-runs/` directories beside the

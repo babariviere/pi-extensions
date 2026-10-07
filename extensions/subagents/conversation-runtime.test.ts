@@ -779,11 +779,12 @@ test("host night framing excludes the output rider and requires a host workspace
 	try {
 		installConversationWorker(first.host, deps);
 		first.events.emit("message", command);
-		first.events.emit("message", input("night", "do approved work"));
+		first.events.emit("message", input("night", "do night work"));
 		await until(() => answers(first).length === 1);
 		assert.match(prepared, /\[night-mode\]/);
 		assert.match(prepared, /Never ask a question/);
-		assert.match(prepared, /do approved work/);
+		assert.match(prepared, /do night work/);
+		assert.doesNotMatch(prepared, /Approved ledger scope/);
 		assert.doesNotMatch(prepared, /Deliverables directory|Output:|Task:|complete findings/);
 		await pause(first);
 		command.spec.request.cwd = directory;
@@ -800,7 +801,7 @@ test("host night framing excludes the output rider and requires a host workspace
 	}
 });
 
-test("missing approved host night contract fails closed before kernel startup", async () => {
+test("missing active host night contract fails closed before kernel startup", async () => {
 	const { options } = setup();
 	const host = workerHost();
 	const command = launchFor(process.cwd());

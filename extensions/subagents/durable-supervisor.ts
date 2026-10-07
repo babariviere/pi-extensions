@@ -1,18 +1,11 @@
 /** Reload-stable named conversations, durable admissions and native-parent notification receipts. */
 import { createHash, randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import type { JsonValue } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { createSession, defineDoc, type Storage } from "@earendil-works/pi-durable";
-import {
-	readActiveNightRun,
-	isNightRunParticipant,
-	activeNightRunPhase,
-	type ActiveNightRun,
-} from "../night-mode/night-run.ts";
+import { readActiveNightRun, isNightRunParticipant, type ActiveNightRun } from "../night-mode/night-run.ts";
 import type { AgentWorkspace } from "../night-mode/agent-workspace.ts";
-import { parseLedgerItem } from "../night-mode/ledger.ts";
 import { builtinAgent } from "./discovery.ts";
 import { openDurableStorage } from "./durable-storage.ts";
 import { openConversationWorker, type WorkerConnection, type WorkerFactory } from "./conversation-backend.ts";
@@ -108,32 +101,14 @@ export function durableDirectory(ref: SessionRef): string {
 	return resolve(`${ref.sessionFile}.subagents-durable`, identity);
 }
 
-/** Exact tool schema keeps night approval in the instance name instead of a caller-controlled extra field. */
-export function approvedNightForName(
-	name: string,
-	ref: SessionRef,
-	run = readActiveNightRun(),
-): ActiveNightRun | undefined {
+/** Night policy comes from the active host contract, never caller names or messages. */
+export function activeNightForSession(ref: SessionRef, run = readActiveNightRun()): ActiveNightRun | undefined {
 	if (!run) {
 		if (process.env.PI_NIGHT_RUN === "1")
 			throw new Error("Active night contract unavailable; refusing an unprotected subagent");
 		return undefined;
 	}
 	if (!isNightRunParticipant(run, ref)) return undefined;
-	if (activeNightRunPhase(run) === "planning") {
-		if (
-			run.sandbox?.mode !== "read-only" ||
-			(run.sandbox.allowWrite?.length ?? 0) !== 0 ||
-			run.mcp?.readOnly !== true
-		)
-			throw new Error("Night planning requires read-only filesystem and MCP policies");
-		return copy(run);
-	}
-	const id = /^TODO-([a-f0-9]+)$/i.exec(name)?.[1]?.toLowerCase();
-	if (!id || !run.approvedTaskIds?.some((approved) => approved.replace(/^TODO-/i, "").toLowerCase() === id))
-		throw new Error(
-			"An active night run may spawn only an approved ledger item; use its TODO-<id> as the subagent name.",
-		);
 	return copy(run);
 }
 
@@ -264,7 +239,7 @@ export class DurableSupervisor {
 		return this.#locked(name, async () => {
 			this.#healthy();
 			if (this.#closing) throw new Error("Subagents are shutting down");
-			const night = approvedNightForName(name, this.ref);
+			const night = activeNightForSession(this.ref);
 			if (night && cwd !== undefined)
 				throw new Error("Night subagent placement is host-controlled; cwd is not allowed");
 			const placement = await resolveSpawnDirectory(cwd, this.ref);
@@ -278,15 +253,6 @@ export class DurableSupervisor {
 				throw new Error(`${name} already exists; use send.`);
 			}
 			const model = validateHostModel(policy, this.ref.cwd, this.ref.projectTrusted);
-			let nightTask: string | undefined;
-			if (night && activeNightRunPhase(night) === "execution") {
-				const taskId = name.replace(/^TODO-/i, "").toLowerCase();
-				if (!night.ledgerDir) throw new Error("Approved night ledger unavailable");
-				nightTask = readFileSync(join(night.ledgerDir, `${taskId}.md`), "utf8");
-				const item = parseLedgerItem(taskId, nightTask);
-				if (!item || item.id.replace(/^TODO-/i, "").toLowerCase() !== taskId)
-					throw new Error("Approved night ledger item unavailable or invalid");
-			}
 			const id = randomUUID();
 			const agent = builtinAgent();
 			agent.config.name = name;
@@ -327,14 +293,14 @@ export class DurableSupervisor {
 						sessionFile: this.ref.sessionFile,
 						runId: id,
 						timeoutMs: policy.timeoutMs,
-						...(night ? { nightRun: night, ...(nightTask ? { nightTask } : {}) } : {}),
+						...(night ? { nightRun: night } : {}),
 					},
 				},
 			};
 			try {
 				if (this.#closing) throw new Error("Subagents are shutting down");
-				if (JSON.stringify(approvedNightForName(name, this.ref)) !== JSON.stringify(night))
-					throw new Error("Night approval changed during subagent admission");
+				if (JSON.stringify(activeNightForSession(this.ref)) !== JSON.stringify(night))
+					throw new Error("Night contract changed during subagent admission");
 				await this.#change((records) => {
 					records.set(keyOf(name), record);
 				});
@@ -351,9 +317,9 @@ export class DurableSupervisor {
 			this.#healthy();
 			if (this.#closing) throw new Error("Subagents are shutting down");
 			let record = this.#record(name);
-			const currentNight = approvedNightForName(name, this.ref);
+			const currentNight = activeNightForSession(this.ref);
 			if (record.retired || JSON.stringify(currentNight) !== JSON.stringify(record.spec.context.nightRun))
-				throw new Error("This subagent belongs to a different night approval; spawn a new approved ledger item.");
+				throw new Error("This subagent belongs to a different night run; spawn a new named worker.");
 			const repeated = record.inputs.find((input) => input.id === callId);
 			if (repeated) {
 				if (repeated.message !== message || repeated.followUp !== followUp)

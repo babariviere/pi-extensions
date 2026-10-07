@@ -3,7 +3,7 @@ import { rm } from "node:fs/promises";
 import { test } from "node:test";
 import { JobsProvider, type JobSnapshot } from "./jobs-provider.ts";
 import { Value } from "typebox/value";
-import { createActionTool } from "../shared/action-tools.ts";
+import { createActionsTool } from "../shared/action-tools.ts";
 
 const context = { cwd: process.cwd() } as never;
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -230,13 +230,19 @@ test("jobs native tools retain structured output schemas and codemode exposure",
 	);
 	const actions = await jobs.list({}, context);
 	const descriptor = actions.find((action) => action.name === "start")!;
-	const tool = createActionTool(jobs, descriptor);
-	assert.equal(tool.name, "jobs_start");
+	const tool = createActionsTool(jobs, actions);
+	assert.equal(tool.name, "jobs");
 	assert.equal(tool.exposure, "codemode");
 	assert.ok(tool.outputSchema);
 	assert.ok(Value.Check(descriptor.inputSchema, { name: "check", command: "echo ready" }));
 	assert.ok(!Value.Check(descriptor.inputSchema, { name: "check" }));
-	const result = await tool.execute("call", { name: "check", command: "echo ready" }, undefined, undefined, context);
+	const result = await tool.execute(
+		"call",
+		{ action: "start", name: "check", command: "echo ready" },
+		undefined,
+		undefined,
+		context,
+	);
 	assert.ok(Value.Check(descriptor.outputSchema!, result.structuredContent));
 	assert.equal((result.structuredContent as unknown as JobSnapshot).state, "running");
 	await jobs.close();

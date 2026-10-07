@@ -21,7 +21,6 @@ afterEach(() => {
 });
 
 const run: ActiveNightRun = {
-	phase: "execution",
 	startedAt: 1,
 	reportPath: "/report",
 	maxPullRequests: 0,

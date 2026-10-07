@@ -12,7 +12,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import nightMode from "./index.ts";
 import { MIN_ELAPSED_BEFORE_STALL_MS } from "./night-mode.ts";
-import { NIGHT_PLAN_HANDOFF_ENTRY } from "./plan.ts";
+import { runIdFor } from "./ledger.ts";
 import { readActiveNightRun } from "./night-run.ts";
 import { USAGE_SNAPSHOT_EVENT } from "../usage/protocol.ts";
 
@@ -22,34 +22,6 @@ interface HarnessOptions {
 	entries?: Array<{ customType?: string; data?: unknown }>;
 	beforeBoundary?: (event: AgentBeforeSettleEvent) => BoundaryResult | undefined;
 	forceContextCanContinue?: boolean;
-}
-
-function task(cwd: string) {
-	return {
-		title: "Inspect the repository",
-		goal: "Check the current repository state",
-		repository: cwd,
-		definitionOfDone: "Write a concise report",
-		category: "instructions",
-		outputs: [],
-		permissions: [],
-	};
-}
-
-function handoff(cwd: string) {
-	return {
-		customType: NIGHT_PLAN_HANDOFF_ENTRY,
-		data: {
-			version: 1,
-			planningStartedAt: 1,
-			scheduledStartAt: 0,
-			windowLabel: "test window",
-			cwd,
-			prompt: "Follow the test routine",
-			instructions: "",
-			tasks: [task(cwd)],
-		},
-	};
 }
 
 function createHarness(cwd: string, options: HarnessOptions = {}) {
@@ -181,7 +153,6 @@ async function withProject<T>(
 		join(cwd, ".pi", "settings.json"),
 		JSON.stringify({
 			nightMode: {
-				plannerModel: "test/night",
 				orchestratorModel: "test/night",
 				promptPath: join(cwd, "routine.md"),
 				instructionsPath: join(cwd, "instructions.md"),
@@ -212,32 +183,29 @@ async function withProject<T>(
 	}
 }
 
-test("incomplete planning uses one boundary reminder and retains settled cleanup", async () => {
+function seedLedger(cwd: string): void {
+	const active = readActiveNightRun()!;
+	writeFileSync(
+		join(cwd, "todos", "abc.md"),
+		JSON.stringify({
+			id: "abc",
+			title: "Inspect the repository",
+			status: "open",
+			tags: ["night", `run:${runIdFor(new Date(active.startedAt))}`],
+		}) + "\n\nCheck repository",
+	);
+}
+
+test("a direct run with no ledger gets a run-tagged creation reminder at the boundary", async () => {
 	await withProject({}, async (harness) => {
 		await harness.command("start");
-		const aborted = await harness.boundary({ outcome: "aborted" });
-		assert.equal(aborted.continue, false);
-		await harness.emit("agent_settled");
-		assert.equal(harness.messages.length, 1, "an aborted planner is not restarted from agent_settled");
-		const userMessagesAfterStart = harness.messages.length;
-		const first = await harness.boundary();
-		assert.equal(first.continue, true);
-		assert.equal(first.entries.length, 1);
-		assert.equal(first.entries[0]?.type, "custom_message");
-		assert.equal((first.entries[0] as { customType: string }).customType, "night-mode:continuation");
-		assert.match(String((first.entries[0] as { content: string }).content), /Planning is not complete/);
-		assert.equal(
-			harness.messages.length,
-			userMessagesAfterStart,
-			"the reminder is a boundary entry, not sendUserMessage",
-		);
-
-		const repeated = await harness.boundary();
-		assert.equal(repeated.continue, false);
-		assert.equal(repeated.entries.length, 0, "planning only reminds once");
-		await harness.emit("agent_settled");
-		assert.equal(readActiveNightRun(), undefined, "settled still performs planning cleanup");
-		assert.ok(harness.notifications.some((message) => message.includes("failed to submit a plan twice")));
+		const active = readActiveNightRun()!;
+		const result = await harness.boundary();
+		assert.equal(result.continue, true);
+		const reminder = result.entries.at(-1) as { content: string };
+		assert.match(reminder.content, /night ledger is empty/);
+		assert.ok(reminder.content.includes(`run:${runIdFor(new Date(active.startedAt))}`));
+		assert.equal(harness.messages.length, 1, "the reminder is a boundary entry, not a new user turn");
 	});
 });
 
@@ -250,8 +218,9 @@ test("ledger continuation chains boundary entries and ends a no-progress run at 
 			beforeBoundary: (event) => ({ entries: [...event.entries, externalEntry] }),
 		},
 		async (harness, cwd) => {
-			harness.entries.push(handoff(cwd));
 			await harness.emit("session_start");
+			await harness.command("start");
+			seedLedger(cwd);
 			const first = await harness.boundary();
 			assert.equal(first.continue, true);
 			assert.equal(first.entries[0], externalEntry, "earlier handlers' proposed entries survive");
@@ -278,8 +247,9 @@ test("ledger continuation chains boundary entries and ends a no-progress run at 
 
 test("aborted, failed, queued, and already-continuing boundaries do not add a restart", async () => {
 	await withProject({ entries: [] }, async (harness, cwd) => {
-		harness.entries.push(handoff(cwd));
 		await harness.emit("session_start");
+		await harness.command("start");
+		seedLedger(cwd);
 		for (const outcome of ["aborted", "error"] as const) {
 			const result = await harness.boundary({ outcome });
 			assert.equal(result.continue, false);
@@ -303,8 +273,9 @@ test("aborted, failed, queued, and already-continuing boundaries do not add a re
 test("night-mode honors the projected canContinue guard and stops cache warming only for a paused run", async (t) => {
 	t.mock.timers.enable({ apis: ["Date", "setTimeout", "setInterval"], now: new Date(2026, 7, 29, 22).getTime() });
 	await withProject({ entries: [], forceContextCanContinue: false }, async (harness, cwd) => {
-		harness.entries.push(handoff(cwd));
 		await harness.emit("session_start");
+		await harness.command("start");
+		seedLedger(cwd);
 		const result = await harness.boundary();
 		assert.equal(result.entries.length, 1, "the proposed message is still stored in the boundary");
 		assert.equal(result.continue, false, "a false projected canContinue blocks the restart");
