@@ -30,7 +30,7 @@
   },
   "dependencies": {
     "@earendil-works/chord": "1.0.0",
-    "@earendil-works/pi-durable": "1.0.0",
+    "@earendil-works/pi-durable": "1.1.0",
     "defuddle": "^0.19.1",
     "linkedom": "^0.18.13",
     "parse5": "^8.0.0",
