@@ -163,7 +163,8 @@ test("fullscreen viewer bounds its viewport and scrolls when rendered as a custo
 for (const closeKey of ["\r", "\x1b"]) {
 	test(`fullscreen renderer routes keyboard and wheel scrolling to the viewer (close ${JSON.stringify(closeKey)})`, async (t) => {
 		let input = (_data: string) => {};
-		const terminal: Terminal & { rows: number; columns: number } = {
+		// Include the newer status hook while retaining compatibility with Pi 1.0.
+		const terminal: Terminal & { rows: number; columns: number; setProgramStatus: () => void } = {
 			rows: 8,
 			columns: 100,
 			kittyProtocolActive: false,
@@ -181,6 +182,7 @@ for (const closeKey of ["\r", "\x1b"]) {
 			clearScreen: () => {},
 			setTitle: () => {},
 			setProgress: () => {},
+			setProgramStatus: () => {},
 		};
 		const tui = new TuiAltScreen(terminal);
 		t.after(() => tui.stop());

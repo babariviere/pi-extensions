@@ -631,6 +631,8 @@ export function scrubText(text: string, secrets: SecretEntry[], refs?: RefCodec)
  * appears there still lands on disk unmasked unless it is scrubbed too.
  * Non-plain objects are returned untouched: rebuilding them would drop their
  * prototype, and they are not what carries tool text.
+ * Image objects' base64 `data` is opaque, just like image content parts. Random
+ * binary encodings can match secret patterns; metadata is still scrubbed.
  *
  * Returns the input by reference when nothing changed. Callers use that identity
  * to decide whether to patch a tool result at all, and patching an untouched
@@ -674,11 +676,18 @@ function scrubDeepInternal(
 	const proto = Object.getPrototypeOf(input);
 	if (proto !== Object.prototype && proto !== null) return input;
 
+	const object = input as Record<string, unknown>;
+	// Accept both content blocks and the { data, mimeType } image tool shape.
+	const isImage =
+		(object.type === "image" || object.type === undefined) &&
+		typeof object.data === "string" &&
+		typeof object.mimeType === "string" &&
+		object.mimeType.startsWith("image/");
 	memo.set(input, input);
 	let changed = false;
 	const out: Record<string, unknown> = {};
 	for (const [key, value] of Object.entries(input)) {
-		const next = scrubDeepInternal(value, secrets, refs, memo);
+		const next = isImage && key === "data" ? value : scrubDeepInternal(value, secrets, refs, memo);
 		if (next !== value) changed = true;
 		out[key] = next;
 	}

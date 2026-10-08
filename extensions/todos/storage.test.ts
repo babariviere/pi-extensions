@@ -14,8 +14,8 @@ it("createTodo writes the format consumed by the todo extension", async () => {
 	const dir = mkdtempSync(join(tmpdir(), "todo-storage-"));
 	roots.push(dir);
 	const todo = await createTodo(dir, {
-		title: "Approved task",
-		tags: ["night", "night-approved"],
+		title: "Night task",
+		tags: ["night"],
 		body: "Exact scope",
 		needs: ["gh-auth"],
 		createdAt: new Date("2026-09-05T20:00:00.000Z"),

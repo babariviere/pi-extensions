@@ -42,16 +42,12 @@ export interface NightMcpRequest {
 }
 
 export interface ActiveNightRun {
-	/** Explicit admission phase. Older handshakes are inferred conservatively. */
-	phase?: "planning" | "execution";
 	/** Epoch ms the run was started. */
 	startedAt: number;
 	/** Absolute path of the report every participant appends to. */
 	reportPath: string;
 	/** Hard cap on pull requests for the whole night. */
 	maxPullRequests: number;
-	/** Ledger ids explicitly checked by the user during planning. */
-	approvedTaskIds?: string[];
 	/** Session id of the coordinator, for debugging. */
 	sessionId?: string;
 	/**
@@ -105,22 +101,6 @@ export interface ActiveNightRun {
 	mcp?: NightMcpRequest;
 }
 
-/** Only an unambiguously read-only legacy handshake may admit planning explorers. */
-export function activeNightRunPhase(run: ActiveNightRun): "planning" | "execution" {
-	if (run.phase === "planning" || run.phase === "execution") return run.phase;
-	if (
-		run.phase === undefined &&
-		run.approvedTaskIds === undefined &&
-		run.ledgerDir === undefined &&
-		run.sandbox?.mode === "read-only" &&
-		(run.sandbox.allowWrite === undefined ||
-			(Array.isArray(run.sandbox.allowWrite) && run.sandbox.allowWrite.length === 0)) &&
-		run.mcp?.readOnly === true
-	)
-		return "planning";
-	return "execution";
-}
-
 /** Next to the default prompt/report files, so one feature owns one directory. */
 export function activeRunPath(): string {
 	const base = process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent");
@@ -130,7 +110,7 @@ export function activeRunPath(): string {
 /** The currently active night run, or undefined. Never throws. */
 export function readActiveNightRun(): ActiveNightRun | undefined {
 	try {
-		// Isolated durable workers retain their originally approved policy even
+		// Isolated durable workers retain their original run policy even
 		// after the global handshake is replaced or cleared. Never affect bystanders.
 		const path =
 			process.env.PI_CODE_MODE_SUBAGENT === "1" && process.env.PI_DURABLE_NIGHT_RUN_FILE

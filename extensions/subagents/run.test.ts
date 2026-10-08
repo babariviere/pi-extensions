@@ -8,7 +8,7 @@ test("a private child config home preserves the rest of the environment", () => 
 	assert.equal(env.XDG_CONFIG_HOME, "/tmp/child-xdg");
 	assert.equal(env.PATH, "/usr/bin");
 });
-test("runCwd uses only the host workspace override", () => {
+test("runCwd uses the pinned conversation directory unless the host overrides it with a workspace", () => {
 	const request: RunRequest = { agent: builtinAgent(), task: "work", index: 0 };
 	const context = { cwd: "/parent" } as RunContext;
 	assert.equal(runCwd(request, context), "/parent");

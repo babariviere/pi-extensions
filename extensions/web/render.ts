@@ -1,5 +1,5 @@
 /**
- * Shared TUI rendering for the web tools.
+ * Shared TUI rendering for web actions.
  *
  * Renders a tool's text output as a folded preview by default (like the bash
  * tool) and the full content when the row is expanded (Ctrl+O). An optional

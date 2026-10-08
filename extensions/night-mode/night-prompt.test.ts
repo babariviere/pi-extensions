@@ -13,7 +13,7 @@ import { buildNightContract } from "./night-run.ts";
 import {
 	composeNightPrompt,
 	composeNudge,
-	composePlanningPrompt,
+	composeLedgerReminder,
 	composeReportHeader,
 	hasInstructions,
 	ORCHESTRATOR_CONTRACT,
@@ -56,12 +56,10 @@ describe("mergeNightConfig", () => {
 		const merged = mergeNightConfig({
 			instructionsPath: "/tmp/i.md",
 			maxPullRequests: 2,
-			plannerModel: "provider/planner",
 			orchestratorModel: "provider/orchestrator",
 		});
 		assert.equal(merged.instructionsPath, "/tmp/i.md");
 		assert.equal(merged.maxPullRequests, 2);
-		assert.equal(merged.plannerModel, "provider/planner");
 		assert.equal(merged.orchestratorModel, "provider/orchestrator");
 	});
 
@@ -125,26 +123,6 @@ describe("hasInstructions", () => {
 	});
 });
 
-describe("composePlanningPrompt", () => {
-	it("keeps Astra in planning and allows exploratory subagents", () => {
-		const text = composePlanningPrompt({
-			prompt: "Inspect routine sources",
-			instructions: "Check documentation",
-			windowLabel: "21:00-09:00",
-		});
-		assert.match(text, /Build a proposed plan only/);
-		assert.match(text, /spawn subagents to explore/);
-		assert.match(text, /automatically inherit the planning/);
-		assert.match(text, /ordinary names, not execution TODO names/);
-		assert.match(text, /No task approval is required/);
-		assert.match(text, /action: 'spawn'/);
-		assert.doesNotMatch(text, /night: true|agents_run|nightTodoId/);
-		assert.match(text, /tools\.night_plan/);
-		assert.doesNotMatch(text, /code_mode|night\.plan/);
-		assert.match(text, /Check documentation/);
-	});
-});
-
 describe("composeNightPrompt", () => {
 	const base = {
 		prompt: "# Night Run\nDo the work.",
@@ -190,22 +168,18 @@ describe("composeNightPrompt", () => {
 		assert.doesNotMatch(text, /Working copy:/);
 	});
 
-	it("contains only the tasks approved in the previous session", () => {
-		const text = composeNightPrompt({
-			...base,
-			instructions: "",
-			approvedTasks: [
-				{
-					id: "abcd1234",
-					title: "Approved docs",
-					goal: "Correct docs",
-					repository: "/repo",
-					definitionOfDone: "Draft PR opened",
-				},
-			],
-		});
-		assert.match(text, /Only these tasks are authorized/);
-		assert.match(text, /TODO-abcd1234 Approved docs/);
+	it("creates a run-scoped ledger and permits discovery during execution", () => {
+		const text = composeNightPrompt({ ...base, instructions: "", runId: "2026-08-29-2130" });
+		assert.match(text, /Discover tonight's work/);
+		assert.match(text, /tools\.todo\(\{ action: 'create'/);
+		assert.match(text, /Tag every item `night` and `run:2026-08-29-2130`/);
+		assert.match(text, /Discovery may add tasks/);
+		assert.doesNotMatch(text, /night_plan|approved ledger|approval happened|Only these tasks/);
+	});
+
+	it("includes run tags in the no-ledger reminder", () => {
+		assert.match(composeLedgerReminder("/report.md", "run-one"), /run:run-one/);
+		assert.match(composeLedgerReminder("/report.md"), /tag|Tag/);
 	});
 });
 
@@ -215,8 +189,8 @@ describe("orchestrator contract", () => {
 		assert.match(ORCHESTRATOR_CONTRACT, /action: 'spawn'/);
 		assert.match(ORCHESTRATOR_CONTRACT, /action: 'send'/);
 		assert.match(ORCHESTRATOR_CONTRACT, /action: 'status'/);
-		assert.match(ORCHESTRATOR_CONTRACT, /TODO-<approved id>/);
-		assert.match(ORCHESTRATOR_CONTRACT, /both spawn and send/);
+		assert.match(ORCHESTRATOR_CONTRACT, /TODO-<id>/);
+		assert.match(ORCHESTRATOR_CONTRACT, /ledger id as the conversation name/);
 		assert.match(ORCHESTRATOR_CONTRACT, /in the message/);
 		assert.match(ORCHESTRATOR_CONTRACT, /lastAnswer/);
 		assert.match(ORCHESTRATOR_CONTRACT, /Answers arrive automatically/);
@@ -246,7 +220,7 @@ describe("orchestrator contract", () => {
 		});
 		assert.match(nudge, /orchestrator/);
 		assert.match(nudge, /tools\.subagent/);
-		assert.match(nudge, /TODO-<approved id>/);
+		assert.match(nudge, /TODO-<id>/);
 		assert.match(nudge, /named status and lastAnswer/);
 		assert.doesNotMatch(nudge, /night: true|agents_run|nightTodoId/);
 	});
@@ -345,11 +319,11 @@ describe("capability journal", () => {
 		assert.doesNotMatch(compose(), /Capability journal/);
 	});
 
-	it("checks status before retrying a worker failure without rewriting approved scope", () => {
+	it("checks status before retrying a worker failure without rewriting task scope", () => {
 		assert.match(ORCHESTRATOR_CONTRACT, /admission or worker failure/);
 		assert.match(ORCHESTRATOR_CONTRACT, /Inspect named status first/);
 		assert.match(ORCHESTRATOR_CONTRACT, /child may already have performed work/);
-		assert.match(ORCHESTRATOR_CONTRACT, /Never rewrite or shorten the approved scope/);
+		assert.match(ORCHESTRATOR_CONTRACT, /Never rewrite or shorten the task scope/);
 	});
 });
 
