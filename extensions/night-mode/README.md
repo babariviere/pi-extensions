@@ -193,8 +193,10 @@ ladder: they drop untracked and ignored files, which is exactly where local
 toolchain config and credentials live. `sandboxCopyFiles` still copies a
 configured list (default `mise.local.toml`) for the strategies that need it.
 
-A failed clone degrades to "work in the real checkout" with a warning rather
-than blocking the run. Set `sandboxRoot: ""` to disable cloning entirely.
+An ordinary copy failure degrades to "work in the real checkout" with a warning.
+Shared VCS pointer state instead blocks startup, before copying or rewriting
+remotes, rather than falling back to the real checkout. Set `sandboxRoot: ""`
+to disable cloning entirely.
 
 ### One workspace per subagent
 
@@ -210,6 +212,11 @@ commits in one `jj log` of the clone instead of round-tripping through the
 remote. A fresh workspace still checks out tracked files only, so
 `sandboxCopyFiles` is replayed into it and the new path is trusted like any
 other copy.
+
+With jj 0.46, child workspaces inherit Git colocation when the clone is
+colocated and `git.colocate` is true. Their `.git` pointer files intentionally
+share the private clone, not the user's repository. `jj workspace forget`
+unlinks the native Git worktree during release, before its directory is removed.
 
 Placement and release are host-controlled. Night runs reject caller `cwd`;
 `artifactsDir` remains host-only. Brief paths and requested outputs in
@@ -324,11 +331,13 @@ coordinator (the one process not subject to the gate) saw nothing wrong.
 ### When the copy is not actually independent
 
 A git linked worktree keeps `.git` as a pointer file, and a secondary jj
-workspace keeps `.jj/repo` as one. Copying either produces a directory that still
-writes into the repository you were trying to protect, and whose store sits
-outside the writable roots, so VCS commands fail confusingly. Both are detected
-and reported in `## Needs you`, since no amount of trusting fixes them. Start the
-run from the main checkout when it matters.
+workspace keeps `.jj/repo` as one, including jj 0.46 colocated secondary
+workspaces. Copying either preserves shared state or breaks relative pointers.
+Night-mode refuses these sources before copying and aborts startup, without
+rewriting remotes or falling back to the original checkout. Remote rewriting
+also refuses pointer state if called directly. Start the run from the main
+checkout, or an independently cloned repository. No automatic detachment is
+attempted.
 
 The copies are **not** deleted when the run ends: a morning review needs them.
 Garbage-collect the root when you are done with it.

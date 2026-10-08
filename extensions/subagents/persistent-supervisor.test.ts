@@ -122,6 +122,27 @@ test("named admissions are journaled before launch, deduplicated, and retain pin
 	});
 });
 
+test("host descriptions expose display state and storage without answer text", async () => {
+	await fixture(async (ref, fake, owner) => {
+		await owner.spawn("review", "scope", "one", policy);
+		const kernel = fake.opened[0]!;
+		const [working] = owner.describe();
+		assert.equal(working!.state, "working");
+		assert.equal(working!.task, "scope");
+		assert.equal(working!.model, "test/cheap");
+		assert.equal(working!.storage, kernel.spec.directory);
+		assert.equal(working!.cwd, kernel.spec.context.cwd);
+		assert.equal(working!.conversationId, "8");
+		assert.ok(working!.createdAt > 0);
+		assert.ok(kernel.spec.directory.startsWith(join(ref.cwd, "subagent-runs")));
+		fake.answer(kernel, "one", "12", "secret answer");
+		await until(() => owner.describe()[0]!.state === "idle");
+		const [idle] = owner.describe();
+		assert.equal(idle!.lastAnswerId, "12");
+		assert.doesNotMatch(JSON.stringify(idle), /secret answer/);
+	});
+});
+
 test("spawn cwd is pinned across sends, stop/resume and supervisor recovery", async () => {
 	await fixture(async (ref, fake, owner) => {
 		const target = join(ref.cwd, "other");

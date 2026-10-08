@@ -9,6 +9,7 @@ import type { AgentWorkspace } from "../night-mode/agent-workspace.ts";
 import { builtinAgent } from "./discovery.ts";
 import { openDurableStorage } from "./durable-storage.ts";
 import { openConversationWorker, type WorkerConnection, type WorkerFactory } from "./conversation-backend.ts";
+import type { SubagentHostEntry } from "./host-events.ts";
 import { allocateNightWorkspaces, releaseNightWorkspaces, relocateWorkspacePaths } from "./night-workspace.ts";
 import { sanitizeSegment } from "./paths.ts";
 import { validateHostModel, type HostModel } from "./persistent-model.ts";
@@ -50,6 +51,19 @@ export interface SubagentStatus {
 	lastAnswer?: LastAnswer;
 	error?: string;
 }
+const asHostEntry = (record: NamedRecord): SubagentHostEntry => ({
+	name: record.name,
+	state: pending(record).length ? "working" : "idle",
+	task: record.inputs[0]?.message ?? "",
+	createdAt: record.createdAt,
+	cwd: record.spec.context.cwd,
+	...(record.spec.request.overrides?.model ? { model: record.spec.request.overrides.model } : {}),
+	storage: record.spec.directory,
+	...(record.conversationId ? { conversationId: record.conversationId } : {}),
+	...(record.lastAnswer ? { lastAnswerId: record.lastAnswer.id } : {}),
+	...(record.error ? { error: record.error } : {}),
+	...(record.retired ? { retired: true } : {}),
+});
 export interface SpawnPolicy extends HostModel {
 	timeoutMs: number;
 }
@@ -183,6 +197,10 @@ export class DurableSupervisor {
 	}
 	list(): SubagentStatus[] {
 		return [...this.#records.values()].map((record) => asStatus(record, false));
+	}
+	/** Host display entries, without answer text. Acknowledges nothing. */
+	describe(): SubagentHostEntry[] {
+		return [...this.#records.values()].map(asHostEntry);
 	}
 	#healthy(): void {
 		if (this.#failure) throw this.#failure;

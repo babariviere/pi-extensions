@@ -83,6 +83,7 @@ import {
 	prepareWorkingCopy,
 	rewriteRemotesToHttps,
 	sandboxPathFor,
+	SharedRepositoryStateError,
 } from "./sandbox-clone.ts";
 import { capabilityJournalPathFor } from "./capability-journal.ts";
 import { preflightPathFor } from "./preflight.ts";
@@ -652,9 +653,10 @@ export default function (pi: ExtensionAPI): void {
 	 * Clone the session's checkout into a private working copy for tonight, so an
 	 * unattended run cannot dirty, stash or reset the tree the user left open.
 	 *
-	 * Returns undefined when cloning is disabled or fails. A failed clone degrades
+	 * Returns undefined when cloning is disabled or an ordinary copy fails. A failed clone degrades
 	 * to "work in the real checkout" with a warning rather than blocking the run:
 	 * the night still has value, it just loses one layer of containment.
+	 * Shared repository state instead aborts startup before remote rewriting.
 	 */
 	async function prepareWorkspace(
 		config: NightConfig,
@@ -710,6 +712,7 @@ export default function (pi: ExtensionAPI): void {
 				problems: [...trusted.problems, ...configHome.problems, ...remotes.problems],
 			};
 		} catch (error) {
+			if (error instanceof SharedRepositoryStateError) throw error;
 			ctx.ui.notify(
 				`night-mode: no private working copy tonight (${String(error)}). The run will use ${cwd}.`,
 				"warning",
