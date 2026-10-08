@@ -179,9 +179,24 @@ const defaultRun = async (command: CloneCommand): Promise<void> => {
 	await execFileAsync(command.command, command.args);
 };
 
+/** Unsafe copies must stop startup, not fall back to the user's checkout. */
+export class SharedRepositoryStateError extends Error {
+	constructor(path: string, problems: string[]) {
+		super(
+			`night-mode: cannot make an independent copy of ${path}: ${problems.join("; ")}. Start from the main checkout.`,
+		);
+		this.name = "SharedRepositoryStateError";
+	}
+}
+
+function requireIndependentRepository(path: string): void {
+	const problems = detectSharedStateWarnings(path);
+	if (problems.length > 0) throw new SharedRepositoryStateError(path, problems);
+}
+
 /**
  * Clone `source` into `destination`, trying each strategy in turn. Rejects only
- * when every strategy fails, with all the failures in the message: a silent
+ * for shared repository state or when every strategy fails: a silent
  * fallback to "no sandbox" would be worse than not starting the run.
  *
  * Async so the copy does not block the caller's event loop.
@@ -189,6 +204,9 @@ const defaultRun = async (command: CloneCommand): Promise<void> => {
 export async function createRunSandbox(input: CreateSandboxInput): Promise<CreatedSandbox> {
 	const { source, destination } = input;
 	if (!existsSync(source)) throw new Error(`night-mode: source ${source} does not exist`);
+	// Copying pointer files preserves shared state (or breaks relative pointers).
+	// Refuse before copying, trusting configs, or rewriting any remotes.
+	requireIndependentRepository(source);
 
 	const run = input.run ?? defaultRun;
 	const platform = input.platform ?? process.platform;
@@ -217,6 +235,8 @@ export async function createRunSandbox(input: CreateSandboxInput): Promise<Creat
 			continue;
 		}
 		copyLocalFiles(source, destination, input.copyFiles ?? []);
+		// Recheck the result in case the source changed during the copy.
+		requireIndependentRepository(destination);
 		return { path: destination, strategy, fallbacks };
 	}
 
@@ -574,6 +594,13 @@ export async function rewriteRemotesToHttps(
 		present?: { git: boolean; jj: boolean };
 	} = {},
 ): Promise<RewriteRemotesResult> {
+	const sharedState = detectSharedStateWarnings(path);
+	if (sharedState.length > 0) {
+		return {
+			rewritten: [],
+			problems: sharedState.map((problem) => `remotes: refusing shared repository state: ${problem}`),
+		};
+	}
 	const present = opts.present ?? { git: existsSync(join(path, ".git")), jj: existsSync(join(path, ".jj")) };
 	if (!present.git && !present.jj) return { rewritten: [], problems: [] };
 
