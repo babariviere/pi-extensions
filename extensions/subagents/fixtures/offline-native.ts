@@ -64,6 +64,23 @@ export default async function offlineNative(pi: ExtensionAPI): Promise<void> {
 				);
 			}
 			const toolResult = [...request.messages].reverse().find((message) => message.role === "toolResult");
+			if (lastUser.includes("directory probe")) {
+				const reversed = [...request.messages].reverse();
+				const inputIndex = reversed.findIndex((message) => message.role === "user");
+				const probeResult = reversed.slice(0, inputIndex).find((message) => message.role === "toolResult");
+				if (!getCurrentSystemPrompt(request.messages).includes("Selected directory context marker"))
+					return fauxAssistantMessage("Selected directory context was lost");
+				if (!probeResult)
+					return fauxAssistantMessage(
+						[
+							fauxToolCall("codemode", {
+								code: 'text(await tools.read({path:"location.txt"})); text(await tools.bash({command:"pwd"})); await tools.write({path:"child-output.txt",content:"selected cwd"});',
+							}),
+						],
+						{ stopReason: "toolUse" },
+					);
+				return fauxAssistantMessage(`Directory probe: ${JSON.stringify(probeResult.content)}`);
+			}
 			if (userText.includes("recover store")) {
 				const results = request.messages.filter((message) => message.role === "toolResult");
 				if (results.length === 0)

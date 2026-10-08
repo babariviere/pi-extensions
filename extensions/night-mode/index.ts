@@ -22,13 +22,7 @@
 
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import type {
-	ExtensionAPI,
-	ExtensionCommandContext,
-	ExtensionContext,
-	SessionBoundaryDraft,
-} from "@earendil-works/pi-coding-agent";
-import { Type } from "typebox";
+import type { ExtensionAPI, ExtensionContext, SessionBoundaryDraft } from "@earendil-works/pi-coding-agent";
 import {
 	FIVE_HOUR_LABEL,
 	findWindow,
@@ -81,14 +75,7 @@ import {
 	windowStartingAt,
 } from "./night-mode.ts";
 import { clearActiveNightRun, readActiveNightRun, type NightSandboxRequest, writeActiveNightRun } from "./night-run.ts";
-import { answerNightModePlanningQuery, NIGHT_MODE_PLANNING_QUERY_EVENT } from "./protocol.ts";
 import { SANDBOX_REQUEST_EVENT, type SandboxRequestEvent } from "../sandbox/protocol.ts";
-import {
-	createActionTool,
-	type ActionDescriptor,
-	type ActionContext,
-	type ActionProvider,
-} from "../shared/action-tools.ts";
 import { agentWorkspacesRoot } from "./agent-workspace.ts";
 import {
 	createRunSandbox,
@@ -96,6 +83,7 @@ import {
 	prepareWorkingCopy,
 	rewriteRemotesToHttps,
 	sandboxPathFor,
+	SharedRepositoryStateError,
 } from "./sandbox-clone.ts";
 import { capabilityJournalPathFor } from "./capability-journal.ts";
 import { preflightPathFor } from "./preflight.ts";
@@ -106,38 +94,24 @@ import {
 	composeLedgerReminder,
 	composeNightPrompt,
 	composeNudge,
-	composePlanningPrompt,
 	composeReportHeader,
 	composeResumePrompt,
 	hasInstructions,
 	timelineLine,
 } from "./prompt.ts";
 import { scheduledStartAt } from "./schedule.ts";
-import {
-	NIGHT_PLAN_HANDOFF_ENTRY,
-	NIGHT_PLAN_STARTED_ENTRY,
-	NightPlanTaskSchema,
-	NightCoverageSchema,
-	planProblems,
-	reviewNightPlan,
-	seedApprovedLedger,
-	type NightCoverage,
-	type NightPlanHandoff,
-	type NightPlanTask,
-} from "./plan.ts";
 
 const TICK_MS = 30_000;
 const STATUS_KEY = "night-mode";
 const PAUSE_ENTRY = "night-mode:pause";
 const STATE_EVENT = "night-mode:state";
 const CONTINUATION_MESSAGE = "night-mode:continuation";
+const SCHEDULE_ENTRY = "night-mode:schedule";
 
 /** Hard cap on automated "you are not done" follow-ups in one night. */
 const MAX_CONTINUATIONS = 10;
 
-type PendingBoundaryAction =
-	| { kind: "planning-reminder" }
-	| { kind: "ledger-nudge"; fingerprint: string; openCount: number; attempt: number };
+type PendingBoundaryAction = { fingerprint: string; openCount: number; attempt: number };
 
 export interface NightModeState {
 	enabled: boolean;
@@ -175,10 +149,11 @@ export default function (pi: ExtensionAPI): void {
 	let resumeAt: number | undefined;
 	let resumeTimer: ReturnType<typeof setTimeout> | undefined;
 	let tickTimer: ReturnType<typeof setInterval> | undefined;
-	let pendingStart: { handoff: NightPlanHandoff; ctx: ExtensionContext } | undefined;
+	let pendingStart: { at: number; ctx: ExtensionContext } | undefined;
 	let startTimer: ReturnType<typeof setTimeout> | undefined;
 	let starting = false;
-	const cancelledPlanEntry = "night-mode:approved-plan-cancelled";
+	let startGeneration = 0;
+	let startingAt: number | undefined;
 	let unsubscribeUsage: (() => void) | undefined;
 	/** Session-only window override, set by `/night start`. */
 	let windowOverride: NightWindow | undefined;
@@ -210,24 +185,7 @@ export default function (pi: ExtensionAPI): void {
 
 	// ── night run (prompt / instructions / report) ────────────────────────
 
-	/** Astra's proposal in the current session, before a fresh execution session is created. */
-	let planning:
-		| {
-				config: NightConfig;
-				commandContext: ExtensionCommandContext;
-				prompt: string;
-				instructions: string;
-				startedAt: Date;
-				windowLabel: string;
-				previousModel?: { provider: string; id: string };
-				approved?: NightPlanTask[];
-				reviewDismissed?: boolean;
-				reminded?: boolean;
-				handoffStarted?: boolean;
-		  }
-		| undefined;
-
-	/** Set for the lifetime of an approved execution run. */
+	/** Set for the lifetime of a direct execution run. */
 	let run:
 		| {
 				config: NightConfig;
@@ -466,7 +424,7 @@ export default function (pi: ExtensionAPI): void {
 		const attempt = run.nudges + 1;
 		const message =
 			items.length === 0
-				? composeLedgerReminder(run.reportPath)
+				? composeLedgerReminder(run.reportPath, run.runId)
 				: composeNudge({
 						unresolved: formatUnresolved(open),
 						reportPath: run.reportPath,
@@ -476,7 +434,7 @@ export default function (pi: ExtensionAPI): void {
 		return { message, fingerprint: current, openCount: open.length, attempt };
 	}
 
-	/** Switch to one configured model, failing before a phase starts. */
+	/** Switch to the configured model, failing before execution starts. */
 	async function selectConfiguredModel(ctx: ExtensionContext, qualified: string): Promise<string | undefined> {
 		const slash = qualified.indexOf("/");
 		if (slash <= 0 || slash === qualified.length - 1) return `night-mode: invalid model '${qualified}'`;
@@ -489,11 +447,14 @@ export default function (pi: ExtensionAPI): void {
 		return undefined;
 	}
 
-	/** Start Astra in this session. It may explore, but it cannot create the execution run. */
-	async function startPlanning(ctx: ExtensionCommandContext, windowLabel: string): Promise<string | undefined> {
-		if (planning || run || pendingStart || starting) return "night-mode: a plan or run is already in flight";
+	/** Load the routine and begin execution in the current session. */
+	async function startRun(
+		ctx: ExtensionContext,
+		windowLabel: string,
+		generation: number,
+	): Promise<string | undefined> {
 		const cwd = process.cwd();
-		if (readActiveNightRun()) return "night-mode: another planning or execution run is already active";
+		if (run || readActiveNightRun()) return "night-mode: another run is already active";
 		const config = readNightConfig(cwd);
 		const promptPath = resolvePath(config.promptPath, cwd);
 		if (!existsSync(promptPath)) return `night-mode: prompt file not found at ${promptPath}`;
@@ -511,46 +472,9 @@ export default function (pi: ExtensionAPI): void {
 		} catch {
 			instructions = "";
 		}
-		const previousModel = ctx.model ? { provider: ctx.model.provider, id: ctx.model.id } : undefined;
-		const modelError = await selectConfiguredModel(ctx, config.plannerModel);
+		const modelError = await selectConfiguredModel(ctx, config.orchestratorModel);
+		if (generation !== startGeneration || !enabled) return "night-mode: start cancelled";
 		if (modelError) return modelError;
-		const planningSandbox: NightSandboxRequest = { mode: "read-only", allowWrite: [], denyRead: [] };
-		planning = {
-			config,
-			commandContext: ctx,
-			prompt,
-			instructions,
-			startedAt: new Date(),
-			windowLabel,
-			...(previousModel ? { previousModel } : {}),
-		};
-		const sessionId = ctx.sessionManager.getSessionId();
-		writeActiveNightRun({
-			phase: "planning",
-			startedAt: planning.startedAt.getTime(),
-			reportPath: reportPathFor(config, planning.startedAt, cwd),
-			maxPullRequests: config.maxPullRequests,
-			...(sessionId ? { sessionId } : {}),
-			sandbox: planningSandbox,
-			mcp: { readOnly: true },
-		});
-		requestSandbox(planningSandbox, "night planning started");
-		deliver(composePlanningPrompt({ prompt, instructions, windowLabel, mcpReadOnly: config.mcpReadOnly }), ctx);
-		return undefined;
-	}
-
-	/** Create the approved execution run in the fresh orchestrator session. */
-	async function startRun(
-		ctx: ExtensionContext,
-		windowLabel: string,
-		handoff: NightPlanHandoff,
-	): Promise<string | undefined> {
-		const cwd = process.cwd();
-		if (readActiveNightRun()) return "night-mode: another planning or execution run became active before handoff";
-		const config = readNightConfig(cwd);
-		const prompt = handoff.prompt;
-		const instructionsPath = resolvePath(config.instructionsPath, cwd);
-		const instructions = handoff.instructions;
 		const startedAt = new Date();
 		const reportPath = reportPathFor(config, startedAt, cwd);
 		try {
@@ -566,6 +490,8 @@ export default function (pi: ExtensionAPI): void {
 		// Awaited: cloning a real repository takes seconds, and doing it
 		// synchronously would freeze the UI for the whole copy.
 		const prepared = await prepareWorkspace(config, cwd, startedAt, ctx);
+		if (generation !== startGeneration || !enabled) return "night-mode: start cancelled";
+		if (readActiveNightRun()) return "night-mode: another run became active during startup";
 		const workspace = prepared.path;
 		// Set on this process, so every shell and every subagent `pi` the run spawns
 		// inherits it: without it the first jj command in the clone fails with
@@ -580,12 +506,10 @@ export default function (pi: ExtensionAPI): void {
 		// first ledger write fail at 2am.
 		const ledgerPath = resolveLedgerDir(config, cwd);
 		const runId = runIdFor(startedAt);
-		let approvedTasks;
 		try {
 			mkdirSync(ledgerPath, { recursive: true });
-			approvedTasks = await seedApprovedLedger(ledgerPath, runId, handoff.tasks, startedAt);
 		} catch (error) {
-			return `night-mode: cannot seed approved ledger at ${ledgerPath}: ${String(error)}`;
+			return `night-mode: cannot create ledger at ${ledgerPath}: ${String(error)}`;
 		}
 		// Set on this process, like XDG_CONFIG_HOME below: this is what makes the
 		// coordinator's own todo tool write the ledger to the night store, and every
@@ -626,11 +550,9 @@ export default function (pi: ExtensionAPI): void {
 		// Written before the request is emitted: subagent processes read the policy
 		// from this file, so it has to be on disk before any child can start.
 		writeActiveNightRun({
-			phase: "execution",
 			startedAt: startedAt.getTime(),
 			reportPath,
 			maxPullRequests: config.maxPullRequests,
-			approvedTaskIds: approvedTasks.map((task) => task.id),
 			ledgerDir: ledgerPath,
 			// Published rather than left in this process's environment: a child the
 			// spawn path cannot hand an env to reads these back from the file.
@@ -672,7 +594,6 @@ export default function (pi: ExtensionAPI): void {
 				windowLabel,
 				startedAt,
 				runId,
-				approvedTasks,
 				...(workspace ? { workspacePath: workspace } : {}),
 				preflightPath,
 				capabilityPath,
@@ -732,9 +653,10 @@ export default function (pi: ExtensionAPI): void {
 	 * Clone the session's checkout into a private working copy for tonight, so an
 	 * unattended run cannot dirty, stash or reset the tree the user left open.
 	 *
-	 * Returns undefined when cloning is disabled or fails. A failed clone degrades
+	 * Returns undefined when cloning is disabled or an ordinary copy fails. A failed clone degrades
 	 * to "work in the real checkout" with a warning rather than blocking the run:
 	 * the night still has value, it just loses one layer of containment.
+	 * Shared repository state instead aborts startup before remote rewriting.
 	 */
 	async function prepareWorkspace(
 		config: NightConfig,
@@ -790,6 +712,7 @@ export default function (pi: ExtensionAPI): void {
 				problems: [...trusted.problems, ...configHome.problems, ...remotes.problems],
 			};
 		} catch (error) {
+			if (error instanceof SharedRepositoryStateError) throw error;
 			ctx.ui.notify(
 				`night-mode: no private working copy tonight (${String(error)}). The run will use ${cwd}.`,
 				"warning",
@@ -858,8 +781,7 @@ export default function (pi: ExtensionAPI): void {
 	}
 
 	function statusText(): string | undefined {
-		if (pendingStart)
-			return `🌙 scheduled for ${formatDateTimeStamp(new Date(pendingStart.handoff.scheduledStartAt ?? Date.now()))}`;
+		if (pendingStart) return `🌙 scheduled for ${formatDateTimeStamp(new Date(pendingStart.at))}`;
 		if (!enabled || !inWindow) return undefined;
 		if (paused) {
 			const left = resumeAt ? formatDuration(resumeAt - Date.now()) : "?";
@@ -1002,7 +924,7 @@ export default function (pi: ExtensionAPI): void {
 	}
 
 	function evaluate(): void {
-		void startPendingPlan();
+		void startPendingRun();
 		const active = enabled && !pendingStart && isWithinWindow(new Date(), currentWindow());
 		if (active !== inWindow) {
 			inWindow = active;
@@ -1045,70 +967,21 @@ export default function (pi: ExtensionAPI): void {
 		}
 	}
 
-	function handoffFromSession(ctx: ExtensionContext): NightPlanHandoff | undefined {
+	/** Restore only an outstanding direct schedule. */
+	function scheduleFromSession(ctx: ExtensionContext): number | undefined {
 		try {
 			const entries = ctx.sessionManager.getEntries() as Array<{ customType?: string; data?: unknown }>;
-			let handoff: NightPlanHandoff | undefined;
-			const started = new Set<number>();
-			for (const entry of entries) {
-				if (entry.customType === NIGHT_PLAN_HANDOFF_ENTRY) handoff = entry.data as NightPlanHandoff;
-				if (entry.customType === NIGHT_PLAN_STARTED_ENTRY || entry.customType === cancelledPlanEntry) {
-					const value = entry.data as { planningStartedAt?: number } | undefined;
-					if (typeof value?.planningStartedAt === "number") started.add(value.planningStartedAt);
-				}
+			for (let i = entries.length - 1; i >= 0; i--) {
+				if (entries[i]?.customType !== SCHEDULE_ENTRY) continue;
+				const data = entries[i].data as { status?: string; at?: number } | undefined;
+				return data?.status === "scheduled" && typeof data.at === "number" && Number.isFinite(data.at)
+					? data.at
+					: undefined;
 			}
-			if (!handoff || handoff.version !== 1 || !Array.isArray(handoff.tasks) || handoff.tasks.length === 0)
-				return undefined;
-			return started.has(handoff.planningStartedAt) ? undefined : handoff;
 		} catch {
-			return undefined;
+			// No session history available.
 		}
-	}
-
-	async function handoffApprovedPlan(ctx: ExtensionCommandContext): Promise<void> {
-		const state = planning;
-		if (!state?.approved?.length || state.handoffStarted) return;
-		state.handoffStarted = true;
-		const planningSession = ctx.sessionManager.getSessionFile();
-		const handoff: NightPlanHandoff = {
-			version: 1,
-			...(planningSession ? { planningSession } : {}),
-			planningStartedAt: state.startedAt.getTime(),
-			scheduledStartAt: scheduledStartAt(new Date()),
-			windowLabel: state.windowLabel,
-			cwd: process.cwd(),
-			prompt: state.prompt,
-			instructions: state.instructions,
-			tasks: state.approved,
-		};
-		const slash = state.config.orchestratorModel.indexOf("/");
-		if (slash <= 0 || slash === state.config.orchestratorModel.length - 1) {
-			state.handoffStarted = false;
-			ctx.ui.notify(`night-mode: invalid orchestrator model '${state.config.orchestratorModel}'`, "error");
-			return;
-		}
-		const provider = state.config.orchestratorModel.slice(0, slash);
-		const modelId = state.config.orchestratorModel.slice(slash + 1);
-		const available = await ctx.modelRegistry.getAvailable();
-		if (!available.some((model) => model.provider === provider && model.id === modelId)) {
-			state.handoffStarted = false;
-			ctx.ui.notify(`night-mode: orchestrator model ${state.config.orchestratorModel} is unavailable`, "error");
-			return;
-		}
-		requestSandbox(null, "night planning approved");
-		clearActiveNightRun();
-		const result = await ctx.newSession({
-			...(planningSession ? { parentSession: planningSession } : {}),
-			setup: async (session) => {
-				session.appendModelChange(provider, modelId);
-				session.appendCustomEntry(NIGHT_PLAN_HANDOFF_ENTRY, handoff);
-				session.appendSessionInfo(`Night execution ${formatDateTimeStamp(new Date())}`);
-			},
-		});
-		if (result.cancelled) {
-			state.handoffStarted = false;
-			ctx.ui.notify("night-mode: creation of the execution session was cancelled", "error");
-		}
+		return undefined;
 	}
 
 	// ── wiring ───────────────────────────────────────────────────────────
@@ -1119,95 +992,42 @@ export default function (pi: ExtensionAPI): void {
 		evaluate();
 	});
 
-	const nightPlanDescriptor: ActionDescriptor = {
-		name: "plan",
-		description:
-			"Submit the complete proposed night plan for interactive user review. Planning only: this action never executes tasks.",
-		inputSchema: Type.Object({
-			tasks: Type.Array(NightPlanTaskSchema, { minItems: 1 }),
-			omissions: Type.Optional(Type.Array(NightCoverageSchema)),
-		}) as unknown as Record<string, unknown>,
-		outputSchema: Type.Object({
-			status: Type.Union([Type.Literal("approved"), Type.Literal("dismissed")]),
-			message: Type.String(),
-			approved: Type.Optional(Type.Array(NightPlanTaskSchema)),
-		}) as unknown as Record<string, unknown>,
-	};
-	const nightActions: ActionProvider = {
-		name: "night",
-		description: "Interactive approval for a proposed unattended night run",
-		async list(request) {
-			const query = request.query?.trim().toLowerCase();
-			if (query && !`${nightPlanDescriptor.name} ${nightPlanDescriptor.description}`.toLowerCase().includes(query))
-				return [];
-			return [nightPlanDescriptor];
-		},
-		async describe(actionName) {
-			return actionName === nightPlanDescriptor.name ? nightPlanDescriptor : undefined;
-		},
-		async invoke(actionName, args, context: ActionContext) {
-			if (actionName !== nightPlanDescriptor.name) throw new Error(`Unknown night action: ${actionName}`);
-			if (!planning) {
-				throw new Error("No night planning phase is active");
-			}
-			const params = args as { tasks: NightPlanTask[]; omissions?: NightCoverage[] };
-			const problems = planProblems(params.tasks, params.omissions ?? [], planning.config.mcpReadOnly);
-			if (problems.length)
-				throw new Error(`Plan incomplete. Revise and resubmit tools.night_plan:\n${problems.join("\n")}`);
-			const approved = await reviewNightPlan(
-				context.extensionContext,
-				params.tasks,
-				params.omissions ?? [],
-				planning.config.mcpReadOnly,
-			);
-			planning.reviewDismissed = !approved;
-			if (!approved) {
-				return {
-					status: "dismissed",
-					message:
-						"The user dismissed the plan review without approving it. Night planning remains active. Wait for user feedback before revising and resubmitting with tools.night_plan. Do not execute any work.",
-				};
-			}
-			planning.approved = approved;
-			return {
-				status: "approved",
-				message: `${approved.length} task(s) approved and refined. Stop now. A fresh orchestrator session will execute them.`,
-				approved,
-			};
-		},
-	};
-	pi.registerTool(createActionTool(nightActions, nightPlanDescriptor));
-	const unsubscribePlanningQuery = pi.events.on(NIGHT_MODE_PLANNING_QUERY_EVENT, (value: unknown) => {
-		answerNightModePlanningQuery(value, planning !== undefined);
-	});
-
 	function clearPendingStart(): void {
+		startGeneration++;
 		if (startTimer) clearTimeout(startTimer);
 		startTimer = undefined;
 		pendingStart = undefined;
 	}
 
-	async function startPendingPlan(): Promise<void> {
+	function armStartTimer(): void {
+		if (!pendingStart || pendingStart.at <= Date.now()) return;
+		ctxRef?.ui.notify(`night-mode: scheduled for ${formatDateTimeStamp(new Date(pendingStart.at))}`, "info");
+		startTimer = setTimeout(() => void startPendingRun(), pendingStart.at - Date.now());
+		startTimer.unref?.();
+	}
+
+	async function startPendingRun(): Promise<void> {
 		const pending = pendingStart;
-		if (!pending || starting || Date.now() < (pending.handoff.scheduledStartAt ?? 0)) return;
+		if (!pending || starting || Date.now() < pending.at) return;
 		if (!pending.ctx.isIdle()) return;
 		starting = true;
+		startingAt = pending.at;
+		clearPendingStart();
+		const generation = startGeneration;
 		try {
-			const { ctx, handoff } = pending;
-			const config = readNightConfig(process.cwd());
-			const modelError = await selectConfiguredModel(ctx, config.orchestratorModel);
-			if (pendingStart !== pending) return;
-			clearPendingStart();
+			const { ctx } = pending;
 			enabled = true;
 			windowOverride = windowStartingAt(new Date());
-			const error = modelError ?? (await startRun(ctx, formatWindow(currentWindow()), handoff));
+			const error = await startRun(ctx, formatWindow(currentWindow()), generation);
+			if (generation !== startGeneration) return;
 			if (error) ctx.ui.notify(error, "error");
-			else pi.appendEntry(NIGHT_PLAN_STARTED_ENTRY, { planningStartedAt: handoff.planningStartedAt });
+			else pi.appendEntry(SCHEDULE_ENTRY, { status: "started", at: pending.at });
 		} catch (error) {
-			clearPendingStart();
-			pending.ctx.ui.notify(`night-mode: execution start failed: ${String(error)}`, "error");
+			if (generation === startGeneration)
+				pending.ctx.ui.notify(`night-mode: execution start failed: ${String(error)}`, "error");
 		} finally {
 			starting = false;
+			startingAt = undefined;
 			report();
 		}
 	}
@@ -1221,18 +1041,11 @@ export default function (pi: ExtensionAPI): void {
 			tickTimer = setInterval(() => evaluate(), TICK_MS);
 			tickTimer.unref?.();
 		}
-		const handoff = handoffFromSession(ctx);
-		if (handoff) {
-			pendingStart = { handoff, ctx };
-			const delay = Math.max(0, (handoff.scheduledStartAt ?? 0) - Date.now());
-			if (delay > 0) {
-				ctx.ui.notify(
-					`night-mode: scheduled for ${formatDateTimeStamp(new Date(handoff.scheduledStartAt!))}`,
-					"info",
-				);
-				startTimer = setTimeout(() => void startPendingPlan(), delay);
-				startTimer.unref?.();
-			} else await startPendingPlan();
+		const at = scheduleFromSession(ctx);
+		if (at !== undefined) {
+			pendingStart = { at, ctx };
+			armStartTimer();
+			if (at <= Date.now()) await startPendingRun();
 		}
 		evaluate();
 	});
@@ -1268,29 +1081,19 @@ export default function (pi: ExtensionAPI): void {
 		pendingRunEndNote = undefined;
 		if (!mayOfferBoundaryContinuation(event)) return;
 
-		let message: string | undefined;
-		if (planning) {
-			// A dismissed review withholds approval, it does not invite an automatic retry.
-			if (planning.reviewDismissed || planning.approved?.length || planning.reminded) return;
-			pendingBoundaryAction = { kind: "planning-reminder" };
-			message =
-				"[night-mode] Planning is not complete. Submit the proposed tasks with `tools.night_plan` in native codemode, then stop.";
-		} else {
-			const decision = maybeContinue();
-			if (!decision) return;
-			if ("endReason" in decision) {
-				pendingRunEndReason = decision.endReason;
-				pendingRunEndNote = decision.endNote;
-				return;
-			}
-			message = decision.message;
-			pendingBoundaryAction = {
-				kind: "ledger-nudge",
-				fingerprint: decision.fingerprint,
-				openCount: decision.openCount,
-				attempt: decision.attempt,
-			};
+		const decision = maybeContinue();
+		if (!decision) return;
+		if ("endReason" in decision) {
+			pendingRunEndReason = decision.endReason;
+			pendingRunEndNote = decision.endNote;
+			return;
 		}
+		const message = decision.message;
+		pendingBoundaryAction = {
+			fingerprint: decision.fingerprint,
+			openCount: decision.openCount,
+			attempt: decision.attempt,
+		};
 
 		if (!message) {
 			pendingBoundaryAction = undefined;
@@ -1310,47 +1113,20 @@ export default function (pi: ExtensionAPI): void {
 		pendingBoundaryAction = undefined;
 		if (!action) return;
 		if (!mayOfferBoundaryContinuation(event) || !event.context.canContinue) return;
-		if (action.kind === "planning-reminder") {
-			if (!planning) return;
-			planning.reminded = true;
-		} else {
-			if (!run) return;
-			run.lastFingerprint = action.fingerprint;
-			run.nudges = action.attempt;
-			noteTimeline(
-				`night-mode: boundary reached with ${action.openCount || "no"} ledger item(s) open, sending continuation ${action.attempt}/${MAX_CONTINUATIONS}`,
-			);
-		}
+		if (!run) return;
+		run.lastFingerprint = action.fingerprint;
+		run.nudges = action.attempt;
+		noteTimeline(
+			`night-mode: boundary reached with ${action.openCount || "no"} ledger item(s) open, sending continuation ${action.attempt}/${MAX_CONTINUATIONS}`,
+		);
 		return { continue: true };
 	});
 
 	// `agent_settled` is final and notification/cleanup-only. Any ledger decision
 	// made at the actionable boundary is applied here, after Pi has finished work.
-	pi.on("agent_settled", async (_event, ctx) => {
+	pi.on("agent_settled", () => {
 		agentBusy = false;
 		evaluate();
-		if (planning) {
-			// Dismissing review withholds approval, it does not leave planning.
-			// Do not reopen the checklist automatically while awaiting user feedback.
-			if (planning.reviewDismissed) return;
-			if (planning.approved?.length) {
-				await handoffApprovedPlan(planning.commandContext);
-				return;
-			}
-			// Without an actionable-boundary reminder (for example, after abort/error),
-			// leave planning available for explicit user feedback instead of restarting.
-			if (!planning.reminded) return;
-			const previous = planning.previousModel;
-			requestSandbox(null, "night planning stalled");
-			clearActiveNightRun();
-			planning = undefined;
-			if (previous) {
-				const model = ctx.modelRegistry.find(previous.provider, previous.id);
-				if (model) await pi.setModel(model);
-			}
-			ctx.ui.notify("night-mode: planning stopped after Astra failed to submit a plan twice", "error");
-			return;
-		}
 		const endReason = pendingRunEndReason;
 		const endNote = pendingRunEndNote;
 		pendingRunEndReason = undefined;
@@ -1390,11 +1166,6 @@ export default function (pi: ExtensionAPI): void {
 
 	pi.on("session_shutdown", async () => {
 		clearPendingStart();
-		if (planning) {
-			requestSandbox(null, "night planning session ended");
-			clearActiveNightRun();
-		}
-		planning = undefined;
 		endRun("session shutdown");
 		await lock().release();
 		clearResumeTimer();
@@ -1404,37 +1175,33 @@ export default function (pi: ExtensionAPI): void {
 		}
 		unsubscribeUsage?.();
 		unsubscribeUsage = undefined;
-		unsubscribePlanningQuery();
 	});
 
 	pi.registerCommand("night", {
 		description:
-			"Night mode: Astra plan approval, fresh Sol orchestration, wake lock, and usage guards (status | start | report | todos | on | off | resume)",
+			"Night mode: direct orchestration, scheduling, wake lock, and usage guards (status | start | start-now | schedule | report | todos | on | off | resume)",
 		getArgumentCompletions: (prefix) =>
-			["status", "start", "report", "todos", "on", "off", "resume"]
+			["status", "start", "start-now", "schedule", "report", "todos", "on", "off", "resume"]
 				.filter((v) => v.startsWith(prefix))
 				.map((value) => ({ value, label: value })),
 		handler: async (args, ctx) => {
 			ctxRef = ctx;
 			const action = args.trim().toLowerCase();
 
-			if (action === "start") {
-				enabled = true;
-				windowOverride = windowStartingAt(new Date());
-				evaluate();
-				const error = await startPlanning(ctx, formatWindow(currentWindow()));
-				if (error) {
-					ctx.ui.notify(error, "error");
+			if (action === "start" || action === "start-now" || action === "schedule") {
+				if (run || starting || (pendingStart && action === "schedule")) {
+					ctx.ui.notify("night-mode: a run or schedule is already in flight", "error");
 					return;
 				}
-				ctx.ui.notify(
-					[
-						`night-mode: planning started with ${planning?.config.plannerModel}`,
-						`execution window: ${formatWindow(currentWindow())}`,
-						"Astra will submit a checklist. No execution run exists until you approve tasks.",
-					].join("\n"),
-					"info",
-				);
+				if (pendingStart) pi.appendEntry(SCHEDULE_ENTRY, { status: "cancelled", at: pendingStart.at });
+				clearPendingStart();
+				enabled = true;
+				const at = action === "schedule" ? scheduledStartAt(new Date()) : Date.now();
+				pendingStart = { at, ctx };
+				if (action === "schedule") pi.appendEntry(SCHEDULE_ENTRY, { status: "scheduled", at });
+				armStartTimer();
+				if (at <= Date.now()) await startPendingRun();
+				evaluate();
 				return;
 			}
 
@@ -1491,20 +1258,9 @@ export default function (pi: ExtensionAPI): void {
 			if (action === "on" || action === "off") {
 				enabled = action === "on";
 				if (!enabled) {
-					if (pendingStart) {
-						pi.appendEntry(cancelledPlanEntry, { planningStartedAt: pendingStart.handoff.planningStartedAt });
-						clearPendingStart();
-					}
-					const previous = planning?.previousModel;
-					if (planning) {
-						requestSandbox(null, "night planning turned off");
-						clearActiveNightRun();
-					}
-					planning = undefined;
-					if (previous) {
-						const model = ctx.modelRegistry.find(previous.provider, previous.id);
-						if (model) await pi.setModel(model);
-					}
+					const at = pendingStart?.at ?? startingAt;
+					if (at !== undefined) pi.appendEntry(SCHEDULE_ENTRY, { status: "cancelled", at });
+					clearPendingStart();
 					endRun("turned off");
 					stopCaffeinate();
 					clearPause();
@@ -1546,7 +1302,7 @@ export default function (pi: ExtensionAPI): void {
 				`5h reset: ${resets ? formatDuration(new Date(resets).getTime() - Date.now()) : "unknown"}`,
 				`week usage: ${weekly === undefined ? "unknown" : `${Math.round(weekly)}% / ${DEFAULT_WEEKLY_THRESHOLD_PERCENT}%`}`,
 				`paused: ${paused ? `yes (${limitLabel(pausedReason)}), resume in ${resumeAt ? formatDuration(resumeAt - Date.now()) : "?"}` : "no"}`,
-				`phase: ${pendingStart ? `scheduled for ${formatDateTimeStamp(new Date(pendingStart.handoff.scheduledStartAt ?? Date.now()))}` : planning ? (planning.approved ? "plan approved, preparing handoff" : "planning with Astra") : run ? "executing approved plan" : "idle"}`,
+				`phase: ${pendingStart ? `scheduled for ${formatDateTimeStamp(new Date(pendingStart.at))}` : run ? "executing" : "idle"}`,
 				`run: ${run ? `since ${formatDateTimeStamp(run.startedAt)}, report ${run.reportPath}` : "none"}`,
 				`working copy: ${run?.workspacePath ?? (run ? "session checkout (no clone)" : "n/a")}`,
 				`ledger: ${ledgerSummary()}`,

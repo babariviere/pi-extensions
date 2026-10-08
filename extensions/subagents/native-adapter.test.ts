@@ -15,7 +15,12 @@ import {
 	type Message,
 	type Provider,
 } from "@earendil-works/pi-ai";
-import { ModelRuntime, SettingsManager, type ExtensionFactory } from "@earendil-works/pi-coding-agent";
+import {
+	ModelRuntime,
+	SettingsManager,
+	type ExtensionFactory,
+	type ToolLoadout,
+} from "@earendil-works/pi-coding-agent";
 import { createRegistry, Harness, MemoryStorage, type Conversation, GenerationTask } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { SandboxSession } from "../sandbox/index.ts";
@@ -79,6 +84,52 @@ test("codemode-only presentation hides direct declarations but keeps them callab
 		]);
 		const { conversation } = await start(adapter);
 		await submit(conversation);
+	});
+});
+
+test("native loadout supplies SDK prompt guidelines to newer presentation hooks", async () => {
+	await fixture(async ({ open, start, faux }) => {
+		const adapter = await open(
+			(pi) => {
+				pi.registerTool({
+					name: "guided_tool",
+					label: "guided",
+					description: "Guided tool",
+					exposure: "codemode",
+					promptGuidelines: [" Use guided_tool carefully. ", "", "Use guided_tool carefully."],
+					parameters: Type.Object({}),
+					execute: async () => ({ content: [], details: undefined }),
+				});
+			},
+			{ settingsManager: SettingsManager.inMemory({ defaultTools: ["+codemode"], codemode: { mode: "only" } }) },
+		);
+		const codemode = adapter.session.getToolDefinition("codemode")!;
+		const prepare = codemode.prepareLoadout!;
+		let calls = 0;
+		// Emulate the Pi 1.0.4 hook even when tests use an older SDK peer.
+		codemode.prepareLoadout = (loadout) => {
+			const current = loadout as ToolLoadout & { getPromptGuidelines(name: string): readonly string[] };
+			assert.deepEqual(current.getPromptGuidelines("guided_tool"), ["Use guided_tool carefully."]);
+			assert.deepEqual(current.getPromptGuidelines("codemode"), codemode.promptGuidelines);
+			assert.deepEqual(
+				current.getPromptGuidelines("read"),
+				adapter.session.getToolDefinition("read")!.promptGuidelines,
+			);
+			assert.deepEqual(current.getPromptGuidelines("missing_tool"), []);
+			calls++;
+			return prepare(loadout);
+		};
+		adapter.refreshTools();
+		assert.equal(calls, 1);
+		assert.deepEqual(
+			adapter.extension.tools?.map((tool) => tool.name),
+			["codemode"],
+		);
+		assert.ok(adapter.session.getCallableToolNames().includes("guided_tool"));
+		faux.setResponses([fauxAssistantMessage("done")]);
+		const { conversation } = await start(adapter);
+		await submit(conversation);
+		assert.ok(calls > 1);
 	});
 });
 

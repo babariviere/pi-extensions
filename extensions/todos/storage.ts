@@ -60,7 +60,7 @@ export async function generateTodoId(todosDir: string): Promise<string> {
 	throw new Error("Failed to generate unique todo id");
 }
 
-/** Create a todo atomically. This is shared by the todo tool and host-owned workflows such as night approval. */
+/** Create a todo atomically in the file-backed store. */
 export async function createTodo(todosDir: string, input: CreateTodoInput): Promise<TodoRecord> {
 	await ensureTodosDir(todosDir);
 	for (let attempt = 0; attempt < 10; attempt += 1) {

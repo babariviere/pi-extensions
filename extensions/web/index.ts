@@ -1,10 +1,10 @@
 /**
  * web extension for pi
  *
- * Two tools:
- *   - web_search    : ranked web links + snippets via Kagi (consumer session token).
- *   - fetch_content : URL -> Markdown (local defuddle), with a git-repo fast path
- *                     that clones + summarizes instead of scraping.
+ * One tool, web, with search and fetch actions:
+ *   - search : ranked web links + snippets via Kagi (consumer session token).
+ *   - fetch  : URL -> Markdown (local defuddle), with a git-repo fast path
+ *              that clones + summarizes instead of scraping.
  *
  * Command:
  *   - /kagi-status  : validate the Kagi session token.
@@ -17,19 +17,17 @@
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { createFetchContentTool } from "./fetch.ts";
-import { createWebSearchTool } from "./search.ts";
 import { getKagiToken, kagiSearch } from "./search/kagi.ts";
 import { DEFAULT_SETTINGS } from "./settings.ts";
+import { createWebTool } from "./tool.ts";
 
 export default function (pi: ExtensionAPI) {
 	const settings = DEFAULT_SETTINGS;
 
-	pi.registerTool(createWebSearchTool(settings));
-	pi.registerTool(createFetchContentTool(settings));
+	pi.registerTool(createWebTool(settings));
 
 	pi.registerCommand("kagi-status", {
-		description: "Validate the Kagi session token used by web_search",
+		description: "Validate the Kagi session token used by web search",
 		handler: async (_args, ctx) => {
 			const token = getKagiToken();
 			if (!token) {

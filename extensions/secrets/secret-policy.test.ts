@@ -150,7 +150,7 @@ test("bash is blocked when the ref sits inside single quotes", () => {
 
 test("a ref passed to any other tool is refused, not expanded", () => {
 	const { registry, named } = setup();
-	for (const tool of ["grep", "fetch_content", "web_search"]) {
+	for (const tool of ["grep", "web", "jobs", "todo"]) {
 		const call = event(tool, { query: `check ${named.ref}` });
 		const outcome = applySecretPolicy(call, registry);
 		assert.equal(outcome.block, true, `${tool} must refuse refs`);

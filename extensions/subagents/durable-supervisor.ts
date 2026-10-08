@@ -1,26 +1,21 @@
 /** Reload-stable named conversations, durable admissions and native-parent notification receipts. */
 import { createHash, randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import type { JsonValue } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { createSession, defineDoc, type Storage } from "@earendil-works/pi-durable";
-import {
-	readActiveNightRun,
-	isNightRunParticipant,
-	activeNightRunPhase,
-	type ActiveNightRun,
-} from "../night-mode/night-run.ts";
+import { readActiveNightRun, isNightRunParticipant, type ActiveNightRun } from "../night-mode/night-run.ts";
 import type { AgentWorkspace } from "../night-mode/agent-workspace.ts";
-import { parseLedgerItem } from "../night-mode/ledger.ts";
 import { builtinAgent } from "./discovery.ts";
 import { openDurableStorage } from "./durable-storage.ts";
 import { openConversationWorker, type WorkerConnection, type WorkerFactory } from "./conversation-backend.ts";
+import type { SubagentHostEntry } from "./host-events.ts";
 import { allocateNightWorkspaces, releaseNightWorkspaces, relocateWorkspacePaths } from "./night-workspace.ts";
 import { sanitizeSegment } from "./paths.ts";
 import { validateHostModel, type HostModel } from "./persistent-model.ts";
 import type { LastAnswer, WorkerAnswer, WorkerSpec, WorkerStatus } from "./worker-protocol.ts";
 import type { SessionRef } from "./session-ref.ts";
+import { resolveSpawnDirectory } from "./spawn-directory.ts";
 
 const ctx = BACKGROUND_CONTEXT;
 const RegistryDoc = defineDoc<{ agents: Record<string, JsonValue> }>({
@@ -56,6 +51,19 @@ export interface SubagentStatus {
 	lastAnswer?: LastAnswer;
 	error?: string;
 }
+const asHostEntry = (record: NamedRecord): SubagentHostEntry => ({
+	name: record.name,
+	state: pending(record).length ? "working" : "idle",
+	task: record.inputs[0]?.message ?? "",
+	createdAt: record.createdAt,
+	cwd: record.spec.context.cwd,
+	...(record.spec.request.overrides?.model ? { model: record.spec.request.overrides.model } : {}),
+	storage: record.spec.directory,
+	...(record.conversationId ? { conversationId: record.conversationId } : {}),
+	...(record.lastAnswer ? { lastAnswerId: record.lastAnswer.id } : {}),
+	...(record.error ? { error: record.error } : {}),
+	...(record.retired ? { retired: true } : {}),
+});
 export interface SpawnPolicy extends HostModel {
 	timeoutMs: number;
 }
@@ -107,37 +115,19 @@ export function durableDirectory(ref: SessionRef): string {
 	return resolve(`${ref.sessionFile}.subagents-durable`, identity);
 }
 
-/** Exact tool schema keeps night approval in the instance name instead of a caller-controlled extra field. */
-export function approvedNightForName(
-	name: string,
-	ref: SessionRef,
-	run = readActiveNightRun(),
-): ActiveNightRun | undefined {
+/** Night policy comes from the active host contract, never caller names or messages. */
+export function activeNightForSession(ref: SessionRef, run = readActiveNightRun()): ActiveNightRun | undefined {
 	if (!run) {
 		if (process.env.PI_NIGHT_RUN === "1")
 			throw new Error("Active night contract unavailable; refusing an unprotected subagent");
 		return undefined;
 	}
 	if (!isNightRunParticipant(run, ref)) return undefined;
-	if (activeNightRunPhase(run) === "planning") {
-		if (
-			run.sandbox?.mode !== "read-only" ||
-			(run.sandbox.allowWrite?.length ?? 0) !== 0 ||
-			run.mcp?.readOnly !== true
-		)
-			throw new Error("Night planning requires read-only filesystem and MCP policies");
-		return copy(run);
-	}
-	const id = /^TODO-([a-f0-9]+)$/i.exec(name)?.[1]?.toLowerCase();
-	if (!id || !run.approvedTaskIds?.some((approved) => approved.replace(/^TODO-/i, "").toLowerCase() === id))
-		throw new Error(
-			"An active night run may spawn only an approved ledger item; use its TODO-<id> as the subagent name.",
-		);
 	return copy(run);
 }
 
 export class DurableSupervisor {
-	readonly format = "named-conversations-v2";
+	readonly format = "named-conversations-v3";
 	readonly #session;
 	#records = new Map<string, NamedRecord>();
 	#workers = new Map<string, LiveWorker>();
@@ -208,6 +198,10 @@ export class DurableSupervisor {
 	list(): SubagentStatus[] {
 		return [...this.#records.values()].map((record) => asStatus(record, false));
 	}
+	/** Host display entries, without answer text. Acknowledges nothing. */
+	describe(): SubagentHostEntry[] {
+		return [...this.#records.values()].map(asHostEntry);
+	}
 	#healthy(): void {
 		if (this.#failure) throw this.#failure;
 		if (this.#closed) throw new Error("Subagent supervisor is closed");
@@ -259,26 +253,24 @@ export class DurableSupervisor {
 		return result;
 	}
 
-	spawn(name: string, message: string, callId: string, policy: SpawnPolicy): Promise<SubagentStatus> {
+	spawn(name: string, message: string, callId: string, policy: SpawnPolicy, cwd?: string): Promise<SubagentStatus> {
 		return this.#locked(name, async () => {
 			this.#healthy();
 			if (this.#closing) throw new Error("Subagents are shutting down");
+			const night = activeNightForSession(this.ref);
+			if (night && cwd !== undefined)
+				throw new Error("Night subagent placement is host-controlled; cwd is not allowed");
+			const placement = await resolveSpawnDirectory(cwd, this.ref);
 			const existing = this.#records.get(keyOf(name));
 			if (existing) {
-				if (existing.spawnCallId === callId && existing.inputs[0]?.message === message) return asStatus(existing);
+				if (existing.spawnCallId === callId && existing.inputs[0]?.message === message) {
+					if (resolve(existing.spec.context.cwd) !== resolve(placement.cwd))
+						throw new Error("Spawn input ID reused with a different cwd");
+					return asStatus(existing);
+				}
 				throw new Error(`${name} already exists; use send.`);
 			}
 			const model = validateHostModel(policy, this.ref.cwd, this.ref.projectTrusted);
-			const night = approvedNightForName(name, this.ref);
-			let nightTask: string | undefined;
-			if (night && activeNightRunPhase(night) === "execution") {
-				const taskId = name.replace(/^TODO-/i, "").toLowerCase();
-				if (!night.ledgerDir) throw new Error("Approved night ledger unavailable");
-				nightTask = readFileSync(join(night.ledgerDir, `${taskId}.md`), "utf8");
-				const item = parseLedgerItem(taskId, nightTask);
-				if (!item || item.id.replace(/^TODO-/i, "").toLowerCase() !== taskId)
-					throw new Error("Approved night ledger item unavailable or invalid");
-			}
 			const id = randomUUID();
 			const agent = builtinAgent();
 			agent.config.name = name;
@@ -314,18 +306,19 @@ export class DurableSupervisor {
 					),
 					context: {
 						...this.ref,
+						...placement,
 						sessionId: this.ref.sessionId,
 						sessionFile: this.ref.sessionFile,
 						runId: id,
 						timeoutMs: policy.timeoutMs,
-						...(night ? { nightRun: night, ...(nightTask ? { nightTask } : {}) } : {}),
+						...(night ? { nightRun: night } : {}),
 					},
 				},
 			};
 			try {
 				if (this.#closing) throw new Error("Subagents are shutting down");
-				if (JSON.stringify(approvedNightForName(name, this.ref)) !== JSON.stringify(night))
-					throw new Error("Night approval changed during subagent admission");
+				if (JSON.stringify(activeNightForSession(this.ref)) !== JSON.stringify(night))
+					throw new Error("Night contract changed during subagent admission");
 				await this.#change((records) => {
 					records.set(keyOf(name), record);
 				});
@@ -342,9 +335,9 @@ export class DurableSupervisor {
 			this.#healthy();
 			if (this.#closing) throw new Error("Subagents are shutting down");
 			let record = this.#record(name);
-			const currentNight = approvedNightForName(name, this.ref);
+			const currentNight = activeNightForSession(this.ref);
 			if (record.retired || JSON.stringify(currentNight) !== JSON.stringify(record.spec.context.nightRun))
-				throw new Error("This subagent belongs to a different night approval; spawn a new approved ledger item.");
+				throw new Error("This subagent belongs to a different night run; spawn a new named worker.");
 			const repeated = record.inputs.find((input) => input.id === callId);
 			if (repeated) {
 				if (repeated.message !== message || repeated.followUp !== followUp)
@@ -733,12 +726,14 @@ export async function acquireDurableSupervisor(
 		const active = await existing.entry;
 		if (existing.closing || entries.get(key) !== existing) return acquireDurableSupervisor(ref, factory);
 		const format = (active as { format?: string }).format;
-		if (format !== "named-conversations-v2") {
+		if (format !== "named-conversations-v3") {
 			// Compatible named-conversation upgrades pause and reopen the same journal.
 			// Old job handles cannot become names, so those owners still retire their work.
 			existing.closing = (async () => {
 				try {
-					await active.close({ preserveRuns: format === "named-conversations-v1" });
+					await active.close({
+						preserveRuns: format === "named-conversations-v1" || format === "named-conversations-v2",
+					});
 				} finally {
 					if (entries.get(key) === existing) entries.delete(key);
 				}

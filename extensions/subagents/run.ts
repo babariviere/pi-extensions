@@ -21,8 +21,6 @@ export interface RunContext {
 	timeoutMs: number;
 	deadlineAt?: number;
 	nightRun?: ActiveNightRun;
-	/** Admission-time ledger scope, never widened by a later caller message. */
-	nightTask?: string;
 	projectTrusted?: boolean;
 	signal?: AbortSignal;
 }
