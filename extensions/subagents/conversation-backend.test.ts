@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { access, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -129,6 +129,33 @@ async function noMarkdown(directory: string): Promise<void> {
 		[],
 	);
 }
+
+test("selected conversation cwd drives process cwd, native tools and project context across reopen", async () => {
+	await withOfflineWorkers(async ({ directory, spec, open }) => {
+		const target = join(directory, "selected");
+		await mkdir(target);
+		await writeFile(join(target, "AGENTS.md"), "Selected directory context marker");
+		await writeFile(join(directory, "location.txt"), "wrong parent directory");
+		const launch = { ...spec, context: { ...spec.context, cwd: target } };
+		for (const id of ["first", "reopened"]) {
+			await writeFile(join(target, "location.txt"), `selected directory input ${id}`);
+			await rm(join(target, "child-output.txt"), { force: true });
+			const { worker, answer } = open(launch);
+			await worker.ready;
+			await worker.input(id, "directory probe", false);
+			const { result } = await answer(id);
+			assert.equal(result.ok, true, result.error ?? "Worker failed");
+			assert.ok(result.answer!.text.includes(`selected directory input ${id}`));
+			assert.ok(result.answer!.text.includes(await realpath(target)), "bash pwd must report the selected cwd");
+			assert.match(result.answer!.text, /Directory probe/);
+			assert.doesNotMatch(result.answer!.text, /wrong parent directory/);
+			assert.equal(await readFile(join(target, "child-output.txt"), "utf8"), "selected cwd");
+			await assert.rejects(access(join(directory, "child-output.txt")));
+			await assert.rejects(access(join(directory, "generation-count")), "process cwd must be selected");
+			await worker.pause();
+		}
+	});
+});
 
 test("persistent worker admits explicit input with real native codemode, structured results and policy hooks", async () => {
 	await withOfflineWorkers(async ({ directory, open }) => {

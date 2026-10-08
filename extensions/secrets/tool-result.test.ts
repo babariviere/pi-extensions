@@ -1,9 +1,74 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { scrubToolResult } from "./secret-mask.ts";
+import { scrubText, scrubToolResult } from "./secret-mask.ts";
 import { SecretRefRegistry } from "./secret-ref.ts";
 
 const secret = { name: "TOKEN", value: "supersecretvalue123" };
+
+// Valid base64 containing a chance AWS-pattern match, as in the reported JPEGs.
+const imageData = `AAAAaws${"B".repeat(64)}C`;
+
+test("image payloads in details and structured content are opaque and need no patch", () => {
+	assert.notEqual(scrubText(imageData, []), imageData);
+	for (const type of ["image", undefined]) {
+		const image = { ...(type ? { type } : {}), data: imageData, mimeType: "image/jpeg" };
+		for (const value of [image, { nested: [{ content: [image] }] }]) {
+			assert.equal(
+				scrubToolResult({ content: [], details: value, structuredContent: value }, [], new SecretRefRegistry()),
+				undefined,
+			);
+		}
+	}
+});
+
+test("image metadata and neighboring text are scrubbed without changing image data", () => {
+	const registry = new SecretRefRegistry();
+	const image = { type: "image", data: imageData, mimeType: "image/png", metadata: { token: secret.value } };
+	const text = { type: "text", text: secret.value };
+	const value = { content: [image, text] as const, token: secret.value };
+	const result = { content: [image, text], details: value, structuredContent: value };
+	const patch = scrubToolResult(result, [secret], registry);
+	assert.ok(patch?.content && patch.details && patch.structuredContent);
+	assert.equal(patch.content[0], image);
+	for (const scrubbed of [patch.details, patch.structuredContent]) {
+		assert.equal(scrubbed.content[0].data, imageData);
+		assert.equal(scrubbed.content[0].metadata?.token, scrubbed.token);
+		assert.equal(scrubbed.content[1].text, scrubbed.token);
+		assert.match(scrubbed.token, /^<secret:token:[0-9a-f]+>$/);
+	}
+	assert.equal(image.metadata.token, secret.value);
+	assert.equal(text.text, secret.value);
+	assert.equal(scrubToolResult({ ...result, ...patch }, [secret], registry), undefined);
+});
+
+test("known-secret substrings in image payloads stay untouched", () => {
+	const image = { type: "image", data: imageData, mimeType: "image/jpeg" };
+	assert.equal(
+		scrubToolResult(
+			{ content: [image], details: image, structuredContent: image },
+			[{ name: "TOKEN", value: "B".repeat(40) }],
+			new SecretRefRegistry(),
+		),
+		undefined,
+	);
+});
+
+test("ordinary data fields and non-image objects are still scrubbed", () => {
+	for (const structuredContent of [
+		{ data: imageData },
+		{ type: "image", data: imageData },
+		{ type: "text", data: imageData, mimeType: "image/png" },
+		{ data: imageData, mimeType: "text/plain" },
+	]) {
+		const patch = scrubToolResult(
+			{ content: [], details: undefined, structuredContent },
+			[],
+			new SecretRefRegistry(),
+		);
+		assert.ok(patch?.structuredContent);
+		assert.notEqual(patch.structuredContent.data, imageData);
+	}
+});
 
 test("structured-only secrets are scrubbed without a content patch or mutation", () => {
 	const registry = new SecretRefRegistry();

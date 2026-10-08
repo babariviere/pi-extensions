@@ -1,5 +1,5 @@
 /**
- * fetch_content tool.
+ * Web fetch action.
  *
  * Dispatch order:
  *   1. GitHub repo URL (root / tree / blob) -> clone + reuse, return summary.
@@ -13,28 +13,20 @@ import { randomBytes } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
-	DEFAULT_MAX_BYTES,
-	DEFAULT_MAX_LINES,
-	defineTool,
-	formatSize,
-	truncateHead,
-} from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
+import { DEFAULT_MAX_BYTES, formatSize, truncateHead } from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
 import { browserFetch } from "./fetch/browser.ts";
 import { defuddleFetch, DefuddleError, type DefuddleResult } from "./fetch/defuddle.ts";
 import { isSoftNotFound, shouldEscalateToBrowser } from "./fetch/status.ts";
-import { renderFoldableResult } from "./render.ts";
 import { DEFAULT_SETTINGS, type WebSettings } from "./settings.ts";
 import { cloneCachePath, type GitHubRepoRef, isRawGitHubUrl, parseGitHubRepoUrl, readTextCapped } from "./utils.ts";
 
 /** How the content was obtained. Also available to programmatic callers. */
 type FetchSource = "defuddle" | "browser" | "raw" | "github";
 
-type FetchDetails = { source: FetchSource } | undefined;
+export type FetchDetails = { source: FetchSource } | undefined;
 
-const FetchOutputSchema = Type.Object({
+export const FetchOutputSchema = Type.Object({
 	url: Type.String(),
 	text: Type.String({ description: "Full fetched text or repository summary, before display truncation" }),
 	source: Type.Optional(
@@ -56,7 +48,7 @@ type TextResult = {
 	isError?: boolean;
 };
 
-const SOURCE_LABELS: Record<FetchSource, string> = {
+export const SOURCE_LABELS: Record<FetchSource, string> = {
 	defuddle: "via defuddle",
 	browser: "via browser (headed Chrome)",
 	raw: "via raw fetch",
@@ -104,47 +96,15 @@ function cappedText(body: string, details: FetchDetails = undefined, data: Parti
 	return { ...full, content: [{ type: "text", text: `${result.content}\n\n${footer}` }] };
 }
 
-export function createFetchContentTool(settings: WebSettings = DEFAULT_SETTINGS) {
-	return defineTool({
-		name: "fetch_content",
-		label: "fetch content",
-		namespace: { name: "web", description: "Web search and content fetching" },
-		// Fetches may create clone caches, fresh temp files, and a browser profile.
-		annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
-		outputSchema: FetchOutputSchema,
-		description:
-			"Fetch a URL as Markdown. GitHub repo URLs (root/tree/blob) are cloned locally and summarized " +
-			"so you can read/grep/ls the source; raw.githubusercontent.com is fetched directly; everything " +
-			"else is fetched and converted to Markdown via the defuddle library. " +
-			`Content is truncated to the first ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB ` +
-			"(whichever is hit first); if truncated, the full content is saved to a temp file.",
-		promptSnippet: "Fetch a URL as Markdown (clones GitHub repos for local inspection)",
-		parameters: Type.Object({
-			url: Type.String({ description: "URL to fetch" }),
-			timeout: Type.Optional(
-				Type.Number({
-					description: `Network timeout in ms (default ${settings.fetchTimeout})`,
-					minimum: 1000,
-				}),
-			),
-		}),
-		renderCall(args, theme, context) {
-			const text = context.lastComponent instanceof Text ? context.lastComponent : new Text("", 0, 0);
-			text.setText(formatFetchCall(args, theme));
-			return text;
-		},
-		renderResult(result, options, theme, context) {
-			const source = (result.details as FetchDetails)?.source;
-			const sourceLabel = source ? SOURCE_LABELS[source] : undefined;
-			return renderFoldableResult(result, options, theme, context, { sourceLabel });
-		},
-		async execute(_toolCallId, params, signal) {
-			const timeout = params.timeout ?? settings.fetchTimeout;
-			const url = params.url.trim();
-			const result = await fetchContent(url, timeout, settings, signal);
-			return { ...result, structuredContent: { url, ...result.structuredContent } };
-		},
-	});
+export async function fetchWeb(
+	params: { url: string; timeout?: number },
+	settings: WebSettings = DEFAULT_SETTINGS,
+	signal?: AbortSignal,
+) {
+	const timeout = params.timeout ?? settings.fetchTimeout;
+	const url = params.url.trim();
+	const result = await fetchContent(url, timeout, settings, signal);
+	return { ...result, structuredContent: { url, ...result.structuredContent } };
 }
 
 async function fetchContent(
@@ -168,7 +128,7 @@ async function fetchContent(
 }
 
 // biome-ignore lint/suspicious/noExplicitAny: theme type is not exported
-function formatFetchCall(args: { url?: string; timeout?: number }, theme: any): string {
+export function formatFetchCall(args: { url?: string; timeout?: number }, theme: any): string {
 	const url = typeof args?.url === "string" ? args.url.trim() : null;
 	const invalidArg = theme.fg("error", "[invalid arg]");
 	return (
@@ -199,7 +159,7 @@ async function fetchViaDefuddle(
 		const message =
 			err instanceof DefuddleError
 				? err.message
-				: `fetch_content failed: ${err instanceof Error ? err.message : String(err)}`;
+				: `web fetch failed: ${err instanceof Error ? err.message : String(err)}`;
 		return failure(message, { status });
 	}
 

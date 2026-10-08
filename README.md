@@ -15,19 +15,19 @@ The manifest discovers `extensions/*/index.ts` and `themes/*.json`.
 | `context` | `/context` shows loaded resources, project context, tokens and cost. |
 | `footer` | Project, context, model, thinking, subscription usage and extension status. |
 | `guardrail` | `/guardrail` controls checks for obvious catastrophic shell commands and direct shell-edit patterns. |
-| `jobs` | Native `jobs_*` tools manage session-owned background shell jobs through the sandbox extension. |
+| `jobs` | Native `jobs({ action, ... })` manages session-owned background shell jobs through the sandbox extension. |
 | `linear` | `/linear` lists current-sprint issues or starts work on a ticket. |
-| `night-mode` | `/night` runs approved overnight tasks with a ledger, usage guards, reports, optional private working copies and wake locks. Native `night_plan` reviews the plan. |
+| `night-mode` | `/night` starts unattended overnight work directly, with a ledger, usage guards, reports, optional private working copies and wake locks. |
 | `pr` | `/review-comments`, `/autofix`, and `/autofix-stop` integrate GitHub reviews and CI. |
 | `router` | Opt-in `router/auto` virtual model with scoped, authenticated, cost-aware physical routing. |
 | `preview-system-prompt` | `/system-prompt` shows the assembled prompt. |
 | `sandbox` | `/sandbox` controls filesystem policy and native MCP read-only permissions for direct and codemode-nested calls. |
 | `secrets` | `/secret-list`; fnox shell injection and reversible secret references in text, structured results and persisted details. |
 | `subagents` | One native `subagent` tool manages named persistent background conversations, automatic answers, steering, stop and durable recovery. |
-| `todos` | Native `todo_*` tools manage file-backed todos; `/todos` provides the interactive manager. |
+| `todos` | Native `todo({ action, ... })` manages file-backed todos; `/todos` provides the interactive manager. |
 | `tool-substitute` | Search guidance and jj-aware Git-write checks. |
 | `usage` | `/usage` polls Claude and Codex/ChatGPT subscription windows. |
-| `web` | `web_search` searches Kagi; `fetch_content` fetches pages or summarizes Git repositories; `/kagi-status` checks credentials. |
+| `web` | `web({ action: "search" | "fetch", ... })` searches Kagi, fetches pages, or summarizes Git repositories; `/kagi-status` checks credentials. |
 | `workspaces` | `/workspace` manages jj workspaces, with optional Herdr integration. |
 
 Themes include Catppuccin Frappé, Latte and Macchiato, plus Rosé Pine Dawn and Moon.
@@ -80,16 +80,16 @@ them for every model. Other tool selections are left alone.
 Scripts are JavaScript and use `tools.<name>`, for example:
 
 ```js
-const todos = await tools.todo_list({});
-const page = await tools.fetch_content({ url: "https://example.com" });
+const todos = await tools.todo({ action: "list" });
+const page = await tools.web({ action: "fetch", url: "https://example.com" });
 return { tasks: todos.length, page: page.text.slice(0, 1000) };
 ```
 
-Other capabilities include `tools.night_plan`, `tools.subagent`, `tools.jobs_start`,
-`tools.applyPatch`, and `tools.web_search`. Use native `searchTools()` and
+Other capabilities include `tools.subagent`, `tools.jobs`,
+`tools.applyPatch`, and `tools.web`. Use native `searchTools()` and
 `describeTool()` for exact schemas and tools omitted from the inline catalog.
-Less frequently used extension actions use deferred exposure and remain callable
-by name or discoverable with `searchTools()`. Read namespace workflow instructions
+Multi-operation tools use an `action` parameter rather than separate suffixed
+tool names. Read namespace workflow instructions
 with `describeNamespace("todo")` or `describeNamespace("jobs")` when needed;
 use `describeTool("subagent")` for the single persistent-conversation tool.
 There are no old `pi.*`, `web.*`, `mcp.*`, `agents.*`, `jobs.*`, `π` or `τ` globals.
@@ -114,9 +114,10 @@ nothing. Model/thinking, deadlines and workspaces are host policy.
 
 The old `agents_*` tools, batch/wait handles, per-call `output`, `reads`, `task`,
 `model`, `thinking` and night arguments, and automatic Markdown outputs are removed.
-Put scope, briefs, permissions and requested deliverables in `message`. Approved
-night execution uses its approved `TODO-<id>` as the name; planning children
-automatically inherit read-only policy. Old handles cannot map to names: pending
+Put scope, briefs, permissions and requested deliverables in `message`. Night
+children inherit the active run's sandbox and MCP policy. Night runs start
+directly, without a planning tool or approval checklist.
+Old handles cannot map to names: pending
 old jobs are safely retired and journals retained, not replayed. See the
 [upgrade and recovery caveats](extensions/subagents/README.md).
 
@@ -229,6 +230,7 @@ packages remain host-provided peers, not bundled runtime dependencies.
 - [Sandbox](extensions/sandbox/README.md)
 - [Subagents](extensions/subagents/README.md)
 - [Jobs](extensions/jobs/README.md)
+- [Web](extensions/web/README.md)
 - [Night mode](extensions/night-mode/README.md)
 - [Guardrail](extensions/guardrail/README.md)
 - [Secrets](extensions/secrets/README.md)

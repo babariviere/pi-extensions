@@ -90,47 +90,78 @@ No HTTP calls of its own. The `usage` extension owns subscription polling and
 publishes `usage:snapshot` on pi's event bus;
 this extension only subscribes. State is republished as `night-mode:state`.
 
-## Native tools
+## Tools and safety
 
-Night mode registers `night_plan` directly with Pi, exposed to native `codemode`
-as `tools.night_plan({ tasks, omissions })`. Its structured result has status
-`approved` or `dismissed`, a message, and approved tasks when selected. The tool
-requires an active planning phase and interactive TUI approval. It reviews tasks
-only, never executes them. Pi owns tool discovery, execution, and MCP connections.
-The standalone sandbox extension supplies filesystem and read-only MCP guards.
+Night mode registers no model-callable tool. Its commands start execution
+directly. The orchestrator uses native `codemode` with
+`tools.todo({ action, ... })` and `tools.subagent({ action, ... })`.
+Pi owns tool discovery, execution, and MCP connections. The standalone sandbox
+extension supplies filesystem and read-only MCP guards.
 
 ## Night runs
 
-`/night start` has separate planning, approval, and execution phases.
+`/night start` and `/night start-now` start a run in the current session as soon
+as it is idle. There is no planning session, interactive review, or separate
+execution-session handoff.
 
-1. The current session switches to **gpt-6.1-sol** and receives a planning-only prompt.
-2. Sol reads the standing routine and one-off instructions. It may spawn subagents with ordinary conversation names to explore repositories and services. Children automatically inherit planning's read-only filesystem and MCP policy; neither Sol nor its children implement anything.
-3. Sol submits structured candidates through the native `tools.night_plan` tool through Pi's `codemode`. Each task specifies `category`, `outputs`, and `permissions` (empty arrays for read-only work). Categories are `instructions`, `linear`, `ci`, `slack`, `daily-note`, `opportunistic`, `insights`, and `auto-improvement`. Every category needs a task or an `omissions` entry with `category` and a nonempty `reason`. For custom routines, mark unused categories not applicable. Validation errors allow revision and resubmission.
-   Planning treats the configured prompt as an execution reference, not an instruction to stop discovering work. Extra instructions supplement the routine. Slack, daily-note, and insights passes are proposed unless excluded or blocked.
-   The checklist shows omission reasons, task scope, outputs, and permissions. Users can still uncheck any task. Output and permission metadata survives into the ledger and execution prompt; it is a delegation contract, not a new OS permission grant. Declare `mcp-write` for MCP mutations: these tasks are rejected while `mcpReadOnly` is enabled, including after checklist edits. Filesystem capabilities still require the existing execution preflight; declared paths do not widen the sandbox. Legacy persisted handoffs remain readable.
-4. Night mode presents an interactive checklist. Tasks begin unchecked. They can be selected, edited as JSON, added, or deleted.
-5. Approval creates a fresh session with the planning session recorded as its parent. Only checked and refined tasks are placed in the new session state.
-6. If approval happens before **21:00 local time**, the fresh session waits until 21:00 that day. At or after 21:00, execution starts immediately. This is a calendar-day rule: approval at 02:00 also waits until 21:00. At execution time, **gpt-6.1-sol** creates the report and private working copy and materializes approved tasks through the todo extension's shared storage layer.
-7. Sol orchestrates those tasks through `tools.subagent`. Both spawn and send use the approved `TODO-<id>` as `name`; unknown or unchecked ids are refused. The approved scope, permissions, outputs and brief paths belong in `message`, not extra tool arguments.
-8. The run handshake at `~/.pi/agent/night/active.json` carries the approved ids, sandbox policy, report path, ledger store, and working copy to every participant.
+1. The session selects `orchestratorModel` (default
+   `openai-codex/gpt-6.1-sol`) and reads the configured standing routine and
+   one-off instructions.
+2. Night mode creates the report, prepares a private working copy when enabled,
+   ensures the ledger store exists, and publishes the filesystem and MCP policy.
+   Existing entries are preserved; the new run starts without pre-seeded tasks.
+3. The orchestrator discovers concrete work from the routine, instructions,
+   repositories and read-only sources. It creates one todo per unit of work with
+   `tools.todo({ action: "create", title, tags, body })`, tagging each item
+   `night` and the supplied `run:<id>`.
+4. The orchestrator delegates ledger items through `tools.subagent`, using
+   `TODO-<id>` as a tracking name. Scope, outputs, permitted operations,
+   findings, required capabilities, completion criteria and brief paths belong
+   in the todo body and task message, not extra tool arguments.
+5. The handshake at `~/.pi/agent/night/active.json` carries the sandbox policy,
+   report path, ledger store, and working copy to participating sessions.
 
-The execution session does not inherit the planning transcript. It receives the approved task descriptions and the planner findings attached to them. New work discovered during execution is reported for a later planning session rather than executed.
+Discovery and ledger creation happen during execution. Additional tasks may be
+added within the user's instructions and the run's safety policy. Task descriptions
+and brief files never widen the filesystem or MCP permissions.
 
-If planning settles without a submitted plan, night-mode appends one visible
-reminder at Pi's `agent_before_settle` boundary and requests one continuation.
-It does not repeat that reminder indefinitely. Approval still hands off only at
-`agent_settled`; a dismissed review waits for the user's feedback.
+### Scheduling
 
-The scheduled timestamp is persisted in the execution session. Reloading or resuming it restores the schedule; an overdue schedule starts immediately once the session is idle. The footer and `/night status` show the scheduled time. `/night off` cancels a pending start, including across reloads. Keep pi running and the machine awake for an on-time start: the schedule does not launch pi or wake a sleeping machine. No execution prompt, report, working copy, or ledger is created while waiting. Legacy approved handoffs without a scheduled timestamp still start immediately.
+`/night schedule` persists a direct start for **21:00 local time today**. At or
+after 21:00 it starts immediately once the session is idle. This is a calendar-day
+rule: scheduling at 02:00 waits until 21:00 that day.
 
-The instructions file is archived and truncated when the approved run *ends*, not during planning. Cancelling the checklist leaves it untouched and keeps the current session in read-only night planning with the same model and sandbox. The planner waits for feedback instead of reopening the checklist automatically. Ask for revisions and resubmit with `tools.night_plan`; execution starts only after approval. Use `/night off` to exit night mode explicitly.
+Reloading or resuming the session restores an outstanding schedule; an overdue
+schedule starts once the session is idle. The footer and `/night status` show
+the scheduled time. `/night off` cancels a pending start, including across reloads.
+`/night start` or `/night start-now` overrides a pending schedule.
 
-Pauses and resumes are appended to the report's `## Timeline`, so a report read
-in the morning shows where the 5h window bit.
+Keep pi running and the machine awake for an on-time start: the schedule does
+not launch pi or wake a sleeping machine. No execution prompt, report, working
+copy, or ledger is created while waiting. A startup failure is reported without
+marking the schedule started or repeatedly retrying it on timer ticks.
 
-While an approved run is paused or outside its execution schedule, night-mode
-stops prompt-cache warming for that run. It leaves Pi's normal cache-warming
-decision unchanged in sessions with no active night run.
+The instructions file is archived and truncated when the run *ends*. Cancelling
+a pending schedule leaves it untouched. Pauses and resumes are appended to the
+report's `## Timeline`, so the morning report shows where the usage window bit.
+
+While a run is paused or outside its execution window, night mode stops
+prompt-cache warming for that run. It leaves Pi's normal cache-warming decision
+unchanged in sessions with no active night run.
+
+### Migration from the planning workflow
+
+The old `night_plan` tool, planning checklist, and approved-plan handoff have
+been removed. Old handoff entries do not start a run; use a direct start command
+or create a new schedule. The removed `plannerModel` setting is ignored;
+`orchestratorModel` still selects the execution model.
+
+Customized standing routine files are **not rewritten**. Remove instructions to
+call `night_plan`, await checklist approval, consume only an approved ledger,
+or stop discovering work. Replace them with discovery, todo creation and
+delegation instructions for direct execution. Update old todo calls to
+`tools.todo({ action: "create" | "list" | "get" | "update" | "append" | "claim", ... })`.
+Existing sandbox policy and unattended safety rules still apply.
 
 ## Private working copy
 
@@ -162,14 +193,16 @@ ladder: they drop untracked and ignored files, which is exactly where local
 toolchain config and credentials live. `sandboxCopyFiles` still copies a
 configured list (default `mise.local.toml`) for the strategies that need it.
 
-A failed clone degrades to "work in the real checkout" with a warning rather
-than blocking the run. Set `sandboxRoot: ""` to disable cloning entirely.
+An ordinary copy failure degrades to "work in the real checkout" with a warning.
+Shared VCS pointer state instead blocks startup, before copying or rewriting
+remotes, rather than falling back to the real checkout. Set `sandboxRoot: ""`
+to disable cloning entirely.
 
 ### One workspace per subagent
 
 The clone keeps the run out of your checkout. It does not keep the run's own
 subagents out of each other: two children creating changes in one working copy
-fight over `@`. The host allocates a private jj workspace for each approved
+fight over `@`. The host allocates a private jj workspace for each night
 execution conversation under `<clone>.agents/`, using an internal identifier,
 and starts its isolated worker there.
 
@@ -180,8 +213,13 @@ remote. A fresh workspace still checks out tracked files only, so
 `sandboxCopyFiles` is replayed into it and the new path is trusted like any
 other copy.
 
-Placement and release are host-controlled. Neither `cwd` nor `artifactsDir` is
-part of the `tools.subagent` schema. Brief paths and requested outputs in
+With jj 0.46, child workspaces inherit Git colocation when the clone is
+colocated and `git.colocate` is true. Their `.git` pointer files intentionally
+share the private clone, not the user's repository. `jj workspace forget`
+unlinks the native Git worktree during release, before its directory is removed.
+
+Placement and release are host-controlled. Night runs reject caller `cwd`;
+`artifactsDir` remains host-only. Brief paths and requested outputs in
 `message` do not choose a workspace or widen the sandbox. Required isolation
 fails closed on allocation failure instead of silently using a shared copy.
 
@@ -202,8 +240,8 @@ Two mechanisms, in this order:
 
 1. The host tells the child the deliverables path. Files that must outlive the
    workspace go there, including `Evidence: file ...` artifacts. Answers travel
-   automatically as messages, not generated Markdown result files. Explicitly
-   approved documents are still deliverables; describe them in `message`.
+   automatically as messages, not generated Markdown result files. Requested
+   documents are still deliverables; describe them in `message`.
 2. On release, every file `jj diff --summary -r @` reports as present in the
    workspace is copied there before the delete, keeping its relative layout and
    never overwriting a file the child put there itself. Paths the child
@@ -293,18 +331,20 @@ coordinator (the one process not subject to the gate) saw nothing wrong.
 ### When the copy is not actually independent
 
 A git linked worktree keeps `.git` as a pointer file, and a secondary jj
-workspace keeps `.jj/repo` as one. Copying either produces a directory that still
-writes into the repository you were trying to protect, and whose store sits
-outside the writable roots, so VCS commands fail confusingly. Both are detected
-and reported in `## Needs you`, since no amount of trusting fixes them. Start the
-run from the main checkout when it matters.
+workspace keeps `.jj/repo` as one, including jj 0.46 colocated secondary
+workspaces. Copying either preserves shared state or breaks relative pointers.
+Night-mode refuses these sources before copying and aborts startup, without
+rewriting remotes or falling back to the original checkout. Remote rewriting
+also refuses pointer state if called directly. Start the run from the main
+checkout, or an independently cloned repository. No automatic detachment is
+attempted.
 
 The copies are **not** deleted when the run ends: a morning review needs them.
 Garbage-collect the root when you are done with it.
 
-This is one copy per night, not one per ledger item, so two subagents working in
-parallel still share it. The orchestrator contract already says to run one
-subagent at a time per repository.
+The run has one top-level copy per night, with private child workspaces where
+supported. The orchestrator contract still says to run one subagent at a time
+per repository.
 
 ## Filesystem sandbox
 
@@ -321,7 +361,8 @@ drift out of sync with it:
 
 - the night's working copy (or the cwd, when cloning is off),
 - the report directory,
-- the ledger store (`todoPath`),
+- the ledger store (`todoPath`) through the trusted todo tool only, not agent
+  filesystem tools or shell commands,
 - temp dirs and the tool caches (`GOCACHE`, `GOMODCACHE`, the platform cache home),
 - anything listed in `sandboxAllowWrite`.
 
@@ -412,11 +453,17 @@ Like the filesystem sandbox, the night request is a floor: `readOnly: false` in
 `sandbox.json` cannot turn it back off while the run is in flight.
 
 
-## The approved ledger, and finishing
+## The task ledger
 
-Only checklist selections are materialized as ledger entries. Each item carries `night`, `night-approved`, and the current `run:<id>` tag. The active run reads only that run id, so unresolved items from an older night cannot enter the execution queue.
+The orchestrator creates ledger entries during the run. Each item carries
+`night` and the current `run:<id>` tag. The active run reads only that run id,
+so unresolved items from an older night cannot enter the execution queue.
 
-The native subagent tool checks the participating parent's active approval on both spawn and send. During approved execution, `name` must be the approved ledger item's `TODO-<id>` present in `approvedTaskIds`. Stop and status remain available for cancellation and recovery. The name selects an approved item; it does not authorize arbitrary message text, a different repository, or broader permissions. Planning explorers use ordinary names and inherit read-only policy automatically.
+Conversation names such as `TODO-<id>` are for tracking, not an authorization
+whitelist. The host still enforces the participating run's sandbox, MCP policy,
+working-directory placement, private workspaces, and stale-contract safeguards.
+Stop and status remain available for cancellation and recovery. Naming a task
+never grants a different repository or broader permissions.
 
 ## Ledger completion and evidence
 
@@ -461,7 +508,7 @@ a row carried items that were finished and looked abandoned, purely because the
 line was missing, and one night put a file path into the report that had been
 deleted with the subagent's workspace. So closing a `night` todo now takes typed
 evidence, the todo tool **refuses the write** without it (`validateClosure` in
-`evidence.ts`, called from `todos.ts`), and the claim is checked before it is
+`evidence.ts`, called from `../todos/index.ts`), and the claim is checked before it is
 believed (`verifyEvidence`, called through `verifyLedger`):
 
 | Kind | Written as | Checked by |
@@ -522,7 +569,7 @@ runs do not restart. A quota pause or closed schedule also suppresses this
 automatic path.
 
 `agent_settled` remains the final cleanup point: resolved, stalled, and capped
-runs are ended there, and the approved planning session is handed off there.
+runs are ended there.
 Timer-driven quota resumes remain ordinary automated resume prompts, so a
 resumed run re-enters the same boundary checks after doing work. Two brakes stop
 ledger continuations spinning:
@@ -573,19 +620,19 @@ come from host subagents configuration, not per-child tool arguments.
 Participating execution children receive the host's night contract automatically
 (no questions, no outbound messages, no push to the default branch, draft PRs
 only, PR cap, report path). No `night` flag or Markdown persona is involved.
-Delegate the exact approved scope, permissions, outputs and briefs in `message`:
+Delegate the exact task scope, permissions, outputs and briefs in `message`:
 
 ```ts
 await tools.subagent({
   action: "spawn",
-  name: "TODO-abcd1234", // Must be approved for this execution run.
-  message: "Fix the flaky login test within the approved repository scope. " +
+  name: "TODO-abcd1234", // Track the matching ledger item.
+  message: "Fix the flaky login test within the assigned repository scope. " +
     "Read /abs/briefs/login-tests.md. Permissions: local test/code edits and tests only. " +
-    "Outputs: the approved patch and typed ledger evidence. No push or external writes.",
+    "Outputs: the patch and typed ledger evidence. No push or external writes.",
 });
 ```
 
-Use `send` with the same approved name to steer, or `followUp: true` to queue
+Use `send` with the same conversation name to steer, or `followUp: true` to queue
 additional work within that scope. `stop` aborts current/queued work without
 deleting the conversation. Answers arrive automatically; named `status` returns
 the latest completed `lastAnswer: { id, text }` and acknowledges that answer's
@@ -609,8 +656,7 @@ and every path is configurable. Defaults keep the night files under
 
 | Key | Default | Meaning |
 |-----|---------|---------|
-| `plannerModel` | `openai-codex/gpt-6.1-sol` | Model used in the current session to propose the plan |
-| `orchestratorModel` | `openai-codex/gpt-6.1-sol` | Model used by the fresh approved execution session |
+| `orchestratorModel` | `openai-codex/gpt-6.1-sol` | Model used in the current session for direct execution |
 | `promptPath` | `~/.pi/agent/night/prompt.md` | Your standing routine |
 | `instructionsPath` | `~/.pi/agent/night/instructions.md` | One-off asks, cleared after the run |
 | `reportPathTemplate` | `~/.pi/agent/night/reports/{datetime} - report.md` | `{datetime}`, `{date}`, `{time}` placeholders |
@@ -621,6 +667,7 @@ and every path is configurable. Defaults keep the night files under
 | `sandboxMode` | `workspace-write` | Filesystem sandbox requested for the run: `off`, `read-only`, `workspace-write`, `full` |
 | `sandboxAllowWrite` | `[]` | Extra writable roots for the run, on top of the derived ones |
 | `sandboxTrust` | `true` | Run `mise trust` / `direnv allow` on a fresh working copy |
+| `mcpReadOnly` | `true` | Refuse write-shaped native MCP calls for every run participant |
 | `wakeLock` | `"auto"` | `auto` \| `pmset` \| `caffeinate` \| `off`, see [Wake lock](#wake-lock) |
 | `maxPullRequests` | `5` | Hard cap on PRs opened in one night |
 | `reportSections` | `Summary`, `Needs you`, `Work`, `Findings`, `Skipped / failed`, `Timeline` | `## ` headings seeded into a fresh report |
@@ -648,10 +695,11 @@ follows.
 | Command | Effect |
 |---------|--------|
 | `/night` or `/night status` | Window state, wake lock state, 5h and weekly usage, reset countdown, pause state, active run |
-| `/night start` | Use the configured planner model to build a read-only plan and show its approval checklist. Checked tasks continue in a fresh execution session |
+| `/night start` / `/night start-now` | Begin direct execution in the current session once idle; override a pending schedule |
+| `/night schedule` | Schedule direct execution for 21:00 today, or start once idle if already past 21:00 |
 | `/night report` | Path, wiki-link and size of tonight's report |
 | `/night todos` | The ledger: every item, its state and its evidence. Works outside a run |
-| `/night on` / `/night off` | Enable or disable the whole thing for this session |
+| `/night on` / `/night off` | Enable guards, or cancel a pending start and end an active run for this session |
 | `/night resume` | Clear a pause immediately and send the continue prompt |
 
 While active, the footer shows `🌙 night (5h 42%)`, or `🌙 paused (5h 96%) ⟳ 42m` / `🌙 paused (week 96%) ⟳ 30m`.

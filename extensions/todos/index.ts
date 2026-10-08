@@ -45,7 +45,7 @@ import path from "node:path";
 import fs from "node:fs/promises";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import {
-	createActionTool,
+	createActionsTool,
 	type ActionDescriptor,
 	type ActionContext,
 	type ActionProvider,
@@ -62,7 +62,6 @@ import { updateTodoPromptSection } from "./todo-prompt.ts";
 import { validateClosure } from "../night-mode/evidence.ts";
 import { NIGHT_TAG } from "../night-mode/ledger.ts";
 import { isNightRunParticipant, readActiveNightRun } from "../night-mode/night-run.ts";
-import { NIGHT_MODE_PLANNING_QUERY_EVENT, type NightModePlanningQuery } from "../night-mode/protocol.ts";
 import {
 	Container,
 	type Focusable,
@@ -1473,7 +1472,6 @@ const todoActionDescriptors: ActionDescriptor[] = [
 		description: "List all todos, including closed todos",
 		inputSchema: emptyInputSchema,
 		outputSchema: { type: "array", items: todoFrontMatterSchema },
-		exposure: "deferred",
 	},
 	{
 		name: "get",
@@ -1533,7 +1531,6 @@ const todoActionDescriptors: ActionDescriptor[] = [
 		description: "Delete a todo and return the deleted record",
 		inputSchema: idInputSchema,
 		outputSchema: todoRecordSchema,
-		exposure: "deferred",
 	},
 	{
 		name: "claim",
@@ -1546,7 +1543,6 @@ const todoActionDescriptors: ActionDescriptor[] = [
 		description: "Release a todo from its assigned session",
 		inputSchema: assignmentInputSchema,
 		outputSchema: todoRecordSchema,
-		exposure: "deferred",
 	},
 ];
 
@@ -1580,15 +1576,15 @@ function todoRecordOrThrow(result: TodoRecord | { error: string }): TodoRecord {
 	return result;
 }
 
-function createTodoActions(pi: ExtensionAPI): ActionProvider {
+function createTodoActions(): ActionProvider {
 	return {
 		name: "todo",
 		description: "Manage file-based todos stored under .pi/todos.",
 		instructions: [
 			"Use todo tools for durable multi-step or multi-session task state instead of ad-hoc plan or scratch files.",
-			"Call tools.todo_claim({ id }) before working on an assigned task. If it is already assigned to another session, ask before forcing a claim.",
-			'Call tools.todo_append({ id, body }) to record progress or blockers, and tools.todo_update({ id, status: "closed" }) only when the work is complete.',
-			"Use tools.todo_list() for open items, tools.todo_listAll() when closed items matter, and tools.todo_get({ id }) for the full body.",
+			'Call tools.todo({ action: "claim", id }) before working on an assigned task. If it is already assigned to another session, ask before forcing a claim.',
+			'Call tools.todo({ action: "append", id, body }) to record progress or blockers, and tools.todo({ action: "update", id, status: "closed" }) only when the work is complete.',
+			'Use tools.todo({ action: "list" }) for open items, tools.todo({ action: "listAll" }) when closed items matter, and tools.todo({ action: "get", id }) for the full body.',
 			"IDs may be TODO-<hex> or the raw hex filename. Mutation results are structured todo records; errors are returned as tool errors.",
 		].join("\n"),
 
@@ -1610,13 +1606,6 @@ function createTodoActions(pi: ExtensionAPI): ActionProvider {
 		},
 
 		async invoke(actionName: string, args: Record<string, unknown>, context: ActionContext) {
-			if (!TODO_READ_ACTIONS.has(actionName)) {
-				const query: NightModePlanningQuery = { version: 1, planning: false };
-				pi.events.emit(NIGHT_MODE_PLANNING_QUERY_EVENT, query);
-				if (query.planning) {
-					throw new Error("night-mode planning is read-only; todo mutations begin only after approval");
-				}
-			}
 			const ctx = context.extensionContext;
 			const todosDir = getTodosDir(context.cwd);
 			switch (actionName) {
@@ -1743,10 +1732,8 @@ export default function todosExtension(pi: ExtensionAPI) {
 		updateTodoPromptSection(event.systemPromptOptions.sections, open.length, mine.length);
 	});
 
-	const todoActions = createTodoActions(pi);
-	for (const descriptor of todoActionDescriptors) {
-		pi.registerTool(createActionTool(todoActions, descriptor));
-	}
+	const todoActions = createTodoActions();
+	pi.registerTool(createActionsTool(todoActions, todoActionDescriptors));
 
 	pi.registerCommand("todos", {
 		description: "List todos from .pi/todos",

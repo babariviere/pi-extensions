@@ -1,7 +1,7 @@
 /**
  * Tunable settings for the web extension.
  *
- * These are plain defaults. Adjust here to change behavior across both tools.
+ * These are plain defaults. Adjust here to change behavior across both actions.
  */
 
 export interface WebSettings {
@@ -11,7 +11,7 @@ export interface WebSettings {
 	maxSearchLimit: number;
 	/** Timeout (ms) for `git clone`. */
 	gitCloneTimeout: number;
-	/** Default timeout (ms) for fetch_content network requests. */
+	/** Default timeout (ms) for web network requests. */
 	fetchTimeout: number;
 	/** Number of README lines included in a repo summary. */
 	readmeHeadLines: number;
