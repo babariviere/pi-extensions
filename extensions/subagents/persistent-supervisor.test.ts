@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -7,7 +7,7 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { writeActiveNightRun, clearActiveNightRun, type ActiveNightRun } from "../night-mode/night-run.ts";
 import type { WorkerCallbacks, WorkerConnection, WorkerFactory } from "./conversation-backend.ts";
 import {
-	approvedNightForName,
+	activeNightForSession,
 	acquireDurableSupervisor,
 	closeDurableSupervisor,
 	durableDirectory,
@@ -119,6 +119,64 @@ test("named admissions are journaled before launch, deduplicated, and retain pin
 		assert.equal(kernel.inputs[1]!.followUp, false);
 		assert.equal(kernel.inputs[2]!.followUp, true);
 		await assert.rejects(owner.send("__proto__", "different", true, "three"), /different content/);
+	});
+});
+
+test("host descriptions expose display state and storage without answer text", async () => {
+	await fixture(async (ref, fake, owner) => {
+		await owner.spawn("review", "scope", "one", policy);
+		const kernel = fake.opened[0]!;
+		const [working] = owner.describe();
+		assert.equal(working!.state, "working");
+		assert.equal(working!.task, "scope");
+		assert.equal(working!.model, "test/cheap");
+		assert.equal(working!.storage, kernel.spec.directory);
+		assert.equal(working!.cwd, kernel.spec.context.cwd);
+		assert.equal(working!.conversationId, "8");
+		assert.ok(working!.createdAt > 0);
+		assert.ok(kernel.spec.directory.startsWith(join(ref.cwd, "subagent-runs")));
+		fake.answer(kernel, "one", "12", "secret answer");
+		await until(() => owner.describe()[0]!.state === "idle");
+		const [idle] = owner.describe();
+		assert.equal(idle!.lastAnswerId, "12");
+		assert.doesNotMatch(JSON.stringify(idle), /secret answer/);
+	});
+});
+
+test("spawn cwd is pinned across sends, stop/resume and supervisor recovery", async () => {
+	await fixture(async (ref, fake, owner) => {
+		const target = join(ref.cwd, "other");
+		await mkdir(target);
+		await owner.spawn("other", "first", "one", policy, "other");
+		const kernel = fake.opened[0]!;
+		assert.equal(kernel.spec.context.cwd, await realpath(target));
+		assert.equal(kernel.spec.context.projectTrusted, false);
+		assert.equal(kernel.spec.request.cwd, undefined, "caller placement must not masquerade as a night workspace");
+		assert.equal(kernel.spec.context.sessionFile, ref.sessionFile);
+		await owner.spawn("other", "first", "one", policy, target);
+		await assert.rejects(owner.spawn("other", "first", "one", policy, "."), /different cwd/);
+		await owner.send("other", "steer", false, "two");
+		await owner.stop("other");
+		await owner.send("other", "resume", false, "three");
+		await owner.close({ preserveRuns: true });
+		const reopened = await DurableSupervisor.open(ref, fake.factory);
+		try {
+			await until(() => fake.opened.length === 2 && fake.opened[1]!.inputs.length === 1);
+			assert.equal(fake.opened[1]!.spec.context.cwd, await realpath(target));
+			assert.equal(fake.opened[1]!.spec.context.projectTrusted, false);
+			await reopened.send("other", "follow-up", true, "four");
+			assert.equal(fake.opened[1]!.inputs.at(-1)?.id, "four");
+		} finally {
+			await reopened.close();
+		}
+	});
+});
+
+test("invalid directories fail before admission or worker launch", async () => {
+	await fixture(async (_ref, fake, owner) => {
+		await assert.rejects(owner.spawn("missing", "work", "one", policy, "missing"), /existing directory/);
+		assert.deepEqual(owner.list(), []);
+		assert.equal(fake.opened.length, 0);
 	});
 });
 
@@ -313,7 +371,7 @@ test("closing wins over not-yet-started admissions without launching a child", a
 	});
 });
 
-test("night planning inherits read-only protection while execution requires an approved TODO name", () => {
+test("night participants inherit a host policy snapshot without name or ledger restrictions", () => {
 	const ref = { cwd: "/repo", sessionId: "parent" };
 	const base: ActiveNightRun = {
 		startedAt: 1,
@@ -323,15 +381,31 @@ test("night planning inherits read-only protection while execution requires an a
 		sandbox: { mode: "read-only", allowWrite: [], denyRead: [] },
 		mcp: { readOnly: true },
 	};
-	assert.deepEqual(approvedNightForName("research", ref, base), base);
-	assert.throws(
-		() => approvedNightForName("research", ref, { ...base, phase: "planning", sandbox: { mode: "off" } }),
-		/read-only/,
-	);
-	assert.throws(() => approvedNightForName("research", ref, { ...base, phase: "execution" }), /approved ledger/);
-	assert.throws(() => approvedNightForName("TODO-bad", ref, { ...base, approvedTaskIds: ["abc"] }), /approved ledger/);
-	assert.equal(approvedNightForName("TODO-abc", ref, { ...base, approvedTaskIds: ["abc"] })?.startedAt, 1);
-	assert.equal(approvedNightForName("research", { ...ref, sessionId: "other" }, base), undefined);
+	const snapshot = activeNightForSession(ref, base);
+	assert.deepEqual(snapshot, base);
+	base.sandbox!.denyRead!.push("/private");
+	assert.deepEqual(snapshot?.sandbox?.denyRead, [], "admission pins a copy of the host policy");
+	const writable = { ...base, sandbox: { mode: "workspace-write" as const } };
+	assert.deepEqual(activeNightForSession(ref, writable), writable);
+	assert.equal(activeNightForSession({ ...ref, sessionId: "other" }, base), undefined);
+});
+
+test("missing active night contracts refuse spawn and send before admitting new work", async () => {
+	await fixture(async (_ref, fake, owner) => {
+		await owner.spawn("existing", "before night", "before", policy);
+		const old = process.env.PI_NIGHT_RUN;
+		process.env.PI_NIGHT_RUN = "1";
+		try {
+			await assert.rejects(owner.spawn("unprotected", "work", "spawn", policy), /Active night contract unavailable/);
+			await assert.rejects(owner.send("existing", "work", false, "send"), /Active night contract unavailable/);
+			assert.equal(owner.list().length, 1);
+			assert.equal(fake.opened.length, 1);
+			assert.equal(fake.opened[0]!.inputs.length, 1);
+		} finally {
+			if (old === undefined) delete process.env.PI_NIGHT_RUN;
+			else process.env.PI_NIGHT_RUN = old;
+		}
+	});
 });
 
 test("failed notification sinks consume one durable receipt without losing named status", async () => {
@@ -424,56 +498,46 @@ test("unacknowledged stop keeps durable intent and a later send aborts before ad
 	});
 });
 
-test("night binding pins ledger scope and rejects pre-night, ended and replaced policies on send", async () => {
+test("direct night runs admit named workers and reject pre-night, ended and replaced policies on send", async () => {
 	await fixture(async (ref, fake, owner) => {
-		await owner.spawn("TODO-abc", "before night", "before", policy);
+		await owner.spawn("before-night", "before night", "before", policy);
 		const run: ActiveNightRun = {
-			phase: "execution",
 			startedAt: 1,
 			sessionId: ref.sessionId,
 			reportPath: "/report",
 			maxPullRequests: 1,
-			approvedTaskIds: ["abc", "def"],
-			ledgerDir: join(ref.cwd, "ledger"),
+			sandbox: { mode: "workspace-write" },
 			mcp: { readOnly: true },
 		};
-		await mkdir(run.ledgerDir!);
-		const scope =
-			JSON.stringify({ id: "def", title: "Read CI", tags: ["night", "approved"], status: "open" }) +
-			"\n\n## Goal\nRead CI only.\nApproved operations: read-only\n";
-		await writeFile(join(run.ledgerDir!, "def.md"), scope);
 		writeActiveNightRun(run);
 		try {
+			await assert.rejects(owner.spawn("read-ci", "work", "cwd", policy, "."), /host-controlled/);
 			await assert.rejects(
-				owner.send("TODO-abc", "cannot reuse pre-night", false, "denied"),
-				/different night approval/,
+				owner.send("before-night", "cannot reuse pre-night", false, "denied"),
+				/different night run/,
 			);
-			await owner.spawn("TODO-def", "perform approved scope", "approved", policy);
+			await owner.spawn("read-ci", "read CI", "admitted", policy);
 			const kernel = fake.opened.at(-1)!;
-			assert.equal(kernel.spec.context.nightTask, scope);
-			await writeFile(join(run.ledgerDir!, "def.md"), scope + "Caller tried to change ledger later.");
-			await owner.send("TODO-def", "follow-up within scope", true, "allowed");
-			assert.equal(
-				kernel.spec.context.nightTask,
-				scope,
-				"host scope stays pinned, not reread from a mutable ledger",
-			);
+			assert.deepEqual(kernel.spec.context.nightRun, run);
+			writeActiveNightRun({ ...run, mcp: { readOnly: false } });
+			await assert.rejects(owner.send("read-ci", "changed policy", false, "changed"), /different night run/);
+			writeActiveNightRun(run);
+			await owner.send("read-ci", "follow-up", true, "allowed");
 			clearActiveNightRun();
-			await assert.rejects(owner.send("TODO-def", "ended", false, "ended"), /different night approval/);
+			await assert.rejects(owner.send("read-ci", "ended", false, "ended"), /different night run/);
 			writeActiveNightRun({ ...run, startedAt: 2 });
-			await assert.rejects(owner.send("TODO-def", "replaced", false, "replaced"), /different night approval/);
+			await assert.rejects(owner.send("read-ci", "replaced", false, "replaced"), /different night run/);
 			assert.equal(kernel.inputs.length, 2);
-			await owner.stop("TODO-def");
+			await owner.stop("read-ci");
 		} finally {
 			clearActiveNightRun();
 		}
 	});
 });
 
-test("planning explorers inherit read-only policies and are retired at a cancelling host boundary", async () => {
+test("night workers inherit read-only policies and are retired at a cancelling host boundary", async () => {
 	await fixture(async (ref, fake, owner) => {
 		const run: ActiveNightRun = {
-			phase: "planning",
 			startedAt: 1,
 			sessionId: ref.sessionId,
 			reportPath: "/report",
@@ -483,12 +547,14 @@ test("planning explorers inherit read-only policies and are retired at a cancell
 		};
 		writeActiveNightRun(run);
 		try {
+			await assert.rejects(owner.spawn("explorer", "read only", "cwd", policy, "."), /host-controlled/);
+			assert.equal(fake.opened.length, 0);
 			await owner.spawn("explorer", "read only", "one", policy);
 			assert.deepEqual(fake.opened[0]!.spec.context.nightRun, run);
 			await owner.close();
 			const reopened = await DurableSupervisor.open(ref, fake.factory);
 			try {
-				await assert.rejects(reopened.send("explorer", "retired", false, "two"), /different night approval/);
+				await assert.rejects(reopened.send("explorer", "retired", false, "two"), /different night run/);
 				assert.equal((await reopened.status("explorer")).state, "idle");
 				assert.equal(fake.opened.length, 1, "retired kernel must not reopen in a released workspace");
 			} finally {
@@ -643,36 +709,41 @@ test("reading a previous answer does not acknowledge a later failure", async () 
 	});
 });
 
-test("compatible supervisor reload adopts acknowledgements without cancelling pending work", async () => {
-	await fixture(async (ref, fake, owner) => {
-		await owner.spawn("upgrade", "work", "one", policy);
-		const first = fake.opened[0]!;
-		first.status = { conversationId: "8", working: false, lastAnswer: { id: "10", text: "seen before reload" } };
-		await owner.status("upgrade");
-		Object.defineProperty(owner, "format", { value: "named-conversations-v1" });
-		const symbol = Symbol.for("babariviere.pi-extensions.durable-supervisors.v2");
-		const state = globalThis as unknown as Record<symbol, Map<string, { entry: Promise<unknown> }>>;
-		const map = (state[symbol] ??= new Map());
-		map.set(durableDirectory(ref), { entry: Promise.resolve(owner) });
-		try {
-			const upgraded = await acquireDurableSupervisor(ref, fake.factory);
-			assert.notEqual(upgraded, owner);
-			assert.equal(upgraded.format, "named-conversations-v2");
-			assert.equal(first.pauses, 1);
-			assert.equal(first.cancels, 0);
-			await until(() => fake.opened.length === 2 && fake.opened[1]!.inputs.length === 1);
-			const reports: SubagentReport[] = [];
-			upgraded.setSink((report) => reports.push(report));
-			fake.answer(fake.opened[1]!, "one", "10", "seen before reload");
-			await until(() => upgraded.list()[0]?.state === "idle");
-			await upgraded.flushReports();
-			assert.equal(reports.length, 0);
-			assert.equal((await upgraded.status("upgrade")).lastAnswer?.text, "seen before reload");
-			await upgraded.send("upgrade", "next", false, "two");
-			assert.equal(fake.opened[1]!.inputs.at(-1)?.id, "two");
-		} finally {
-			await closeDurableSupervisor(ref);
-			map.delete(durableDirectory(ref));
-		}
+for (const previousFormat of ["named-conversations-v1", "named-conversations-v2"]) {
+	test(`compatible supervisor reload from ${previousFormat} adopts acknowledgements without cancelling pending work`, async () => {
+		await fixture(async (ref, fake, owner) => {
+			await owner.spawn("upgrade", "work", "one", policy);
+			const first = fake.opened[0]!;
+			first.status = { conversationId: "8", working: false, lastAnswer: { id: "10", text: "seen before reload" } };
+			await owner.status("upgrade");
+			Object.defineProperty(owner, "format", { value: previousFormat });
+			const symbol = Symbol.for("babariviere.pi-extensions.durable-supervisors.v2");
+			const state = globalThis as unknown as Record<symbol, Map<string, { entry: Promise<unknown> }>>;
+			const map = (state[symbol] ??= new Map());
+			map.set(durableDirectory(ref), { entry: Promise.resolve(owner) });
+			try {
+				const upgraded = await acquireDurableSupervisor(ref, fake.factory);
+				assert.notEqual(upgraded, owner);
+				assert.equal(upgraded.format, "named-conversations-v3");
+				assert.equal(first.pauses, 1);
+				assert.equal(first.cancels, 0);
+				await until(() => fake.opened.length === 2 && fake.opened[1]!.inputs.length === 1);
+				const reports: SubagentReport[] = [];
+				upgraded.setSink((report) => reports.push(report));
+				fake.answer(fake.opened[1]!, "one", "10", "seen before reload");
+				await until(() => upgraded.list()[0]?.state === "idle");
+				await upgraded.flushReports();
+				assert.equal(reports.length, 0);
+				assert.equal((await upgraded.status("upgrade")).lastAnswer?.text, "seen before reload");
+				await upgraded.send("upgrade", "next", false, "two");
+				assert.equal(fake.opened[1]!.inputs.at(-1)?.id, "two");
+				await mkdir(join(ref.cwd, "selected"));
+				await upgraded.spawn("selected", "work", "new", policy, "selected");
+				assert.equal(fake.opened[2]!.spec.context.cwd, await realpath(join(ref.cwd, "selected")));
+			} finally {
+				await closeDurableSupervisor(ref);
+				map.delete(durableDirectory(ref));
+			}
+		});
 	});
-});
+}

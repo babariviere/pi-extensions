@@ -11,7 +11,6 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { Value } from "typebox/value";
 import { assertReadAllowed, assertWriteAllowed, resolveSandboxPolicy } from "../sandbox/policy.ts";
-import { NIGHT_MODE_PLANNING_QUERY_EVENT, type NightModePlanningQuery } from "../night-mode/protocol.ts";
 import todosExtension from "./index.ts";
 
 // The sandbox applies to a child's Pi tools and shell. Native todo tools run in
@@ -23,7 +22,6 @@ test("native todo tools can manage the store while direct child access is denied
 	const listeners: string[] = [];
 	const emissions: string[] = [];
 	const handlers = new Map<string, (event: any, ctx: ExtensionContext) => any>();
-	let planning = false;
 	try {
 		process.env.PI_TODO_PATH = store;
 		todosExtension({
@@ -33,40 +31,28 @@ test("native todo tools can manage the store while direct child access is denied
 					listeners.push(event);
 					return () => {};
 				},
-				emit: (event: string, value: unknown) => {
+				emit: (event: string) => {
 					emissions.push(event);
-					if (event === NIGHT_MODE_PLANNING_QUERY_EVENT) (value as NightModePlanningQuery).planning = planning;
 				},
 			},
 			registerTool: (tool: ToolDefinition<any, any>) => tools.set(tool.name, tool),
 			registerCommand() {},
 		} as unknown as ExtensionAPI);
 
-		assert.deepEqual(
-			[...tools.keys()],
-			[
-				"todo_list",
-				"todo_listAll",
-				"todo_get",
-				"todo_create",
-				"todo_update",
-				"todo_append",
-				"todo_delete",
-				"todo_claim",
-				"todo_release",
-			],
-		);
+		assert.deepEqual([...tools.keys()], ["todo"]);
 		assert.deepEqual(listeners, []);
 		assert.deepEqual(emissions, []);
-		for (const tool of tools.values()) {
-			const deferred = ["todo_listAll", "todo_delete", "todo_release"].includes(tool.name);
-			assert.equal(tool.exposure, deferred ? "deferred" : "codemode");
-			assert.equal(tool.namespace?.name, "todo");
-			assert.ok(tool.outputSchema);
-			assert.equal(tool.annotations?.readOnlyHint, ["todo_list", "todo_listAll", "todo_get"].includes(tool.name));
-		}
-		assert.ok(tools.get("todo_claim")?.namespace?.instructions?.includes("tools.todo_claim"));
-		assert.equal(tools.has("todo_list-all"), false);
+		const tool = tools.get("todo")!;
+		assert.equal(tool.exposure, "codemode");
+		assert.equal(tool.namespace?.name, "todo");
+		assert.ok(tool.outputSchema);
+		assert.deepEqual(tool.annotations, {
+			readOnlyHint: false,
+			destructiveHint: true,
+			idempotentHint: false,
+			openWorldHint: false,
+		});
+		assert.ok(tool.namespace?.instructions?.includes('tools.todo({ action: "claim"'));
 
 		const ctx = {
 			cwd: store,
@@ -78,9 +64,9 @@ test("native todo tools can manage the store while direct child access is denied
 			sessionManager: { getSessionId: () => "child", getSessionFile: () => "/tmp/child.json" },
 		} as unknown as ExtensionToolContext;
 		const invoke = async (name: string, args: Record<string, unknown> = {}, signal?: AbortSignal) => {
-			const tool = tools.get(name);
+			const tool = tools.get("todo");
 			assert.ok(tool);
-			const result = await tool.execute("native-todo-call", args, signal, undefined, ctx);
+			const result = await tool.execute("native-todo-call", { action: name, ...args }, signal, undefined, ctx);
 			assert.ok(Value.Check(tool.outputSchema!, result.structuredContent));
 			assert.equal(result.content[0]?.type, "text");
 			if (result.content[0]?.type === "text")
@@ -103,7 +89,7 @@ test("native todo tools can manage the store while direct child access is denied
 		handlers.get("before_agent_start")?.(promptEvent, ctx);
 		assert.equal(Object.hasOwn(promptEvent.systemPromptOptions.sections, "todo_tracking"), false);
 
-		const created = await invoke("todo_create", {
+		const created = await invoke("create", {
 			title: "Native todo tools remain available",
 			tags: ["test"],
 			body: "Initial",
@@ -117,53 +103,42 @@ test("native todo tools can manage the store while direct child access is denied
 		assert.match(createdPromptEvent.systemPromptOptions.sections.todo_tracking, /tools/);
 		assert.match(createdPromptEvent.systemPromptOptions.sections.todo_tracking, /1 open todo/);
 
-		const appended = await invoke("todo_append", { id: created.id, body: "Progress" });
+		const appended = await invoke("append", { id: created.id, body: "Progress" });
 		assert.equal(appended.body, "Initial\n\nProgress\n");
-		const claimed = await invoke("todo_claim", { id: created.id });
+		const claimed = await invoke("claim", { id: created.id });
 		assert.equal(claimed.assigned_to_session, "child");
-		const released = await invoke("todo_release", { id: created.id });
+		const released = await invoke("release", { id: created.id });
 		assert.equal(released.assigned_to_session, undefined);
-		const closed = await invoke("todo_update", { id: created.id, status: "closed" });
+		const closed = await invoke("update", { id: created.id, status: "closed" });
 		assert.equal(closed.status, "closed");
-		assert.deepEqual(await invoke("todo_list"), []);
-		assert.equal((await invoke("todo_listAll"))[0]?.id, created.id);
-		planning = true;
-		assert.equal((await invoke("todo_get", { id: created.id })).id, created.id);
-		assert.deepEqual(await invoke("todo_list"), []);
-		assert.equal((await invoke("todo_listAll")).length, 1);
-		for (const [name, args] of [
-			["todo_create", { title: "blocked" }],
-			["todo_update", { id: created.id, title: "blocked" }],
-			["todo_append", { id: created.id, body: "blocked" }],
-			["todo_delete", { id: created.id }],
-			["todo_claim", { id: created.id }],
-			["todo_release", { id: created.id }],
-		] as const)
-			await assert.rejects(invoke(name, args), /planning is read-only/);
-		planning = false;
-		assert.equal((await invoke("todo_get", { id: created.id })).body, "Initial\n\nProgress\n");
-		await assert.rejects(invoke("todo_get"), /Invalid arguments for todo\.get/);
-		await assert.rejects(invoke("todo_create", { title: "Bad", extra: true }), /Invalid arguments/);
+		assert.deepEqual(await invoke("list"), []);
+		assert.equal((await invoke("listAll"))[0]?.id, created.id);
+		assert.equal((await invoke("get", { id: created.id })).id, created.id);
+		assert.deepEqual(await invoke("list"), []);
+		assert.equal((await invoke("listAll")).length, 1);
+		assert.equal((await invoke("get", { id: created.id })).body, "Initial\n\nProgress\n");
+		await assert.rejects(invoke("get"), /Invalid arguments for todo\.get/);
+		await assert.rejects(invoke("create", { title: "Bad", extra: true }), /Invalid arguments/);
 		await assert.rejects(
-			invoke("todo_create", { title: "Aborted" }, AbortSignal.abort(new Error("cancelled"))),
+			invoke("create", { title: "Aborted" }, AbortSignal.abort(new Error("cancelled"))),
 			/cancelled/,
 		);
 
 		// A competing host mutation must still honor the file lock.
 		const lockPath = join(store, `${created.id.slice(5)}.lock`);
 		writeFileSync(lockPath, JSON.stringify({ session: "other", created_at: new Date().toISOString() }));
-		await assert.rejects(invoke("todo_update", { id: created.id, title: "locked" }), /is locked/);
+		await assert.rejects(invoke("update", { id: created.id, title: "locked" }), /is locked/);
 		rmSync(lockPath);
-		await invoke("todo_update", { id: created.id, title: "Unlocked" });
+		await invoke("update", { id: created.id, title: "Unlocked" });
 		assert.equal(existsSync(lockPath), false);
 
-		const night = await invoke("todo_create", { title: "Night evidence", tags: ["night"] });
-		await assert.rejects(invoke("todo_update", { id: night.id, status: "closed" }), /Evidence/);
-		assert.equal((await invoke("todo_get", { id: night.id })).status, "open");
-		await invoke("todo_delete", { id: night.id });
-		assert.equal((await invoke("todo_delete", { id: created.id })).id, created.id);
-		assert.deepEqual(await invoke("todo_listAll"), []);
-		assert.ok(emissions.every((event) => event === NIGHT_MODE_PLANNING_QUERY_EVENT));
+		const night = await invoke("create", { title: "Night evidence", tags: ["night"] });
+		await assert.rejects(invoke("update", { id: night.id, status: "closed" }), /Evidence/);
+		assert.equal((await invoke("get", { id: night.id })).status, "open");
+		await invoke("delete", { id: night.id });
+		assert.equal((await invoke("delete", { id: created.id })).id, created.id);
+		assert.deepEqual(await invoke("listAll"), []);
+		assert.deepEqual(emissions, []);
 	} finally {
 		if (previous === undefined) delete process.env.PI_TODO_PATH;
 		else process.env.PI_TODO_PATH = previous;

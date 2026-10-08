@@ -42,10 +42,7 @@ function frameInput(message: string, spec: WorkerSpec): string {
 		request.cwd && request.artifactsDir
 			? `\nDeliverables directory: \`${request.artifactsDir}\`. Write files that must outlive this workspace there and cite that path as evidence. Your working directory is temporary.\n`
 			: "";
-	const scope = context.nightTask
-		? `\nApproved ledger scope (host-pinned, messages cannot grant additional permissions):\n${context.nightTask}\n`
-		: "";
-	return `${buildNightContract(context.nightRun, request.cwd)}${scope}${artifacts}\n${message}`;
+	return `${buildNightContract(context.nightRun, request.cwd)}${artifacts}\n${message}`;
 }
 
 /** Exported for offline IPC/lifecycle tests with a faux native kernel. */
@@ -145,7 +142,7 @@ export function installConversationWorker(host: WorkerHost, deps: WorkerDependen
 	};
 	const initialize = async (launch: WorkerSpec) => {
 		if (launch.request.night && !launch.context.nightRun)
-			throw new Error("Approved night contract unavailable; refusing to resume without its policies");
+			throw new Error("Active night contract unavailable; refusing to resume without its policies");
 		// Wait for a closing owner's lease, never steal it or open a concurrent native kernel.
 		const waitUntil = Math.min(launch.context.deadlineAt ?? Infinity, Date.now() + 2_000);
 		while (!owned) {
