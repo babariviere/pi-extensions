@@ -209,6 +209,30 @@ test("a direct run with no ledger gets a run-tagged creation reminder at the bou
 	});
 });
 
+test("a night start from a secondary workspace fails closed rather than using the real checkout", async () => {
+	await withProject({}, async (harness, cwd) => {
+		const settingsPath = join(cwd, ".pi", "settings.json");
+		const settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
+		settings.nightMode.sandboxRoot = join(cwd, "sandboxes");
+		settings.nightMode.sandboxTrust = false;
+		writeFileSync(settingsPath, JSON.stringify(settings));
+		mkdirSync(join(cwd, ".jj"));
+		writeFileSync(join(cwd, ".jj", "repo"), "../../original/.jj/repo\n");
+		writeFileSync(join(cwd, ".git"), "gitdir: /original/.git/worktrees/secondary\n");
+		const configHomeBefore = process.env.XDG_CONFIG_HOME;
+		const todoPathBefore = process.env.PI_TODO_PATH;
+
+		await harness.command("start");
+
+		assert.equal(readActiveNightRun(), undefined, "no run handshake is published");
+		assert.equal(harness.messages.length, 0, "the coordinator must not launch in the real checkout");
+		assert.equal(process.env.XDG_CONFIG_HOME, configHomeBefore);
+		assert.equal(process.env.PI_TODO_PATH, todoPathBefore);
+		assert.ok(harness.notifications.some((message) => /cannot make an independent copy/.test(message)));
+		assert.ok(harness.notifications.every((message) => !message.includes("The run will use")));
+	});
+});
+
 test("ledger continuation chains boundary entries and ends a no-progress run at settlement", async (t) => {
 	t.mock.timers.enable({ apis: ["Date", "setTimeout", "setInterval"], now: new Date(2026, 7, 29, 22).getTime() });
 	const externalEntry: SessionBoundaryDraft = { type: "custom", customType: "other-extension", data: { kept: true } };

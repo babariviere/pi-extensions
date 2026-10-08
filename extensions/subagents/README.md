@@ -155,6 +155,25 @@ Pi host, including managed packages without a local SDK installation.
   those answers again.
 - Disable the optional TUI widget with `--no-subagents-progress`.
 
+## Host events
+
+Hosts that embed Pi (for example a desktop app) can display and control subagents
+through `pi.events`, without going through the model. The contract and payload
+types live in `host-events.ts`.
+
+| Event | Direction | Payload |
+| --- | --- | --- |
+| `subagents:snapshot` | extension to host | `{ agents }`: name, `working`/`idle` state, spawn task, creation time, pinned cwd and model, child storage directory, child conversation ID, latest answer ID, error and `retired`. Emitted after changes (coalesced over 250 ms) and on request. Never includes answer text. |
+| `subagents:request-snapshot` | host to extension | None. Emits a fresh snapshot immediately. |
+| `subagents:command` | host to extension | `{ requestId, action: "send", name, message, followUp? }` or `{ requestId, action: "stop", name }`. Same semantics as the tool's `send` (steer by default) and `stop`. A retried `requestId` admits its message once. |
+| `subagents:command-result` | extension to host | `{ requestId, ok, error? }`, exactly one per command handled by an active session. |
+
+The child storage directory holds the child's `runs.sqlite`. Hosts may open it
+read-only to show the transcript; the child worker remains its only writer.
+Answers delivered to the parent still use `pi.sendMessage` with
+`deliverAs: "followUp"` and `triggerTurn: true`; hosts that own the model loop
+must bridge those messages into their own input queue.
+
 ## Breaking upgrade
 
 The prior `agents_*` tool API is removed, not aliased. Replace it with
