@@ -1,7 +1,7 @@
 # Subagents
 
 Named persistent pi-durable conversations with native Pi tools, extensions,
-authentication, trust, sandbox, secrets and MCP. Requires Pi 1.0 and Node.js 24+.
+authentication, trust, sandbox, secrets and MCP. Requires Pi 1.1 and Node.js 24+.
 Durable execution is the only backend, with no Herdr panes or headless CLI fallback.
 
 ## Single tool

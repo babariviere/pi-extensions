@@ -42,7 +42,7 @@ pi update --extensions
 For a local checkout, run `pi install ./`. Individual extension paths can also be
 loaded through pi's normal configuration.
 
-Requires Node.js `>=24.0.0` and pi `>=1.0.0`. The host supplies
+Requires Node.js `>=24.0.0` and pi `>=1.1.0`. The host supplies
 `@earendil-works/pi-ai`, `@earendil-works/pi-coding-agent`, `@earendil-works/pi-tui`
 and `typebox` as peer dependencies. This package no longer installs its own
 native Pi SDK, MCP SDK or keyring implementation.
@@ -221,7 +221,7 @@ npm run fmt:check
 ```
 
 `npm run fmt` applies Biome formatting. CI runs `npm ci`, typechecking and tests on Node 24.
-CI explicitly tests the minimum Pi 1.0.0 APIs and the current Pi release. The SDK
+CI explicitly tests the minimum Pi 1.1.0 APIs and the current Pi release. The SDK
 packages remain host-provided peers, not bundled runtime dependencies.
 
 ## Documentation

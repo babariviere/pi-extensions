@@ -1,6 +1,6 @@
 # Background jobs
 
-Standalone session-owned shell jobs for Pi 1.0 or newer. The standalone sandbox
+Standalone session-owned shell jobs for Pi 1.1 or newer. The standalone sandbox
 extension is required, even when sandbox policy is off. Every launch requests a
 sandbox-wrapped command through `sandboxWrapCommand(pi, command)`; missing or
 failed policy services refuse launch rather than falling back to an unchecked shell.

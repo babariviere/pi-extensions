@@ -30,7 +30,7 @@
   },
   "dependencies": {
     "@earendil-works/chord": "1.1.0",
-    "@earendil-works/pi-durable": "1.0.0",
+    "@earendil-works/pi-durable": "1.1.0",
     "defuddle": "^0.19.1",
     "linkedom": "^0.18.13",
     "parse5": "^8.0.0",
@@ -45,9 +45,9 @@
     "tsx": "^4.19.2"
   },
   "peerDependencies": {
-    "@earendil-works/pi-ai": ">=1.0.0",
-    "@earendil-works/pi-coding-agent": ">=1.0.0",
-    "@earendil-works/pi-tui": ">=1.0.0",
+    "@earendil-works/pi-ai": ">=1.1.0",
+    "@earendil-works/pi-coding-agent": ">=1.1.0",
+    "@earendil-works/pi-tui": ">=1.1.0",
     "typebox": "*"
   },
   "scripts": {
