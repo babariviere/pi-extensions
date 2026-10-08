@@ -27,15 +27,15 @@
  *   }
  *
  * Managed workspaces are created at <root>/<repo>/<name>, mirroring herdr's
- * ~/.herdr/worktrees/<repo>/<branch-slug> convention. jj workspaces have a .jj
- * dir but no .git dir, so tools that require .git (gh, prek) need extra care;
- * that is out of scope for these commands.
+ * ~/.herdr/worktrees/<repo>/<branch-slug> convention. With jj 0.46, new
+ * workspaces inherit Git colocation when the current workspace is colocated
+ * and git.colocate is true. Existing non-colocated workspaces stay unchanged.
  */
 
 import net from "node:net";
-import { copyFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, isAbsolute, join } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { Key, matchesKey, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 
@@ -118,17 +118,18 @@ interface RepoInfo {
  * In a secondary workspace, .jj/repo is a file whose content points at the
  * store path (<mainRoot>/.jj/repo). In the default workspace it is a directory.
  */
-async function resolveRepo(pi: ExtensionAPI, cwd: string): Promise<RepoInfo> {
-	const workspaceRoot = (await jj(pi, ["workspace", "root"], cwd)).trim();
+export async function resolveRepo(pi: ExtensionAPI, cwd: string): Promise<RepoInfo> {
+	const workspaceRoot = (await jj(pi, ["--ignore-working-copy", "workspace", "root"], cwd)).trim();
 	let mainRoot = workspaceRoot;
 	try {
 		const repoPointer = join(workspaceRoot, ".jj", "repo");
 		if (existsSync(repoPointer)) {
-			const stat = readFileSync(repoPointer, "utf-8").trim();
-			// A file pointer contains an absolute path to the store's repo dir.
-			if (stat && isAbsolute(stat) && stat.includes(`${join(".jj", "repo")}`)) {
+			const pointer = readFileSync(repoPointer, "utf-8").trim();
+			// Relative pointers are resolved from .jj, not the workspace root.
+			const repoPath = resolve(dirname(repoPointer), pointer);
+			if (pointer && basename(repoPath) === "repo" && basename(dirname(repoPath)) === ".jj") {
 				// <mainRoot>/.jj/repo -> mainRoot
-				mainRoot = dirname(dirname(stat));
+				mainRoot = dirname(dirname(repoPath));
 			}
 		}
 	} catch {
@@ -140,30 +141,64 @@ async function resolveRepo(pi: ExtensionAPI, cwd: string): Promise<RepoInfo> {
 interface WorkspaceEntry {
 	name: string;
 	current: boolean;
-	/** Managed directory (<root>/<repo>/<name>) or mainRoot for "default". */
+	/** Recorded workspace path, or the legacy managed/default path. */
 	dir: string;
 }
 
+function sameDirectory(left: string, right: string): boolean {
+	try {
+		return realpathSync(left) === realpathSync(right);
+	} catch {
+		return resolve(left) === resolve(right);
+	}
+}
+
 /** List jj workspaces for the repo. */
-async function listWorkspaces(
+export async function listWorkspaces(
 	pi: ExtensionAPI,
 	cfg: WorkspaceConfig,
 	repo: RepoInfo,
 	cwd: string,
 ): Promise<WorkspaceEntry[]> {
-	const out = await jj(pi, ["workspace", "list"], cwd);
-	const currentName = repo.workspaceRoot === repo.mainRoot ? "default" : basename(repo.workspaceRoot);
+	const out = await jj(pi, ["--ignore-working-copy", "workspace", "list"], cwd);
+	const legacyCurrentName = sameDirectory(repo.workspaceRoot, repo.mainRoot)
+		? "default"
+		: basename(repo.workspaceRoot);
 	const entries: WorkspaceEntry[] = [];
+	const legacyNames = new Set<string>();
 	for (const line of out.split("\n")) {
 		const t = line.trim();
 		if (!t) continue;
 		const m = t.match(/^([^:\s]+):/);
 		if (!m) continue;
 		const name = m[1];
-		const dir = name === "default" ? repo.mainRoot : join(cfg.root, repo.repoName, name);
-		entries.push({ name, current: name === currentName, dir });
+		let dir: string;
+		try {
+			dir = (await jj(pi, ["--ignore-working-copy", "workspace", "root", "--name", name], cwd)).trim();
+			if (!isAbsolute(dir)) throw new Error(`invalid recorded workspace path for '${name}': ${dir}`);
+		} catch (error) {
+			// Workspaces created before jj 0.38 may not have a recorded root.
+			// Do not turn other errors into guessed paths used by switch/delete.
+			if (!String(error).includes("Workspace has no recorded path:")) throw error;
+			legacyNames.add(name);
+			dir = name === "default" ? repo.mainRoot : join(cfg.root, repo.repoName, name);
+		}
+		entries.push({ name, current: sameDirectory(dir, repo.workspaceRoot), dir });
+	}
+	if (!entries.some((entry) => entry.current)) {
+		const current = entries.find((entry) => entry.name === legacyCurrentName && legacyNames.has(entry.name));
+		if (current) {
+			current.current = true;
+			current.dir = repo.workspaceRoot;
+		}
 	}
 	return entries;
+}
+
+/** Only remove directories strictly inside this repo's managed root. */
+export function isManagedWorkspaceDir(managedRoot: string, dir: string): boolean {
+	const path = relative(managedRoot, dir);
+	return path !== "" && path !== ".." && !path.startsWith(`..${sep}`) && !isAbsolute(path);
 }
 
 // ---------------------------------------------------------------------------
@@ -475,7 +510,7 @@ async function deleteWorkspaces(
 		try {
 			await jj(pi, ["workspace", "forget", t.name], ctx.cwd);
 			summary.push(`Forgot '${t.name}'`);
-			if (t.dir.startsWith(managedPrefix) && existsSync(t.dir)) {
+			if (isManagedWorkspaceDir(managedPrefix, t.dir) && existsSync(t.dir)) {
 				const rm = await sh(pi, "rm", ["-rf", t.dir]);
 				summary.push(rm.code === 0 ? `  removed ${t.dir}` : `  failed to remove dir: ${rm.stderr.trim()}`);
 			} else {

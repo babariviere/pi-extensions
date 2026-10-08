@@ -28,6 +28,9 @@ function fakeOwner() {
 			sink = undefined;
 		},
 		list: () => [{ name: status.name, state: status.state, conversationId: status.conversationId }],
+		describe: () => [
+			{ name: status.name, state: status.state, task: "scope", createdAt: 1, cwd: "/work", storage: "/runs/review" },
+		],
 		status: async (...args: any[]) => record("status", args),
 		spawn: async (...args: any[]) => record("spawn", args),
 		send: async (...args: any[]) => record("send", args),
@@ -73,7 +76,13 @@ test("only the upstream single tool schema is registered without legacy caller f
 		const { host, definition } = await setup();
 		assert.deepEqual([...host.tools.keys()], ["subagent"]);
 		assert.equal(definition.exposure, "codemode");
-		assert.deepEqual(Object.keys(SubagentParameters.properties).sort(), ["action", "followUp", "message", "name"]);
+		assert.deepEqual(Object.keys(SubagentParameters.properties).sort(), [
+			"action",
+			"cwd",
+			"followUp",
+			"message",
+			"name",
+		]);
 		assert.deepEqual(SubagentParameters.required, ["action"]);
 		assert.equal((SubagentParameters as unknown as { additionalProperties: boolean }).additionalProperties, false);
 		assert.deepEqual(
@@ -107,6 +116,21 @@ test("spawn pins host model/thinking/lifetime and send defaults to steer or queu
 		assert.deepEqual(fake.calls[2]!.args, ["review", "next", true, "next"]);
 		await execute({ action: "stop", name: "review" });
 		assert.equal(fake.calls.at(-1)!.action, "stop");
+		await host.emit("session_shutdown", { reason: "quit" });
+	});
+});
+
+test("cwd is forwarded only on spawn and rejected on send, stop and status", async () => {
+	await withParentSession(async () => {
+		const { host, fake, execute } = await setup();
+		await execute({ action: "spawn", name: "other", message: "work", cwd: "../other" });
+		assert.equal(fake.calls[0]!.args[4], "../other");
+		for (const action of ["send", "stop", "status"])
+			await assert.rejects(
+				execute({ action, name: "other", message: "work", cwd: "." }),
+				/only supported for spawn/,
+			);
+		assert.equal(fake.calls.length, 1);
 		await host.emit("session_shutdown", { reason: "quit" });
 	});
 });
@@ -214,5 +238,63 @@ test("child and background attempt sessions cannot register the subagent tool", 
 				else process.env[key] = old;
 			}
 		}
+	});
+});
+
+test("hosts receive display snapshots and can steer or stop subagents through the event bus", async () => {
+	await withParentSession(async () => {
+		const { host, fake } = await setup();
+		const snapshots: unknown[] = [];
+		const results: unknown[] = [];
+		host.api.events.on("subagents:snapshot", (value) => snapshots.push(value));
+		host.api.events.on("subagents:command-result", (value) => results.push(value));
+		host.api.events.emit("subagents:request-snapshot", undefined);
+		assert.deepEqual(snapshots, [
+			{
+				agents: [
+					{ name: "review", state: "idle", task: "scope", createdAt: 1, cwd: "/work", storage: "/runs/review" },
+				],
+			},
+		]);
+		const settled = async (count: number) => {
+			for (let n = 0; n < 100 && results.length < count; n++) await new Promise((resolve) => setTimeout(resolve, 1));
+		};
+		host.api.events.emit("subagents:command", { requestId: "r1", action: "send", name: "review", message: "focus" });
+		await settled(1);
+		host.api.events.emit("subagents:command", {
+			requestId: "r2",
+			action: "send",
+			name: "review",
+			message: "then",
+			followUp: true,
+		});
+		await settled(2);
+		host.api.events.emit("subagents:command", { requestId: "r3", action: "stop", name: "review" });
+		await settled(3);
+		host.api.events.emit("subagents:command", { requestId: "r4", action: "send", name: "review", message: " " });
+		await settled(4);
+		host.api.events.emit("subagents:command", { requestId: "r5", action: "status", name: "review" });
+		await settled(5);
+		assert.deepEqual(
+			fake.calls.map((call) => [call.action, ...call.args]),
+			[
+				["send", "review", "focus", false, "host:r1"],
+				["send", "review", "then", true, "host:r2"],
+				["stop", "review"],
+			],
+		);
+		assert.deepEqual(results.slice(0, 3), [
+			{ requestId: "r1", ok: true },
+			{ requestId: "r2", ok: true },
+			{ requestId: "r3", ok: true },
+		]);
+		assert.match((results[3] as { error: string }).error, /non-empty message/);
+		assert.match((results[4] as { error: string }).error, /Unknown subagent command/);
+		await host.emit("session_shutdown", { reason: "quit" });
+		host.api.events.emit("subagents:command", { requestId: "r6", action: "stop", name: "review" });
+		host.api.events.emit("subagents:request-snapshot", undefined);
+		await new Promise((resolve) => setTimeout(resolve, 5));
+		assert.equal(results.length, 5);
+		assert.equal(snapshots.length, 1);
 	});
 });

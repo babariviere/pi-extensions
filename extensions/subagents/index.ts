@@ -19,6 +19,15 @@ import {
 	type SubagentReport,
 } from "./durable-supervisor.ts";
 import type { SessionRef } from "./session-ref.ts";
+import {
+	SUBAGENTS_COMMAND_EVENT,
+	SUBAGENTS_COMMAND_RESULT_EVENT,
+	SUBAGENTS_REQUEST_SNAPSHOT_EVENT,
+	SUBAGENTS_SNAPSHOT_EVENT,
+	type SubagentHostCommand,
+	type SubagentHostCommandResult,
+	type SubagentHostSnapshot,
+} from "./host-events.ts";
 
 export const SubagentParameters = Type.Object(
 	{
@@ -26,6 +35,12 @@ export const SubagentParameters = Type.Object(
 		name: Type.Optional(Type.String()),
 		message: Type.Optional(Type.String()),
 		followUp: Type.Optional(Type.Boolean()),
+		cwd: Type.Optional(
+			Type.String({
+				description:
+					"Spawn only. Existing directory, relative to the parent cwd or absolute. Defaults to the parent cwd. Fixed for sends and recovery; unavailable during night runs.",
+			}),
+		),
 	},
 	{ additionalProperties: false },
 );
@@ -67,6 +82,7 @@ export default function subagents(pi: ExtensionAPI, deps: SubagentExtensionDeps 
 	let generation = 0;
 	let closing: Promise<void> | undefined;
 	let unsubscribe: (() => void) | undefined;
+	let hostEvents: Array<() => void> = [];
 	let widgetRefresh: ReturnType<typeof setTimeout> | undefined;
 	let definition: ToolDefinition<typeof SubagentParameters> | undefined;
 	const calls = new Map<string, number>();
@@ -81,6 +97,8 @@ export default function subagents(pi: ExtensionAPI, deps: SubagentExtensionDeps 
 		context = undefined;
 		unsubscribe?.();
 		unsubscribe = undefined;
+		for (const off of hostEvents) off();
+		hostEvents = [];
 		if (widgetRefresh) clearTimeout(widgetRefresh);
 		widgetRefresh = undefined;
 		calls.clear();
@@ -134,13 +152,14 @@ export default function subagents(pi: ExtensionAPI, deps: SubagentExtensionDeps 
 			label: "Subagent",
 			exposure: "codemode",
 			description:
-				"Manage persistent background subagents. spawn needs name and message; send needs name and message and steers unless followUp is true; stop aborts current/queued work but keeps the conversation usable; status takes a name for its latest completed answer and acknowledges that answer's pending notification, or no name for compact summaries. Unread answers arrive automatically. Names identify conversations, not Markdown agent definitions. Model/thinking and lifetime are host policy. During approved night execution use the approved TODO-<id> as the name. Children cannot launch subagents or jobs.",
+				"Manage persistent background subagents. spawn needs name and message and accepts an optional cwd (relative to the parent or absolute, fixed for this conversation); send needs name and message and steers unless followUp is true; stop aborts current/queued work but keeps the conversation usable; status takes a name for its latest completed answer and acknowledges that answer's pending notification, or no name for compact summaries. Unread answers arrive automatically. Names identify conversations, not Markdown agent definitions. Model/thinking and lifetime are host policy. Night runs inherit the active host contract, control placement and reject cwd; use ordinary conversation names. Children cannot launch subagents or jobs.",
 			parameters: SubagentParameters,
 			annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
 			execute: async (callId, args, signal) => {
 				if (current !== generation || supervisor !== owner) throw new Error("Subagents session is not initialized");
 				signal?.throwIfAborted();
 				if (!["spawn", "send", "stop", "status"].includes(args.action)) throw new Error("Unknown subagent action");
+				if (args.cwd !== undefined && args.action !== "spawn") throw new Error("cwd is only supported for spawn");
 				let result: unknown;
 				let text: string;
 				if (args.action === "status" && args.name === undefined) {
@@ -163,13 +182,19 @@ export default function subagents(pi: ExtensionAPI, deps: SubagentExtensionDeps 
 						if (args.action === "spawn") {
 							if (!context) throw new Error("Subagents session is not initialized");
 							const parent = inheritedParentModel(context);
-							result = await owner.spawn(name, args.message, callId, {
-								model: config.defaultModel ?? (parent ? `${parent.provider}/${parent.id}` : undefined),
-								thinking: config.defaultThinking,
-								parentProvider: parent?.provider,
-								models,
-								timeoutMs: config.timeoutMs,
-							});
+							result = await owner.spawn(
+								name,
+								args.message,
+								callId,
+								{
+									model: config.defaultModel ?? (parent ? `${parent.provider}/${parent.id}` : undefined),
+									thinking: config.defaultThinking,
+									parentProvider: parent?.provider,
+									models,
+									timeoutMs: config.timeoutMs,
+								},
+								args.cwd,
+							);
 							text = `Started ${name}.`;
 						} else {
 							result = await owner.send(name, args.message, args.followUp === true, callId);
@@ -185,8 +210,41 @@ export default function subagents(pi: ExtensionAPI, deps: SubagentExtensionDeps 
 			},
 		};
 		pi.registerTool(definition!);
-		if (ctx.mode === "tui" && ctx.hasUI && pi.getFlag("no-subagents-progress") !== true) {
-			const refresh = () => {
+		const publish = () => {
+			if (current !== generation || supervisor !== owner) return;
+			const snapshot: SubagentHostSnapshot = { agents: owner.describe() };
+			pi.events.emit(SUBAGENTS_SNAPSHOT_EVENT, snapshot);
+		};
+		const answer = (result: SubagentHostCommandResult) => pi.events.emit(SUBAGENTS_COMMAND_RESULT_EVENT, result);
+		hostEvents.push(
+			pi.events.on(SUBAGENTS_REQUEST_SNAPSHOT_EVENT, publish),
+			pi.events.on(SUBAGENTS_COMMAND_EVENT, async (data) => {
+				const command = data as SubagentHostCommand | undefined;
+				if (!command || typeof command.requestId !== "string" || !command.requestId) return;
+				try {
+					if (current !== generation || supervisor !== owner)
+						throw new Error("Subagents session is not initialized");
+					const name = validName(command.name);
+					if (command.action === "stop") await owner.stop(name);
+					else if (command.action === "send") {
+						if (typeof command.message !== "string" || !command.message.trim())
+							throw new Error("send needs a non-empty message.");
+						// Stable input ID: a retried host request is admitted once.
+						await owner.send(name, command.message, command.followUp === true, `host:${command.requestId}`);
+					} else throw new Error("Unknown subagent command");
+					answer({ requestId: command.requestId, ok: true });
+				} catch (error) {
+					answer({
+						requestId: command.requestId,
+						ok: false,
+						error: error instanceof Error ? error.message : String(error),
+					});
+				}
+			}),
+		);
+		const widget = ctx.mode === "tui" && ctx.hasUI && pi.getFlag("no-subagents-progress") !== true;
+		const refresh = () => {
+			if (widget) {
 				const active = owner.list().filter((agent) => agent.state === "working");
 				context?.ui.setWidget(
 					"subagents-progress",
@@ -199,18 +257,19 @@ export default function subagents(pi: ExtensionAPI, deps: SubagentExtensionDeps 
 							]
 						: undefined,
 				);
-			};
-			unsubscribe = owner.subscribe(() => {
-				if (!widgetRefresh) {
-					widgetRefresh = setTimeout(() => {
-						widgetRefresh = undefined;
-						refresh();
-					}, 250);
-					widgetRefresh.unref();
-				}
-			});
-			refresh();
-		}
+			}
+			publish();
+		};
+		unsubscribe = owner.subscribe(() => {
+			if (!widgetRefresh) {
+				widgetRefresh = setTimeout(() => {
+					widgetRefresh = undefined;
+					refresh();
+				}, 250);
+				widgetRefresh.unref();
+			}
+		});
+		refresh();
 	});
 	pi.on("before_agent_start", (_event, ctx) => {
 		context = ctx;

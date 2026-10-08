@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, test } from "node:test";
@@ -19,6 +19,7 @@ import {
 	remoteRewriteCommands,
 	rewriteRemotesToHttps,
 	sandboxPathFor,
+	SharedRepositoryStateError,
 	strategyOrder,
 } from "./sandbox-clone.ts";
 
@@ -276,6 +277,91 @@ test("createRunSandbox rejects a missing source", async () => {
 	);
 });
 
+for (const pointer of ["/original/.jj/repo\n", "../../../original/.jj/repo\n"]) {
+	test(`createRunSandbox refuses a secondary jj workspace with pointer ${pointer.trim()}`, async () => {
+		const source = join(dir, "secondary");
+		const destination = join(dir, "sandbox");
+		mkdirSync(join(source, ".jj"), { recursive: true });
+		writeFileSync(join(source, ".jj", "repo"), pointer);
+		// jj 0.46 colocated secondary workspaces also have a .git pointer.
+		writeFileSync(join(source, ".git"), "gitdir: /original/.git/worktrees/secondary\n");
+		let copies = 0;
+		await assert.rejects(
+			createRunSandbox({
+				source,
+				destination,
+				run: () => {
+					copies++;
+				},
+			}),
+			(error: unknown) =>
+				error instanceof SharedRepositoryStateError && /secondary jj workspace/.test(error.message),
+		);
+		assert.equal(copies, 0, "refuse before invoking any copy strategy");
+		assert.equal(existsSync(destination), false);
+		assert.equal(readFileSync(join(source, ".jj", "repo"), "utf-8"), pointer);
+	});
+}
+
+test("createRunSandbox refuses a non-colocated secondary jj workspace", async () => {
+	const source = join(dir, "secondary");
+	mkdirSync(join(source, ".jj"), { recursive: true });
+	writeFileSync(join(source, ".jj", "repo"), "/original/.jj/repo\n");
+	await assert.rejects(createRunSandbox({ source, destination: join(dir, "sandbox") }), SharedRepositoryStateError);
+});
+
+test("createRunSandbox refuses a plain Git linked worktree before copying", async () => {
+	const source = join(dir, "linked");
+	mkdirSync(source);
+	writeFileSync(join(source, ".git"), "gitdir: /original/.git/worktrees/linked\n");
+	await assert.rejects(createRunSandbox({ source, destination: join(dir, "sandbox") }), /git linked worktree/);
+	assert.equal(existsSync(join(dir, "sandbox")), false);
+});
+
+test("createRunSandbox rechecks copied state before it can be prepared or rewritten", async () => {
+	const source = join(dir, "repo");
+	const destination = join(dir, "sandbox");
+	mkdirSync(source);
+	let copies = 0;
+	await assert.rejects(
+		createRunSandbox({
+			source,
+			destination,
+			run: () => {
+				copies++;
+				mkdirSync(destination, { recursive: true });
+				writeFileSync(join(destination, ".git"), "gitdir: /original/.git/worktrees/linked\n");
+			},
+		}),
+		SharedRepositoryStateError,
+	);
+	assert.equal(copies, 1, "unsafe state must not try a different copy strategy");
+});
+
+test("a main colocated checkout still gets an independent copy with writable remotes", async () => {
+	const source = join(dir, "main");
+	const destination = join(dir, "sandbox");
+	mkdirSync(join(source, ".git"), { recursive: true });
+	mkdirSync(join(source, ".jj", "repo"), { recursive: true });
+	const originalRemote = "git@github.com:owner/repo.git";
+	writeFileSync(join(source, ".git", "config"), originalRemote);
+	const created = await createRunSandbox({
+		source,
+		destination,
+		run: () => cpSync(source, destination, { recursive: true }),
+	});
+	const result = await rewriteRemotesToHttps(created.path, {
+		list: async () => [{ remote: "origin", url: originalRemote }],
+		run: (command) => {
+			writeFileSync(join(destination, ".git", "config"), command.args.at(-1)!);
+		},
+	});
+	assert.equal(result.rewritten.length, 1);
+	assert.deepEqual(result.problems, []);
+	assert.equal(readFileSync(join(source, ".git", "config"), "utf-8"), originalRemote);
+	assert.equal(readFileSync(join(destination, ".git", "config"), "utf-8"), "https://github.com/owner/repo.git");
+});
+
 test("createRunSandbox really clones, and brings ignored files along", async () => {
 	const source = join(dir, "repo");
 	mkdirSync(join(source, "src"), { recursive: true });
@@ -397,6 +483,37 @@ test("rewriteRemotesToHttps only touches the SSH remotes", async () => {
 	assert.deepEqual(result.problems, []);
 	assert.deepEqual(ran, ["-C /night/clone remote set-url origin https://github.com/stoikio/phishing.git"]);
 });
+
+for (const kind of ["git", "jj-absolute", "jj-relative"] as const) {
+	test(`rewriteRemotesToHttps refuses ${kind} pointer state without listing or writing remotes`, async () => {
+		const path = join(dir, "shared-copy");
+		mkdirSync(path);
+		if (kind === "git") {
+			writeFileSync(join(path, ".git"), "gitdir: /original/.git/worktrees/secondary\n");
+		} else {
+			mkdirSync(join(path, ".jj"));
+			writeFileSync(
+				join(path, ".jj", "repo"),
+				kind === "jj-absolute" ? "/original/.jj/repo\n" : "../../../original/.jj/repo\n",
+			);
+		}
+		let lists = 0;
+		let writes = 0;
+		const result = await rewriteRemotesToHttps(path, {
+			list: async () => {
+				lists++;
+				return [{ remote: "origin", url: "git@github.com:owner/repo.git" }];
+			},
+			run: () => {
+				writes++;
+			},
+		});
+		assert.deepEqual(result.rewritten, []);
+		assert.match(result.problems[0], /refusing shared repository state/);
+		assert.equal(lists, 0);
+		assert.equal(writes, 0);
+	});
+}
 
 test("a failing rewrite is a problem, not a thrown clone", async () => {
 	const result = await rewriteRemotesToHttps("/night/clone", {

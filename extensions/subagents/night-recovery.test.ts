@@ -17,12 +17,11 @@ test("an isolated durable worker keeps the admitted night policy when the global
 		maxPullRequests: 1,
 		sandbox: { mode: "read-only", allowWrite: [join(directory, "artifacts")], denyRead: ["/private"] },
 		mcp: { readOnly: true },
-		ledgerDir: join(directory, "ledger"),
 		configHome: join(directory, "config-home"),
 	};
 	try {
 		process.env.PI_CODING_AGENT_DIR = directory;
-		process.env.PI_DURABLE_NIGHT_RUN_FILE = join(directory, "approved.json");
+		process.env.PI_DURABLE_NIGHT_RUN_FILE = join(directory, "night-contract.json");
 		await writeFile(process.env.PI_DURABLE_NIGHT_RUN_FILE, JSON.stringify(snapshot), { mode: 0o600 });
 		await mkdir(join(directory, "night"));
 		await writeFile(
