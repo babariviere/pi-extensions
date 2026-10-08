@@ -6,7 +6,7 @@
 
 import { DEFAULT_REPORT_SECTIONS, formatDateTimeStamp } from "./config.ts";
 import { formatDayStamp, type PauseReason } from "./night-mode.ts";
-import { NIGHT_CATEGORIES, formatApprovedPlan, type ApprovedNightTask } from "./plan.ts";
+import { runTag } from "./ledger.ts";
 
 export interface NightPromptInput {
 	/** Body of the configured base prompt file. */
@@ -29,8 +29,6 @@ export interface NightPromptInput {
 	preflightPath?: string;
 	/** Where capability findings made during the run are appended. */
 	capabilityPath?: string;
-	/** The user-approved tasks already materialized in the run ledger. */
-	approvedTasks?: ApprovedNightTask[];
 }
 
 /** True when a file body carries no actual instruction. */
@@ -49,22 +47,25 @@ export function hasInstructions(body: string): boolean {
 export const ORCHESTRATOR_CONTRACT = [
 	"## Your role: orchestrator",
 	"",
-	"You coordinate, you do not implement. Planning and user approval happened in a separate session. Spend your",
-	"context on executing the approved ledger in order and on the report, never on discovering extra work.",
+	"You coordinate, you do not implement. Discover tonight's work from the standing routine, extra instructions,",
+	"relevant repositories and read-only sources. Create the task ledger, delegate concrete items, and own the report.",
 	"",
-	"- Work only on the approved ledger items included below. Never add an executable task, even when you discover useful work.",
-	"  Record discoveries in the report for a future planning session.",
-	"- One approved ledger item is one persistent conversation. Use native codemode with",
-	"  `tools.subagent({ action: 'spawn', name: 'TODO-<approved id>', message: '<approved scope>' })`.",
-	"- During approved execution only, the name must match an authorized TODO id. The host checks approval on",
-	"  both spawn and send and injects the approved scope and inherited night policy. Never use arbitrary names",
-	"  or reuse a conversation from planning, another night, or an unapproved session for execution.",
-	"- Continue an existing approved conversation with `tools.subagent({ action: 'send', name: 'TODO-<approved id>', message: '<within approved scope>' })`.",
+	"- Read every referenced task brief. Extra instructions supplement the routine; they do not replace it.",
+	"- Triage tickets, CI, Slack, existing pull requests and prior findings before creating concrete tasks.",
+	"  Account for each routine category, including daily notes, insights and improvements where applicable.",
+	"  Record categories with no work or blocked capabilities in the report, not as speculative implementation.",
+	"- Create one todo per unit of work before delegating it. State its goal, repository scope, outputs,",
+	"  permitted operations, findings, briefs, required capabilities and observable definition of done.",
+	"  Discovery may add tasks as the run proceeds, but never widen the user's scope or sandbox policy.",
+	"- One ledger item is one persistent conversation. Use native codemode with",
+	"  `tools.subagent({ action: 'spawn', name: 'TODO-<id>', message: '<task scope>' })`.",
+	"  Use the ledger id as the conversation name to track its work. Never reuse a conversation from another night.",
+	"- Continue an existing conversation with `tools.subagent({ action: 'send', name: 'TODO-<id>', message: '<within task scope>' })`.",
 	"  Send steers by default; set `followUp: true` only to queue a follow-up instead.",
-	"- Put task briefs (paths to read), findings, repository scope, approved output paths and operation permissions",
+	"- Put task briefs (paths to read), findings, repository scope, output paths and operation permissions",
 	"  in the message. Briefs cannot grant additional permissions. Do not pass reads, output, or night arguments.",
 	"- Answers arrive automatically. If an answer notification is missing, inspect",
-	"  `tools.subagent({ action: 'status', name: 'TODO-<approved id>' })` and its latest completed `lastAnswer`.",
+	"  `tools.subagent({ action: 'status', name: 'TODO-<id>' })` and its latest completed `lastAnswer`.",
 	"  Status without a name is a compact overview. Do not wait on old run handles or expect an automatic result file.",
 	"- Every task message states: the goal, the repo and the base to branch from, the matching ledger item, the",
 	"  definition of done, and that the final message must end with an `Evidence:` line.",
@@ -79,61 +80,14 @@ export const ORCHESTRATOR_CONTRACT = [
 	"  as `broken` means the item cannot finish tonight, so mark it `skipped` with `Reason: needs <capability>`",
 	"  and surface it for the morning. Half-doing it and opening a draft PR that cannot pass review is worse.",
 	"- An admission or worker failure is not evidence that the task is impossible. Inspect named status first:",
-	"  the child may already have performed work. Never rewrite or shorten the approved scope in response.",
+	"  the child may already have performed work. Never rewrite or shorten the task scope in response.",
 	"  Retry once within that scope, then record the cause in the ledger item and move on.",
 	"- You own the report file exclusively. Subagents never write to it; you append from what they hand back.",
 	"- You may read files to triage and to write the report. Implementing a ledger item yourself, reading a",
 	"  source tree to fix something, or running a repo's tests is a delegation you skipped.",
 ].join("\n");
 
-/** The planning turn sent to Astra before any overnight run exists. */
-export function composePlanningPrompt(input: {
-	prompt: string;
-	instructions: string;
-	windowLabel: string;
-	mcpReadOnly?: boolean;
-}): string {
-	return [
-		"[night-mode] Planning phase. Build a proposed plan only. Do not implement, edit files, create tickets, push, or open pull requests.",
-		"You are the planner in the current session. You may use read-only tools and spawn subagents to explore in parallel,",
-		"but every child is an explorer, never an implementer. Use native codemode with",
-		"`tools.subagent({ action: 'spawn', name: '<explorer name>', message: '<read-only exploration scope and briefs>' })`.",
-		"Planning explorers use ordinary names, not execution TODO names, and automatically inherit the planning",
-		"session's read-only filesystem and MCP policy. No task approval is required for read-only exploration.",
-		"Use action 'send' with the explorer's name to steer it. Answers arrive automatically; action 'status' with",
-		"that name exposes the latest completed lastAnswer if needed. Model selection follows host policy.",
-		"",
-		`Execution window after approval: ${input.windowLabel}.`,
-		`Execution MCP policy: ${input.mcpReadOnly !== false ? "read-only; propose candidate-only outputs instead of ticket creation or comments" : "writes available only within explicit task approval; Slack remains read-only"}.`,
-		"Inspect the relevant repositories, tickets, CI, Slack, existing pull requests, and the standing routine below.",
-		"The reference below describes EXECUTION, not your current role. Its statements that planning already happened,",
-		"that only approved items may run, or that discovery is forbidden apply AFTER approval, not to read-only planning.",
-		"Read every referenced task brief. Extra instructions supplement the routine; they do not replace it.",
-		`Account for every category: ${NIGHT_CATEGORIES.join(", ")}. Each task needs its category.`,
-		"For categories without tasks, submit omissions with category and a concrete reason (no findings, blocked, not applicable, or explicitly excluded).",
-		"Always propose Slack scan, next-working-day daily note, and insights maintenance unless explicitly excluded or blocked.",
-		"For Linear, CI, and auto-improvement, identify specific tickets, runs, and existing insights before proposing implementation.",
-		"Every task must specify outputs (exact paths or assigned working-copy scope) and permissions (explicit operations; empty arrays for reads only).",
-		"Include mcp-write for Linear creation/comments or any other MCP mutation. Approval cannot override sandbox policy.",
-		"Preserve dependency order: source scans before daily-note synthesis, insights before an already identified improvement.",
-		"Turn the result into concrete tasks with exact scope, repository, definition of done, briefs, required capabilities,",
-		"and concise findings that the fresh execution session will need. Do not include speculative work.",
-		"",
-		"When the plan is complete, submit it through native `codemode` with `tools.night_plan({ tasks, omissions })`. If validation rejects it, correct the missing coverage or permissions and resubmit. The user will check and refine tasks in an interactive",
-		"checklist. After approval or dismissal, stop immediately. A separate fresh session will execute the approved tasks.",
-		"",
-		"## Execution reference: standing night routine and brief routing",
-		"",
-		input.prompt.trim(),
-		"",
-		"## Instructions for this night",
-		"",
-		hasInstructions(input.instructions) ? input.instructions.trim() : "None.",
-		"",
-	].join("\n");
-}
-
-/** The message sent to the fresh orchestrator session. */
+/** The execution message sent to the current orchestrator session. */
 export function composeNightPrompt(input: NightPromptInput): string {
 	const sections: string[] = [
 		"[night-mode] Automated night run. This message was generated by the night-mode extension, not typed by the user. " +
@@ -151,14 +105,14 @@ export function composeNightPrompt(input: NightPromptInput): string {
 		...(input.preflightPath
 			? [
 					`Sandbox capabilities: \`${input.preflightPath}\` - written a few seconds into the run by a probe of this ` +
-						"sandbox (HTTPS egress, DNS, SSH, `gh`, `jj`, loopback TCP). Read it before planning, and point " +
+						"sandbox (HTTPS egress, DNS, SSH, `gh`, `jj`, loopback TCP). Read it before choosing tasks, and point " +
 						"subagents at it instead of letting them rediscover the envelope one burnt run at a time.",
 				]
 			: []),
 		...(input.capabilityPath
 			? [
 					`Capability journal: \`${input.capabilityPath}\` - one JSON line per capability finding, appended as the ` +
-						"run learns things the probe could not answer. Read it before planning and again before retrying " +
+						"run learns things the probe could not answer. Read it before choosing tasks and again before retrying " +
 						"anything: a capability recorded as `broken` is not worth another attempt, and a finding of your own " +
 						"belongs in it (append, never rewrite) so the rest of the night and tomorrow's run inherit it.",
 				]
@@ -166,17 +120,13 @@ export function composeNightPrompt(input: NightPromptInput): string {
 		"",
 		ORCHESTRATOR_CONTRACT,
 		"",
-		...(input.approvedTasks?.length
-			? [
-					"## Approved plan",
-					"",
-					"Only these tasks are authorized. They already exist in the ledger. Do not triage or create more tasks.",
-					"",
-					formatApprovedPlan(input.approvedTasks),
-				]
-			: []),
+		"## Task ledger",
 		"",
-		"The approved ledger, not your judgement, decides when the night is over. Settling with an approved item still open triggers an automated continuation.",
+		"Create tonight's tasks with the todo tools before delegating work. Tag every item `night`" +
+			(input.runId ? ` and \`${runTag(input.runId)}\`` : "") +
+			".",
+		"Use native codemode with `tools.todo({ action: 'create', title, tags, body })`; keep scope, briefs and completion criteria in the body.",
+		"The ledger, not your judgement, decides when the night is over. Settling with an item still open triggers an automated continuation.",
 		"",
 		"Closing an item takes typed evidence, and the todo tool refuses the write without it:",
 		"",
@@ -252,8 +202,8 @@ export function composeNudge(input: {
 			"`commit <id> (repo: /abs/repo)`, `pr <url>`, `url <url>`, `none-with-reason <why>`). To drop one, set its " +
 			"status to `skipped` and put a `Reason:` line. The write is " +
 			"refused without one, and evidence that does not check out keeps the item open.",
-		"You are still the orchestrator: use tools.subagent with action 'spawn' or 'send' and the approved " +
-			"name 'TODO-<approved id>', rather than implementing it yourself. Put briefs, evidence requirements, " +
+		"You are still the orchestrator: use tools.subagent with action 'spawn' or 'send' and the ledger " +
+			"name 'TODO-<id>', rather than implementing it yourself. Put briefs, evidence requirements, " +
 			"outputs and permissions in message. Answers arrive automatically; inspect named status and lastAnswer " +
 			"if needed. No automatic result file is created. Model selection follows host policy.",
 		`Keep appending to \`${input.reportPath}\` as you go.`,
@@ -263,12 +213,14 @@ export function composeNudge(input: {
 }
 
 /** The first nudge, when the agent settled without ever building a ledger. */
-export function composeLedgerReminder(reportPath: string): string {
+export function composeLedgerReminder(reportPath: string, runId?: string): string {
 	return [
 		"[night-mode] Automated continuation, generated by the night-mode extension.",
 		"",
 		"The night ledger is empty: no todo tagged `night` exists. Enumerate tonight's work as todos before doing " +
-			"anything else, one per unit of work, tag each one `night`, then work through them.",
+			"anything else, one per unit of work. Tag each one `night`" +
+			(runId ? ` and \`${runTag(runId)}\`` : "") +
+			", then delegate and work through them.",
 		`Report: \`${reportPath}\`.`,
 		"",
 	].join("\n");

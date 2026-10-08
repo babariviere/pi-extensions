@@ -3,9 +3,8 @@
  * durable directory its deliverables end up in.
  *
  * The coordinator asks for a subagent; it does not get to say where the child
- * runs. `cwd` is absent from the tool schema, so the
- * only way a run gets one is here, host side, from the active night run. The
- * same is true of `artifactsDir`.
+ * runs during a night run. Caller `cwd` is rejected for night admissions;
+ * request.cwd and artifactsDir remain host-only workspace overrides.
  *
  * The dependency direction matches `sandbox/night-bridge.ts`: subagents reads
  * night-mode, never the reverse.

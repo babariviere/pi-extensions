@@ -30,7 +30,7 @@ export const openConversationWorker: WorkerFactory = (spec, callbacks) => {
 	mkdirSync(spec.directory, { recursive: true, mode: 0o700 });
 	const night = spec.request.night ? spec.context.nightRun : undefined;
 	if (spec.request.night && !night)
-		throw new Error("Approved night contract unavailable; refusing an unprotected worker");
+		throw new Error("Active night contract unavailable; refusing an unprotected worker");
 	const nightSnapshot = night ? join(spec.directory, "night-contract.json") : undefined;
 	if (nightSnapshot) writeFileSync(nightSnapshot, JSON.stringify(night), { mode: 0o600 });
 	const configHome = night ? undefined : prepareConfigHome(join(spec.directory, "config-home")).path;

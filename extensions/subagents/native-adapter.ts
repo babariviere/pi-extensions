@@ -430,15 +430,24 @@ export class NativeAdapter {
 				? [wrapRegisteredTool({ definition, sourceInfo: info.sourceInfo }, this.session.extensionRunner)]
 				: [];
 		});
+		// Use the SDK's normalized guidelines, including callable tools with hidden declarations.
+		// Pi 1.0.4+ codemode reads these through the public loadout contract.
+		const guidelines = new Map(
+			Object.entries(
+				this.session.extensionRunner.createCommandContext().getSystemPromptOptions().toolGuidelines ?? {},
+			),
+		);
+		const loadout = {
+			declared: registered.filter((t) => this.session.getActiveToolNames().includes(t.name)),
+			registered,
+			callable: registered.filter((t) => this.session.getCallableToolNames().includes(t.name)),
+			getExposure: (name: string) => infos.find((info) => info.name === name)?.exposure ?? "hidden",
+			getNamespace: (name: string) => infos.find((info) => info.name === name)?.namespace,
+			getPromptGuidelines: (name: string): readonly string[] => guidelines.get(name) ?? [],
+		};
 		const hidden = new Set<string>();
 		for (const tool of this.session.agent.state.tools) {
-			const changes = this.session.getToolDefinition(tool.name)?.prepareLoadout?.({
-				declared: registered.filter((t) => this.session.getActiveToolNames().includes(t.name)),
-				registered,
-				callable: registered.filter((t) => this.session.getCallableToolNames().includes(t.name)),
-				getExposure: (name) => infos.find((info) => info.name === name)?.exposure ?? "hidden",
-				getNamespace: (name) => infos.find((info) => info.name === name)?.namespace,
-			});
+			const changes = this.session.getToolDefinition(tool.name)?.prepareLoadout?.(loadout);
 			for (const name of changes?.hiddenDeclarations ?? []) hidden.add(name);
 		}
 		const tools: ToolRegistration[] = this.session.agent.state.tools
