@@ -48,8 +48,13 @@ register jobs tools, preventing recursive background workflows.
 
 Pending unclaimed completions are grouped into one follow-up when the parent is
 idle, listing each finished job's name, handle, state, exit code, and output path.
-Jobs finishing close together are coalesced over a 150 ms window. Completions
-during an active turn are collected when the parent settles.
+The follow-up is sent after a 2-second quiet period. Each new completion resets the
+quiet period, so staggered exits share one message. While a job started within 5
+seconds of a finished one is still running, the quiet period grows to 5 seconds,
+so a batch started together (tests, typecheck, lint) tends to report once. The
+wait never exceeds 10 seconds from the first pending completion. Completions during
+an active turn are collected when the parent settles, which restarts the same
+grouping window so jobs exiting right after the turn join them.
 A terminal wait or log read claims its result and suppresses that wake-up. Reading
 logs while the job is still running does not claim its later completion. Stopped
 jobs never wake the model. Use `jobs({ action: "logs", id })` to inspect completion output;

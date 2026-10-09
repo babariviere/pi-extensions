@@ -13,7 +13,24 @@ const MAX_HISTORY = 50;
 const MAX_LIFETIME_MS = 2 * 60 * 60_000;
 const MAX_LOG_CHARS = 20_000;
 const MAX_LOG_BYTES = 8 * 1024 * 1024;
-const ANNOUNCE_DELAY_MS = 150;
+
+/** Completion grouping. A quiet window that resets on each completion, bounded by a hard cap. */
+export interface AnnouncementTiming {
+	/** Quiet period after the latest completion before announcing. */
+	quietMs: number;
+	/** Quiet period used while sibling jobs (started around the same time) are still running. */
+	siblingQuietMs: number;
+	/** Jobs started within this window of a pending job are siblings. */
+	siblingWindowMs: number;
+	/** Maximum delay from the first pending completion (or turn settle) to the announcement. */
+	maxDelayMs: number;
+}
+export const DEFAULT_ANNOUNCEMENT_TIMING: AnnouncementTiming = {
+	quietMs: 2_000,
+	siblingQuietMs: 5_000,
+	siblingWindowMs: 5_000,
+	maxDelayMs: 10_000,
+};
 
 type JobState = "running" | "done" | "failed" | "cancelled";
 export interface JobSnapshot {
@@ -139,41 +156,44 @@ export class JobsProvider implements ActionProvider {
 		"Jobs remain owned by this session and stop on shutdown/reload, cancellation, exit, or the two-hour cap.",
 		"After starting a job, do other work or finish the turn. Do not repeatedly call wait, status, or logs to poll progress.",
 		'Use tools.jobs({ action: "wait", id, waitMs? }) only when the next step depends on completion. Use tools.jobs({ action: "logs", id }) to inspect output after completion or diagnose a running job when needed.',
-		"Pending unclaimed completions wake the idle parent together in one follow-up listing all finished jobs. Terminal waits and log reads suppress that wake-up; running log reads do not. Stopped jobs never wake it.",
+		"Pending unclaimed completions wake the idle parent together in one follow-up listing all finished jobs, sent after a short quiet period so jobs finishing close together are grouped. Terminal waits and log reads suppress that wake-up; running log reads do not. Stopped jobs never wake it.",
 		"Output files are temporary and disappear during session cleanup. The sandbox extension is required for every launch.",
 	].join("\n");
 	readonly #jobs = new Map<string, Job>();
 	#closing = false;
 	#announcementTimer?: ReturnType<typeof setTimeout>;
+	#windowStartedAt?: number;
 	readonly wrapCommand: (command: string) => Promise<string>;
 	readonly sink: JobCompletionSink;
 	readonly canAnnounce: () => boolean;
 	readonly onChange: () => void;
+	readonly timing: AnnouncementTiming;
 
 	constructor(
 		wrapCommand: (command: string) => Promise<string>,
 		sink: JobCompletionSink,
 		canAnnounce = () => true,
 		onChange = () => {},
+		timing: Partial<AnnouncementTiming> = {},
 	) {
 		this.wrapCommand = wrapCommand;
 		this.sink = sink;
 		this.canAnnounce = canAnnounce;
 		this.onChange = onChange;
+		this.timing = { ...DEFAULT_ANNOUNCEMENT_TIMING, ...timing };
 	}
 
 	running(): JobSnapshot[] {
 		return [...this.#jobs.values()].filter((job) => job.state === "running").map((job) => this.#snapshot(job));
 	}
 
-	/** Recheck unclaimed exits when the parent agent finishes its turn. */
+	/** Announce pending unclaimed exits now, if the parent can take them. */
 	flushCompletions(): void {
 		if (this.#announcementTimer) clearTimeout(this.#announcementTimer);
 		this.#announcementTimer = undefined;
 		if (this.#closing || !this.canAnnounce()) return;
-		const completed = [...this.#jobs.values()].filter(
-			(job) => job.finishedWriting && !job.claimed && job.waiters === 0,
-		);
+		const completed = this.#pending();
+		this.#windowStartedAt = undefined;
 		if (!completed.length) return;
 		for (const job of completed) job.claimed = true;
 		try {
@@ -183,9 +203,36 @@ export class JobsProvider implements ActionProvider {
 		}
 	}
 
+	/**
+	 * The parent finished its turn. Restart the grouping window so jobs exiting
+	 * right after the turn join completions collected during it.
+	 */
+	settle(): void {
+		if (this.#closing || !this.#pending().length) return;
+		this.#windowStartedAt = Date.now();
+		this.#scheduleAnnouncement();
+	}
+
+	#pending(): Job[] {
+		return [...this.#jobs.values()].filter((job) => job.finishedWriting && !job.claimed && job.waiters === 0);
+	}
+
+	/** (Re)arm the announcement: wait for a quiet period, capped from the start of the window. */
 	#scheduleAnnouncement(): void {
-		if (this.#closing || this.#announcementTimer) return;
-		this.#announcementTimer = setTimeout(() => this.flushCompletions(), ANNOUNCE_DELAY_MS);
+		if (this.#closing) return;
+		if (this.#announcementTimer) clearTimeout(this.#announcementTimer);
+		const now = Date.now();
+		this.#windowStartedAt ??= now;
+		const pending = this.#pending();
+		const { quietMs, siblingQuietMs, siblingWindowMs, maxDelayMs } = this.timing;
+		const siblingRunning = [...this.#jobs.values()].some(
+			(job) =>
+				job.state === "running" &&
+				pending.some((done) => Math.abs(done.startedAt - job.startedAt) <= siblingWindowMs),
+		);
+		const quiet = siblingRunning ? Math.max(quietMs, siblingQuietMs) : quietMs;
+		const delay = Math.max(0, Math.min(quiet, this.#windowStartedAt + maxDelayMs - now));
+		this.#announcementTimer = setTimeout(() => this.flushCompletions(), delay);
 		this.#announcementTimer.unref?.();
 	}
 
@@ -372,6 +419,7 @@ export class JobsProvider implements ActionProvider {
 		this.#closing = true;
 		if (this.#announcementTimer) clearTimeout(this.#announcementTimer);
 		this.#announcementTimer = undefined;
+		this.#windowStartedAt = undefined;
 		const running = [...this.#jobs.values()].filter((job) => job.state === "running");
 		for (const job of running) {
 			job.state = "cancelled";

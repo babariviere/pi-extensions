@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
 import { rm } from "node:fs/promises";
 import { test } from "node:test";
-import { JobsProvider, type JobSnapshot } from "./jobs-provider.ts";
+import { JobsProvider, type AnnouncementTiming, type JobSnapshot } from "./jobs-provider.ts";
 import { Value } from "typebox/value";
 import { createActionsTool } from "../shared/action-tools.ts";
 
 const context = { cwd: process.cwd() } as never;
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+const fast: Partial<AnnouncementTiming> = { quietMs: 50, siblingQuietMs: 50, siblingWindowMs: 0, maxDelayMs: 1_000 };
 const start = (provider: JobsProvider, command: string) =>
 	provider.invoke("start", { name: "test", command }, context) as Promise<JobSnapshot>;
 
@@ -28,6 +29,7 @@ test("a running job remains running across calls, then wakes only when unclaimed
 		(completed) => sent.push(...completed),
 		undefined,
 		() => changes++,
+		fast,
 	);
 	try {
 		const job = await start(jobs, "sleep 0.15; echo completed");
@@ -237,6 +239,8 @@ test("the announcement timer flushes all pending completions together", async ()
 		async (command) => command,
 		(completed) => batches.push(completed),
 		() => idle,
+		undefined,
+		fast,
 	);
 	try {
 		const first = await start(jobs, "echo first");
@@ -350,4 +354,111 @@ test("jobs native tools retain structured output schemas and codemode exposure",
 	assert.ok(Value.Check(descriptor.outputSchema!, result.structuredContent));
 	assert.equal((result.structuredContent as unknown as JobSnapshot).state, "running");
 	await jobs.close();
+});
+
+test("the quiet window resets on each completion so staggered exits are grouped", async () => {
+	const batches: JobSnapshot[][] = [];
+	const jobs = new JobsProvider(
+		async (command) => command,
+		(completed) => batches.push(completed),
+		() => true,
+		undefined,
+		{ quietMs: 400, siblingQuietMs: 400, siblingWindowMs: 0, maxDelayMs: 5_000 },
+	);
+	try {
+		const first = await start(jobs, "echo first");
+		const second = await start(jobs, "sleep 0.25; echo second");
+		const third = await start(jobs, "sleep 0.5; echo third");
+		const deadline = Date.now() + 3_000;
+		while (!batches.length && Date.now() < deadline) await sleep(10);
+		await sleep(100);
+		assert.deepEqual(
+			batches.map((batch) => batch.map((job) => job.id)),
+			[[first.id, second.id, third.id]],
+		);
+	} finally {
+		await jobs.close();
+	}
+});
+
+test("the quiet window is capped by the maximum delay", async () => {
+	const batches: JobSnapshot[][] = [];
+	const jobs = new JobsProvider(
+		async (command) => command,
+		(completed) => batches.push(completed),
+		() => true,
+		undefined,
+		{ quietMs: 5_000, siblingQuietMs: 5_000, siblingWindowMs: 0, maxDelayMs: 200 },
+	);
+	try {
+		const started = Date.now();
+		const job = await start(jobs, "echo capped");
+		const deadline = Date.now() + 3_000;
+		while (!batches.length && Date.now() < deadline) await sleep(10);
+		assert.ok(Date.now() - started < 1_500);
+		assert.deepEqual(
+			batches.map((batch) => batch.map((item) => item.id)),
+			[[job.id]],
+		);
+	} finally {
+		await jobs.close();
+	}
+});
+
+test("running sibling jobs extend the quiet window", async () => {
+	const batches: JobSnapshot[][] = [];
+	const jobs = new JobsProvider(
+		async (command) => command,
+		(completed) => batches.push(completed),
+		() => true,
+		undefined,
+		{ quietMs: 100, siblingQuietMs: 800, siblingWindowMs: 5_000, maxDelayMs: 5_000 },
+	);
+	try {
+		const quick = await start(jobs, "echo quick");
+		const slow = await start(jobs, "sleep 0.5; echo slow");
+		await sleep(350);
+		assert.equal(batches.length, 0, "a sibling is still running, so the quick job waits");
+		const deadline = Date.now() + 3_000;
+		while (!batches.length && Date.now() < deadline) await sleep(10);
+		assert.deepEqual(
+			batches.map((batch) => batch.map((job) => job.id)),
+			[[quick.id, slow.id]],
+		);
+	} finally {
+		await jobs.close();
+	}
+});
+
+test("settling restarts the grouping window instead of announcing immediately", async () => {
+	const batches: JobSnapshot[][] = [];
+	let idle = false;
+	const jobs = new JobsProvider(
+		async (command) => command,
+		(completed) => batches.push(completed),
+		() => idle,
+		undefined,
+		{ quietMs: 300, siblingQuietMs: 300, siblingWindowMs: 0, maxDelayMs: 5_000 },
+	);
+	try {
+		const during = await start(jobs, "echo during-turn");
+		await waitForExit(jobs, during.id);
+		await sleep(400);
+		assert.equal(batches.length, 0);
+		idle = true;
+		jobs.settle();
+		assert.equal(batches.length, 0);
+		const after = await start(jobs, "sleep 0.1; echo after-turn");
+		const deadline = Date.now() + 3_000;
+		while (!batches.length && Date.now() < deadline) await sleep(10);
+		assert.deepEqual(
+			batches.map((batch) => batch.map((job) => job.id)),
+			[[during.id, after.id]],
+		);
+		jobs.settle();
+		await sleep(400);
+		assert.equal(batches.length, 1);
+	} finally {
+		await jobs.close();
+	}
 });

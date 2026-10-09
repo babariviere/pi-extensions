@@ -4,6 +4,9 @@ import { SANDBOX_WRAP_COMMAND_EVENT, type WrapCommandRequest } from "../sandbox/
 import { testHost, withParentSession } from "../subagents/test-host.ts";
 import jobs from "./index.ts";
 
+const fast = { quietMs: 50, siblingQuietMs: 50, siblingWindowMs: 0, maxDelayMs: 1_000 };
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
 test("jobs are native codemode tools with sandbox service wrapping and shutdown cleanup", async () => {
 	await withParentSession(async () => {
 		const host = testHost();
@@ -52,14 +55,14 @@ test("jobs fail closed when the standalone sandbox service is absent", async () 
 	});
 });
 
-test("unclaimed job completions trigger one grouped follow-up only after the parent settles", async () => {
+test("unclaimed job completions trigger one grouped follow-up after the parent settles", async () => {
 	await withParentSession(async () => {
 		const host = testHost();
 		host.api.events.on(SANDBOX_WRAP_COMMAND_EVENT, (payload) => {
 			const request = payload as WrapCommandRequest;
 			request.result = Promise.resolve(request.command);
 		});
-		jobs(host.api);
+		jobs(host.api, fast);
 		await host.emit("session_start");
 		host.setIdle(false);
 		const done = (await host.execute("jobs", { action: "start", name: "done", command: "echo done" }))
@@ -71,6 +74,8 @@ test("unclaimed job completions trigger one grouped follow-up only after the par
 		host.setIdle(true);
 		await host.emit("agent_settled");
 		await host.emit("agent_settled");
+		assert.equal(host.sent.length, 0, "settling restarts the grouping window");
+		await sleep(250);
 		assert.equal(host.sent.length, 1);
 		assert.equal(host.sent[0]?.message.customType, "jobs.result");
 		assert.deepEqual(
@@ -92,7 +97,7 @@ test("terminal jobs logs suppress the follow-up when the parent settles", async 
 			const request = payload as WrapCommandRequest;
 			request.result = Promise.resolve(request.command);
 		});
-		jobs(host.api);
+		jobs(host.api, fast);
 		await host.emit("session_start");
 		try {
 			host.setIdle(false);

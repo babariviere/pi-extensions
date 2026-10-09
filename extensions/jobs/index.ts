@@ -3,9 +3,9 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { actionContext, createActionsTool } from "../shared/action-tools.ts";
 import { sandboxWrapCommand } from "../sandbox/service.ts";
 import { isChildSession } from "../subagents/constants.ts";
-import { JobsProvider } from "./jobs-provider.ts";
+import { JobsProvider, type AnnouncementTiming } from "./jobs-provider.ts";
 
-export default function jobs(pi: ExtensionAPI): void {
+export default function jobs(pi: ExtensionAPI, timing: Partial<AnnouncementTiming> = {}): void {
 	let provider: JobsProvider | undefined;
 	let generation = 0;
 	let closing: Promise<void> | undefined;
@@ -50,6 +50,8 @@ export default function jobs(pi: ExtensionAPI): void {
 				);
 			},
 			() => current === generation && ctx.isIdle(),
+			undefined,
+			timing,
 		);
 		provider = active;
 		const descriptors = await active.list({}, actionContext(ctx, "jobs-startup"));
@@ -58,7 +60,7 @@ export default function jobs(pi: ExtensionAPI): void {
 		pi.registerTool(definition);
 	});
 	pi.on("agent_settled", () => {
-		provider?.flushCompletions();
+		provider?.settle();
 	});
 	pi.on("session_shutdown", async () => {
 		await shutdown();
