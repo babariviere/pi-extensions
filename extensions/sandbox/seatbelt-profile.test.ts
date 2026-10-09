@@ -250,7 +250,9 @@ test("an empty allowWrite emits no write allow and no WRITABLE_ROOT param", () =
 
 test("a missing writable root is kept as a subpath param rather than dropped", () => {
 	const missing = join(fixtureDir, "does-not-exist-yet");
-	const result = buildSeatbeltProfile(basePolicy({ allowWrite: [missing] }));
+	// Pass an empty SSH_AUTH_SOCK so the host's socket (often a symlink into
+	// ~/.gnupg) cannot contribute an unrelated canonicalization warning.
+	const result = buildSeatbeltProfile(basePolicy({ allowWrite: [missing] }), "");
 	const key = result.params.find(([, value]) => value === missing)?.[0];
 	assert.ok(key, "a missing root must still be interned");
 	assert.ok(result.profile.includes(`(subpath (param "${key}"))`));
