@@ -38,7 +38,7 @@ interface Job extends JobSnapshot {
 	finishedWriting: boolean;
 	timer?: ReturnType<typeof setTimeout>;
 }
-export type JobCompletionSink = (job: JobSnapshot) => void;
+export type JobCompletionSink = (jobs: JobSnapshot[]) => void;
 
 const jobOutputSchema = {
 	type: "object",
@@ -60,7 +60,7 @@ const descriptors: ActionDescriptor[] = [
 	{
 		name: "start",
 		description:
-			"Start a named shell command in the background. Not tied to the tool call. Runs until exit, stop, session shutdown, or the 2-hour cap. Output is stored in a temporary file.",
+			"Start a named long-running shell command only. Use bash for short commands and codemode to run independent tool calls in parallel. Unclaimed completions automatically notify the idle parent in one batch. Runs until exit, stop, session shutdown, or the 2-hour cap. Output is stored in a temporary file.",
 		inputSchema: {
 			type: "object",
 			properties: { name: { type: "string" }, command: { type: "string" }, cwd: { type: "string" } },
@@ -78,7 +78,7 @@ const descriptors: ActionDescriptor[] = [
 	{
 		name: "wait",
 		description:
-			"Wait for a job to exit, or return running after waitMs (default 30 seconds). A terminal wait claims its result and suppresses the completion wake-up.",
+			"Wait only when the next step depends on this job; otherwise rely on automatic completion notifications, not polling. Returns running after waitMs (default 30 seconds). A terminal wait claims its result and suppresses the completion wake-up.",
 		inputSchema: {
 			type: "object",
 			properties: { id: { type: "string" }, waitMs: { type: "number" } },
@@ -90,7 +90,7 @@ const descriptors: ActionDescriptor[] = [
 	{
 		name: "logs",
 		description:
-			"Read the last maxChars of a job's output (default 4000, max 20000). A terminal log read claims its result and suppresses the completion wake-up.",
+			"Inspect a completed job's output, or diagnose a running job when needed. Avoid polling running logs. Reads the last maxChars (default 4000, max 20000). A terminal log read claims its result and suppresses the completion wake-up.",
 		inputSchema: {
 			type: "object",
 			properties: { id: { type: "string" }, maxChars: { type: "number" } },
@@ -131,16 +131,20 @@ const bounded = (value: unknown, fallback: number, max: number): number =>
 
 export class JobsProvider implements ActionProvider {
 	readonly name = "jobs";
-	readonly description = "Session-owned background shell jobs";
+	readonly description =
+		"Session-owned background shell jobs for long-running commands only. Use bash for short commands and codemode to run independent tool calls in parallel. Start a long-running job, do other work, and rely on automatic completion notifications instead of polling wait/logs.";
 	readonly instructions = [
-		'Use tools.jobs({ action: "start", name, command, cwd? }) for shell work that should outlive a tool call.',
+		"Use jobs only for long-running shell commands. Use bash for short commands and codemode with Promise.allSettled to run independent tool calls in parallel. Parallelism alone is not a reason to start jobs.",
+		'Use tools.jobs({ action: "start", name, command, cwd? }) for long-running shell work that should outlive a tool call.',
 		"Jobs remain owned by this session and stop on shutdown/reload, cancellation, exit, or the two-hour cap.",
-		'Use tools.jobs({ action: "wait", id, waitMs? }) to await completion and claim its result, then tools.jobs({ action: "logs", id }) for output.',
-		"Unclaimed completions wake the idle parent once. Terminal waits and log reads suppress that wake-up; running log reads do not. Stopped jobs never wake it.",
+		"After starting a job, do other work or finish the turn. Do not repeatedly call wait, status, or logs to poll progress.",
+		'Use tools.jobs({ action: "wait", id, waitMs? }) only when the next step depends on completion. Use tools.jobs({ action: "logs", id }) to inspect output after completion or diagnose a running job when needed.',
+		"Pending unclaimed completions wake the idle parent together in one follow-up listing all finished jobs. Terminal waits and log reads suppress that wake-up; running log reads do not. Stopped jobs never wake it.",
 		"Output files are temporary and disappear during session cleanup. The sandbox extension is required for every launch.",
 	].join("\n");
 	readonly #jobs = new Map<string, Job>();
 	#closing = false;
+	#announcementTimer?: ReturnType<typeof setTimeout>;
 	readonly wrapCommand: (command: string) => Promise<string>;
 	readonly sink: JobCompletionSink;
 	readonly canAnnounce: () => boolean;
@@ -164,17 +168,25 @@ export class JobsProvider implements ActionProvider {
 
 	/** Recheck unclaimed exits when the parent agent finishes its turn. */
 	flushCompletions(): void {
-		for (const job of this.#jobs.values()) this.#announce(job);
-	}
-
-	#announce(job: Job): void {
-		if (this.#closing || !job.finishedWriting || job.claimed || job.waiters > 0 || !this.canAnnounce()) return;
-		job.claimed = true;
+		if (this.#announcementTimer) clearTimeout(this.#announcementTimer);
+		this.#announcementTimer = undefined;
+		if (this.#closing || !this.canAnnounce()) return;
+		const completed = [...this.#jobs.values()].filter(
+			(job) => job.finishedWriting && !job.claimed && job.waiters === 0,
+		);
+		if (!completed.length) return;
+		for (const job of completed) job.claimed = true;
 		try {
-			this.sink(this.#snapshot(job));
+			this.sink(completed.map((job) => this.#snapshot(job)));
 		} catch {
 			// A notification failure must not crash Pi.
 		}
+	}
+
+	#scheduleAnnouncement(): void {
+		if (this.#closing || this.#announcementTimer) return;
+		this.#announcementTimer = setTimeout(() => this.flushCompletions(), ANNOUNCE_DELAY_MS);
+		this.#announcementTimer.unref?.();
 	}
 
 	async list(_request: ActionListRequest, _context: ActionContext): Promise<ActionDescriptor[]> {
@@ -246,8 +258,7 @@ export class JobsProvider implements ActionProvider {
 				job.finishedWriting = true;
 				job.resolve();
 				this.#prune();
-				const announcement = setTimeout(() => this.#announce(job), ANNOUNCE_DELAY_MS);
-				announcement.unref?.();
+				this.#scheduleAnnouncement();
 			};
 			output.on("error", (error) => {
 				job.error = `Output file: ${error.message}`;
@@ -359,6 +370,8 @@ export class JobsProvider implements ActionProvider {
 	}
 	async close(): Promise<void> {
 		this.#closing = true;
+		if (this.#announcementTimer) clearTimeout(this.#announcementTimer);
+		this.#announcementTimer = undefined;
 		const running = [...this.#jobs.values()].filter((job) => job.state === "running");
 		for (const job of running) {
 			job.state = "cancelled";

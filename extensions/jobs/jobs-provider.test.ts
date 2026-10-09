@@ -25,7 +25,7 @@ test("a running job remains running across calls, then wakes only when unclaimed
 	let changes = 0;
 	const jobs = new JobsProvider(
 		async (command) => command,
-		(job) => sent.push(job),
+		(completed) => sent.push(...completed),
 		undefined,
 		() => changes++,
 	);
@@ -59,7 +59,7 @@ test("a terminal wait claims the result, a stopped job cannot wake the model", a
 	let changes = 0;
 	const jobs = new JobsProvider(
 		async (command) => command,
-		(job) => sent.push(job),
+		(completed) => sent.push(...completed),
 		undefined,
 		() => changes++,
 	);
@@ -83,7 +83,7 @@ test("a completion during an active turn stays pending until wait claims it", as
 	let idle = false;
 	const jobs = new JobsProvider(
 		async (command) => command,
-		(job) => sent.push(job),
+		(completed) => sent.push(...completed),
 		() => idle,
 	);
 	try {
@@ -110,7 +110,7 @@ for (const { exitCode, missingOutput } of [
 		let idle = false;
 		const jobs = new JobsProvider(
 			async (command) => command,
-			(job) => sent.push(job),
+			(completed) => sent.push(...completed),
 			() => idle,
 		);
 		try {
@@ -138,7 +138,7 @@ test("reading running logs does not claim a later completion", async () => {
 	let idle = false;
 	const jobs = new JobsProvider(
 		async (command) => command,
-		(job) => sent.push(job),
+		(completed) => sent.push(...completed),
 		() => idle,
 	);
 	try {
@@ -165,7 +165,7 @@ test("an unclaimed completion during a turn wakes once the turn settles", async 
 	let idle = false;
 	const jobs = new JobsProvider(
 		async (command) => command,
-		(job) => sent.push(job),
+		(completed) => sent.push(...completed),
 		() => idle,
 	);
 	try {
@@ -188,6 +188,99 @@ test("an unclaimed completion during a turn wakes once the turn settles", async 
 	}
 });
 
+test("settling batches pending completions and excludes claimed and stopped jobs", async () => {
+	const batches: JobSnapshot[][] = [];
+	let idle = false;
+	const jobs = new JobsProvider(
+		async (command) => command,
+		(completed) => {
+			batches.push(completed);
+			idle = false; // Sending a follow-up may immediately start the next turn.
+		},
+		() => idle,
+	);
+	try {
+		const done = await start(jobs, "echo done");
+		const failed = await start(jobs, "echo failed; exit 7");
+		const waited = await start(jobs, "echo waited");
+		const logged = await start(jobs, "echo logged");
+		const stopped = await start(jobs, "sleep 30");
+		await jobs.invoke("wait", { id: waited.id }, context);
+		await jobs.invoke("stop", { id: stopped.id }, context);
+		await Promise.all([done, failed, logged].map((job) => waitForExit(jobs, job.id)));
+		await jobs.invoke("logs", { id: logged.id }, context);
+		await sleep(250);
+		assert.equal(batches.length, 0);
+		idle = true;
+		jobs.flushCompletions();
+		idle = true;
+		jobs.flushCompletions();
+		assert.equal(batches.length, 1);
+		assert.deepEqual(
+			batches[0]?.map((job) => [job.id, job.state, job.exitCode]),
+			[
+				[done.id, "done", 0],
+				[failed.id, "failed", 7],
+			],
+		);
+		await sleep(250);
+		assert.equal(batches.length, 1);
+	} finally {
+		await jobs.close();
+	}
+});
+
+test("the announcement timer flushes all pending completions together", async () => {
+	const batches: JobSnapshot[][] = [];
+	let idle = false;
+	const jobs = new JobsProvider(
+		async (command) => command,
+		(completed) => batches.push(completed),
+		() => idle,
+	);
+	try {
+		const first = await start(jobs, "echo first");
+		const second = await start(jobs, "echo second");
+		await Promise.all([first, second].map((job) => waitForExit(jobs, job.id)));
+		await sleep(250);
+		assert.equal(batches.length, 0);
+		idle = true;
+		const third = await start(jobs, "echo third");
+		const deadline = Date.now() + 3_000;
+		while (!batches.length && Date.now() < deadline) await sleep(10);
+		assert.deepEqual(
+			batches.map((batch) => batch.map((job) => job.id)),
+			[[first.id, second.id, third.id]],
+		);
+		await sleep(250);
+		jobs.flushCompletions();
+		assert.equal(batches.length, 1);
+	} finally {
+		await jobs.close();
+	}
+});
+
+test("shutdown suppresses pending completion batches", async () => {
+	const batches: JobSnapshot[][] = [];
+	let idle = false;
+	const jobs = new JobsProvider(
+		async (command) => command,
+		(completed) => batches.push(completed),
+		() => idle,
+	);
+	try {
+		const started = await start(jobs, "echo pending");
+		await waitForExit(jobs, started.id);
+		await jobs.close();
+		idle = true;
+		jobs.flushCompletions();
+		await sleep(250);
+		assert.deepEqual(batches, []);
+	} finally {
+		await jobs.close();
+	}
+});
+
 test("sandbox wrapping is applied before launch and rejects unsafe launches", async () => {
 	const jobs = new JobsProvider(
 		async () => {
@@ -204,7 +297,7 @@ test("a failed command remains queryable and is not reported as done", async () 
 	const sent: JobSnapshot[] = [];
 	const jobs = new JobsProvider(
 		async (command) => command,
-		(job) => sent.push(job),
+		(completed) => sent.push(...completed),
 	);
 	try {
 		const started = await start(jobs, "echo failure >&2; exit 7");
@@ -234,6 +327,17 @@ test("jobs native tools retain structured output schemas and codemode exposure",
 	assert.equal(tool.name, "jobs");
 	assert.equal(tool.exposure, "codemode");
 	assert.ok(tool.outputSchema);
+	assert.match(tool.description, /long-running commands only/);
+	assert.match(tool.description, /Use bash for short commands and codemode to run independent tool calls in parallel/);
+	assert.match(descriptor.description, /long-running shell command only/);
+	assert.match(descriptor.description, /codemode to run independent tool calls in parallel/);
+	assert.match(tool.namespace?.instructions ?? "", /Use jobs only for long-running shell commands/);
+	assert.match(tool.namespace?.instructions ?? "", /codemode with Promise\.allSettled/);
+	assert.match(tool.namespace?.instructions ?? "", /Parallelism alone is not a reason to start jobs/);
+	assert.doesNotMatch(tool.description + tool.namespace?.instructions, /long-running or parallel/);
+	assert.match(tool.description, /instead of polling wait\/logs/);
+	assert.match(tool.namespace?.instructions ?? "", /Do not repeatedly call wait, status, or logs/);
+	assert.match(actions.find((action) => action.name === "wait")!.description, /only when the next step depends/i);
 	assert.ok(Value.Check(descriptor.inputSchema, { name: "check", command: "echo ready" }));
 	assert.ok(!Value.Check(descriptor.inputSchema, { name: "check" }));
 	const result = await tool.execute(

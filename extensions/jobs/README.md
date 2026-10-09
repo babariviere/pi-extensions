@@ -7,6 +7,14 @@ failed policy services refuse launch rather than falling back to an unchecked sh
 
 ## Native tool
 
+Use jobs only for long-running commands. Use regular `bash` for short commands
+and `codemode` with `Promise.allSettled` to run independent tool calls in parallel.
+Parallelism alone is not a reason to start jobs. After starting jobs, do other work
+or finish the turn and rely on automatic completion notifications.
+Do not repeatedly poll `wait`, `status`, or `logs`.
+Use `wait` only when the next step genuinely depends on a job finishing, and
+inspect logs after completion or when diagnosing a running job.
+
 - `jobs({ action: "start", name, command, cwd? })`: launch a named Bash command.
 - `jobs({ action: "status" })`: list live and recent handles without output.
 - `jobs({ action: "wait", id, waitMs? })`: wait up to 30 seconds by default, maximum 120 seconds.
@@ -21,8 +29,10 @@ transport. Full workflow instructions are available through
 `await describeNamespace("jobs")`. Example native script:
 
 ```ts
+// For a test suite expected to run a long time:
 const job = await tools.jobs({ action: "start", name: "tests", command: "npm test" });
-return await tools.jobs({ action: "wait", id: job.id });
+return job;
+// Do other work or finish the turn. A follow-up will announce completion.
 ```
 
 The `action` parameter is required, with arguments validated for that action.
@@ -36,7 +46,10 @@ They finish on command exit, `jobs({ action: "stop", id })`, session replacement
 the 2-hour lifetime cap. Child sessions and background agent attempts never
 register jobs tools, preventing recursive background workflows.
 
-An unclaimed completion sends one follow-up message when the parent is idle.
+Pending unclaimed completions are grouped into one follow-up when the parent is
+idle, listing each finished job's name, handle, state, exit code, and output path.
+Jobs finishing close together are coalesced over a 150 ms window. Completions
+during an active turn are collected when the parent settles.
 A terminal wait or log read claims its result and suppresses that wake-up. Reading
 logs while the job is still running does not claim its later completion. Stopped
 jobs never wake the model. Use `jobs({ action: "logs", id })` to inspect completion output;
