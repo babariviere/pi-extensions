@@ -327,7 +327,14 @@ test("jobs native tools retain structured output schemas and codemode exposure",
 	assert.equal(tool.name, "jobs");
 	assert.equal(tool.exposure, "codemode");
 	assert.ok(tool.outputSchema);
-	assert.match(tool.description, /Prefer bash for short commands/);
+	assert.match(tool.description, /long-running commands only/);
+	assert.match(tool.description, /Use bash for short commands and codemode to run independent tool calls in parallel/);
+	assert.match(descriptor.description, /long-running shell command only/);
+	assert.match(descriptor.description, /codemode to run independent tool calls in parallel/);
+	assert.match(tool.namespace?.instructions ?? "", /Use jobs only for long-running shell commands/);
+	assert.match(tool.namespace?.instructions ?? "", /codemode with Promise\.allSettled/);
+	assert.match(tool.namespace?.instructions ?? "", /Parallelism alone is not a reason to start jobs/);
+	assert.doesNotMatch(tool.description + tool.namespace?.instructions, /long-running or parallel/);
 	assert.match(tool.description, /instead of polling wait\/logs/);
 	assert.match(tool.namespace?.instructions ?? "", /Do not repeatedly call wait, status, or logs/);
 	assert.match(actions.find((action) => action.name === "wait")!.description, /only when the next step depends/i);

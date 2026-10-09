@@ -60,7 +60,7 @@ const descriptors: ActionDescriptor[] = [
 	{
 		name: "start",
 		description:
-			"Start a named shell command for long-running or parallel work. Prefer bash for short commands. Unclaimed completions automatically notify the idle parent in one batch. Runs until exit, stop, session shutdown, or the 2-hour cap. Output is stored in a temporary file.",
+			"Start a named long-running shell command only. Use bash for short commands and codemode to run independent tool calls in parallel. Unclaimed completions automatically notify the idle parent in one batch. Runs until exit, stop, session shutdown, or the 2-hour cap. Output is stored in a temporary file.",
 		inputSchema: {
 			type: "object",
 			properties: { name: { type: "string" }, command: { type: "string" }, cwd: { type: "string" } },
@@ -132,10 +132,10 @@ const bounded = (value: unknown, fallback: number, max: number): number =>
 export class JobsProvider implements ActionProvider {
 	readonly name = "jobs";
 	readonly description =
-		"Session-owned background shell jobs. Prefer bash for short commands. Start long-running or parallel work, do other work, and rely on automatic completion notifications instead of polling wait/logs.";
+		"Session-owned background shell jobs for long-running commands only. Use bash for short commands and codemode to run independent tool calls in parallel. Start a long-running job, do other work, and rely on automatic completion notifications instead of polling wait/logs.";
 	readonly instructions = [
-		"Prefer bash for short commands. Use jobs for long-running or parallel shell work.",
-		'Use tools.jobs({ action: "start", name, command, cwd? }) for shell work that should outlive a tool call.',
+		"Use jobs only for long-running shell commands. Use bash for short commands and codemode with Promise.allSettled to run independent tool calls in parallel. Parallelism alone is not a reason to start jobs.",
+		'Use tools.jobs({ action: "start", name, command, cwd? }) for long-running shell work that should outlive a tool call.',
 		"Jobs remain owned by this session and stop on shutdown/reload, cancellation, exit, or the two-hour cap.",
 		"After starting a job, do other work or finish the turn. Do not repeatedly call wait, status, or logs to poll progress.",
 		'Use tools.jobs({ action: "wait", id, waitMs? }) only when the next step depends on completion. Use tools.jobs({ action: "logs", id }) to inspect output after completion or diagnose a running job when needed.',

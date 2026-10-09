@@ -7,9 +7,11 @@ failed policy services refuse launch rather than falling back to an unchecked sh
 
 ## Native tool
 
-Prefer regular `bash` for short commands. Use jobs for long-running or parallel
-work. After starting jobs, do other work or finish the turn and rely on automatic
-completion notifications. Do not repeatedly poll `wait`, `status`, or `logs`.
+Use jobs only for long-running commands. Use regular `bash` for short commands
+and `codemode` with `Promise.allSettled` to run independent tool calls in parallel.
+Parallelism alone is not a reason to start jobs. After starting jobs, do other work
+or finish the turn and rely on automatic completion notifications.
+Do not repeatedly poll `wait`, `status`, or `logs`.
 Use `wait` only when the next step genuinely depends on a job finishing, and
 inspect logs after completion or when diagnosing a running job.
 
@@ -27,6 +29,7 @@ transport. Full workflow instructions are available through
 `await describeNamespace("jobs")`. Example native script:
 
 ```ts
+// For a test suite expected to run a long time:
 const job = await tools.jobs({ action: "start", name: "tests", command: "npm test" });
 return job;
 // Do other work or finish the turn. A follow-up will announce completion.
