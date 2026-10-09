@@ -34,13 +34,17 @@ export default function jobs(pi: ExtensionAPI): void {
 		const current = ++generation;
 		const active = new JobsProvider(
 			(command) => sandboxWrapCommand(pi, command),
-			(job) => {
+			(completed) => {
+				const summary = completed.map(
+					(job) =>
+						`- ${job.name} (${job.id}): ${job.state}, exit code ${job.exitCode ?? "unknown"}. Output: ${job.outputPath}${job.error ? `\n  ${job.error}` : ""}`,
+				);
 				pi.sendMessage(
 					{
 						customType: "jobs.result",
 						display: true,
-						details: job,
-						content: `Background job ${job.name} (${job.id}) ${job.state}. Output: ${job.outputPath}${job.error ? `\n${job.error}` : ""}. Use jobs({ action: "logs", id: "${job.id}" }) to inspect it.`,
+						details: { jobs: completed },
+						content: `Finished background jobs:\n${summary.join("\n")}\nUse jobs({ action: "logs", id }) to inspect output as needed.`,
 					},
 					{ deliverAs: "followUp", triggerTurn: true },
 				);

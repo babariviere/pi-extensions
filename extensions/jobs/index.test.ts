@@ -52,7 +52,7 @@ test("jobs fail closed when the standalone sandbox service is absent", async () 
 	});
 });
 
-test("unclaimed job completions trigger a follow-up only after the parent settles", async () => {
+test("unclaimed job completions trigger one grouped follow-up only after the parent settles", async () => {
 	await withParentSession(async () => {
 		const host = testHost();
 		host.api.events.on(SANDBOX_WRAP_COMMAND_EVENT, (payload) => {
@@ -62,7 +62,10 @@ test("unclaimed job completions trigger a follow-up only after the parent settle
 		jobs(host.api);
 		await host.emit("session_start");
 		host.setIdle(false);
-		await host.execute("jobs", { action: "start", name: "done", command: "echo done" });
+		const done = (await host.execute("jobs", { action: "start", name: "done", command: "echo done" }))
+			.structuredContent as { id: string; outputPath: string };
+		const failed = (await host.execute("jobs", { action: "start", name: "failed", command: "exit 7" }))
+			.structuredContent as { id: string; outputPath: string };
 		await new Promise((resolve) => setTimeout(resolve, 350));
 		assert.equal(host.sent.length, 0);
 		host.setIdle(true);
@@ -70,6 +73,13 @@ test("unclaimed job completions trigger a follow-up only after the parent settle
 		await host.emit("agent_settled");
 		assert.equal(host.sent.length, 1);
 		assert.equal(host.sent[0]?.message.customType, "jobs.result");
+		assert.deepEqual(
+			host.sent[0]?.message.details.jobs.map((job: { id: string }) => job.id),
+			[done.id, failed.id],
+		);
+		const content = host.sent[0]?.message.content as string;
+		assert.ok(content.includes(`done (${done.id}): done, exit code 0. Output: ${done.outputPath}`));
+		assert.ok(content.includes(`failed (${failed.id}): failed, exit code 7. Output: ${failed.outputPath}`));
 		assert.deepEqual(host.sent[0]?.options, { deliverAs: "followUp", triggerTurn: true });
 		await host.emit("session_shutdown");
 	});
