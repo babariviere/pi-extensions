@@ -4,7 +4,7 @@ import { SANDBOX_WRAP_COMMAND_EVENT, type WrapCommandRequest } from "../sandbox/
 import { testHost, withParentSession } from "../subagents/test-host.ts";
 import jobs from "./index.ts";
 
-const fast = { quietMs: 50, siblingQuietMs: 50, siblingWindowMs: 0, maxDelayMs: 1_000 };
+const fast = { quietMs: 50, batchWindowMs: -1, batchMaxDelayMs: 0, maxDelayMs: 1_000 };
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 test("jobs are native codemode tools with sandbox service wrapping and shutdown cleanup", async () => {

@@ -49,12 +49,15 @@ register jobs tools, preventing recursive background workflows.
 Pending unclaimed completions are grouped into one follow-up when the parent is
 idle, listing each finished job's name, handle, state, exit code, and output path.
 The follow-up is sent after a 2-second quiet period. Each new completion resets the
-quiet period, so staggered exits share one message. While a job started within 5
-seconds of a finished one is still running, the quiet period grows to 5 seconds,
-so a batch started together (tests, typecheck, lint) tends to report once. The
-wait never exceeds 10 seconds from the first pending completion. Completions during
-an active turn are collected when the parent settles, which restarts the same
-grouping window so jobs exiting right after the turn join them.
+quiet period, so staggered exits share one message, and the wait never exceeds 10
+seconds from the first pending completion. Jobs started within 5 seconds of each
+other form a batch: a successful completion is held while the rest of its batch is
+still running, for up to 60 seconds, so tests, typecheck and lint started together
+report once. A failure skips that hold and is announced after the normal quiet
+period, since the agent can act on it right away. Jobs started separately, such as
+an earlier dev server, never hold a batch. Completions during an active turn are
+collected when the parent settles, which restarts the same grouping window so jobs
+exiting right after the turn join them.
 A terminal wait or log read claims its result and suppresses that wake-up. Reading
 logs while the job is still running does not claim its later completion. Stopped
 jobs never wake the model. Use `jobs({ action: "logs", id })` to inspect completion output;

@@ -14,21 +14,25 @@ const MAX_LIFETIME_MS = 2 * 60 * 60_000;
 const MAX_LOG_CHARS = 20_000;
 const MAX_LOG_BYTES = 8 * 1024 * 1024;
 
-/** Completion grouping. A quiet window that resets on each completion, bounded by a hard cap. */
+/**
+ * Completion grouping. A quiet window that resets on each completion, bounded by a hard cap.
+ * While jobs from the same batch are still running, a successful completion is held until the
+ * batch finishes (bounded by batchMaxDelayMs). Failures skip the batch hold.
+ */
 export interface AnnouncementTiming {
 	/** Quiet period after the latest completion before announcing. */
 	quietMs: number;
-	/** Quiet period used while sibling jobs (started around the same time) are still running. */
-	siblingQuietMs: number;
-	/** Jobs started within this window of a pending job are siblings. */
-	siblingWindowMs: number;
-	/** Maximum delay from the first pending completion (or turn settle) to the announcement. */
+	/** Jobs started within this window of a pending job belong to its batch. */
+	batchWindowMs: number;
+	/** Maximum hold, from the first pending completion (or turn settle), while batch jobs still run. */
+	batchMaxDelayMs: number;
+	/** Maximum delay from the first pending completion (or turn settle) when nothing holds the batch. */
 	maxDelayMs: number;
 }
 export const DEFAULT_ANNOUNCEMENT_TIMING: AnnouncementTiming = {
 	quietMs: 2_000,
-	siblingQuietMs: 5_000,
-	siblingWindowMs: 5_000,
+	batchWindowMs: 5_000,
+	batchMaxDelayMs: 60_000,
 	maxDelayMs: 10_000,
 };
 
@@ -224,15 +228,20 @@ export class JobsProvider implements ActionProvider {
 		const now = Date.now();
 		this.#windowStartedAt ??= now;
 		const pending = this.#pending();
-		const { quietMs, siblingQuietMs, siblingWindowMs, maxDelayMs } = this.timing;
-		const siblingRunning = [...this.#jobs.values()].some(
+		const { quietMs, batchWindowMs, batchMaxDelayMs, maxDelayMs } = this.timing;
+		const batchRunning = [...this.#jobs.values()].some(
 			(job) =>
 				job.state === "running" &&
-				pending.some((done) => Math.abs(done.startedAt - job.startedAt) <= siblingWindowMs),
+				pending.some((done) => Math.abs(done.startedAt - job.startedAt) <= batchWindowMs),
 		);
-		const quiet = siblingRunning ? Math.max(quietMs, siblingQuietMs) : quietMs;
-		const delay = Math.max(0, Math.min(quiet, this.#windowStartedAt + maxDelayMs - now));
-		this.#announcementTimer = setTimeout(() => this.flushCompletions(), delay);
+		const failed = pending.some((job) => job.state !== "done");
+		// Hold successes until the rest of their batch exits (its completions re-arm this timer).
+		// A failure is actionable now, so it uses the normal quiet window instead.
+		const delay =
+			batchRunning && !failed
+				? this.#windowStartedAt + batchMaxDelayMs - now
+				: Math.min(quietMs, this.#windowStartedAt + maxDelayMs - now);
+		this.#announcementTimer = setTimeout(() => this.flushCompletions(), Math.max(0, delay));
 		this.#announcementTimer.unref?.();
 	}
 

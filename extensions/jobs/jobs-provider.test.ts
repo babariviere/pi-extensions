@@ -7,7 +7,7 @@ import { createActionsTool } from "../shared/action-tools.ts";
 
 const context = { cwd: process.cwd() } as never;
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-const fast: Partial<AnnouncementTiming> = { quietMs: 50, siblingQuietMs: 50, siblingWindowMs: 0, maxDelayMs: 1_000 };
+const fast: Partial<AnnouncementTiming> = { quietMs: 50, batchWindowMs: -1, batchMaxDelayMs: 0, maxDelayMs: 1_000 };
 const start = (provider: JobsProvider, command: string) =>
 	provider.invoke("start", { name: "test", command }, context) as Promise<JobSnapshot>;
 
@@ -363,7 +363,7 @@ test("the quiet window resets on each completion so staggered exits are grouped"
 		(completed) => batches.push(completed),
 		() => true,
 		undefined,
-		{ quietMs: 400, siblingQuietMs: 400, siblingWindowMs: 0, maxDelayMs: 5_000 },
+		{ quietMs: 400, batchWindowMs: -1, batchMaxDelayMs: 0, maxDelayMs: 5_000 },
 	);
 	try {
 		const first = await start(jobs, "echo first");
@@ -388,7 +388,7 @@ test("the quiet window is capped by the maximum delay", async () => {
 		(completed) => batches.push(completed),
 		() => true,
 		undefined,
-		{ quietMs: 5_000, siblingQuietMs: 5_000, siblingWindowMs: 0, maxDelayMs: 200 },
+		{ quietMs: 5_000, batchWindowMs: -1, batchMaxDelayMs: 0, maxDelayMs: 200 },
 	);
 	try {
 		const started = Date.now();
@@ -405,25 +405,72 @@ test("the quiet window is capped by the maximum delay", async () => {
 	}
 });
 
-test("running sibling jobs extend the quiet window", async () => {
+test("successes are held until the rest of their batch finishes", async () => {
 	const batches: JobSnapshot[][] = [];
 	const jobs = new JobsProvider(
 		async (command) => command,
 		(completed) => batches.push(completed),
 		() => true,
 		undefined,
-		{ quietMs: 100, siblingQuietMs: 800, siblingWindowMs: 5_000, maxDelayMs: 5_000 },
+		{ quietMs: 100, batchWindowMs: 5_000, batchMaxDelayMs: 5_000, maxDelayMs: 200 },
 	);
 	try {
 		const quick = await start(jobs, "echo quick");
-		const slow = await start(jobs, "sleep 0.5; echo slow");
-		await sleep(350);
-		assert.equal(batches.length, 0, "a sibling is still running, so the quick job waits");
+		const slow = await start(jobs, "sleep 0.7; echo slow");
+		await sleep(500);
+		assert.equal(batches.length, 0, "the batch is still running, so the quick success waits past maxDelayMs");
+		const deadline = Date.now() + 3_000;
+		while (!batches.length && Date.now() < deadline) await sleep(10);
+		await sleep(150);
+		assert.deepEqual(
+			batches.map((batch) => batch.map((job) => job.id)),
+			[[quick.id, slow.id]],
+		);
+	} finally {
+		await jobs.close();
+	}
+});
+
+test("the batch hold is capped", async () => {
+	const batches: JobSnapshot[][] = [];
+	const jobs = new JobsProvider(
+		async (command) => command,
+		(completed) => batches.push(completed),
+		() => true,
+		undefined,
+		{ quietMs: 50, batchWindowMs: 5_000, batchMaxDelayMs: 300, maxDelayMs: 1_000 },
+	);
+	try {
+		const quick = await start(jobs, "echo quick");
+		await start(jobs, "sleep 30");
 		const deadline = Date.now() + 3_000;
 		while (!batches.length && Date.now() < deadline) await sleep(10);
 		assert.deepEqual(
 			batches.map((batch) => batch.map((job) => job.id)),
-			[[quick.id, slow.id]],
+			[[quick.id]],
+		);
+	} finally {
+		await jobs.close();
+	}
+});
+
+test("a failure skips the batch hold", async () => {
+	const batches: JobSnapshot[][] = [];
+	const jobs = new JobsProvider(
+		async (command) => command,
+		(completed) => batches.push(completed),
+		() => true,
+		undefined,
+		{ quietMs: 50, batchWindowMs: 5_000, batchMaxDelayMs: 5_000, maxDelayMs: 1_000 },
+	);
+	try {
+		const broken = await start(jobs, "exit 3");
+		await start(jobs, "sleep 30");
+		const deadline = Date.now() + 3_000;
+		while (!batches.length && Date.now() < deadline) await sleep(10);
+		assert.deepEqual(
+			batches.map((batch) => batch.map((job) => [job.id, job.state])),
+			[[[broken.id, "failed"]]],
 		);
 	} finally {
 		await jobs.close();
@@ -438,7 +485,7 @@ test("settling restarts the grouping window instead of announcing immediately", 
 		(completed) => batches.push(completed),
 		() => idle,
 		undefined,
-		{ quietMs: 300, siblingQuietMs: 300, siblingWindowMs: 0, maxDelayMs: 5_000 },
+		{ quietMs: 300, batchWindowMs: -1, batchMaxDelayMs: 0, maxDelayMs: 5_000 },
 	);
 	try {
 		const during = await start(jobs, "echo during-turn");
