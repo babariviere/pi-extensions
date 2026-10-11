@@ -1,9 +1,10 @@
 /**
- * Single owner of subscription-usage polls. Claude and Codex / ChatGPT OAuth
- * usage are cached per provider and republished on pi's event bus.
+ * Subscription-usage polls for Claude and Codex / ChatGPT OAuth accounts. One
+ * process per provider holds the poll lease and fetches; every pi process
+ * republishes the shared cache on its own event bus.
  */
 
-import type { ExtensionAPI, SessionEntry } from "@earendil-works/pi-coding-agent";
+import { type ExtensionAPI, getAgentDir, type ModelRegistry, type SessionEntry } from "@earendil-works/pi-coding-agent";
 import { formatLocalDateTime } from "./format.ts";
 import {
 	FIVE_HOUR_LABEL,
@@ -22,12 +23,13 @@ import {
 	type RoutedPhysicalModel,
 } from "../shared/routed-model.ts";
 import {
+	acquireLease,
 	fetchWithCache,
-	isOAuthToken,
-	loadClaudeToken,
-	loadOpenAIToken,
+	loadToken,
 	REFRESH_INTERVAL_MS,
 	readCache,
+	readLease,
+	releaseLease,
 	watchCache,
 } from "./source.ts";
 
@@ -73,7 +75,10 @@ export default function (pi: ExtensionAPI): void {
 	let timer: ReturnType<typeof setInterval> | undefined;
 	let stopWatch: (() => void) | undefined;
 	let watchedProvider: UsageProvider | undefined;
+	let leasedProvider: UsageProvider | undefined;
+	let modelRegistry: ModelRegistry | undefined;
 	const modelTracker = new UsageModelTracker();
+	const agentDir = getAgentDir();
 
 	function provider(): UsageProvider | undefined {
 		return usageProviderForModel(modelTracker.currentModel);
@@ -90,7 +95,7 @@ export default function (pi: ExtensionAPI): void {
 		stopWatch?.();
 		stopWatch = undefined;
 		watchedProvider = next;
-		if (next) stopWatch = watchCache(next, (entry) => publish(entry.snapshot, entry.fetchedAt));
+		if (next) stopWatch = watchCache(next, (entry) => publish(entry.snapshot, entry.fetchedAt), agentDir);
 	}
 
 	function clearStaleSnapshot(source: UsageProvider | undefined): void {
@@ -99,26 +104,37 @@ export default function (pi: ExtensionAPI): void {
 		last = undefined;
 		if (hadSnapshot) pi.events.emit(USAGE_SNAPSHOT_EVENT, { fetchedAt: Date.now(), snapshot: UNAVAILABLE });
 		if (!source) return;
-		const entry = readCache(source);
+		const entry = readCache(source, agentDir);
 		if (entry?.snapshot && !entry.snapshot.error) publish(entry.snapshot, entry.fetchedAt);
+	}
+
+	function releaseHeldLease(): void {
+		if (leasedProvider) releaseLease(leasedProvider, agentDir);
+		leasedProvider = undefined;
 	}
 
 	async function refresh(): Promise<void> {
 		const source = provider();
 		syncWatch();
 		clearStaleSnapshot(source);
+		if (leasedProvider !== source) releaseHeldLease();
 		if (inFlight) return;
 		if (!source) {
 			return;
 		}
-		const token = source === "anthropic" ? loadClaudeToken() : loadOpenAIToken();
-		if (!token || (source === "anthropic" && !isOAuthToken(token))) {
-			return;
-		}
+		// Followers receive the poller's snapshots through the cache watch.
+		if (!acquireLease(source, agentDir)) return;
+		leasedProvider = source;
 
 		inFlight = true;
 		try {
-			const snapshot = await fetchWithCache(source, token);
+			const token = await loadToken(source, { agentDir, modelRegistry });
+			// Without credentials, leave polling to a process that has them.
+			if (!token) {
+				if (leasedProvider === source) releaseHeldLease();
+				return;
+			}
+			const snapshot = await fetchWithCache(source, token, agentDir);
 			if (snapshot && source === provider()) publish(snapshot);
 		} finally {
 			inFlight = false;
@@ -140,6 +156,7 @@ export default function (pi: ExtensionAPI): void {
 		stopWatch?.();
 		stopWatch = undefined;
 		watchedProvider = undefined;
+		releaseHeldLease();
 	}
 
 	pi.events.on(USAGE_REQUEST_EVENT, () => {
@@ -148,6 +165,7 @@ export default function (pi: ExtensionAPI): void {
 	});
 
 	pi.on("session_start", async (_event, ctx) => {
+		modelRegistry = ctx.modelRegistry;
 		modelTracker.startSession(ctx.model, ctx.sessionManager.getBranch());
 		syncWatch();
 		clearStaleSnapshot(provider());
@@ -157,6 +175,7 @@ export default function (pi: ExtensionAPI): void {
 	});
 
 	pi.on("model_select", async (event, ctx) => {
+		modelRegistry = ctx.modelRegistry;
 		modelTracker.selectModel(event.model ?? ctx.model);
 		await refresh();
 	});
@@ -183,9 +202,13 @@ export default function (pi: ExtensionAPI): void {
 			}
 			const week = findWindow(last?.snapshot, WEEK_LABEL);
 			const fiveHour = findWindow(last?.snapshot, FIVE_HOUR_LABEL);
+			const source = provider();
+			const lease = source ? readLease(source, agentDir) : undefined;
+			const poller = !lease ? "none" : lease.pid === process.pid ? "this session" : `pid ${lease.pid}`;
 			ctx.ui.notify(
 				[
 					`usage provider: ${last?.snapshot.provider ?? "unknown"}`,
+					`usage poller: ${poller}`,
 					`Codex week: ${percent(week?.usedPercent)}${week?.resetsAt ? `, resets ${formatLocalDateTime(week.resetsAt)}` : ""}`,
 					`Codex 5h: ${fiveHour ? percent(fiveHour.usedPercent) : "none"}`,
 				].join("\n"),

@@ -3,6 +3,10 @@
  *
  * Claude uses its OAuth usage API. Codex / ChatGPT uses the undocumented
  * WHAM API used by Codex clients. Neither endpoint accepts API keys.
+ *
+ * Files live in `<agentDir>/cache/usage-status/<provider>/`, so each pi auth
+ * source has its own cache. One process per provider holds `lease.json` and is
+ * the only one that polls; every other process watches `cache.json`.
  */
 
 import { execFileSync } from "node:child_process";
@@ -19,12 +23,16 @@ import {
 } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import type { RateWindow, UsageProvider, UsageSnapshot } from "./protocol.ts";
 
 export const REFRESH_INTERVAL_MS = 60_000;
 const API_TIMEOUT_MS = 5_000;
 const DEFAULT_BACKOFF_MS = 60_000;
-const LOCK_STALE_MS = 5_000;
+// Longer than one API request, so a slow fetch never loses its lock.
+const LOCK_STALE_MS = API_TIMEOUT_MS + 5_000;
+/** A poll lease survives two missed refreshes before another process may take it over. */
+export const LEASE_TTL_MS = REFRESH_INTERVAL_MS * 2.5;
 const CLAUDE_USAGE_ENDPOINT = "https://api.anthropic.com/api/oauth/usage";
 const OPENAI_USAGE_ENDPOINT = "https://chatgpt.com/backend-api/wham/usage";
 
@@ -33,26 +41,64 @@ interface CachePaths {
 	cache: string;
 	lock: string;
 	backoff: string;
+	lease: string;
 }
 
-function pathsFor(provider: UsageProvider): CachePaths {
-	const dir = join(homedir(), ".pi", "agent", "cache", "usage-status", provider);
-	return { dir, cache: join(dir, "cache.json"), lock: join(dir, "cache.lock"), backoff: join(dir, "backoff") };
+/** Root of the shared usage cache for one pi agent directory. */
+export function usageCacheDir(agentDir = getAgentDir()): string {
+	return join(agentDir, "cache", "usage-status");
+}
+
+function pathsFor(provider: UsageProvider, agentDir?: string): CachePaths {
+	const dir = join(usageCacheDir(agentDir), provider);
+	return {
+		dir,
+		cache: join(dir, "cache.json"),
+		lock: join(dir, "cache.lock"),
+		backoff: join(dir, "backoff"),
+		lease: join(dir, "lease.json"),
+	};
 }
 
 // ── Token loading ───────────────────────────────────────────────────────────
 
-/** Load the Claude OAuth access token from pi's auth.json, then the macOS keychain. */
-export function loadClaudeToken(): string | undefined {
-	const piAuthPath = join(homedir(), ".pi", "agent", "auth.json");
+/** pi provider ids whose OAuth credentials can read subscription usage. */
+const PI_PROVIDER: Record<UsageProvider, string> = { anthropic: "anthropic", openai: "openai-codex" };
+
+export interface TokenSource {
+	agentDir?: string;
+	/** pi's model registry. Resolves OAuth credentials, refreshing expired tokens under pi's auth lock. */
+	modelRegistry?: { getApiKeyForProvider(provider: string): Promise<string | undefined> };
+}
+
+/** Resolve a usage-capable token: pi's credentials first, then other local clients' credential stores. */
+export async function loadToken(provider: UsageProvider, source: TokenSource = {}): Promise<string | undefined> {
+	let token: string | undefined;
 	try {
-		if (existsSync(piAuthPath)) {
-			const data = JSON.parse(readFileSync(piAuthPath, "utf8"));
-			if (typeof data.anthropic?.access === "string") return data.anthropic.access;
-		}
+		token = await source.modelRegistry?.getApiKeyForProvider(PI_PROVIDER[provider]);
 	} catch {
-		// Ignore malformed credentials.
+		// Fall back to the stored credentials below.
 	}
+	if (token && (provider !== "anthropic" || isOAuthToken(token))) return token;
+	token = provider === "anthropic" ? loadClaudeToken(source.agentDir) : loadOpenAIToken(source.agentDir);
+	if (!token || (provider === "anthropic" && !isOAuthToken(token))) return undefined;
+	return token;
+}
+
+function storedPiToken(agentDir: string, provider: string): string | undefined {
+	try {
+		const data = JSON.parse(readFileSync(join(agentDir, "auth.json"), "utf8"));
+		const access = data[provider]?.access;
+		return typeof access === "string" ? access : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+/** Load the Claude OAuth access token from pi's auth.json, then the macOS keychain. */
+export function loadClaudeToken(agentDir = getAgentDir()): string | undefined {
+	const stored = storedPiToken(agentDir, "anthropic");
+	if (stored && isOAuthToken(stored)) return stored;
 	try {
 		const keychainData = execFileSync("security", ["find-generic-password", "-s", "Claude Code-credentials", "-w"], {
 			encoding: "utf-8",
@@ -72,13 +118,9 @@ export function loadClaudeToken(): string | undefined {
 }
 
 /** Load a ChatGPT OAuth access token from pi, then the Codex CLI credential store. */
-export function loadOpenAIToken(): string | undefined {
-	try {
-		const auth = JSON.parse(readFileSync(join(homedir(), ".pi", "agent", "auth.json"), "utf8"));
-		if (typeof auth["openai-codex"]?.access === "string") return auth["openai-codex"].access;
-	} catch {
-		// Fall through to Codex CLI credentials.
-	}
+export function loadOpenAIToken(agentDir = getAgentDir()): string | undefined {
+	const stored = storedPiToken(agentDir, "openai-codex");
+	if (stored) return stored;
 	try {
 		const codexHome = process.env.CODEX_HOME || join(homedir(), ".codex");
 		const auth = JSON.parse(readFileSync(join(codexHome, "auth.json"), "utf8"));
@@ -203,24 +245,24 @@ function ensureDir(paths: CachePaths): void {
 	mkdirSync(paths.dir, { recursive: true });
 }
 
-export function readCache(provider: UsageProvider): CacheEntry | undefined {
+export function readCache(provider: UsageProvider, agentDir?: string): CacheEntry | undefined {
 	try {
-		return JSON.parse(readFileSync(pathsFor(provider).cache, "utf-8")) as CacheEntry;
+		return JSON.parse(readFileSync(pathsFor(provider, agentDir).cache, "utf-8")) as CacheEntry;
 	} catch {
 		return undefined;
 	}
 }
 
-function writeCache(provider: UsageProvider, entry: CacheEntry): void {
-	const paths = pathsFor(provider);
+function writeCache(provider: UsageProvider, entry: CacheEntry, agentDir?: string): void {
+	const paths = pathsFor(provider, agentDir);
 	ensureDir(paths);
 	const temp = `${paths.cache}.${process.pid}.tmp`;
 	writeFileSync(temp, JSON.stringify(entry), "utf-8");
 	renameSync(temp, paths.cache);
 }
 
-function getGoodUsage(provider: UsageProvider, ttlMs: number): UsageSnapshot | undefined {
-	const entry = readCache(provider);
+function getGoodUsage(provider: UsageProvider, ttlMs: number, agentDir?: string): UsageSnapshot | undefined {
+	const entry = readCache(provider, agentDir);
 	if (!entry || Date.now() - entry.fetchedAt >= ttlMs || entry.snapshot.error) return undefined;
 	return entry.snapshot;
 }
@@ -280,13 +322,17 @@ function clearBackoff(paths: CachePaths): void {
 }
 
 /** Fetch a fresh snapshot, coalescing requests across pi instances. */
-export async function fetchWithCache(provider: UsageProvider, token: string): Promise<UsageSnapshot | undefined> {
-	const good = getGoodUsage(provider, REFRESH_INTERVAL_MS);
+export async function fetchWithCache(
+	provider: UsageProvider,
+	token: string,
+	agentDir?: string,
+): Promise<UsageSnapshot | undefined> {
+	const good = getGoodUsage(provider, REFRESH_INTERVAL_MS, agentDir);
 	if (good) return good;
-	const paths = pathsFor(provider);
+	const paths = pathsFor(provider, agentDir);
 	if (isBackingOff(paths)) return undefined;
 	if (!tryAcquireLock(paths)) {
-		if (await waitForLock(paths, 3_000)) return getGoodUsage(provider, REFRESH_INTERVAL_MS);
+		if (await waitForLock(paths, 3_000)) return getGoodUsage(provider, REFRESH_INTERVAL_MS, agentDir);
 		return undefined;
 	}
 	try {
@@ -295,7 +341,7 @@ export async function fetchWithCache(provider: UsageProvider, token: string): Pr
 			writeBackoff(paths, retryAfterMs);
 			return undefined;
 		}
-		writeCache(provider, { fetchedAt: Date.now(), snapshot });
+		writeCache(provider, { fetchedAt: Date.now(), snapshot }, agentDir);
 		clearBackoff(paths);
 		return snapshot;
 	} finally {
@@ -303,9 +349,77 @@ export async function fetchWithCache(provider: UsageProvider, token: string): Pr
 	}
 }
 
+// ── Poll lease ──────────────────────────────────────────────────────────────
+
+export interface UsageLease {
+	pid: number;
+	/** Epoch ms after which another process may take the lease over. */
+	expiresAt: number;
+}
+
+export function readLease(provider: UsageProvider, agentDir?: string): UsageLease | undefined {
+	try {
+		const lease = JSON.parse(readFileSync(pathsFor(provider, agentDir).lease, "utf-8")) as Partial<UsageLease>;
+		if (Number.isInteger(lease.pid) && Number.isFinite(lease.expiresAt)) return lease as UsageLease;
+	} catch {}
+	return undefined;
+}
+
+function isAlive(pid: number): boolean {
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch (error) {
+		return (error as NodeJS.ErrnoException).code === "EPERM";
+	}
+}
+
+/**
+ * Acquire or renew the provider's poll lease. A live, unexpired lease held by another
+ * process is respected; a dead holder or expired lease is taken over. Two processes
+ * racing a takeover can both win once, which only costs one coalesced cache read.
+ */
+export function acquireLease(
+	provider: UsageProvider,
+	agentDir?: string,
+	options: { now?: number; pid?: number } = {},
+): boolean {
+	const now = options.now ?? Date.now();
+	const pid = options.pid ?? process.pid;
+	const paths = pathsFor(provider, agentDir);
+	const lease = JSON.stringify({ pid, expiresAt: now + LEASE_TTL_MS } satisfies UsageLease);
+	try {
+		ensureDir(paths);
+		const current = readLease(provider, agentDir);
+		if (current && current.pid !== pid && current.expiresAt > now && isAlive(current.pid)) return false;
+		if (current || existsSync(paths.lease)) {
+			const temp = `${paths.lease}.${pid}.tmp`;
+			writeFileSync(temp, lease, "utf-8");
+			renameSync(temp, paths.lease);
+		} else {
+			writeFileSync(paths.lease, lease, { flag: "wx" });
+		}
+	} catch {
+		// Another process created it first, or the cache directory is unwritable.
+	}
+	return readLease(provider, agentDir)?.pid === pid;
+}
+
+/** Release the provider's poll lease if this process holds it. */
+export function releaseLease(provider: UsageProvider, agentDir?: string, pid = process.pid): void {
+	if (readLease(provider, agentDir)?.pid !== pid) return;
+	try {
+		unlinkSync(pathsFor(provider, agentDir).lease);
+	} catch {}
+}
+
 /** Watch another pi instance's cache updates for one subscription provider. */
-export function watchCache(provider: UsageProvider, onChange: (entry: CacheEntry) => void): () => void {
-	const paths = pathsFor(provider);
+export function watchCache(
+	provider: UsageProvider,
+	onChange: (entry: CacheEntry) => void,
+	agentDir?: string,
+): () => void {
+	const paths = pathsFor(provider, agentDir);
 	let lastMtimeMs = 0;
 	let stopped = false;
 	const check = () => {
