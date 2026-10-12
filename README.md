@@ -11,6 +11,7 @@ The manifest discovers `extensions/*/index.ts` and `themes/*.json`.
 | --- | --- |
 | `apply-patch` | Standalone `applyPatch` V4A file-editing tool, available directly and through native codemode. |
 | `ask` | `--ask` selects the cheapest priced scoped model and disables thinking for a one-shot question. |
+| `browser` | `browser({ action: "open" | "click" | "type" | "screenshot" | ..., ... })` drives a hidden background browser for interactive pages. |
 | `clef` | Local Clef Flash MLX classifier (optional full model), offline startup checks and lazy loading with idle unloading; `/clef install` prepares Python/model dependencies, `/clef` shows status. |
 | `context` | `/context` shows loaded resources, project context, tokens and cost. |
 | `footer` | Project, context, model, thinking, subscription usage and extension status. |
@@ -231,6 +232,7 @@ packages remain host-provided peers, not bundled runtime dependencies.
 - [Subagents](extensions/subagents/README.md)
 - [Jobs](extensions/jobs/README.md)
 - [Web](extensions/web/README.md)
+- [Browser](extensions/browser/README.md)
 - [Night mode](extensions/night-mode/README.md)
 - [Guardrail](extensions/guardrail/README.md)
 - [Secrets](extensions/secrets/README.md)

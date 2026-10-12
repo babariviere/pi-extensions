@@ -184,15 +184,3 @@ export function isSafeSegment(segment: string): boolean {
 export function cloneCachePath(ref: GitHubRepoRef): string {
 	return join(tmpdir(), "pi-web-clones", "github.com", ref.owner, ref.repo);
 }
-
-/**
- * Persistent profile directory for the browser fallback's background browser,
- * one per browser kind (`helium`, `chrome`, `chromium`) so profiles are never
- * shared across incompatible versions.
- * Uses XDG_CACHE_HOME when set, otherwise ~/.cache, so the profile (and its
- * warm Cloudflare clearance cookies) survives across runs.
- */
-export function browserProfileDir(browser = "chrome"): string {
-	const base = process.env.XDG_CACHE_HOME || join(homedir(), ".cache");
-	return join(base, "pi-web-extension", `${browser}-profile`);
-}

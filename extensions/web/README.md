@@ -46,7 +46,8 @@ While a page shows a bot-protection interstitial (such as Cloudflare's "Just a m
 waiting for it to resolve, and the reported status is that of the page that replaces the challenge.
 
 A browser already listening on the CDP port is reused as is, so an older Chrome instance started by a
-previous version keeps being used until it quits.
+previous version keeps being used until it quits. The same instance backs the [`browser`](../browser/README.md)
+tool; its launch code lives in `extensions/shared/browser/`.
 
 Model-facing fetched text is capped at 2000 lines or 50 KB. When truncated, the full content is saved to a temp
 file and its path is included in the output. Codemode receives the full structured `text`. Interactive output
