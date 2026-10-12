@@ -5,7 +5,8 @@
  *   1. GitHub repo URL (root / tree / blob) -> clone + reuse, return summary.
  *   2. raw.githubusercontent.com           -> fetch raw bytes directly.
  *   3. Anything else                        -> fetch + local defuddle -> Markdown.
- *      When that is blocked or empty, fall back to a headed-Chrome CDP fetch.
+ *      When that is blocked or empty, fall back to a headed-browser CDP fetch
+ *      (Helium, Chrome, or Chromium) using hidden pages.
  */
 
 import { spawn } from "node:child_process";
@@ -50,7 +51,7 @@ type TextResult = {
 
 export const SOURCE_LABELS: Record<FetchSource, string> = {
 	defuddle: "via defuddle",
-	browser: "via browser (headed Chrome)",
+	browser: "via browser (headed Chromium)",
 	raw: "via raw fetch",
 	github: "via git clone",
 };
@@ -149,7 +150,7 @@ async function fetchViaDefuddle(
 		result = await defuddleFetch(url, { timeout, signal });
 	} catch (err) {
 		// Retry through the browser only when the failure looks like bot protection
-		// or a transient error. A 404 is conclusive, and rendering it in Chrome
+		// or a transient error. A 404 is conclusive, and rendering it in a browser
 		// would return the site's error page as if it were content.
 		const status = err instanceof DefuddleError ? err.status : undefined;
 		if (settings.browserFallback && shouldEscalateToBrowser(status)) {

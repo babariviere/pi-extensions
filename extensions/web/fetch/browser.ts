@@ -1,13 +1,16 @@
 /**
- * Tier 2 fallback: fetch a page through a real, headed Chrome driven over the
- * DevTools Protocol, for sites that block a plain fetch (e.g. Cloudflare's
- * "Just a moment..." managed challenge, which detects headless browsers).
+ * Tier 2 fallback: fetch a page through a real, headed Chromium browser driven
+ * over the DevTools Protocol, for sites that block a plain fetch (e.g.
+ * Cloudflare's "Just a moment..." managed challenge, which detects headless
+ * browsers).
  *
- * Approach (after antirez's ds4_web.c): launch the user's real Chrome in the
- * background (`open -g` on macOS) with a dedicated profile and remote debugging
- * port, keep it warm across calls, open pages as background tabs, and enable
- * focus emulation so the backgrounded page still runs the challenge JS. The
- * rendered outerHTML is then handed to the same defuddle extractor as Tier 1.
+ * Approach (after antirez's ds4_web.c): launch the user's real browser (Helium,
+ * then Chrome, then Chromium) in the background with a dedicated profile and
+ * remote debugging port, and keep it warm across calls. To stay out of the way
+ * it starts without a window (and hidden on macOS), and pages are opened as
+ * hidden targets that never appear in a tab strip. Focus emulation keeps the
+ * backgrounded page running the challenge JS. The rendered outerHTML is then
+ * handed to the same defuddle extractor as Tier 1.
  */
 
 import { spawn } from "node:child_process";
@@ -65,9 +68,11 @@ async function ensureBrowser(port: number, signal: AbortSignal): Promise<string>
 	const existing = await cdpWebSocketUrl(port);
 	if (existing) return existing;
 
-	const profileDir = browserProfileDir();
+	const browser = findBrowser();
+	if (!browser) throw new DefuddleError("No Helium, Chrome, or Chromium installation found");
+	const profileDir = browserProfileDir(browser.id);
 	mkdirSync(profileDir, { recursive: true });
-	launchChrome(port, profileDir);
+	launchBrowser(browser, port, profileDir);
 
 	for (let i = 0; i < 80; i++) {
 		if (signal.aborted) throw new DefuddleError("Browser launch aborted");
@@ -75,10 +80,10 @@ async function ensureBrowser(port: number, signal: AbortSignal): Promise<string>
 		const ws = await cdpWebSocketUrl(port);
 		if (ws) return ws;
 	}
-	throw new DefuddleError(`Chrome did not expose a debugging port on ${port}`);
+	throw new DefuddleError(`Browser did not expose a debugging port on ${port}`);
 }
 
-/** Chrome flags shared across platforms. Exported for testing. */
+/** Chromium flags shared across platforms. Exported for testing. */
 export function buildChromeArgs(port: number, profileDir: string): string[] {
 	return [
 		`--remote-debugging-port=${port}`,
@@ -90,47 +95,64 @@ export function buildChromeArgs(port: number, profileDir: string): string[] {
 		"--use-mock-keychain",
 		"--password-store=basic",
 		"--mute-audio",
-		"about:blank",
+		// Start with no window at all; pages are opened later as hidden targets.
+		"--no-startup-window",
 	];
 }
 
-function launchChrome(port: number, profileDir: string): void {
+/** A browser install the fallback can drive. `id` keys its dedicated profile. */
+export interface BrowserInstall {
+	id: string;
+	/** macOS: app bundle path, opened with `open`. Linux: executable path. */
+	path: string;
+}
+
+const MAC_BROWSERS: BrowserInstall[] = [
+	{ id: "helium", path: "/Applications/Helium.app" },
+	{ id: "chrome", path: "/Applications/Google Chrome.app" },
+	{ id: "chromium", path: "/Applications/Chromium.app" },
+];
+
+const LINUX_BROWSERS: BrowserInstall[] = [
+	{ id: "helium", path: "/usr/bin/helium" },
+	{ id: "helium", path: "/opt/helium/helium" },
+	{ id: "chrome", path: "/usr/bin/google-chrome" },
+	{ id: "chrome", path: "/usr/bin/google-chrome-stable" },
+	{ id: "chrome", path: "/opt/google/chrome/chrome" },
+	{ id: "chromium", path: "/usr/bin/chromium" },
+	{ id: "chromium", path: "/usr/bin/chromium-browser" },
+	{ id: "chromium", path: "/snap/bin/chromium" },
+];
+
+/** First installed browser in preference order (Helium first). Exported for testing. */
+export function findBrowser(
+	platform: NodeJS.Platform = process.platform,
+	exists: (path: string) => boolean = existsSync,
+): BrowserInstall | null {
+	const candidates = platform === "darwin" ? MAC_BROWSERS : LINUX_BROWSERS;
+	return candidates.find((b) => exists(b.path)) ?? null;
+}
+
+/** macOS `open` arguments: background (-g), hidden (-j), new instance (-n). Exported for testing. */
+export function buildMacOpenArgs(appPath: string, browserArgs: string[]): string[] {
+	return ["-g", "-j", "-n", "-a", appPath, "--args", ...browserArgs];
+}
+
+function launchBrowser(browser: BrowserInstall, port: number, profileDir: string): void {
 	const args = buildChromeArgs(port, profileDir);
 
 	if (process.platform === "darwin") {
-		const app = macChromeApp();
-		if (!app) throw new DefuddleError("No Chrome or Chromium found in /Applications");
-		// `open -g` launches without stealing focus; a dedicated profile lets it
-		// run alongside the user's own Chrome.
-		spawn("/usr/bin/open", ["-g", "-na", app, "--args", ...args], {
+		// A dedicated profile lets this instance run alongside the user's own
+		// browser of the same kind without touching their session.
+		spawn("/usr/bin/open", buildMacOpenArgs(browser.path, args), {
 			stdio: "ignore",
 			detached: true,
 		}).unref();
 		return;
 	}
 
-	const exe = linuxChromeExecutable();
-	if (!exe) throw new DefuddleError("No Chrome or Chromium executable found");
 	const extra = process.getuid?.() === 0 ? ["--no-sandbox"] : [];
-	spawn(exe, [...args, ...extra], { stdio: "ignore", detached: true }).unref();
-}
-
-function macChromeApp(): string | null {
-	if (existsSync("/Applications/Google Chrome.app")) return "Google Chrome";
-	if (existsSync("/Applications/Chromium.app")) return "Chromium";
-	return null;
-}
-
-function linuxChromeExecutable(): string | null {
-	const candidates = [
-		"/usr/bin/google-chrome",
-		"/usr/bin/google-chrome-stable",
-		"/usr/bin/chromium",
-		"/usr/bin/chromium-browser",
-		"/snap/bin/chromium",
-		"/opt/google/chrome/chrome",
-	];
-	return candidates.find((p) => existsSync(p)) ?? null;
+	spawn(browser.path, [...args, ...extra], { stdio: "ignore", detached: true }).unref();
 }
 
 // --- page rendering ---------------------------------------------------------
@@ -144,12 +166,25 @@ export interface DocumentResponse {
 /**
  * Pick the status of the top-level document. Chrome reports document responses
  * for iframes too, so prefer the frame the navigation was issued on and fall
- * back to the first document seen.
+ * back to the first document seen. Within the main frame take the latest one:
+ * a bot challenge (e.g. Cloudflare's 403 "Just a moment...") reloads the frame
+ * with the real page once it passes.
  */
 export function mainDocumentStatus(documents: DocumentResponse[], mainFrameId?: string): number | undefined {
 	const forMainFrame = mainFrameId ? documents.filter((d) => d.frameId === mainFrameId) : [];
-	const candidates = forMainFrame.length > 0 ? forMainFrame : documents;
-	return candidates[0]?.status;
+	if (forMainFrame.length > 0) return forMainFrame.at(-1)?.status;
+	return documents[0]?.status;
+}
+
+/**
+ * Target.createTarget parameters for a page the user never sees. `hidden`
+ * keeps it out of every tab strip and window (no browser window is needed), and
+ * lives only as long as the creating session. It requires `background: true`,
+ * and `newWindow` must be omitted entirely: Chromium rejects hidden targets
+ * whenever that field is present, even when it is false. Exported for testing.
+ */
+export function hiddenTargetParams(): Record<string, unknown> {
+	return { url: "about:blank", background: true, hidden: true };
 }
 
 async function renderPage(
@@ -158,23 +193,17 @@ async function renderPage(
 	url: string,
 	signal: AbortSignal,
 ): Promise<{ html: string; title: string; status?: number }> {
-	const browser = new Cdp(browserWsUrl, signal);
-	await browser.connect();
-	let targetId: string;
+	// One browser-level socket for the whole render: a hidden target is tied to
+	// the session that created it, so the page is driven through a flattened
+	// session on this same connection rather than a separate page socket.
+	const cdp = new Cdp(browserWsUrl, signal);
+	await cdp.connect();
+	let targetId: string | undefined;
 	try {
-		const created = await browser.call("Target.createTarget", {
-			url: "about:blank",
-			background: true,
-			newWindow: false,
-		});
-		targetId = created.targetId;
-	} finally {
-		browser.close();
-	}
+		targetId = (await cdp.call("Target.createTarget", hiddenTargetParams())).targetId as string;
+		const { sessionId } = await cdp.call("Target.attachToTarget", { targetId, flatten: true });
+		const page = cdp.session(sessionId);
 
-	const page = new Cdp(`ws://127.0.0.1:${port}/devtools/page/${targetId}`, signal);
-	await page.connect();
-	try {
 		await page.call("Page.enable");
 		await page.call("Runtime.enable");
 		// Needed to observe the HTTP status: CDP navigation itself reports none, so
@@ -205,12 +234,18 @@ async function renderPage(
 		const title = await evalString(page, "document.title");
 		return { html, title, status: mainDocumentStatus(documents, nav?.frameId) };
 	} finally {
-		page.close();
-		await fetch(`http://127.0.0.1:${port}/json/close/${encodeURIComponent(targetId)}`).catch(() => {});
+		if (targetId) {
+			const id = targetId;
+			await cdp.call("Target.closeTarget", { targetId: id }).catch(() =>
+				// The socket may already be gone (abort); close over HTTP as a fallback.
+				fetch(`http://127.0.0.1:${port}/json/close/${encodeURIComponent(id)}`).catch(() => {}),
+			);
+		}
+		cdp.close();
 	}
 }
 
-async function evalString(page: Cdp, expr: string): Promise<string> {
+async function evalString(page: CdpSession, expr: string): Promise<string> {
 	const r = await page.call("Runtime.evaluate", {
 		expression: expr,
 		returnByValue: true,
@@ -224,7 +259,7 @@ async function evalString(page: Cdp, expr: string): Promise<string> {
  * Poll until the page is a real URL, is ready, and its text length has settled,
  * which naturally waits out interstitial challenge pages.
  */
-async function waitReady(page: Cdp, signal: AbortSignal): Promise<void> {
+async function waitReady(page: CdpSession, signal: AbortSignal): Promise<void> {
 	let lastLen = -1;
 	let stable = 0;
 	let sawRealUrl = false;
@@ -234,9 +269,9 @@ async function waitReady(page: Cdp, signal: AbortSignal): Promise<void> {
 		await sleep(400);
 		const probe = await evalString(
 			page,
-			"location.href+'\\n'+document.readyState+'\\n'+((document.body&&document.body.innerText)||'').length",
+			"location.href+'\\n'+document.readyState+'\\n'+((document.body&&document.body.innerText)||'').length+'\\n'+document.title",
 		);
-		const [href, ready, lenStr] = probe.split("\n");
+		const [href, ready, lenStr, ...titleParts] = probe.split("\n");
 		const len = Number.parseInt(lenStr || "0", 10);
 		const realUrl = !!href && href !== "about:blank" && !href.startsWith("chrome://");
 		const readyOk = ready === "complete" || ready === "interactive";
@@ -244,13 +279,28 @@ async function waitReady(page: Cdp, signal: AbortSignal): Promise<void> {
 		if (len > 0 && len === lastLen) stable++;
 		else stable = 0;
 		lastLen = len;
+		// A challenge interstitial is static while it works, so its text length
+		// "settles" too. Keep waiting for it to hand over to the real page.
+		if (isChallengeTitle(titleParts.join("\n"))) continue;
 
 		if (sawRealUrl && readyOk && len > 0 && stable >= 2) return;
 		if (sawRealUrl && readyOk && i >= 24) return; // give up waiting for stability
 	}
 }
 
+/** Titles of bot-protection interstitials that resolve on their own. Exported for testing. */
+export function isChallengeTitle(title: string): boolean {
+	return /^(just a moment|attention required|checking your browser|please wait|ddos-guard)\b/i.test(title.trim());
+}
+
 // --- minimal CDP client -----------------------------------------------------
+
+/** Commands and events scoped to one flattened target session. */
+interface CdpSession {
+	call(method: string, params?: Record<string, unknown>): Promise<any>;
+	// biome-ignore lint/suspicious/noExplicitAny: CDP event payloads are untyped
+	on(method: string, handler: (params: any) => void): void;
+}
 
 interface Pending {
 	resolve: (value: any) => void;
@@ -263,6 +313,7 @@ class Cdp {
 	private pending = new Map<number, Pending>();
 	// biome-ignore lint/suspicious/noExplicitAny: CDP event payloads are untyped
 	private handlers = new Map<string, (params: any) => void>();
+	private handlerKey = (method: string, sessionId?: string) => `${sessionId ?? ""}|${method}`;
 	private readonly onAbort = () => this.fail(new DefuddleError("Browser operation aborted"));
 
 	constructor(
@@ -296,24 +347,33 @@ class Cdp {
 					else p.resolve(msg.result);
 					return;
 				}
-				if (typeof msg.method === "string") this.handlers.get(msg.method)?.(msg.params);
+				if (typeof msg.method === "string")
+					this.handlers.get(this.handlerKey(msg.method, msg.sessionId))?.(msg.params);
 			});
 		});
 	}
 
-	/** Subscribe to a CDP event. One handler per method; last call wins. */
+	/** Subscribe to a CDP event. One handler per method and session; last call wins. */
 	// biome-ignore lint/suspicious/noExplicitAny: CDP event payloads are untyped
-	on(method: string, handler: (params: any) => void): void {
-		this.handlers.set(method, handler);
+	on(method: string, handler: (params: any) => void, sessionId?: string): void {
+		this.handlers.set(this.handlerKey(method, sessionId), handler);
 	}
 
-	call(method: string, params: Record<string, unknown> = {}): Promise<any> {
+	call(method: string, params: Record<string, unknown> = {}, sessionId?: string): Promise<any> {
 		if (this.signal.aborted) return Promise.reject(new DefuddleError("Browser operation aborted"));
 		const id = this.id++;
 		return new Promise((resolve, reject) => {
 			this.pending.set(id, { resolve, reject });
-			this.ws.send(JSON.stringify({ id, method, params }));
+			this.ws.send(JSON.stringify(sessionId ? { id, method, params, sessionId } : { id, method, params }));
 		});
+	}
+
+	/** View of this connection scoped to a flattened target session. */
+	session(sessionId: string): CdpSession {
+		return {
+			call: (method, params) => this.call(method, params, sessionId),
+			on: (method, handler) => this.on(method, handler, sessionId),
+		};
 	}
 
 	private fail(err: Error): void {

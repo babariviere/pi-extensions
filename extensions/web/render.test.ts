@@ -39,7 +39,7 @@ test("web retains folded previews, expansion, and human-only fetch source labels
 		} as never,
 	);
 	const preview = folded.render(120).join("\n");
-	assert.match(preview, /via browser \(headed Chrome\)/);
+	assert.match(preview, /via browser \(headed Chromium\)/);
 	assert.match(preview, /line 11/);
 	assert.doesNotMatch(preview, /line 19/);
 	assert.match(preview, /8 more lines/);

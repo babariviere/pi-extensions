@@ -18,13 +18,13 @@ export interface WebSettings {
 	/** Number of tree entries included in a repo summary. */
 	treeHeadEntries: number;
 	/**
-	 * Enable the headed-Chrome CDP fallback when a direct fetch is blocked
+	 * Enable the headed-browser CDP fallback when a direct fetch is blocked
 	 * (e.g. Cloudflare challenge) or yields no content.
 	 */
 	browserFallback: boolean;
 	/** Timeout (ms) for the browser fallback (launch + navigate + extract). */
 	browserTimeout: number;
-	/** CDP port for the reused background Chrome instance. */
+	/** CDP port for the reused background browser instance. */
 	browserCdpPort: number;
 }
 
