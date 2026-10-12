@@ -44,7 +44,7 @@ export default function jobs(pi: ExtensionAPI, timing: Partial<AnnouncementTimin
 						customType: "jobs.result",
 						display: true,
 						details: { jobs: completed },
-						content: `Finished background jobs:\n${summary.join("\n")}\nUse jobs({ action: "logs", id }) to inspect output as needed.`,
+						content: `Finished background jobs:\n${summary.join("\n")}\nUse read or bash with rg/tail on the output paths to inspect output as needed.`,
 					},
 					{ deliverAs: "followUp", triggerTurn: true },
 				);

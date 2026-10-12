@@ -11,16 +11,20 @@ Use jobs only for long-running commands. Use regular `bash` for short commands
 and `codemode` with `Promise.allSettled` to run independent tool calls in parallel.
 Parallelism alone is not a reason to start jobs. After starting jobs, do other work
 or finish the turn and rely on automatic completion notifications.
-Do not repeatedly poll `wait`, `status`, or `logs`.
+Do not repeatedly poll `wait`, `status`, or output files.
 Use `wait` only when the next step genuinely depends on a job finishing, and
 inspect logs after completion or when diagnosing a running job.
 
 - `jobs({ action: "start", name, command, cwd? })`: launch a named Bash command.
-- `jobs({ action: "status" })`: list live and recent handles without output.
+- `jobs({ action: "status" })`: list live and recent handles, including `outputPath`.
 - `jobs({ action: "wait", id, waitMs? })`: wait up to 30 seconds by default, maximum 120 seconds.
-- `jobs({ action: "logs", id, maxChars? })`: read the output tail, default 4000 characters,
-  maximum 20000. A terminal result suppresses the completion notification.
+  Returns `outputPath`; a terminal result suppresses the completion notification.
 - `jobs({ action: "stop", id })`: cancel the job and its subprocess group.
+
+Every job result includes `outputPath`. Use `read` to inspect the file, or `bash`
+with `rg` to search it or `tail` to read its end. The `logs` action has been removed;
+use these existing file tools instead. Status calls and direct file reads do not
+acknowledge completion or suppress pending notifications; a terminal `wait` does.
 
 This tool has native `codemode` exposure, annotation hints, output schemas and
 structured results. Pi configuration controls native codemode. This extension
@@ -33,6 +37,15 @@ transport. Full workflow instructions are available through
 const job = await tools.jobs({ action: "start", name: "tests", command: "npm test" });
 return job;
 // Do other work or finish the turn. A follow-up will announce completion.
+```
+
+When the next step depends on completion, wait and read the returned output path:
+
+```ts
+const result = await tools.jobs({ action: "wait", id });
+if (result.state !== "running") {
+	text(await tools.read({ path: result.outputPath }));
+}
 ```
 
 The `action` parameter is required, with arguments validated for that action.
@@ -58,9 +71,9 @@ period, since the agent can act on it right away. Jobs started separately, such 
 an earlier dev server, never hold a batch. Completions during an active turn are
 collected when the parent settles, which restarts the same grouping window so jobs
 exiting right after the turn join them.
-A terminal wait or log read claims its result and suppresses that wake-up. Reading
-logs while the job is still running does not claim its later completion. Stopped
-jobs never wake the model. Use `jobs({ action: "logs", id })` to inspect completion output;
+A terminal wait claims its result and suppresses that wake-up. Reading the output
+file does not claim completion, even after exit. Stopped jobs never wake the model.
+Use `read` or `bash` with `rg`/`tail` to inspect completion output;
 notifications contain the handle and output path, not an unbounded log.
 
 Defaults are unchanged and are not configurable: maximum 20 live jobs, 50 recent

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { rm } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import { test } from "node:test";
 import { JobsProvider, type AnnouncementTiming, type JobSnapshot } from "./jobs-provider.ts";
 import { Value } from "typebox/value";
@@ -47,10 +47,7 @@ test("a running job remains running across calls, then wakes only when unclaimed
 		assert.equal(changes, 2);
 		assert.equal(sent.length, 1);
 		assert.equal(sent[0]?.state, "done");
-		assert.match(
-			String(((await jobs.invoke("logs", { id: job.id }, context)) as { text: string }).text),
-			/completed/,
-		);
+		assert.match(await readFile(job.outputPath, "utf8"), /completed/);
 	} finally {
 		await jobs.close();
 	}
@@ -67,7 +64,10 @@ test("a terminal wait claims the result, a stopped job cannot wake the model", a
 	);
 	try {
 		const finished = await start(jobs, "echo claimed");
-		assert.equal(((await jobs.invoke("wait", { id: finished.id }, context)) as JobSnapshot).state, "done");
+		const result = (await jobs.invoke("wait", { id: finished.id }, context)) as JobSnapshot;
+		assert.equal(result.state, "done");
+		assert.equal(result.outputPath, finished.outputPath);
+		assert.match(await readFile(result.outputPath, "utf8"), /claimed/);
 		const stopped = await start(jobs, "sleep 30");
 		const beforeStop = changes;
 		assert.equal(((await jobs.invoke("stop", { id: stopped.id }, context)) as JobSnapshot).state, "cancelled");
@@ -102,12 +102,8 @@ test("a completion during an active turn stays pending until wait claims it", as
 	}
 });
 
-for (const { exitCode, missingOutput } of [
-	{ exitCode: 0, missingOutput: false },
-	{ exitCode: 7, missingOutput: false },
-	{ exitCode: 0, missingOutput: true },
-]) {
-	test(`terminal logs claim an exit ${exitCode} result during an active turn (missing output: ${missingOutput})`, async () => {
+for (const exitCode of [0, 7]) {
+	test(`status and output file reads do not claim an exit ${exitCode} result during an active turn`, async () => {
 		const sent: JobSnapshot[] = [];
 		let idle = false;
 		const jobs = new JobsProvider(
@@ -116,26 +112,29 @@ for (const { exitCode, missingOutput } of [
 			() => idle,
 		);
 		try {
-			const started = await start(jobs, `echo claimed-through-logs; exit ${exitCode}`);
+			const started = await start(jobs, `echo read-directly; exit ${exitCode}`);
 			await waitForExit(jobs, started.id);
-			if (missingOutput) await rm(started.outputPath);
-			const result = (await jobs.invoke("logs", { id: started.id }, context)) as JobSnapshot & { text: string };
+			const [result] = (await jobs.invoke("status", {}, context)) as JobSnapshot[];
+			assert.ok(result);
 			assert.equal(result.state, exitCode === 0 ? "done" : "failed");
 			assert.equal(result.exitCode, exitCode);
-			if (missingOutput) assert.equal(result.text, "");
-			else assert.match(result.text, /claimed-through-logs/);
+			assert.equal(result.outputPath, started.outputPath);
+			assert.match(await readFile(result.outputPath, "utf8"), /read-directly/);
 			idle = true;
 			jobs.flushCompletions();
 			await sleep(250);
 			jobs.flushCompletions();
-			assert.deepEqual(sent, []);
+			assert.deepEqual(
+				sent.map((job) => job.id),
+				[started.id],
+			);
 		} finally {
 			await jobs.close();
 		}
 	});
 }
 
-test("reading running logs does not claim a later completion", async () => {
+test("reading a running output file does not claim a later completion", async () => {
 	const sent: JobSnapshot[] = [];
 	let idle = false;
 	const jobs = new JobsProvider(
@@ -144,9 +143,11 @@ test("reading running logs does not claim a later completion", async () => {
 		() => idle,
 	);
 	try {
-		const started = await start(jobs, "sleep 0.3; echo completed-later");
-		const result = (await jobs.invoke("logs", { id: started.id }, context)) as JobSnapshot;
+		const started = await start(jobs, "echo progress; sleep 0.3; echo completed-later");
+		const result = (await jobs.invoke("wait", { id: started.id, waitMs: 50 }, context)) as JobSnapshot;
 		assert.equal(result.state, "running");
+		assert.equal(result.outputPath, started.outputPath);
+		await readFile(result.outputPath, "utf8");
 		await waitForExit(jobs, started.id);
 		await sleep(250);
 		assert.equal(sent.length, 0);
@@ -205,12 +206,10 @@ test("settling batches pending completions and excludes claimed and stopped jobs
 		const done = await start(jobs, "echo done");
 		const failed = await start(jobs, "echo failed; exit 7");
 		const waited = await start(jobs, "echo waited");
-		const logged = await start(jobs, "echo logged");
 		const stopped = await start(jobs, "sleep 30");
 		await jobs.invoke("wait", { id: waited.id }, context);
 		await jobs.invoke("stop", { id: stopped.id }, context);
-		await Promise.all([done, failed, logged].map((job) => waitForExit(jobs, job.id)));
-		await jobs.invoke("logs", { id: logged.id }, context);
+		await Promise.all([done, failed].map((job) => waitForExit(jobs, job.id)));
 		await sleep(250);
 		assert.equal(batches.length, 0);
 		idle = true;
@@ -309,15 +308,35 @@ test("a failed command remains queryable and is not reported as done", async () 
 		assert.equal(result.state, "failed");
 		assert.equal(result.exitCode, 7);
 		assert.equal(((await jobs.invoke("status", {}, context)) as JobSnapshot[])[0]?.state, "failed");
-		assert.match(
-			String(((await jobs.invoke("logs", { id: started.id }, context)) as { text: string }).text),
-			/failure/,
-		);
+		assert.equal(result.outputPath, started.outputPath);
+		assert.match(await readFile(result.outputPath, "utf8"), /failure/);
 		await sleep(250);
 		assert.deepEqual(sent, []);
 	} finally {
 		await jobs.close();
 	}
+});
+
+test("output files retain the capture cap and are removed on session cleanup", async () => {
+	const jobs = new JobsProvider(
+		async (command) => command,
+		() => {},
+	);
+	let outputPath: string;
+	try {
+		const started = await start(
+			jobs,
+			`${JSON.stringify(process.execPath)} -e 'process.stdout.write("x".repeat(9 * 1024 * 1024))'`,
+		);
+		const result = (await jobs.invoke("wait", { id: started.id }, context)) as JobSnapshot;
+		outputPath = result.outputPath;
+		assert.equal(result.state, "done");
+		assert.equal(result.logTruncated, true);
+		assert.equal((await stat(outputPath)).size, 8 * 1024 * 1024);
+	} finally {
+		await jobs.close();
+	}
+	await assert.rejects(stat(outputPath), { code: "ENOENT" });
 });
 
 test("jobs native tools retain structured output schemas and codemode exposure", async () => {
@@ -339,8 +358,23 @@ test("jobs native tools retain structured output schemas and codemode exposure",
 	assert.match(tool.namespace?.instructions ?? "", /codemode with Promise\.allSettled/);
 	assert.match(tool.namespace?.instructions ?? "", /Parallelism alone is not a reason to start jobs/);
 	assert.doesNotMatch(tool.description + tool.namespace?.instructions, /long-running or parallel/);
-	assert.match(tool.description, /instead of polling wait\/logs/);
-	assert.match(tool.namespace?.instructions ?? "", /Do not repeatedly call wait, status, or logs/);
+	assert.match(tool.description, /instead of polling wait\/status/);
+	assert.match(tool.namespace?.instructions ?? "", /Do not repeatedly call wait or status/);
+	assert.match(tool.namespace?.instructions ?? "", /Use read or bash with rg\/tail/);
+	assert.deepEqual(
+		actions.map((action) => action.name),
+		["start", "status", "wait", "stop"],
+	);
+	assert.equal(await jobs.describe("logs", context), undefined);
+	assert.ok(!Value.Check(tool.parameters, { action: "logs", id: "job" }));
+	assert.ok(!Value.Check(tool.parameters, { action: "status", maxChars: 4000 }));
+	await assert.rejects(
+		tool.execute("call", { action: "logs", id: "job" }, undefined, undefined, context),
+		/Unknown jobs action: logs/,
+	);
+	for (const name of ["status", "wait"]) {
+		assert.match(actions.find((action) => action.name === name)!.description, /outputPath/);
+	}
 	assert.match(actions.find((action) => action.name === "wait")!.description, /only when the next step depends/i);
 	assert.ok(Value.Check(descriptor.inputSchema, { name: "check", command: "echo ready" }));
 	assert.ok(!Value.Check(descriptor.inputSchema, { name: "check" }));

@@ -2,7 +2,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { createWriteStream, type WriteStream } from "node:fs";
-import { mkdtemp, open, rm, stat } from "node:fs/promises";
+import { mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { terminateProcessTree } from "../subagents/process-tree.ts";
@@ -11,7 +11,6 @@ import type { ActionDescriptor, ActionContext, ActionProvider, ActionListRequest
 const MAX_JOBS = 20;
 const MAX_HISTORY = 50;
 const MAX_LIFETIME_MS = 2 * 60 * 60_000;
-const MAX_LOG_CHARS = 20_000;
 const MAX_LOG_BYTES = 8 * 1024 * 1024;
 
 /**
@@ -92,14 +91,15 @@ const descriptors: ActionDescriptor[] = [
 	},
 	{
 		name: "status",
-		description: "List running and recent shell jobs (without their output).",
+		description:
+			"List running and recent shell jobs, including outputPath for reading or searching their output files.",
 		inputSchema: { type: "object", properties: {}, additionalProperties: false },
 		outputSchema: { type: "array", items: jobOutputSchema },
 	},
 	{
 		name: "wait",
 		description:
-			"Wait only when the next step depends on this job; otherwise rely on automatic completion notifications, not polling. Returns running after waitMs (default 30 seconds). A terminal wait claims its result and suppresses the completion wake-up.",
+			"Wait only when the next step depends on this job; otherwise rely on automatic completion notifications, not polling. Returns running after waitMs (default 30 seconds). Includes outputPath for reading or searching the output file. A terminal wait claims its result and suppresses the completion wake-up.",
 		inputSchema: {
 			type: "object",
 			properties: { id: { type: "string" }, waitMs: { type: "number" } },
@@ -107,22 +107,6 @@ const descriptors: ActionDescriptor[] = [
 			additionalProperties: false,
 		},
 		outputSchema: jobOutputSchema,
-	},
-	{
-		name: "logs",
-		description:
-			"Inspect a completed job's output, or diagnose a running job when needed. Avoid polling running logs. Reads the last maxChars (default 4000, max 20000). A terminal log read claims its result and suppresses the completion wake-up.",
-		inputSchema: {
-			type: "object",
-			properties: { id: { type: "string" }, maxChars: { type: "number" } },
-			required: ["id"],
-			additionalProperties: false,
-		},
-		outputSchema: {
-			type: "object",
-			properties: { ...jobOutputSchema.properties, text: { type: "string" }, truncated: { type: "boolean" } },
-			required: [...jobOutputSchema.required, "text", "truncated"],
-		},
 	},
 	{
 		name: "stop",
@@ -138,11 +122,11 @@ const descriptors: ActionDescriptor[] = [
 ];
 
 for (const descriptor of descriptors) {
-	const readOnly = ["status", "wait", "logs"].includes(descriptor.name);
+	const readOnly = ["status", "wait"].includes(descriptor.name);
 	descriptor.annotations = {
 		readOnlyHint: readOnly,
 		destructiveHint: !readOnly,
-		idempotentHint: ["status", "logs", "stop"].includes(descriptor.name),
+		idempotentHint: ["status", "stop"].includes(descriptor.name),
 		openWorldHint: descriptor.name === "start",
 	};
 }
@@ -153,14 +137,14 @@ const bounded = (value: unknown, fallback: number, max: number): number =>
 export class JobsProvider implements ActionProvider {
 	readonly name = "jobs";
 	readonly description =
-		"Session-owned background shell jobs for long-running commands only. Use bash for short commands and codemode to run independent tool calls in parallel. Start a long-running job, do other work, and rely on automatic completion notifications instead of polling wait/logs.";
+		"Session-owned background shell jobs for long-running commands only. Use bash for short commands and codemode to run independent tool calls in parallel. Start a long-running job, do other work, and rely on automatic completion notifications instead of polling wait/status. Results include outputPath for reading or searching output files.";
 	readonly instructions = [
 		"Use jobs only for long-running shell commands. Use bash for short commands and codemode with Promise.allSettled to run independent tool calls in parallel. Parallelism alone is not a reason to start jobs.",
 		'Use tools.jobs({ action: "start", name, command, cwd? }) for long-running shell work that should outlive a tool call.',
 		"Jobs remain owned by this session and stop on shutdown/reload, cancellation, exit, or the two-hour cap.",
-		"After starting a job, do other work or finish the turn. Do not repeatedly call wait, status, or logs to poll progress.",
-		'Use tools.jobs({ action: "wait", id, waitMs? }) only when the next step depends on completion. Use tools.jobs({ action: "logs", id }) to inspect output after completion or diagnose a running job when needed.',
-		"Pending unclaimed completions wake the idle parent together in one follow-up listing all finished jobs, sent after a short quiet period so jobs finishing close together are grouped. Terminal waits and log reads suppress that wake-up; running log reads do not. Stopped jobs never wake it.",
+		"After starting a job, do other work or finish the turn. Do not repeatedly call wait or status to poll progress.",
+		'Use tools.jobs({ action: "wait", id, waitMs? }) only when the next step depends on completion. Start, status, and wait return outputPath. Use read or bash with rg/tail to inspect that file after completion or diagnose a running job when needed; do not poll the file.',
+		"Pending unclaimed completions wake the idle parent together in one follow-up listing all finished jobs and their output paths, sent after a short quiet period so jobs finishing close together are grouped. Terminal waits suppress that wake-up; status calls and direct file reads do not. Stopped jobs never wake it.",
 		"Output files are temporary and disappear during session cleanup. The sandbox extension is required for every launch.",
 	].join("\n");
 	readonly #jobs = new Map<string, Job>();
@@ -372,32 +356,6 @@ export class JobsProvider implements ActionProvider {
 			}
 			if (job.endedAt) job.claimed = true;
 			return this.#snapshot(job);
-		}
-		if (name === "logs") {
-			const max = bounded(args.maxChars, 4_000, MAX_LOG_CHARS);
-			// Read a bounded tail rather than loading an unbounded watcher log into memory.
-			const file = await open(job.outputPath, "r").catch((error: NodeJS.ErrnoException) => {
-				if (error.code === "ENOENT") return undefined;
-				throw error;
-			});
-			let text = "";
-			let truncated = false;
-			if (file) {
-				try {
-					const size = (await file.stat()).size;
-					const offset = Math.max(0, size - max * 4);
-					const buffer = Buffer.alloc(size - offset);
-					const { bytesRead } = await file.read(buffer, 0, buffer.length, offset);
-					const tail = buffer.subarray(0, bytesRead).toString("utf8");
-					text = tail.slice(-max);
-					truncated = Boolean(job.logTruncated) || offset > 0 || tail.length > max;
-				} finally {
-					await file.close();
-				}
-			}
-			// Claim only the terminal result actually returned, not a running read or a failed read.
-			if (job.endedAt) job.claimed = true;
-			return { ...this.#snapshot(job), text, truncated };
 		}
 		throw new Error(`Unknown jobs action: ${name}`);
 	}

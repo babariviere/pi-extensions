@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { test } from "node:test";
 import { SANDBOX_WRAP_COMMAND_EVENT, type WrapCommandRequest } from "../sandbox/service.ts";
 import { testHost, withParentSession } from "../subagents/test-host.ts";
@@ -85,12 +86,14 @@ test("unclaimed job completions trigger one grouped follow-up after the parent s
 		const content = host.sent[0]?.message.content as string;
 		assert.ok(content.includes(`done (${done.id}): done, exit code 0. Output: ${done.outputPath}`));
 		assert.ok(content.includes(`failed (${failed.id}): failed, exit code 7. Output: ${failed.outputPath}`));
+		assert.match(content, /Use read or bash with rg\/tail on the output paths/);
+		assert.doesNotMatch(content, /action: "logs"/);
 		assert.deepEqual(host.sent[0]?.options, { deliverAs: "followUp", triggerTurn: true });
 		await host.emit("session_shutdown");
 	});
 });
 
-test("terminal jobs logs suppress the follow-up when the parent settles", async () => {
+test("terminal jobs wait suppresses the follow-up when the parent settles", async () => {
 	await withParentSession(async () => {
 		const host = testHost();
 		host.api.events.on(SANDBOX_WRAP_COMMAND_EVENT, (payload) => {
@@ -114,12 +117,12 @@ test("terminal jobs logs suppress the follow-up when the parent settles", async 
 				await new Promise((resolve) => setTimeout(resolve, 10));
 			} while (Date.now() < deadline);
 			assert.equal(state, "done");
-			const result = (await host.execute("jobs", { action: "logs", id: started.id })).structuredContent as {
+			const result = (await host.execute("jobs", { action: "wait", id: started.id })).structuredContent as {
 				state: string;
-				text: string;
+				outputPath: string;
 			};
 			assert.equal(result.state, "done");
-			assert.match(result.text, /already-read/);
+			assert.match(await readFile(result.outputPath, "utf8"), /already-read/);
 			host.setIdle(true);
 			await host.emit("agent_settled");
 			await new Promise((resolve) => setTimeout(resolve, 250));
