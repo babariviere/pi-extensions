@@ -162,7 +162,7 @@ export default async function offlineNative(pi: ExtensionAPI): Promise<void> {
 	});
 	pi.on("before_agent_start", (event) => {
 		event.systemPromptOptions.sections.offline_test = "Native prompt hook is active.";
-		if (event.prompt.includes("recover forced")) {
+		if ("prompt" in event && event.prompt.includes("recover forced")) {
 			const file = join(process.cwd(), "prompt-starts");
 			writeFileSync(file, String((existsSync(file) ? Number(readFileSync(file, "utf8")) : 0) + 1));
 			return { systemPrompt: "forced native policy" };

@@ -48,6 +48,15 @@ import { agentSandboxFloor } from "../sandbox/agent-floor.ts";
 import { runCwd, type RunContext, type RunRequest } from "./run.ts";
 
 type LoaderOptions = ConstructorParameters<typeof DefaultResourceLoader>[0];
+function emitUserStart(runner: AgentSession["extensionRunner"], prompt: string) {
+	const options = runner.createCommandContext().getSystemPromptOptions();
+	// Pi 1.1 takes (prompt, images, options); Pi 1.2 takes (trigger, options).
+	// Keep the compatibility cast at this boundary and preserve the runner receiver.
+	const emit = runner.emitBeforeAgentStart.bind(runner) as (
+		...args: unknown[]
+	) => ReturnType<AgentSession["extensionRunner"]["emitBeforeAgentStart"]>;
+	return emit.length === 3 ? emit(prompt, undefined, options) : emit({ messageType: "user", prompt }, options);
+}
 /** Optional dependency injection for offline tests and worker-owned SDK services. */
 export interface NativeAdapterOptions {
 	agentDir?: string;
@@ -379,10 +388,9 @@ export class NativeAdapter {
 		}
 		const lastUser = messages.filter((m) => m.role === "user").at(-1);
 		const before = new Set(this.session.sessionManager.getEntries().map((entry) => entry.id));
-		const result = await this.session.extensionRunner.emitBeforeAgentStart(
+		const result = await emitUserStart(
+			this.session.extensionRunner,
 			lastUser ? contentText(lastUser.content) : this.request.task,
-			undefined,
-			this.session.extensionRunner.createCommandContext().getSystemPromptOptions(),
 		);
 		this.#forcedPrompt = result.systemPromptOptions.forceSystemPrompt;
 		result.systemPromptOptions.forceSystemPrompt = undefined;

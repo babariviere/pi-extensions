@@ -472,7 +472,10 @@ test("native startup hooks run once per input across model and tool rounds", asy
 	await fixture(async ({ open, start, faux }) => {
 		let starts = 0;
 		const adapter = await open((pi) => {
-			pi.on("before_agent_start", () => {
+			pi.on("before_agent_start", (event) => {
+				assert.ok("prompt" in event);
+				assert.equal(event.prompt, "same input");
+				if ("messageType" in event) assert.equal(event.messageType, "user");
 				starts++;
 				pi.appendEntry("startup", starts);
 				return { systemPrompt: `native policy ${starts}` };
