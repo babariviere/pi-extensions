@@ -3,9 +3,23 @@ import { test } from "node:test";
 import { parseArguments } from "./pi-usage/index.ts";
 
 test("parseArguments defaults to a daily report", () => {
-	const options = parseArguments([]);
+	const options = parseArguments([], {});
 	assert.equal(options.kind, "daily");
 	assert.ok(options.sessionsDir.endsWith("/.pi/agent/sessions"));
+	assert.equal(options.source, "all");
+	assert.ok(options.pilotDir.endsWith("/.local/share/pilot"));
+	assert.equal(options.color, true);
+});
+
+test("parseArguments resolves Pilot directories and source filters", () => {
+	assert.equal(parseArguments([], { PILOT_HOME: "/data/pilot" }).pilotDir, "/data/pilot");
+	assert.equal(parseArguments([], { XDG_DATA_HOME: "/xdg" }).pilotDir, "/xdg/pilot");
+	assert.equal(parseArguments([], { NO_COLOR: "1" }).color, false);
+	const options = parseArguments(["--source", "pilot", "--pilot-dir", "/tmp/pilot", "--no-color"], {});
+	assert.equal(options.source, "pilot");
+	assert.equal(options.pilotDir, "/tmp/pilot");
+	assert.equal(options.color, false);
+	assert.throws(() => parseArguments(["--source", "codex"], {}), /--source requires/);
 });
 
 test("parseArguments accepts report filters", () => {

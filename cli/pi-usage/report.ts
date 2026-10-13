@@ -44,7 +44,12 @@ export function dateKey(timestamp: number, timezone: string): string {
 
 function rowIdentity(kind: ReportKind, record: UsageRecord, timezone: string): { key: string; label: string } {
 	if (kind === "session")
-		return { key: record.sessionId, label: `${record.project} (${record.sessionId.slice(0, 8)})` };
+		return {
+			key: record.sessionId,
+			label: record.sessionTitle
+				? `${record.project} · ${record.sessionTitle}`
+				: `${record.project} (${record.sessionId.slice(0, 8)})`,
+		};
 	const day = dateKey(record.timestamp, timezone);
 	return kind === "monthly" ? { key: day.slice(0, 7), label: day.slice(0, 7) } : { key: day, label: day };
 }
@@ -68,6 +73,7 @@ export interface BuildReportOptions {
 	kind: ReportKind;
 	timezone: string;
 	sessionsDir: string;
+	pilotDir?: string;
 	since?: string;
 	until?: string;
 }
@@ -117,14 +123,22 @@ export function buildReport(scan: ScanResult, options: BuildReportOptions): Usag
 				.map(publicBreakdown)
 				.sort((left, right) => right.totalCost - left.totalCost || left.model.localeCompare(right.model)),
 		}))
-		.sort((left, right) => left.key.localeCompare(right.key));
+		.sort((left, right) =>
+			// Sessions read best chronologically; periods sort naturally by key.
+			options.kind === "session"
+				? left.firstActivity.localeCompare(right.firstActivity) || left.key.localeCompare(right.key)
+				: left.key.localeCompare(right.key),
+		);
 	return {
 		kind: options.kind,
 		timezone: options.timezone,
 		sessionsDir: options.sessionsDir,
+		...(options.pilotDir === undefined ? {} : { pilotDir: options.pilotDir }),
 		files: scan.files,
 		duplicateRecords: scan.duplicateRecords,
 		invalidLines: scan.invalidLines,
+		...(scan.pilotDatabases === undefined ? {} : { pilotDatabases: scan.pilotDatabases }),
+		...(scan.unreadableDatabases === undefined ? {} : { unreadableDatabases: scan.unreadableDatabases }),
 		rows: outputRows,
 		totals: publicBreakdown(totals),
 	};

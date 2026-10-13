@@ -2,10 +2,15 @@ import type { UsageSource } from "../../extensions/shared/usage-accounting.ts";
 
 export type ReportKind = "daily" | "monthly" | "session";
 
+/** Session store a record was read from: pi JSONL files or Pilot durable SQLite databases. */
+export type UsageOrigin = "pi" | "pilot";
+
 export interface UsageRecord {
 	id: string;
+	origin?: UsageOrigin;
 	sessionId: string;
 	project: string;
+	sessionTitle?: string;
 	timestamp: number;
 	provider: string;
 	model: string;
@@ -21,9 +26,14 @@ export interface UsageRecord {
 
 export interface ScanResult {
 	records: UsageRecord[];
+	/** pi JSONL session files scanned. */
 	files: number;
 	duplicateRecords: number;
 	invalidLines: number;
+	/** Pilot durable databases read successfully. */
+	pilotDatabases?: number;
+	/** Pilot durable databases that could not be opened or queried (for example, locked). */
+	unreadableDatabases?: number;
 }
 
 export interface ModelBreakdown {
@@ -52,9 +62,12 @@ export interface UsageReport {
 	kind: ReportKind;
 	timezone: string;
 	sessionsDir: string;
+	pilotDir?: string;
 	files: number;
 	duplicateRecords: number;
 	invalidLines: number;
+	pilotDatabases?: number;
+	unreadableDatabases?: number;
 	rows: ReportRow[];
 	totals: ModelBreakdown;
 }

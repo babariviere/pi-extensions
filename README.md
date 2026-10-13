@@ -203,10 +203,24 @@ Durable subagent token usage stored in child SQLite databases is not automatical
 included in native-parent totals or this JSONL scanner, even though it scans native
 child session files.
 
+It also reads [Pilot](https://github.com/babariviere/pilot) sessions from
+`$PILOT_HOME` (default `${XDG_DATA_HOME:-~/.local/share}/pilot`). Each session's
+`durable/harness.sqlite` and subagent `runs.sqlite` databases are opened read-only,
+and their recorded assistant and tool-result costs are counted. Subagent runs appear
+as their own sessions, labelled with the Pilot project and session title. Responses
+found in both pi and Pilot stores are counted once. Databases that are locked or
+unreadable are skipped and reported below the table. Use `--source pi` or
+`--source pilot` to limit the scan, and `--pilot-dir` to point elsewhere.
+
+Reports render as a boxed table with compact token counts (`12.3K`, `4.56M`) and a
+cost share bar per row. Colors are used on a TTY unless `--no-color` or `NO_COLOR`
+is set. Use `--json` for exact token counts.
+
 ```sh
 pi-usage daily
 pi-usage monthly --breakdown
 pi-usage session --since 2026-09-01
+pi-usage session --source pilot --since 2026-10-01
 pi-usage daily --timezone Europe/Paris --json
 ```
 
