@@ -28,7 +28,20 @@ export interface WorkerConnection {
 }
 export type WorkerFactory = (spec: WorkerSpec, callbacks: WorkerCallbacks) => WorkerConnection;
 
-export const openConversationWorker: WorkerFactory = (spec, callbacks) => {
+// A cold native SDK/extension graph can take longer than ordinary IPC acknowledgments,
+// particularly while several host sessions are starting. Still bound hung initialization.
+export const WORKER_STARTUP_TIMEOUT_MS = 120_000;
+export interface ConversationWorkerDeps {
+	spawn?: typeof spawn;
+	signalProcessTree?: typeof signalProcessTree;
+}
+
+export function openConversationWorker(
+	spec: WorkerSpec,
+	callbacks: WorkerCallbacks,
+	deps: ConversationWorkerDeps = {},
+): WorkerConnection {
+	const signal = deps.signalProcessTree ?? signalProcessTree;
 	mkdirSync(spec.directory, { recursive: true, mode: 0o700 });
 	const night = spec.request.night ? spec.context.nightRun : undefined;
 	if (spec.request.night && !night)
@@ -38,7 +51,7 @@ export const openConversationWorker: WorkerFactory = (spec, callbacks) => {
 	const configHome = night ? undefined : prepareConfigHome(join(spec.directory, "config-home")).path;
 	const args = [fileURLToPath(new URL("./worker-bootstrap.mjs", import.meta.url))];
 	if (spec.request.agent.config.sandbox) args.push(`--${SANDBOX_MODE_FLAG}`, spec.request.agent.config.sandbox);
-	const child = spawn(process.execPath, args, {
+	const child = (deps.spawn ?? spawn)(process.execPath, args, {
 		cwd: runCwd(spec.request, spec.context),
 		detached: true,
 		stdio: ["ignore", "ignore", "pipe", "ipc"],
@@ -72,7 +85,7 @@ export const openConversationWorker: WorkerFactory = (spec, callbacks) => {
 	const end = (error?: Error) => {
 		if (ended) return;
 		ended = true;
-		if (child.exitCode === null && child.signalCode === null) signalProcessTree(child, "SIGKILL");
+		if (child.exitCode === null && child.signalCode === null) signal(child, "SIGKILL");
 		clearTimeout(startTimer);
 		const failure = error ?? new Error(stderr || "Subagent worker closed");
 		exitError = failure;
@@ -90,9 +103,12 @@ export const openConversationWorker: WorkerFactory = (spec, callbacks) => {
 		});
 	};
 	const startTimer = setTimeout(() => {
-		signalProcessTree(child, "SIGKILL");
-		end(new Error(stderr || "Subagent worker startup timed out"));
-	}, 20_000);
+		end(
+			new Error(
+				`Subagent worker startup timed out after ${WORKER_STARTUP_TIMEOUT_MS}ms${stderr ? `:\n${stderr}` : ""}`,
+			),
+		);
+	}, WORKER_STARTUP_TIMEOUT_MS);
 	startTimer.unref();
 	child.stderr?.on("data", (chunk) => {
 		stderr = (stderr + String(chunk)).slice(-16_384);
@@ -162,7 +178,7 @@ export const openConversationWorker: WorkerFactory = (spec, callbacks) => {
 		return new Promise((resolve, reject) => {
 			const timer = setTimeout(() => {
 				pending.delete(packet.id);
-				signalProcessTree(child, "SIGKILL");
+				signal(child, "SIGKILL");
 				const error = new Error(`Subagent ${packet.type} acknowledgment timed out`);
 				reject(error);
 				end(error);
@@ -186,11 +202,11 @@ export const openConversationWorker: WorkerFactory = (spec, callbacks) => {
 				try {
 					send({ type });
 				} catch {
-					signalProcessTree(child, "SIGKILL");
+					signal(child, "SIGKILL");
 				}
-				terminate = setTimeout(() => signalProcessTree(child, "SIGTERM"), 2_000);
+				terminate = setTimeout(() => signal(child, "SIGTERM"), 2_000);
 				kill = setTimeout(() => {
-					signalProcessTree(child, "SIGKILL");
+					signal(child, "SIGKILL");
 					end();
 				}, 4_000);
 				await closed;
@@ -212,4 +228,4 @@ export const openConversationWorker: WorkerFactory = (spec, callbacks) => {
 		pause: () => close("pause"),
 		cancel: () => close("cancel"),
 	};
-};
+}
