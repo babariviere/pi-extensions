@@ -186,3 +186,18 @@ retired rather than replayed as new conversations; their journals are retained
 for inspection. Spawn a new named conversation explicitly after reviewing any
 interrupted effects. Updating packages or configuration does not translate old
 caller scripts automatically.
+## Optional parent artifact capability
+
+An embedding host can advertise `PILOT_ARTIFACT_EXTENSION` (absolute trusted extension entry path)
+and `PILOT_ARTIFACT_PARENT_SESSION_ID` (its native parent session identity). Matching child workers
+load that extension and can send `artifact.call` IPC packets; results return as `artifact.result`.
+The supervisor binds the real parent identity and child name before forwarding through
+`subagents:artifact-call` / `subagents:artifact-result` on the host event bus. The child cannot choose
+another parent or publishing identity. Storage, schemas, read/write policy and transcript publication
+remain the host's responsibility; this package introduces no store or artifact implementation.
+
+The capability is opt-in, bounded to eight concurrent requests per worker, cancelled on parent
+session replacement/shutdown and unavailable outside the advertising host. Calls have a five-minute
+deadline to permit native artifact rendering. Ordinary Pi sessions are unchanged. Hosts should
+drain in-flight publications before closing their conversation storage. Build-mode tools still have
+their normal OS permissions; this is artifact-tool scoping, not an OS security boundary.

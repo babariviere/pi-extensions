@@ -12,6 +12,7 @@ import { readExtensionConfig } from "../shared/config.ts";
 import { DEFAULT_SUBAGENTS_CONFIG, normalizeSubagentsConfig } from "./config.ts";
 import { isChildSession } from "./constants.ts";
 import { inheritedParentModel } from "./parent-model.ts";
+import { requestParentArtifact } from "./artifact-host.ts";
 import {
 	acquireDurableSupervisor,
 	closeDurableSupervisor,
@@ -215,6 +216,12 @@ export default function subagents(pi: ExtensionAPI, deps: SubagentExtensionDeps 
 			const snapshot: SubagentHostSnapshot = { agents: owner.describe() };
 			pi.events.emit(SUBAGENTS_SNAPSHOT_EVENT, snapshot);
 		};
+		const artifacts = new AbortController();
+		hostEvents.push(() => artifacts.abort());
+		if (process.env.PILOT_ARTIFACT_EXTENSION && process.env.PILOT_ARTIFACT_PARENT_SESSION_ID === ref?.sessionId)
+			owner.setArtifactHandler?.((parentSessionId, name, args) =>
+				requestParentArtifact(pi.events, parentSessionId, name, args, artifacts.signal),
+			);
 		const answer = (result: SubagentHostCommandResult) => pi.events.emit(SUBAGENTS_COMMAND_RESULT_EVENT, result);
 		hostEvents.push(
 			pi.events.on(SUBAGENTS_REQUEST_SNAPSHOT_EVENT, publish),

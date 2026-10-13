@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
-import { openConversationWorker, type WorkerConnection } from "./conversation-backend.ts";
+import { openConversationWorker, type WorkerConnection, type WorkerCallbacks } from "./conversation-backend.ts";
 import { builtinAgent } from "./discovery.ts";
 import type { WorkerAnswer, WorkerSpec, WorkerStatus } from "./worker-protocol.ts";
 
@@ -22,7 +22,10 @@ async function withOfflineWorkers(
 	body: (fixture: {
 		directory: string;
 		spec: WorkerSpec;
-		open(spec?: WorkerSpec): {
+		open(
+			spec?: WorkerSpec,
+			artifact?: WorkerCallbacks["artifact"],
+		): {
 			worker: WorkerConnection;
 			answer(id: string): Promise<{ result: WorkerAnswer; status: WorkerStatus }>;
 		};
@@ -71,11 +74,12 @@ async function withOfflineWorkers(
 		await body({
 			directory,
 			spec,
-			open: (launch = spec) => {
+			open: (launch = spec, artifact) => {
 				const answers = new Map<string, { result: WorkerAnswer; status: WorkerStatus }>();
 				let exited = false;
 				let failure: Error | undefined;
 				const worker = openConversationWorker(launch, {
+					artifact,
 					answer: (id, result, status) => answers.set(id, { result, status }),
 					exit: (error) => {
 						exited = true;
@@ -155,6 +159,40 @@ test("selected conversation cwd drives process cwd, native tools and project con
 			await worker.pause();
 		}
 	});
+});
+
+test("advertised parent artifact extension loads in a real worker and routes only through its bound callback", async () => {
+	const previous = {
+		extension: process.env.PILOT_ARTIFACT_EXTENSION,
+		parent: process.env.PILOT_ARTIFACT_PARENT_SESSION_ID,
+	};
+	process.env.PILOT_ARTIFACT_EXTENSION =
+		previous.extension ?? fileURLToPath(new URL("./fixtures/parent-artifact.ts", import.meta.url));
+	process.env.PILOT_ARTIFACT_PARENT_SESSION_ID = "parent";
+	try {
+		await withOfflineWorkers(async ({ open }) => {
+			const calls: unknown[] = [];
+			const first = open(undefined, async (args) => {
+				calls.push(args);
+				return {
+					content: [{ type: "text", text: "PARENT SOURCE" }],
+					details: {},
+					structuredContent: { source: "PARENT SOURCE" },
+				};
+			});
+			await first.worker.ready;
+			await first.worker.input("artifact", "parent artifact probe", false);
+			const { result } = await first.answer("artifact");
+			assert.equal(result.ok, true, result.error ?? "Worker failed");
+			assert.match(result.answer!.text, /PARENT SOURCE/);
+			assert.deepEqual(calls, [{ action: "get", id: "parent-id" }]);
+		});
+	} finally {
+		if (previous.extension === undefined) delete process.env.PILOT_ARTIFACT_EXTENSION;
+		else process.env.PILOT_ARTIFACT_EXTENSION = previous.extension;
+		if (previous.parent === undefined) delete process.env.PILOT_ARTIFACT_PARENT_SESSION_ID;
+		else process.env.PILOT_ARTIFACT_PARENT_SESSION_ID = previous.parent;
+	}
 });
 
 test("persistent worker admits explicit input with real native codemode, structured results and policy hooks", async () => {

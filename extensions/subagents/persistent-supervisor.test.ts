@@ -122,6 +122,23 @@ test("named admissions are journaled before launch, deduplicated, and retain pin
 	});
 });
 
+test("artifact callbacks bind the actual parent and name and are revoked on suspension", async () => {
+	await fixture(async (ref, fake, owner) => {
+		await owner.spawn("review", "scope", "one", policy);
+		const kernel = fake.opened[0]!;
+		const calls: unknown[][] = [];
+		owner.setArtifactHandler(async (...args) => {
+			calls.push(args);
+			return "SOURCE";
+		});
+		const forged = { action: "get", id: "id", name: "forged", parentSessionId: "other" };
+		assert.equal(await kernel.callbacks.artifact!(forged), "SOURCE");
+		assert.deepEqual(calls, [[ref.sessionId, "review", forged]]);
+		owner.suspend();
+		await assert.rejects(kernel.callbacks.artifact!(forged), /unavailable/);
+	});
+});
+
 test("host descriptions expose display state and storage without answer text", async () => {
 	await fixture(async (ref, fake, owner) => {
 		await owner.spawn("review", "scope", "one", policy);

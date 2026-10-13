@@ -13,6 +13,8 @@ import { signalProcessTree } from "./process-tree.ts";
 import type { WorkerAnswer, WorkerCommand, WorkerPacket, WorkerSpec, WorkerStatus } from "./worker-protocol.ts";
 
 export interface WorkerCallbacks {
+	/** Optional host capability, bound by the supervisor to this worker's real parent and name. */
+	artifact?(args: unknown): Promise<unknown>;
 	answer(id: string, result: WorkerAnswer, status: WorkerStatus): void;
 	exit(error?: Error): void;
 }
@@ -51,6 +53,7 @@ export const openConversationWorker: WorkerFactory = (spec, callbacks) => {
 	let ended = false;
 	let exitError: Error | undefined;
 	let closing: Promise<void> | undefined;
+	let artifactRequests = 0;
 	let acceptReady!: (status: WorkerStatus) => void;
 	let rejectReady!: (error: Error) => void;
 	const ready = new Promise<WorkerStatus>((resolve, reject) => {
@@ -107,7 +110,27 @@ export const openConversationWorker: WorkerFactory = (spec, callbacks) => {
 	child.on("message", (message: unknown) => {
 		if (!message || typeof message !== "object") return;
 		const packet = message as WorkerPacket;
-		if (packet.type === "ready") {
+		if (packet.type === "artifact.call") {
+			if (typeof packet.callId !== "string" || packet.callId.length > 128) return;
+			const reply = (result: { result?: unknown; error?: string }) => {
+				if (!ended && child.connected) send({ type: "artifact.result", callId: packet.callId, ...result });
+			};
+			if (!callbacks.artifact || artifactRequests >= 8) {
+				reply({ error: "Parent artifact capability is unavailable or busy" });
+				return;
+			}
+			artifactRequests++;
+			void Promise.resolve()
+				.then(() => callbacks.artifact!(packet.args))
+				.then(
+					(result) => reply({ result }),
+					(error: unknown) => reply({ error: error instanceof Error ? error.message : String(error) }),
+				)
+				.finally(() => {
+					artifactRequests--;
+				})
+				.catch(() => {});
+		} else if (packet.type === "ready") {
 			clearTimeout(startTimer);
 			acceptReady(packet.status);
 		} else if (packet.type === "answer") {

@@ -64,6 +64,11 @@ export default async function offlineNative(pi: ExtensionAPI): Promise<void> {
 				);
 			}
 			const toolResult = [...request.messages].reverse().find((message) => message.role === "toolResult");
+			if (lastUser.includes("parent artifact probe") && !toolResult)
+				return fauxAssistantMessage(
+					[fauxToolCall("codemode", { code: 'text(await tools.artifact({action:"get",id:"parent-id"}));' })],
+					{ stopReason: "toolUse" },
+				);
 			if (lastUser.includes("directory probe")) {
 				const reversed = [...request.messages].reverse();
 				const inputIndex = reversed.findIndex((message) => message.role === "user");
@@ -157,7 +162,7 @@ export default async function offlineNative(pi: ExtensionAPI): Promise<void> {
 	});
 	pi.on("before_agent_start", (event) => {
 		event.systemPromptOptions.sections.offline_test = "Native prompt hook is active.";
-		if (event.prompt.includes("recover forced")) {
+		if ("prompt" in event && event.prompt.includes("recover forced")) {
 			const file = join(process.cwd(), "prompt-starts");
 			writeFileSync(file, String((existsSync(file) ? Number(readFileSync(file, "utf8")) : 0) + 1));
 			return { systemPrompt: "forced native policy" };
