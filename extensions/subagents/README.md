@@ -101,6 +101,12 @@ background Anchor ownership and checkpointed Reporter tasks. Idle workers may
 park without deleting their conversation. SDK peers resolve from the launching
 Pi host, including managed packages without a local SDK installation.
 
+- Worker initialization has a separate two-minute startup deadline for cold SDK
+  and extension loading, including when the host is busy. Ordinary input/status
+  acknowledgments still time out after 20 seconds once ready (stop after 5
+  seconds). Hung startup is killed and reported as a startup timeout, with bounded
+  stderr diagnostics; warnings cannot replace the timeout reason. Pause/cancel
+  teardown remains bounded to four seconds, including during startup.
 - Requires a file-backed parent session. Single-writer ownership is enforced for
   parent and child SQLite storage; storage failures stop admissions, not fall back
   to memory.
