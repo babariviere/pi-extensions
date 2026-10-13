@@ -64,6 +64,11 @@ export default async function offlineNative(pi: ExtensionAPI): Promise<void> {
 				);
 			}
 			const toolResult = [...request.messages].reverse().find((message) => message.role === "toolResult");
+			if (lastUser.includes("parent artifact probe") && !toolResult)
+				return fauxAssistantMessage(
+					[fauxToolCall("codemode", { code: 'text(await tools.artifact({action:"get",id:"parent-id"}));' })],
+					{ stopReason: "toolUse" },
+				);
 			if (lastUser.includes("directory probe")) {
 				const reversed = [...request.messages].reverse();
 				const inputIndex = reversed.findIndex((message) => message.role === "user");

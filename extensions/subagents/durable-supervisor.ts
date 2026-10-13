@@ -135,6 +135,7 @@ export class DurableSupervisor {
 	#tail: Promise<void> = Promise.resolve();
 	#listeners = new Set<() => void>();
 	#sink?: (report: SubagentReport) => void;
+	#artifactHandler?: (parentSessionId: string, name: string, args: unknown) => Promise<unknown>;
 	#readyToAnnounce: () => boolean = () => true;
 	#errorHandler?: (error: unknown) => void;
 	#factory: WorkerFactory;
@@ -181,6 +182,9 @@ export class DurableSupervisor {
 	setErrorHandler(handler?: (error: unknown) => void): void {
 		this.#errorHandler = handler;
 	}
+	setArtifactHandler(handler?: (parentSessionId: string, name: string, args: unknown) => Promise<unknown>): void {
+		this.#artifactHandler = handler;
+	}
 	setSink(sink?: (report: SubagentReport) => void, ready: () => boolean = () => true): void {
 		this.#sink = sink;
 		this.#readyToAnnounce = ready;
@@ -191,6 +195,7 @@ export class DurableSupervisor {
 		return () => this.#listeners.delete(listener);
 	}
 	suspend(): void {
+		this.#artifactHandler = undefined;
 		this.#sink = undefined;
 		this.#errorHandler = undefined;
 		this.#listeners.clear();
@@ -420,6 +425,17 @@ export class DurableSupervisor {
 			let connection: WorkerConnection;
 			try {
 				connection = this.#factory(spec, {
+					artifact: async (args) => {
+						if (
+							!this.#artifactHandler ||
+							this.#closing ||
+							this.#pausing ||
+							this.#closed ||
+							this.#workers.get(record.id)?.connection !== connection
+						)
+							throw new Error("Parent artifact capability is unavailable");
+						return this.#artifactHandler(this.ref.sessionId!, record.name, args);
+					},
 					answer: (id, answer, status) => this.#background(this.#answer(record.name, id, answer, status)),
 					exit: (error) => this.#background(this.#workerExited(record.name, connection, error)),
 				});

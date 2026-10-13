@@ -12,12 +12,16 @@ function fakeOwner() {
 	let sink: ((report: SubagentReport) => void) | undefined;
 	let ready = () => true;
 	let pending: SubagentReport | undefined;
+	let artifact: Parameters<DurableSupervisor["setArtifactHandler"]>[0];
 	const status = { name: "review", state: "idle", conversationId: "8", lastAnswer: { id: "10", text: "completed" } };
 	const record = (action: string, args: any[]) => {
 		calls.push({ action, args });
 		return status;
 	};
 	const owner = {
+		setArtifactHandler(handler: typeof artifact) {
+			artifact = handler;
+		},
 		setErrorHandler() {},
 		setSink(fn: typeof sink, check?: () => boolean) {
 			sink = fn;
@@ -26,6 +30,7 @@ function fakeOwner() {
 		subscribe: () => () => {},
 		suspend: () => {
 			sink = undefined;
+			artifact = undefined;
 		},
 		list: () => [{ name: status.name, state: status.state, conversationId: status.conversationId }],
 		describe: () => [
@@ -47,6 +52,9 @@ function fakeOwner() {
 		owner: owner as unknown as DurableSupervisor,
 		calls,
 		closes,
+		get artifact() {
+			return artifact;
+		},
 		report: (report: SubagentReport) => {
 			pending = report;
 		},
@@ -90,6 +98,38 @@ test("only the upstream single tool schema is registered without legacy caller f
 			["spawn", "send", "stop", "status"],
 		);
 		await host.emit("session_shutdown", { reason: "quit" });
+	});
+});
+
+test("parent artifact forwarding is advertised only for the matching host and aborted on shutdown", async () => {
+	await withParentSession(async () => {
+		const before = { ...process.env };
+		try {
+			process.env.PILOT_ARTIFACT_EXTENSION = "/trusted/extension.ts";
+			process.env.PILOT_ARTIFACT_PARENT_SESSION_ID = "foreign";
+			const foreign = await setup();
+			assert.equal(foreign.fake.artifact, undefined);
+			await foreign.host.emit("session_shutdown", { reason: "quit" });
+			process.env.PILOT_ARTIFACT_PARENT_SESSION_ID = "session";
+			const { host, fake } = await setup();
+			assert.ok(fake.artifact);
+			const off = host.api.events.on("subagents:artifact-call", (data) => {
+				const request = data as { callId: string; parentSessionId: string; name: string; args: unknown };
+				assert.equal(request.parentSessionId, "session");
+				assert.equal(request.name, "review");
+				assert.deepEqual(request.args, { action: "get", id: "id" });
+				host.api.events.emit("subagents:artifact-result", { callId: request.callId, result: { source: "SOURCE" } });
+			});
+			assert.deepEqual(await fake.artifact("session", "review", { action: "get", id: "id" }), { source: "SOURCE" });
+			off();
+			const pending = fake.artifact("session", "review", { action: "list" });
+			const rejected = assert.rejects(pending, /closed/);
+			await host.emit("session_shutdown", { reason: "quit" });
+			await rejected;
+			assert.equal(fake.artifact, undefined);
+		} finally {
+			process.env = before;
+		}
 	});
 });
 

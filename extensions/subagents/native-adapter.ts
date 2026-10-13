@@ -212,6 +212,13 @@ export class NativeAdapter {
 		};
 		const loader = new DefaultResourceLoader({
 			...options.loaderOptions,
+			additionalExtensionPaths: [
+				...(options.loaderOptions?.additionalExtensionPaths ?? []),
+				...(process.env.PILOT_ARTIFACT_EXTENSION &&
+				process.env.PILOT_ARTIFACT_PARENT_SESSION_ID === context.sessionId
+					? [process.env.PILOT_ARTIFACT_EXTENSION]
+					: []),
+			],
 			cwd,
 			agentDir,
 			settingsManager,

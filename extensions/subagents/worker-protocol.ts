@@ -29,9 +29,11 @@ export type WorkerCommand =
 	| { type: "input"; id: string; message: string; followUp: boolean }
 	| { type: "stop"; id: string }
 	| { type: "status"; id: string }
+	| { type: "artifact.result"; callId: string; result?: unknown; error?: string }
 	| { type: "pause" }
 	| { type: "cancel" };
 export type WorkerPacket =
+	| { type: "artifact.call"; callId: string; args: unknown }
 	| { type: "ready"; status: WorkerStatus }
 	| { type: "accepted"; id: string; status: WorkerStatus }
 	| { type: "answer"; id: string; result: WorkerAnswer; status: WorkerStatus }
