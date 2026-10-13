@@ -1,4 +1,4 @@
-/** Host-only model selection. No model or thinking fields are exposed by subagent. */
+/** Subagent model authorization. Host defaults and caller-selected spawn models pass the same guards. */
 import type { Model } from "@earendil-works/pi-ai";
 import { subagentModelPriceError } from "./model-policy.ts";
 import { qualifyModel, stripThinkingSuffix } from "./pi-args.ts";

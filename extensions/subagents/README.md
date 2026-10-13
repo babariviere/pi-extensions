@@ -81,9 +81,12 @@ Read `~/.pi/agent/subagents.json` (or Pi's configured agent directory), then mer
 - `timeoutMs` bounds an active work cycle, not the persistent conversation's age.
   Default 2 hours, range 1 second to 24 hours. Steering and recovery do not reset
   an active deadline; restart downtime counts. New work after idle gets a new cycle.
-- The host selects `defaultModel`, otherwise the parent's resolved **physical**
-  model, and pins it at spawn for subsequent sends and recovery. `defaultThinking`
-  is host policy too. No persona or caller model/thinking overrides exist.
+- A caller may pass `model` on `spawn` (`provider/id` or a bare ID qualified
+  with the parent's provider, optionally with a `:thinking` suffix). Otherwise the
+  host selects `defaultModel`, then the parent's resolved **physical** model. The
+  choice is pinned at spawn for subsequent sends and recovery. `model` is
+  rejected on `send`, `stop` and `status`. `defaultThinking` is host policy.
+  No persona overrides exist.
 - Selection must pass same-provider, `enabledModels`, catalog and price guards.
   Unavailable/unpriced models or reference prices fail closed. The price ceiling
   is the higher input-plus-output rate of `claude-opus-5-5` and `gpt-6.1-sol`.
@@ -177,7 +180,7 @@ must bridge those messages into their own input queue.
 ## Breaking upgrade
 
 The prior `agents_*` tool API is removed, not aliased. Replace it with
-`tools.subagent`; `output`, `reads`, `task`, `model`, `thinking`, `night`,
+`tools.subagent`; `output`, `reads`, `task`, `thinking`, `night`,
 `nightTodoId`, batch and wait arguments are not accepted. Markdown definitions
 are no longer discovered as personas.
 

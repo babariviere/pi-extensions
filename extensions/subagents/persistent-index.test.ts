@@ -89,6 +89,7 @@ test("only the upstream single tool schema is registered without legacy caller f
 			"cwd",
 			"followUp",
 			"message",
+			"model",
 			"name",
 		]);
 		assert.deepEqual(SubagentParameters.required, ["action"]);
@@ -168,6 +169,23 @@ test("cwd is forwarded only on spawn and rejected on send, stop and status", asy
 		for (const action of ["send", "stop", "status"])
 			await assert.rejects(
 				execute({ action, name: "other", message: "work", cwd: "." }),
+				/only supported for spawn/,
+			);
+		assert.equal(fake.calls.length, 1);
+		await host.emit("session_shutdown", { reason: "quit" });
+	});
+});
+
+test("a caller model on spawn overrides host policy and is rejected elsewhere", async () => {
+	await withParentSession(async () => {
+		const { host, fake, execute } = await setup({ defaultModel: "test/default" });
+		await execute({ action: "spawn", name: "review", message: "work", model: " test/cheap " });
+		assert.equal(fake.calls[0]!.args[3].model, "test/cheap");
+		assert.equal(fake.calls[0]!.args[3].parentProvider, "test");
+		await assert.rejects(execute({ action: "spawn", name: "x", message: "work", model: " " }), /non-empty/);
+		for (const action of ["send", "stop", "status"])
+			await assert.rejects(
+				execute({ action, name: "review", message: "work", model: "test/cheap" }),
 				/only supported for spawn/,
 			);
 		assert.equal(fake.calls.length, 1);

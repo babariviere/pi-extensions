@@ -36,6 +36,12 @@ export const SubagentParameters = Type.Object(
 		name: Type.Optional(Type.String()),
 		message: Type.Optional(Type.String()),
 		followUp: Type.Optional(Type.Boolean()),
+		model: Type.Optional(
+			Type.String({
+				description:
+					"Spawn only. Model ID (provider/id or id, optional :thinking suffix). Defaults to host policy. Must use the parent's provider, be in enabledModels and not cost more than claude-opus-5-5 or gpt-6.1-sol. Fixed for sends and recovery.",
+			}),
+		),
 		cwd: Type.Optional(
 			Type.String({
 				description:
@@ -153,7 +159,7 @@ export default function subagents(pi: ExtensionAPI, deps: SubagentExtensionDeps 
 			label: "Subagent",
 			exposure: "codemode",
 			description:
-				"Manage persistent background subagents. spawn needs name and message and accepts an optional cwd (relative to the parent or absolute, fixed for this conversation); send needs name and message and steers unless followUp is true; stop aborts current/queued work but keeps the conversation usable; status takes a name for its latest completed answer and acknowledges that answer's pending notification, or no name for compact summaries. Unread answers arrive automatically. Names identify conversations, not Markdown agent definitions. Model/thinking and lifetime are host policy. Night runs inherit the active host contract, control placement and reject cwd; use ordinary conversation names. Children cannot launch subagents or jobs.",
+				"Manage persistent background subagents. spawn needs name and message and accepts an optional cwd (relative to the parent or absolute, fixed for this conversation) and an optional model (fixed for this conversation; same provider as the parent, in enabledModels and not pricier than claude-opus-5-5 or gpt-6.1-sol); send needs name and message and steers unless followUp is true; stop aborts current/queued work but keeps the conversation usable; status takes a name for its latest completed answer and acknowledges that answer's pending notification, or no name for compact summaries. Unread answers arrive automatically. Names identify conversations, not Markdown agent definitions. Default model/thinking and lifetime are host policy. Night runs inherit the active host contract, control placement and reject cwd; use ordinary conversation names. Children cannot launch subagents or jobs.",
 			parameters: SubagentParameters,
 			annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
 			execute: async (callId, args, signal) => {
@@ -161,6 +167,10 @@ export default function subagents(pi: ExtensionAPI, deps: SubagentExtensionDeps 
 				signal?.throwIfAborted();
 				if (!["spawn", "send", "stop", "status"].includes(args.action)) throw new Error("Unknown subagent action");
 				if (args.cwd !== undefined && args.action !== "spawn") throw new Error("cwd is only supported for spawn");
+				if (args.model !== undefined && args.action !== "spawn")
+					throw new Error("model is only supported for spawn");
+				if (args.model !== undefined && (typeof args.model !== "string" || !args.model.trim()))
+					throw new Error("model must be a non-empty string");
 				let result: unknown;
 				let text: string;
 				if (args.action === "status" && args.name === undefined) {
@@ -188,7 +198,10 @@ export default function subagents(pi: ExtensionAPI, deps: SubagentExtensionDeps 
 								args.message,
 								callId,
 								{
-									model: config.defaultModel ?? (parent ? `${parent.provider}/${parent.id}` : undefined),
+									model:
+										args.model?.trim() ??
+										config.defaultModel ??
+										(parent ? `${parent.provider}/${parent.id}` : undefined),
 									thinking: config.defaultThinking,
 									parentProvider: parent?.provider,
 									models,
