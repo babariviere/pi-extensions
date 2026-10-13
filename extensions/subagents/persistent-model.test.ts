@@ -13,14 +13,18 @@ const models = [
 	model("gpt-6.1-sol", 15, 10),
 	model("cheap", 1, 2),
 	model("expensive", 20, 20),
+	{ id: "cheap", provider: "other", cost: { input: 1, output: 2 } } as Model<any>,
+	{ id: "expensive", provider: "other", cost: { input: 20, output: 20 } } as Model<any>,
 ];
-test("host model is qualified and authorized by provider, availability and price", async () => {
+test("host model is qualified and authorized by availability and price, across providers", async () => {
 	await withParentSession(async () => {
 		const cwd = process.env.PI_CODING_AGENT_DIR!;
 		const choice = { model: "cheap", thinking: "low", parentProvider: "test", models };
 		assert.equal(validateHostModel(choice, cwd).model, "test/cheap");
 		assert.throws(() => validateHostModel({ ...choice, model: undefined }, cwd), /resolved parent model/);
-		assert.throws(() => validateHostModel({ ...choice, model: "other/cheap" }, cwd), /caller's provider/);
+		assert.equal(validateHostModel({ ...choice, model: "other/cheap" }, cwd).model, "other/cheap");
+		assert.throws(() => validateHostModel({ ...choice, model: "other/expensive" }, cwd), /price ceiling/);
+		assert.throws(() => validateHostModel({ ...choice, model: "nowhere/cheap" }, cwd), /unavailable/);
 		assert.throws(() => validateHostModel({ ...choice, model: "missing" }, cwd), /unavailable/);
 		assert.throws(() => validateHostModel({ ...choice, model: "expensive" }, cwd), /price ceiling/);
 		assert.throws(() => validateHostModel({ ...choice, models: models.slice(1) }, cwd), /Cannot enforce/);

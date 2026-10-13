@@ -14,8 +14,6 @@ export interface HostModel {
 export function validateHostModel(choice: HostModel, cwd: string, projectTrusted = false): HostModel {
 	const model = qualifyModel(choice.model, choice.parentProvider);
 	if (!model) throw new Error("Subagents require a host defaultModel or a resolved parent model");
-	if (choice.parentProvider && !model.startsWith(`${choice.parentProvider}/`))
-		throw new Error(`Subagent model '${model}' must use the caller's provider '${choice.parentProvider}'.`);
 	const enabled = readEnabledModels(cwd, projectTrusted);
 	if (
 		enabled.length &&
