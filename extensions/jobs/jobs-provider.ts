@@ -12,6 +12,11 @@ const MAX_JOBS = 20;
 const MAX_HISTORY = 50;
 const MAX_LIFETIME_MS = 2 * 60 * 60_000;
 const MAX_LOG_BYTES = 8 * 1024 * 1024;
+/**
+ * After the shell exits, how long to keep reading stdio before settling. Background descendants
+ * (`server &`, daemons) inherit the pipes and would otherwise keep the job running forever.
+ */
+const STDIO_DRAIN_MS = 500;
 
 /**
  * Completion grouping. A quiet window that resets on each completion, bounded by a hard cap.
@@ -315,6 +320,7 @@ export class JobsProvider implements ActionProvider {
 			const settle = (code: number | null, error?: Error) => {
 				if (job.endedAt) return;
 				if (job.timer) clearTimeout(job.timer);
+				if (drainTimer) clearTimeout(drainTimer);
 				job.endedAt = Date.now();
 				job.exitCode = code;
 				if (error) job.error = error.message;
@@ -325,6 +331,17 @@ export class JobsProvider implements ActionProvider {
 			};
 			child.on("error", (error) => settle(null, error));
 			child.on("close", (code) => settle(code));
+			// `close` waits for every pipe holder. Once the shell itself exited, give its output a
+			// short grace period, then stop reading so lingering descendants cannot hold the job open.
+			let drainTimer: ReturnType<typeof setTimeout> | undefined;
+			child.on("exit", (code) => {
+				drainTimer = setTimeout(() => {
+					child.stdout?.destroy();
+					child.stderr?.destroy();
+					settle(code);
+				}, STDIO_DRAIN_MS);
+				drainTimer.unref?.();
+			});
 			return this.#snapshot(job);
 		}
 		if (name === "status") return [...this.#jobs.values()].map((job) => this.#snapshot(job));
@@ -342,16 +359,21 @@ export class JobsProvider implements ActionProvider {
 			if (job.state === "running") {
 				job.waiters++;
 				let timer: ReturnType<typeof setTimeout> | undefined;
+				let onAbort: (() => void) | undefined;
 				try {
 					await Promise.race([
 						job.finished,
 						new Promise<void>((resolve) => {
 							timer = setTimeout(resolve, bounded(args.waitMs, 30_000, 120_000));
+							onAbort = resolve;
+							context.signal?.addEventListener("abort", onAbort, { once: true });
+							if (context.signal?.aborted) resolve();
 						}),
 					]);
 				} finally {
 					job.waiters--;
 					if (timer) clearTimeout(timer);
+					if (onAbort) context.signal?.removeEventListener("abort", onAbort);
 				}
 			}
 			if (job.endedAt) job.claimed = true;

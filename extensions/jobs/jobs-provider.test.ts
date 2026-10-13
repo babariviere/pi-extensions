@@ -543,3 +543,42 @@ test("settling restarts the grouping window instead of announcing immediately", 
 		await jobs.close();
 	}
 });
+
+test("a job finishes when its shell exits even if a background descendant holds its output", async () => {
+	const jobs = new JobsProvider(
+		async (command) => command,
+		() => {},
+	);
+	try {
+		const started = await start(jobs, "sleep 5 & echo parent-done");
+		const begin = Date.now();
+		const result = (await jobs.invoke("wait", { id: started.id, waitMs: 4_000 }, context)) as JobSnapshot;
+		assert.equal(result.state, "done");
+		assert.equal(result.exitCode, 0);
+		assert.ok(Date.now() - begin < 3_000);
+		assert.match(await readFile(result.outputPath, "utf8"), /parent-done/);
+	} finally {
+		await jobs.close();
+	}
+});
+
+test("wait returns early when its tool call is aborted", async () => {
+	const jobs = new JobsProvider(
+		async (command) => command,
+		() => {},
+	);
+	try {
+		const started = await start(jobs, "sleep 5");
+		const controller = new AbortController();
+		const begin = Date.now();
+		const waiting = jobs.invoke("wait", { id: started.id, waitMs: 4_000 }, {
+			cwd: process.cwd(),
+			signal: controller.signal,
+		} as never) as Promise<JobSnapshot>;
+		setTimeout(() => controller.abort(), 50);
+		assert.equal((await waiting).state, "running");
+		assert.ok(Date.now() - begin < 2_000);
+	} finally {
+		await jobs.close();
+	}
+});

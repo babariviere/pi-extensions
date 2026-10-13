@@ -19,6 +19,7 @@ inspect logs after completion or when diagnosing a running job.
 - `jobs({ action: "status" })`: list live and recent handles, including `outputPath`.
 - `jobs({ action: "wait", id, waitMs? })`: wait up to 30 seconds by default, maximum 120 seconds.
   Returns `outputPath`; a terminal result suppresses the completion notification.
+  Aborting the tool call ends the wait early; the job keeps running.
 - `jobs({ action: "stop", id })`: cancel the job and its subprocess group.
 
 Every job result includes `outputPath`. Use `read` to inspect the file, or `bash`
@@ -56,7 +57,9 @@ conservatively cover all actions, including shell launches and cancellations.
 
 Jobs are owned by the session, not a script, turn or tool-call abort signal.
 They finish on command exit, `jobs({ action: "stop", id })`, session replacement/reload/shutdown, or
-the 2-hour lifetime cap. Child sessions and background agent attempts never
+the 2-hour lifetime cap. A job is finished once its shell exits: output is read for
+another 500 ms, then capture stops, so background processes it left behind (for
+example `server &`) cannot keep the job running. Child sessions and background agent attempts never
 register jobs tools, preventing recursive background workflows.
 
 Pending unclaimed completions are grouped into one follow-up when the parent is
