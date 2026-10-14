@@ -110,7 +110,7 @@ const descriptors: ActionDescriptor[] = [
 	{
 		name: "wait",
 		description:
-			"Legacy bounded wait (default 30 seconds). Prefer ending your turn: even if the next step depends on this job, completion automatically wakes you. Never repeat wait when it returns running. Includes outputPath. A terminal wait claims its result and suppresses the completion wake-up. Cancelling the wait does not stop the job.",
+			"Optional bounded wait (default 30 seconds). Prefer ending your turn when only job completion remains; completion automatically wakes you. Includes outputPath. A terminal wait claims its result and suppresses the completion wake-up. Cancelling the wait does not stop the job.",
 		inputSchema: {
 			type: "object",
 			properties: { id: { type: "string" }, waitMs: { type: "number" } },
@@ -156,7 +156,7 @@ export class JobsProvider implements ActionProvider {
 		"After starting a job, do independent work. If only job completion remains, end your turn, even when your next step depends on it. Unclaimed completion automatically wakes you to continue. Do not repeatedly call wait, list, status, sleep, or read output files to poll progress.",
 		'Use tools.jobs({ action: "list" }) to recover current handles; status is an alias. Handles are runtime-local and disappear on reload/shutdown. An unknown handle cannot be waited on; list once, then use the recorded output path if it still exists. Do not retry an unknown handle.',
 		"Start, list, status, and wait return outputPath. Let jobs capture stdout/stderr instead of redirecting them to another file, so notifications point at useful logs. Use read or bash with rg/tail after completion or to diagnose a running job; do not poll the file.",
-		"wait is retained for compatibility and terminal-result acknowledgement, not as a polling workflow. If it returns running, do other work or end your turn, never wait again. Aborting a wait leaves the session-owned job running and unclaimed.",
+		"Use wait for bounded synchronization or terminal-result acknowledgement, not polling. If it returns running, do other work or end your turn. Aborting a wait leaves the session-owned job running and unclaimed.",
 		"Pending unclaimed completions wake the idle parent together in one follow-up listing all finished jobs and their output paths, sent after a short quiet period so jobs finishing close together are grouped. Terminal waits suppress that wake-up; status calls and direct file reads do not. Stopped jobs never wake it.",
 		"Output files are temporary and disappear during session cleanup. The sandbox extension is required for every launch.",
 	].join("\n");

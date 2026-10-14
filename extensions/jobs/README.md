@@ -19,7 +19,7 @@ Inspect logs after completion or when diagnosing a running job.
 - `jobs({ action: "list" })`: list live and recent handles, including `outputPath`.
 - `jobs({ action: "status" })`: compatibility alias for `list`.
 - `jobs({ action: "wait", id, waitMs? })`: wait up to 30 seconds by default, maximum 120 seconds.
-  Legacy compatibility and terminal-result acknowledgement, not the recommended workflow.
+  Optional bounded synchronization or terminal-result acknowledgement, not polling.
   Returns `outputPath`; a terminal result suppresses the completion notification.
   If it returns `running`, end the turn rather than waiting again. Cancelling a wait
   releases the tool call but does not stop or claim the session-owned job.

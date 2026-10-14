@@ -491,6 +491,11 @@ test("jobs native tools retain structured output schemas and codemode exposure",
 		assert.match(actions.find((action) => action.name === name)!.description, /outputPath/);
 	}
 	assert.match(actions.find((action) => action.name === "wait")!.description, /Prefer ending your turn/);
+	assert.match(actions.find((action) => action.name === "wait")!.description, /Optional bounded wait/);
+	assert.doesNotMatch(
+		tool.description + tool.namespace?.instructions,
+		/legacy|deprecated|retained for compatibility/i,
+	);
 	assert.doesNotMatch(tool.description + tool.namespace?.instructions, /only when the next step depends/i);
 	assert.ok(Value.Check(tool.parameters, { action: "list" }));
 	assert.ok(!Value.Check(tool.parameters, { action: "list", maxChars: 4000 }));
