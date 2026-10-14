@@ -19,6 +19,9 @@ test("managed worker boots without host-provided SDK peers in its extension pack
 			recursive: true,
 			filter: (path) => !path.endsWith(".test.ts") && !path.includes("/fixtures/"),
 		});
+		await cp(fileURLToPath(new URL("../../embedding/", import.meta.url)), join(installed, "embedding"), {
+			recursive: true,
+		});
 		await writeFile(join(installed, "package.json"), JSON.stringify({ type: "module" }));
 		await mkdir(join(installed, "node_modules", "@earendil-works"), { recursive: true });
 		// Only real runtime dependencies are installed. Pi intentionally suppresses SDK peers.

@@ -46,6 +46,8 @@ import {
 } from "@earendil-works/pi-durable";
 import { agentSandboxFloor } from "../sandbox/agent-floor.ts";
 import { runCwd, type RunContext, type RunRequest } from "./run.ts";
+import { EmbeddedResourceLoader } from "../../embedding/resource-loader.mjs";
+import { PILOT_EXTENSION_NAMES } from "../../embedding/profile.mjs";
 
 type LoaderOptions = ConstructorParameters<typeof DefaultResourceLoader>[0];
 function emitUserStart(runner: AgentSession["extensionRunner"], prompt: string) {
@@ -219,7 +221,7 @@ export class NativeAdapter {
 				renderPrompt = () => event.systemPrompt;
 			});
 		};
-		const loader = new DefaultResourceLoader({
+		const loaderOptions: LoaderOptions = {
 			...options.loaderOptions,
 			additionalExtensionPaths: [
 				...(options.loaderOptions?.additionalExtensionPaths ?? []),
@@ -245,8 +247,27 @@ export class NativeAdapter {
 				...(options.loaderOptions?.extensionFactories ?? []),
 				capture,
 			],
-		});
-		await loader.reload({ resolveProjectTrust: async () => context.projectTrusted === true });
+		};
+		const profile = process.env.PILOT_PI_EXTENSIONS_PROFILE;
+		const auth = process.env.PILOT_ANTHROPIC_AUTH_EXTENSION;
+		if (Boolean(profile) !== Boolean(auth)) throw new Error("Incomplete host extension profile");
+		const loader =
+			profile && auth
+				? new EmbeddedResourceLoader(loaderOptions, {
+						projectTrusted: context.projectTrusted === true,
+						requiredPaths: [profile, auth],
+						ownedPackages: {
+							"@babariviere/pi-extensions": [
+								...PILOT_EXTENSION_NAMES.map((name) => `extensions/${name}`),
+								"embedding/pilot.ts",
+								"embedding/child.ts",
+							],
+							"@gotgenes/pi-anthropic-auth": ["*"],
+						},
+					})
+				: new DefaultResourceLoader(loaderOptions);
+		if (loader instanceof EmbeddedResourceLoader) await loader.reload();
+		else await loader.reload({ resolveProjectTrust: async () => context.projectTrusted === true });
 		const failures = loader.getExtensions().errors;
 		if (failures.length)
 			throw new Error(`Native extension loading failed: ${failures.map((e) => e.error).join("; ")}`);

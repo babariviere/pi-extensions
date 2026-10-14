@@ -56,6 +56,27 @@ backend. See [Subagents](extensions/subagents/README.md).
 Optional integrations need their own tools and credentials, including Kagi,
 fnox, Linear, GitHub CLI, jj, Herdr and platform wake-lock facilities.
 
+## Embedding
+
+Normal Pi discovery remains `extensions/*/index.ts`; embedding profiles are not auto-loaded.
+Hosts can use the native-Node-compatible `@babariviere/pi-extensions/profile` exports for absolute
+paths, and load those TypeScript paths through Pi's extension loader (not Node's strip-types loader).
+`pilot` composes sandbox, apply-patch, web, browser, todos, usage, jobs and subagents.
+`child` omits usage polling, jobs and recursive subagents. These are the same individual factories,
+not independent implementations. Optional extensions are still available individually.
+
+`@babariviere/pi-extensions/resource-loader` exports `EmbeddedResourceLoader`, which keeps native
+Pi resource discovery while filtering host-owned package entries before imports or factories run.
+Ownership uses manifest names and canonical paths, including symlinks, not directory names.
+Hosts supply required paths, selected package-relative prefixes (or `*` for every package entry),
+and a project-trust decision. Missing required paths remain loader errors. Reload invalidates native
+extension caches; user settings and unrelated resources are not replaced.
+
+Subagent workers use this loader when both `PILOT_PI_EXTENSIONS_PROFILE` and
+`PILOT_ANTHROPIC_AUTH_EXTENSION` are inherited as absolute host paths. Supplying only one fails closed.
+Without either variable, standalone Pi worker discovery is unchanged. The embedding package does not
+choose or install an auth provider itself; the host pins and supplies its required auth extension.
+
 ## Native codemode and MCP
 
 Pi owns `codemode`, `tool_search`, MCP connections, OAuth, discovery, QuickJS

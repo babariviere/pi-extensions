@@ -972,6 +972,9 @@ test("unchanged managed-package bootstrap binds a real native kernel for persist
 			recursive: true,
 			filter: (path) => !path.endsWith(".test.ts") && !path.includes("/fixtures/"),
 		});
+		await cp(fileURLToPath(new URL("../../embedding/", import.meta.url)), join(installed, "embedding"), {
+			recursive: true,
+		});
 		await writeFile(join(installed, "package.json"), JSON.stringify({ type: "module" }));
 		await mkdir(join(installed, "node_modules", "@earendil-works"), { recursive: true });
 		for (const name of ["chord", "pi-durable"])
