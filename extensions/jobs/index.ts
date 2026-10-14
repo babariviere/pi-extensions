@@ -1,24 +1,29 @@
 /** Standalone session-owned shell jobs. No execution runtime or MCP transport. */
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, SessionShutdownEvent } from "@earendil-works/pi-coding-agent";
 import { actionContext, createActionsTool } from "../shared/action-tools.ts";
 import { sandboxWrapCommand } from "../sandbox/service.ts";
 import { isChildSession } from "../subagents/constants.ts";
 import { JobsProvider, type AnnouncementTiming } from "./jobs-provider.ts";
+import { acquireJobs, closeJobs, type JobsSession } from "./job-owners.ts";
 
 export default function jobs(pi: ExtensionAPI, timing: Partial<AnnouncementTiming> = {}): void {
 	let provider: JobsProvider | undefined;
+	let ref: JobsSession | undefined;
 	let generation = 0;
 	let closing: Promise<void> | undefined;
 	let definition: ReturnType<typeof createActionsTool> | undefined;
 
-	function shutdown(): Promise<void> {
-		if (closing) return closing;
+	function shutdown(reason?: SessionShutdownEvent["reason"]): Promise<void> {
 		generation++;
+		if (closing) return closing;
 		const old = provider;
+		const previousRef = ref;
 		provider = undefined;
+		ref = undefined;
 		if (definition) pi.registerTool({ ...definition, exposure: "hidden" });
 		definition = undefined;
-		const pending = old?.close() ?? Promise.resolve();
+		old?.suspend();
+		const pending = reason !== "reload" && previousRef ? closeJobs(previousRef) : Promise.resolve();
 		closing = pending;
 		void pending
 			.finally(() => {
@@ -28,11 +33,27 @@ export default function jobs(pi: ExtensionAPI, timing: Partial<AnnouncementTimin
 		return pending;
 	}
 
-	pi.on("session_start", async (_event, ctx) => {
-		await shutdown();
-		if (isChildSession()) return;
-		const current = ++generation;
-		const active = new JobsProvider(
+	pi.on("session_start", async (event, ctx) => {
+		const pending = shutdown(event.reason === "reload" ? "reload" : undefined);
+		const current = generation;
+		await pending;
+		if (current !== generation || isChildSession()) return;
+		const session: JobsSession = {
+			cwd: ctx.cwd,
+			sessionId: ctx.sessionManager.getSessionId(),
+			sessionFile: ctx.sessionManager.getSessionFile() || undefined,
+		};
+		ref = session;
+		let active: JobsProvider;
+		try {
+			active = await acquireJobs(session, timing, () => current === generation);
+		} catch (error) {
+			if (current !== generation) return;
+			ref = undefined;
+			throw error;
+		}
+		if (current !== generation) return;
+		active.attach(
 			(command) => sandboxWrapCommand(pi, command),
 			(completed) => {
 				const summary = completed.map(
@@ -50,19 +71,25 @@ export default function jobs(pi: ExtensionAPI, timing: Partial<AnnouncementTimin
 				);
 			},
 			() => current === generation && ctx.isIdle(),
-			undefined,
-			timing,
+			(error) => ctx.ui.notify(`Jobs: ${error.message}`, "error"),
 		);
 		provider = active;
 		const descriptors = await active.list({}, actionContext(ctx, "jobs-startup"));
 		if (current !== generation) return;
-		definition = createActionsTool(active, descriptors);
+		const tool = createActionsTool(active, descriptors);
+		definition = {
+			...tool,
+			execute: (...args) => {
+				if (current !== generation || provider !== active) throw new Error("Jobs runtime is detached");
+				return tool.execute(...args);
+			},
+		};
 		pi.registerTool(definition);
 	});
 	pi.on("agent_settled", () => {
 		provider?.settle();
 	});
-	pi.on("session_shutdown", async () => {
-		await shutdown();
+	pi.on("session_shutdown", async (event) => {
+		await shutdown(event.reason);
 	});
 }

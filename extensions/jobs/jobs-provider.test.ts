@@ -473,7 +473,7 @@ test("jobs native tools retain structured output schemas and codemode exposure",
 	assert.match(tool.description, /If only job completion remains, end your turn/);
 	assert.match(tool.description, /even when your next step depends on it/);
 	assert.match(tool.description, /Do not poll or use shell sleeps/);
-	assert.match(tool.namespace?.instructions ?? "", /Jobs survive turn end, but not shutdown\/reload/);
+	assert.match(tool.namespace?.instructions ?? "", /Jobs survive turn end and reload, not shutdown/);
 	assert.match(tool.namespace?.instructions ?? "", /Terminal waits claim results; list\/status and log reads do not/);
 	assert.ok(tool.description.length < 1_000, "keep the always-listed tool description compact");
 	assert.ok((tool.namespace?.instructions?.length ?? 0) < 1_000, "avoid duplicating the action descriptions");
@@ -707,5 +707,69 @@ test("wait returns early when its tool call is aborted", async () => {
 		assert.ok(Date.now() - begin < 2_000);
 	} finally {
 		await jobs.close();
+	}
+});
+
+test("reload detachment refuses an in-flight launch and prevents an old wait from claiming completion", async () => {
+	let release: (() => void) | undefined;
+	const wrapping = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	const sent: JobSnapshot[] = [];
+	const jobs = new JobsProvider(
+		async (command) => {
+			await wrapping;
+			return command;
+		},
+		() => {},
+		() => false,
+	);
+	try {
+		const pending = start(jobs, "echo must-not-launch");
+		await sleep(20);
+		jobs.suspend();
+		jobs.attach(
+			async (command) => command,
+			(batch) => sent.push(...batch),
+			() => false,
+			() => {},
+		);
+		release!();
+		await assert.rejects(pending, /detached/);
+		assert.deepEqual(await jobs.invoke("list", {}, context), []);
+		const job = await start(jobs, "sleep 0.1; echo ready");
+		const waiting = jobs.invoke("wait", { id: job.id }, context);
+		jobs.suspend();
+		jobs.attach(
+			async (command) => command,
+			(batch) => sent.push(...batch),
+			() => false,
+			() => {},
+		);
+		assert.equal(((await waiting) as JobSnapshot).state, "done");
+		jobs.canAnnounce = () => true;
+		jobs.flushCompletions();
+		assert.deepEqual(
+			sent.map((done) => done.id),
+			[job.id],
+		);
+	} finally {
+		release?.();
+		await jobs.close();
+	}
+});
+
+test("NUL commands are refused before admission, including NUL introduced by sandbox wrapping", async () => {
+	for (const wrapped of [false, true]) {
+		const jobs = new JobsProvider(
+			async (command) => (wrapped ? `${command}\0` : command),
+			() => {},
+		);
+		try {
+			await assert.rejects(start(jobs, wrapped ? "echo safe" : "echo \0"), /NUL/);
+			assert.deepEqual(await jobs.invoke("list", {}, context), []);
+		} finally {
+			await jobs.close();
+		}
 	}
 });

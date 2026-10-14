@@ -1,6 +1,6 @@
 # Background jobs
 
-Standalone session-owned shell jobs for Pi 1.1 or newer. The standalone sandbox
+Standalone session-owned shell jobs for Pi 1.1 or newer and Node.js 24+. The standalone sandbox
 extension is required, even when sandbox policy is off. Every launch requests a
 sandbox-wrapped command through `sandboxWrapCommand(pi, command)`; missing or
 failed policy services refuse launch rather than falling back to an unchecked shell.
@@ -56,14 +56,33 @@ conservatively cover all actions, including shell launches and cancellations.
 ## Lifetime and limits
 
 Jobs are owned by the session, not a script, turn or tool-call abort signal.
-Handles are runtime-local, not durable across reloads or worker restarts. An unknown
-handle fails immediately. List once to find current jobs, or inspect the previously
-recorded output path if it still exists; do not keep waiting on an unknown handle.
-They finish on command exit, `jobs({ action: "stop", id })`, session replacement/reload/shutdown, or
+Running jobs survive `/reload`: the new extension reconnects to the same process-local
+owner, preserving handles, output capture and the original lifetime deadline. Existing
+jobs retain their implementation until they finish; new launches use the reloaded sandbox
+service. Detached runtimes cannot launch jobs or send completion notifications.
+They finish on command exit, `jobs({ action: "stop", id })`, session replacement/shutdown, or
 the 2-hour lifetime cap. A job is finished once its shell exits: output is read for
 another 500 ms, then capture stops, so background processes it left behind (for
 example `server &`) cannot keep the job running. Child sessions and background agent attempts never
 register jobs tools, preventing recursive background workflows.
+
+File-backed sessions persist handles, terminal status, logs and completion acknowledgements
+under `<session-file>.jobs/<session-identity>/`. Resume the same session to inspect them;
+switching or forking does not transfer jobs to the destination session. Quit still cancels
+running commands and their subprocess groups, rather than keeping a shell service alive.
+Unclaimed completed results remain available for notification on resume.
+
+After a hard crash, an unfinished persisted launch becomes **`interrupted`**, with an
+unknown exit code. Recovery never reruns a command or kills a recorded PID. The command
+may already have changed files or external systems, and a hard crash may leave subprocesses
+alive. Inspect output and side effects before explicitly starting another job. Admission
+is recorded before spawning, so an interrupted record can also represent a command that
+never started. This is durable tracking, not process supervision or exactly-once execution.
+
+An unknown handle fails immediately. List once to find retained handles, or inspect its
+previously recorded output path; do not keep waiting on an unknown handle. Sessions without
+a backing file retain process-local handles across reload only, and delete temporary logs
+on shutdown.
 
 Pending unclaimed completions are grouped into one follow-up when the parent is
 idle, listing each finished job's name, handle, state, exit code, and output path.
@@ -79,12 +98,20 @@ collected when the parent settles, which restarts the same grouping window so jo
 exiting right after the turn join them.
 A terminal wait claims its result and suppresses that wake-up. Reading the output
 file does not claim completion, even after exit. Stopped jobs never wake the model.
+For persistent sessions, a notification receipt is committed before delivery (**at-most-once**).
+A crash or failed delivery can lose the wake-up, but status and logs remain readable.
+Storage failures disable new launches and completion acknowledgements, not silently fall
+back to memory. One process owns a session's journal at a time; a competing owner is refused.
 Use `read` or `bash` with `rg`/`tail` to inspect completion output;
 notifications contain the handle and output path, not an unbounded log.
 
 Defaults are unchanged and are not configurable: maximum 20 live jobs, 50 recent
 terminal handles, 8 MiB captured output per job, and the limits above. `cwd` must
 be an existing absolute directory; omitted `cwd` uses the tool context directory.
-Output files live in temporary directories and are deleted during session cleanup.
+Persistent storage directories are private (0700), with database and log files private
+(0600). Logs can contain secrets. Persistent logs are retained even after a handle leaves
+the 50-result history; no TTL or automatic log deletion applies. Remove a session's `.jobs`
+directory only after its owner has stopped if you want to discard this history. In-memory
+sessions instead use temporary directories deleted during session cleanup.
 The shell inherits the host environment, so sandbox policy is a filesystem/process
 guardrail, not credential isolation. Tool annotations are hints, not permission grants.

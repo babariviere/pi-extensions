@@ -1,12 +1,13 @@
 /** Session-owned shell jobs. No QuickJS promise or tool-call abort signal owns a job. */
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { createWriteStream, type WriteStream } from "node:fs";
+import { closeSync, createWriteStream, type WriteStream } from "node:fs";
 import { mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { terminateProcessTree } from "../subagents/process-tree.ts";
 import type { ActionDescriptor, ActionContext, ActionProvider, ActionListRequest } from "../shared/action-tools.ts";
+import type { JobsStorage } from "./job-storage.ts";
 
 const MAX_JOBS = 20;
 const MAX_HISTORY = 50;
@@ -40,7 +41,7 @@ export const DEFAULT_ANNOUNCEMENT_TIMING: AnnouncementTiming = {
 	maxDelayMs: 10_000,
 };
 
-type JobState = "running" | "done" | "failed" | "cancelled";
+type JobState = "running" | "done" | "failed" | "cancelled" | "interrupted";
 export interface JobSnapshot {
 	id: string;
 	name: string;
@@ -53,8 +54,8 @@ export interface JobSnapshot {
 	logTruncated?: boolean;
 }
 interface Job extends JobSnapshot {
-	child: ChildProcess;
-	output: WriteStream;
+	child?: ChildProcess;
+	output?: WriteStream;
 	finished: Promise<void>;
 	resolve(): void;
 	claimed: boolean;
@@ -62,6 +63,7 @@ interface Job extends JobSnapshot {
 	loggedBytes: number;
 	finishedWriting: boolean;
 	timer?: ReturnType<typeof setTimeout>;
+	dispose?(): void;
 }
 export type JobCompletionSink = (jobs: JobSnapshot[]) => void;
 
@@ -70,7 +72,7 @@ const jobOutputSchema = {
 	properties: {
 		id: { type: "string" },
 		name: { type: "string" },
-		state: { type: "string", enum: ["running", "done", "failed", "cancelled"] },
+		state: { type: "string", enum: ["running", "done", "failed", "cancelled", "interrupted"] },
 		startedAt: { type: "number" },
 		endedAt: { type: "number" },
 		exitCode: { type: ["number", "null"] },
@@ -84,7 +86,7 @@ const jobOutputSchema = {
 const descriptors: ActionDescriptor[] = [
 	{
 		name: "start",
-		description: "Launch a named command, capturing stdout/stderr in temporary outputPath.",
+		description: "Launch a named command, capturing stdout/stderr in outputPath.",
 		inputSchema: {
 			type: "object",
 			properties: { name: { type: "string" }, command: { type: "string" }, cwd: { type: "string" } },
@@ -149,17 +151,23 @@ export class JobsProvider implements ActionProvider {
 		"Session-owned shell jobs for long-running commands only. Use bash for short commands. If only job completion remains, end your turn, even when your next step depends on it; completion wakes you. Do not poll or use shell sleeps.";
 	readonly instructions = [
 		"Use codemode with Promise.allSettled for independent tool calls; parallelism alone does not require jobs.",
-		"Jobs survive turn end, but not shutdown/reload; maximum lifetime is 2 hours. Handles are runtime-local. For an unknown handle, list once to recover current jobs; do not retry it.",
+		"Jobs survive turn end and reload, not shutdown; maximum lifetime is 2 hours. File-backed sessions retain handles and logs. Crash recovery marks unfinished jobs interrupted, never reruns commands. For an unknown handle, list once; do not retry it.",
 		"Unclaimed completions are grouped while idle. Terminal waits claim results; list/status and log reads do not. Aborting wait leaves the job running and unclaimed.",
-		"Let jobs capture stdout/stderr. Use read or bash with rg/tail on outputPath; temporary logs are deleted on shutdown. Every launch requires the sandbox extension.",
+		"Let jobs capture stdout/stderr. Use read or bash with rg/tail on outputPath. Persistent logs survive shutdown; in-memory sessions use temporary logs. Every launch requires the sandbox extension.",
 	].join("\n");
 	readonly #jobs = new Map<string, Job>();
 	#closing = false;
+	#closed = false;
+	#closePromise?: Promise<void>;
+	#attachment = 0;
+	#active = true;
+	#storageError?: Error;
 	#announcementTimer?: ReturnType<typeof setTimeout>;
 	#windowStartedAt?: number;
-	readonly wrapCommand: (command: string) => Promise<string>;
-	readonly sink: JobCompletionSink;
-	readonly canAnnounce: () => boolean;
+	wrapCommand: (command: string) => Promise<string>;
+	sink: JobCompletionSink;
+	canAnnounce: () => boolean;
+	onError: (error: Error) => void = () => {};
 	readonly onChange: () => void;
 	readonly timing: AnnouncementTiming;
 
@@ -169,12 +177,95 @@ export class JobsProvider implements ActionProvider {
 		canAnnounce = () => true,
 		onChange = () => {},
 		timing: Partial<AnnouncementTiming> = {},
+		readonly storage?: JobsStorage,
 	) {
 		this.wrapCommand = wrapCommand;
 		this.sink = sink;
 		this.canAnnounce = canAnnounce;
 		this.onChange = onChange;
 		this.timing = { ...DEFAULT_ANNOUNCEMENT_TIMING, ...timing };
+		if (storage) {
+			for (const { snapshot, claimed } of storage.load()) {
+				const recovered = { ...snapshot };
+				if (recovered.state === "running") {
+					recovered.state = "interrupted";
+					recovered.endedAt = Date.now();
+					recovered.exitCode = null;
+					recovered.error =
+						"Pi stopped before completion was recorded. The command may have produced side effects or left subprocesses alive. Inspect output before starting it again; it was not rerun.";
+				} else if (!recovered.endedAt) recovered.endedAt = Date.now();
+				this.#jobs.set(recovered.id, {
+					...recovered,
+					claimed,
+					finished: Promise.resolve(),
+					resolve() {},
+					waiters: 0,
+					loggedBytes: 0,
+					finishedWriting: true,
+				});
+			}
+			this.#prune();
+			this.#persist();
+		}
+	}
+
+	/** Rebind runtime services after reload. Existing processes keep their original command and deadline. */
+	attach(
+		wrapCommand: JobsProvider["wrapCommand"],
+		sink: JobCompletionSink,
+		canAnnounce: () => boolean,
+		onError: (error: Error) => void,
+	): void {
+		this.#attachment++;
+		this.#active = true;
+		this.wrapCommand = wrapCommand;
+		this.sink = sink;
+		this.canAnnounce = canAnnounce;
+		this.onError = onError;
+		if (this.#storageError) onError(this.#storageError);
+		this.settle();
+	}
+
+	/** Detach stale runtime callbacks without cancelling session-owned jobs. */
+	suspend(): void {
+		this.#attachment++;
+		this.#active = false;
+		this.wrapCommand = async () => {
+			throw new Error("Jobs runtime is detached");
+		};
+		this.sink = () => {};
+		this.canAnnounce = () => false;
+		this.onError = () => {};
+		if (this.#announcementTimer) clearTimeout(this.#announcementTimer);
+		this.#announcementTimer = undefined;
+		this.#windowStartedAt = undefined;
+	}
+
+	#persist(): void {
+		if (this.#closed || !this.storage) return;
+		if (this.#storageError) throw this.#storageError;
+		try {
+			this.storage.save(
+				[...this.#jobs.values()].map((job) => ({ snapshot: this.#snapshot(job), claimed: job.claimed })),
+			);
+		} catch (cause) {
+			this.#storageError = new Error(
+				"Jobs storage failed; new launches and completion acknowledgements are disabled",
+				{ cause },
+			);
+			try {
+				this.onError(this.#storageError);
+			} catch {}
+			throw this.#storageError;
+		}
+	}
+
+	#persistEvent(): void {
+		try {
+			this.#persist();
+		} catch {
+			/* Reported through onError; never throw from process callbacks. */
+		}
 	}
 
 	running(): JobSnapshot[] {
@@ -185,11 +276,16 @@ export class JobsProvider implements ActionProvider {
 	flushCompletions(): void {
 		if (this.#announcementTimer) clearTimeout(this.#announcementTimer);
 		this.#announcementTimer = undefined;
-		if (this.#closing || !this.canAnnounce()) return;
+		if (this.#closing || this.#storageError || !this.canAnnounce()) return;
 		const completed = this.#pending();
 		this.#windowStartedAt = undefined;
 		if (!completed.length) return;
 		for (const job of completed) job.claimed = true;
+		try {
+			this.#persist();
+		} catch {
+			return;
+		}
 		try {
 			this.sink(completed.map((job) => this.#snapshot(job)));
 		} catch {
@@ -202,7 +298,7 @@ export class JobsProvider implements ActionProvider {
 	 * right after the turn join completions collected during it.
 	 */
 	settle(): void {
-		if (this.#closing || !this.#pending().length) return;
+		if (this.#closing || !this.#active || this.#storageError || !this.#pending().length) return;
 		this.#windowStartedAt = Date.now();
 		this.#scheduleAnnouncement();
 	}
@@ -213,7 +309,7 @@ export class JobsProvider implements ActionProvider {
 
 	/** (Re)arm the announcement: wait for a quiet period, capped from the start of the window. */
 	#scheduleAnnouncement(): void {
-		if (this.#closing) return;
+		if (this.#closing || !this.#active || this.#storageError) return;
 		if (this.#announcementTimer) clearTimeout(this.#announcementTimer);
 		const now = Date.now();
 		this.#windowStartedAt ??= now;
@@ -243,8 +339,17 @@ export class JobsProvider implements ActionProvider {
 	}
 
 	async invoke(name: string, args: Record<string, unknown>, context: ActionContext): Promise<unknown> {
+		if (this.#closed) throw new Error("Jobs session is closed");
+		const attachment = this.#attachment;
 		if (name === "start") {
-			if (this.#closing) throw new Error("Session is shutting down");
+			const checkLaunch = () => {
+				if (this.#closing || !this.#active || attachment !== this.#attachment)
+					throw new Error("Jobs runtime is shutting down or detached");
+				if (this.#storageError) throw this.#storageError;
+				if ([...this.#jobs.values()].filter((job) => job.state === "running").length >= MAX_JOBS)
+					throw new Error(`At most ${MAX_JOBS} jobs may run at once`);
+			};
+			checkLaunch();
 			if (
 				typeof args.name !== "string" ||
 				!args.name.trim() ||
@@ -252,33 +357,33 @@ export class JobsProvider implements ActionProvider {
 				!args.command.trim()
 			)
 				throw new Error("jobs.start requires non-empty name and command");
-			if ([...this.#jobs.values()].filter((job) => job.state === "running").length >= MAX_JOBS)
-				throw new Error(`At most ${MAX_JOBS} jobs may run at once`);
+			if (args.command.includes("\0")) throw new Error("jobs.start command cannot contain NUL characters");
 			const cwd = args.cwd ?? context.cwd;
 			if (typeof cwd !== "string" || !isAbsolute(cwd) || !(await stat(cwd).catch(() => undefined))?.isDirectory())
 				throw new Error("jobs.start cwd must be an existing absolute directory");
 			const command = await this.wrapCommand(args.command);
-			if (this.#closing) throw new Error("Session is shutting down");
-			const dir = await mkdtemp(join(tmpdir(), "pi-job-"));
-			if (this.#closing) {
-				await rm(dir, { recursive: true, force: true });
-				throw new Error("Session is shutting down");
+			checkLaunch();
+			if (command.includes("\0")) throw new Error("Sandbox-wrapped command cannot contain NUL characters");
+			const id = randomUUID();
+			const dir = this.storage ? undefined : await mkdtemp(join(tmpdir(), "pi-job-"));
+			try {
+				checkLaunch();
+			} catch (error) {
+				if (dir) await rm(dir, { recursive: true, force: true });
+				throw error;
 			}
-			const outputPath = join(dir, "output.log");
-			const output = createWriteStream(outputPath, { flags: "a" });
-			const child = spawn("bash", ["-c", command], { cwd, detached: true, stdio: ["ignore", "pipe", "pipe"] });
+			const capture = this.storage?.createOutput(id);
+			const outputPath = capture?.outputPath ?? join(dir!, "output.log");
 			let resolve = () => {};
 			const finished = new Promise<void>((done) => {
 				resolve = done;
 			});
 			const job: Job = {
-				id: randomUUID(),
+				id,
 				name: args.name,
 				state: "running",
 				startedAt: Date.now(),
 				outputPath,
-				child,
-				output,
 				finished,
 				resolve,
 				claimed: false,
@@ -286,6 +391,41 @@ export class JobsProvider implements ActionProvider {
 				loggedBytes: 0,
 				finishedWriting: false,
 			};
+			this.#jobs.set(job.id, job);
+			try {
+				this.#persist();
+			} catch (error) {
+				this.#jobs.delete(job.id);
+				if (capture) closeSync(capture.fd);
+				if (dir) await rm(dir, { recursive: true, force: true });
+				throw error;
+			}
+			// Admission is committed before the shell can produce any side effects.
+			let output: WriteStream;
+			let child: ChildProcess;
+			try {
+				output = createWriteStream(outputPath, capture ? { fd: capture.fd } : { flags: "a", mode: 0o600 });
+				job.output = output;
+				child = spawn("bash", ["-c", command], { cwd, detached: true, stdio: ["ignore", "pipe", "pipe"] });
+			} catch (error) {
+				// A synchronous setup failure has no shell to emit exit/close events.
+				if (job.output) {
+					job.output.on("error", () => {});
+					job.output.destroy();
+				} else if (capture) closeSync(capture.fd);
+				job.state = "failed";
+				job.endedAt = Date.now();
+				job.exitCode = null;
+				job.error = error instanceof Error ? error.message : String(error);
+				job.finishedWriting = true;
+				job.resolve();
+				this.#prune();
+				this.#persistEvent();
+				this.#scheduleAnnouncement();
+				throw error;
+			}
+			job.child = child;
+			job.output = output;
 			const recordOutput = (chunk: Buffer) => {
 				const remaining = MAX_LOG_BYTES - job.loggedBytes;
 				if (remaining > 0) {
@@ -302,8 +442,9 @@ export class JobsProvider implements ActionProvider {
 				if (finalized || !job.endedAt) return;
 				finalized = true;
 				job.finishedWriting = true;
-				job.resolve();
 				this.#prune();
+				this.#persistEvent();
+				job.resolve();
 				this.#scheduleAnnouncement();
 			};
 			output.on("error", (error) => {
@@ -316,7 +457,6 @@ export class JobsProvider implements ActionProvider {
 				terminateProcessTree(child);
 			}, MAX_LIFETIME_MS);
 			job.timer.unref?.();
-			this.#jobs.set(job.id, job);
 			this.onChange();
 			const settle = (code: number | null, error?: Error) => {
 				if (job.endedAt) return;
@@ -335,6 +475,13 @@ export class JobsProvider implements ActionProvider {
 			// `close` waits for every pipe holder. Once the shell itself exited, give its output a
 			// short grace period, then stop reading so lingering descendants cannot hold the job open.
 			let drainTimer: ReturnType<typeof setTimeout> | undefined;
+			job.dispose = () => {
+				if (drainTimer) clearTimeout(drainTimer);
+				if (job.timer) clearTimeout(job.timer);
+				child.stdout?.destroy();
+				child.stderr?.destroy();
+				output.destroy();
+			};
 			child.on("exit", (code) => {
 				drainTimer = setTimeout(() => {
 					child.stdout?.destroy();
@@ -353,7 +500,11 @@ export class JobsProvider implements ActionProvider {
 				job.state = "cancelled";
 				job.claimed = true;
 				this.onChange();
-				terminateProcessTree(job.child);
+				try {
+					this.#persist();
+				} finally {
+					if (job.child) terminateProcessTree(job.child);
+				}
 			}
 			return this.#snapshot(job);
 		}
@@ -376,7 +527,6 @@ export class JobsProvider implements ActionProvider {
 						void job.finished.then(resolve);
 						if (signal?.aborted) abort();
 					});
-					if (job.finishedWriting && !signal?.aborted) job.claimed = true;
 				} finally {
 					job.waiters--;
 					if (timer) clearTimeout(timer);
@@ -384,7 +534,10 @@ export class JobsProvider implements ActionProvider {
 					if (this.#pending().length) this.#scheduleAnnouncement();
 				}
 			}
-			if (job.finishedWriting && !context.signal?.aborted) job.claimed = true;
+			if (job.finishedWriting && !context.signal?.aborted && this.#active && attachment === this.#attachment) {
+				job.claimed = true;
+				this.#persist();
+			}
 			return this.#snapshot(job);
 		}
 		throw new Error(`Unknown jobs action: ${name}`);
@@ -394,7 +547,7 @@ export class JobsProvider implements ActionProvider {
 		const job = typeof id === "string" ? this.#jobs.get(id) : undefined;
 		if (!job)
 			throw new Error(
-				`Unknown job: ${String(id)}. Use jobs({ action: "list" }) to find current handles; jobs do not survive reload/shutdown. Do not retry this handle.`,
+				`Unknown job: ${String(id)}. Use jobs({ action: "list" }) to find current handles; older handles may have been pruned. Do not retry this handle.`,
 			);
 		return job;
 	}
@@ -412,24 +565,28 @@ export class JobsProvider implements ActionProvider {
 		};
 	}
 	#prune(): void {
-		const finished = [...this.#jobs.values()].filter((job) => job.endedAt);
+		const finished = [...this.#jobs.values()].filter((job) => job.finishedWriting && job.waiters === 0);
 		for (const job of finished.slice(0, Math.max(0, finished.length - MAX_HISTORY))) this.#jobs.delete(job.id);
 	}
-	async close(): Promise<void> {
+	close(): Promise<void> {
+		return (this.#closePromise ??= this.#close());
+	}
+	async #close(): Promise<void> {
 		this.#closing = true;
-		if (this.#announcementTimer) clearTimeout(this.#announcementTimer);
-		this.#announcementTimer = undefined;
-		this.#windowStartedAt = undefined;
-		const running = [...this.#jobs.values()].filter((job) => job.state === "running");
-		for (const job of running) {
-			job.state = "cancelled";
-			job.claimed = true;
-			terminateProcessTree(job.child);
+		this.suspend();
+		const unfinished = [...this.#jobs.values()].filter((job) => !job.finishedWriting);
+		for (const job of unfinished) {
+			if (job.state === "running") {
+				job.state = "cancelled";
+				job.claimed = true;
+			}
 		}
+		this.#persistEvent();
+		for (const job of unfinished) if (job.child) terminateProcessTree(job.child);
 		let timer: ReturnType<typeof setTimeout> | undefined;
 		try {
 			await Promise.race([
-				Promise.all(running.map((job) => job.finished)),
+				Promise.all(unfinished.map((job) => job.finished)),
 				new Promise<void>((resolve) => {
 					timer = setTimeout(resolve, 5_000);
 				}),
@@ -437,9 +594,21 @@ export class JobsProvider implements ActionProvider {
 		} finally {
 			if (timer) clearTimeout(timer);
 		}
-		await Promise.allSettled(
-			[...this.#jobs.values()].map((job) => rm(join(job.outputPath, ".."), { recursive: true, force: true })),
-		);
+		for (const job of unfinished) {
+			job.dispose?.();
+			if (!job.finishedWriting) {
+				job.endedAt ??= Date.now();
+				job.finishedWriting = true;
+				job.resolve();
+			}
+		}
+		this.#persistEvent();
+		this.#closed = true;
+		if (this.storage) this.storage.close();
+		else
+			await Promise.allSettled(
+				[...this.#jobs.values()].map((job) => rm(join(job.outputPath, ".."), { recursive: true, force: true })),
+			);
 		this.#jobs.clear();
 	}
 }
