@@ -9,22 +9,27 @@ failed policy services refuse launch rather than falling back to an unchecked sh
 
 Use jobs only for long-running commands. Use regular `bash` for short commands
 and `codemode` with `Promise.allSettled` to run independent tool calls in parallel.
-Parallelism alone is not a reason to start jobs. After starting jobs, do other work
-or finish the turn and rely on automatic completion notifications.
-Do not repeatedly poll `wait`, `status`, or output files.
-Use `wait` only when the next step genuinely depends on a job finishing, and
-inspect logs after completion or when diagnosing a running job.
+Parallelism alone is not a reason to start jobs. After starting jobs, do independent
+work. If only job completion remains, **end the turn**, even when the next step
+depends on it. Completion automatically wakes the agent to continue. Do not poll
+`wait`, `list`, `status`, output files, or use shell sleeps to keep the turn alive.
+Inspect logs after completion or when diagnosing a running job.
 
 - `jobs({ action: "start", name, command, cwd? })`: launch a named Bash command.
-- `jobs({ action: "status" })`: list live and recent handles, including `outputPath`.
+- `jobs({ action: "list" })`: list live and recent handles, including `outputPath`.
+- `jobs({ action: "status" })`: compatibility alias for `list`.
 - `jobs({ action: "wait", id, waitMs? })`: wait up to 30 seconds by default, maximum 120 seconds.
+  Legacy compatibility and terminal-result acknowledgement, not the recommended workflow.
   Returns `outputPath`; a terminal result suppresses the completion notification.
-  Aborting the tool call ends the wait early; the job keeps running.
+  If it returns `running`, end the turn rather than waiting again. Cancelling a wait
+  releases the tool call but does not stop or claim the session-owned job.
 - `jobs({ action: "stop", id })`: cancel the job and its subprocess group.
 
-Every job result includes `outputPath`. Use `read` to inspect the file, or `bash`
+Every job result includes `outputPath`. Let jobs capture stdout/stderr instead of
+redirecting them elsewhere, so this path and completion notifications contain useful
+logs. Use `read` to inspect the file, or `bash`
 with `rg` to search it or `tail` to read its end. The `logs` action has been removed;
-use these existing file tools instead. Status calls and direct file reads do not
+use these existing file tools instead. List/status calls and direct file reads do not
 acknowledge completion or suppress pending notifications; a terminal `wait` does.
 
 This tool has native `codemode` exposure, annotation hints, output schemas and
@@ -40,13 +45,11 @@ return job;
 // Do other work or finish the turn. A follow-up will announce completion.
 ```
 
-When the next step depends on completion, wait and read the returned output path:
+On the automatic completion follow-up, inspect its output path and continue the
+dependent work. To recover current handles for diagnostics (not polling):
 
 ```ts
-const result = await tools.jobs({ action: "wait", id });
-if (result.state !== "running") {
-	text(await tools.read({ path: result.outputPath }));
-}
+text(await tools.jobs({ action: "list" }));
 ```
 
 The `action` parameter is required, with arguments validated for that action.
@@ -56,6 +59,9 @@ conservatively cover all actions, including shell launches and cancellations.
 ## Lifetime and limits
 
 Jobs are owned by the session, not a script, turn or tool-call abort signal.
+Handles are runtime-local, not durable across reloads or worker restarts. An unknown
+handle fails immediately. List once to find current jobs, or inspect the previously
+recorded output path if it still exists; do not keep waiting on an unknown handle.
 They finish on command exit, `jobs({ action: "stop", id })`, session replacement/reload/shutdown, or
 the 2-hour lifetime cap. A job is finished once its shell exits: output is read for
 another 500 ms, then capture stops, so background processes it left behind (for

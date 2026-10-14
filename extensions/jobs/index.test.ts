@@ -32,10 +32,17 @@ test("jobs are native codemode tools with sandbox service wrapping and shutdown 
 			assert.ok(tool.outputSchema);
 			assert.match(tool.namespace?.instructions ?? "", /tools\.jobs\(/);
 		}
-		await host.execute("jobs", { action: "start", name: "child", command: "sleep 30" });
+		const started = (await host.execute("jobs", { action: "start", name: "child", command: "sleep 30" }))
+			.structuredContent as { id: string };
+		assert.deepEqual(
+			(await host.execute("jobs", { action: "list" })).structuredContent,
+			(await host.execute("jobs", { action: "status" })).structuredContent,
+		);
 		assert.equal(wrapped, 1);
 		await host.emit("session_start", { reason: "new" });
 		assert.deepEqual((await host.execute("jobs", { action: "status" })).structuredContent, []);
+		assert.deepEqual((await host.execute("jobs", { action: "list" })).structuredContent, []);
+		await assert.rejects(host.execute("jobs", { action: "wait", id: started.id }), /Unknown job:.*list/);
 		assert.deepEqual(host.sent, []);
 		await host.emit("session_shutdown");
 		assert.ok([...host.tools.values()].every((tool) => tool.exposure === "hidden"));
@@ -53,6 +60,46 @@ test("jobs fail closed when the standalone sandbox service is absent", async () 
 		);
 		assert.deepEqual((await host.execute("jobs", { action: "status" })).structuredContent, []);
 		await host.emit("session_shutdown");
+	});
+});
+
+test("a cancelled native wait leaves completion available for the idle follow-up", { timeout: 5_000 }, async () => {
+	await withParentSession(async () => {
+		const host = testHost();
+		host.api.events.on(SANDBOX_WRAP_COMMAND_EVENT, (payload) => {
+			const request = payload as WrapCommandRequest;
+			request.result = Promise.resolve(request.command);
+		});
+		jobs(host.api, fast);
+		await host.emit("session_start");
+		try {
+			host.setIdle(false);
+			const started = (
+				await host.execute("jobs", { action: "start", name: "survives", command: "sleep 0.1; echo ready" })
+			).structuredContent as { id: string };
+			const controller = new AbortController();
+			const waiting = host.tools
+				.get("jobs")!
+				.execute(
+					"wait-call",
+					{ action: "wait", id: started.id, waitMs: 120_000 },
+					controller.signal,
+					undefined,
+					host.ctx as never,
+				);
+			controller.abort(new Error("cancel wait"));
+			assert.equal(((await waiting).structuredContent as { state: string }).state, "running");
+			await sleep(300);
+			assert.equal(host.sent.length, 0);
+			host.setIdle(true);
+			await host.emit("agent_settled");
+			await sleep(200);
+			assert.equal(host.sent.length, 1);
+			assert.equal(host.sent[0]?.message.details.jobs[0]?.id, started.id);
+			assert.equal(host.sent[0]?.message.details.jobs[0]?.state, "done");
+		} finally {
+			await host.emit("session_shutdown");
+		}
 	});
 });
 

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { getEventListeners } from "node:events";
 import { readFile, stat } from "node:fs/promises";
 import { test } from "node:test";
 import { JobsProvider, type AnnouncementTiming, type JobSnapshot } from "./jobs-provider.ts";
@@ -11,6 +12,82 @@ const fast: Partial<AnnouncementTiming> = { quietMs: 50, batchWindowMs: -1, batc
 const start = (provider: JobsProvider, command: string) =>
 	provider.invoke("start", { name: "test", command }, context) as Promise<JobSnapshot>;
 
+test("list is a non-claiming alias for status and unknown waits fail immediately", async () => {
+	const sent: JobSnapshot[] = [];
+	let idle = false;
+	const jobs = new JobsProvider(
+		async (command) => command,
+		(completed) => sent.push(...completed),
+		() => idle,
+	);
+	try {
+		const job = await start(jobs, "echo ready");
+		await waitForExit(jobs, job.id);
+		assert.deepEqual(await jobs.invoke("list", {}, context), await jobs.invoke("status", {}, context));
+		await assert.rejects(
+			jobs.invoke("wait", { id: "missing", waitMs: 120_000 }, context),
+			/Unknown job: missing.*list/,
+		);
+		const empty = new JobsProvider(
+			async (command) => command,
+			() => {},
+		);
+		try {
+			assert.deepEqual(await empty.invoke("list", {}, context), []);
+		} finally {
+			await empty.close();
+		}
+		assert.equal(sent.length, 0);
+		// Neither listing action consumes the pending completion.
+		idle = true;
+		jobs.flushCompletions();
+		assert.deepEqual(
+			sent.map((done) => done.id),
+			[job.id],
+		);
+	} finally {
+		await jobs.close();
+	}
+});
+
+test("aborting an active wait releases it without stopping or claiming the session-owned job", {
+	timeout: 5_000,
+}, async () => {
+	const sent: JobSnapshot[] = [];
+	const updates: string[] = [];
+	let idle = false;
+	const jobs = new JobsProvider(
+		async (command) => command,
+		(completed) => sent.push(...completed),
+		() => idle,
+	);
+	try {
+		const job = await start(jobs, "sleep 0.2; echo survived");
+		const controller = new AbortController();
+		const reason = new Error("cancelled wait");
+		const waiting = jobs.invoke("wait", { id: job.id, waitMs: 120_000 }, {
+			cwd: process.cwd(),
+			signal: controller.signal,
+			update: (message: string) => updates.push(message),
+		} as never);
+		controller.abort(reason);
+		assert.equal(((await waiting) as JobSnapshot).state, "running");
+		assert.equal(getEventListeners(controller.signal, "abort").length, 0);
+		assert.equal(jobs.running()[0]?.id, job.id);
+		assert.ok(updates[0]?.includes(job.id));
+		assert.ok(updates[0]?.includes(job.outputPath));
+		await waitForExit(jobs, job.id);
+		idle = true;
+		jobs.flushCompletions();
+		assert.deepEqual(
+			sent.map((done) => done.id),
+			[job.id],
+		);
+	} finally {
+		await jobs.close();
+	}
+});
+
 async function waitForExit(provider: JobsProvider, id: string): Promise<void> {
 	const deadline = Date.now() + 3_000;
 	while (Date.now() < deadline) {
@@ -20,6 +97,43 @@ async function waitForExit(provider: JobsProvider, id: string): Promise<void> {
 	}
 	assert.fail("Job did not exit in time");
 }
+
+test("bounded and terminal waits remove abort listeners; a pre-aborted wait does not claim completion", async () => {
+	const sent: JobSnapshot[] = [];
+	let idle = false;
+	const jobs = new JobsProvider(
+		async (command) => command,
+		(completed) => sent.push(...completed),
+		() => idle,
+	);
+	try {
+		const job = await start(jobs, "sleep 0.2; echo ready");
+		const controller = new AbortController();
+		const ctx = { cwd: process.cwd(), signal: controller.signal } as never;
+		const running = (await jobs.invoke("wait", { id: job.id, waitMs: 0 }, ctx)) as JobSnapshot;
+		assert.equal(running.state, "running");
+		assert.equal(getEventListeners(controller.signal, "abort").length, 0);
+		await waitForExit(jobs, job.id);
+		const aborted = (await jobs.invoke("wait", { id: job.id }, {
+			cwd: process.cwd(),
+			signal: AbortSignal.abort(new Error("already aborted")),
+		} as never)) as JobSnapshot;
+		assert.equal(aborted.state, "done");
+		idle = true;
+		jobs.flushCompletions();
+		assert.deepEqual(
+			sent.map((done) => done.id),
+			[job.id],
+		);
+		const another = await start(jobs, "echo terminal");
+		const done = (await jobs.invoke("wait", { id: another.id }, ctx)) as JobSnapshot;
+		assert.equal(done.state, "done");
+		assert.equal(getEventListeners(controller.signal, "abort").length, 0);
+		assert.match(await readFile(done.outputPath, "utf8"), /terminal/);
+	} finally {
+		await jobs.close();
+	}
+});
 
 test("a running job remains running across calls, then wakes only when unclaimed", async () => {
 	const sent: JobSnapshot[] = [];
@@ -358,12 +472,13 @@ test("jobs native tools retain structured output schemas and codemode exposure",
 	assert.match(tool.namespace?.instructions ?? "", /codemode with Promise\.allSettled/);
 	assert.match(tool.namespace?.instructions ?? "", /Parallelism alone is not a reason to start jobs/);
 	assert.doesNotMatch(tool.description + tool.namespace?.instructions, /long-running or parallel/);
-	assert.match(tool.description, /instead of polling wait\/status/);
-	assert.match(tool.namespace?.instructions ?? "", /Do not repeatedly call wait or status/);
+	assert.match(tool.description, /If only job completion remains, end your turn/);
+	assert.match(tool.description, /even when your next step depends on it/);
+	assert.match(tool.namespace?.instructions ?? "", /Do not repeatedly call wait, list, status, sleep/);
 	assert.match(tool.namespace?.instructions ?? "", /Use read or bash with rg\/tail/);
 	assert.deepEqual(
 		actions.map((action) => action.name),
-		["start", "status", "wait", "stop"],
+		["start", "list", "status", "wait", "stop"],
 	);
 	assert.equal(await jobs.describe("logs", context), undefined);
 	assert.ok(!Value.Check(tool.parameters, { action: "logs", id: "job" }));
@@ -372,10 +487,15 @@ test("jobs native tools retain structured output schemas and codemode exposure",
 		tool.execute("call", { action: "logs", id: "job" }, undefined, undefined, context),
 		/Unknown jobs action: logs/,
 	);
-	for (const name of ["status", "wait"]) {
+	for (const name of ["list", "status", "wait"]) {
 		assert.match(actions.find((action) => action.name === name)!.description, /outputPath/);
 	}
-	assert.match(actions.find((action) => action.name === "wait")!.description, /only when the next step depends/i);
+	assert.match(actions.find((action) => action.name === "wait")!.description, /Prefer ending your turn/);
+	assert.doesNotMatch(tool.description + tool.namespace?.instructions, /only when the next step depends/i);
+	assert.ok(Value.Check(tool.parameters, { action: "list" }));
+	assert.ok(!Value.Check(tool.parameters, { action: "list", maxChars: 4000 }));
+	const listed = await tool.execute("call", { action: "list" }, undefined, undefined, context);
+	assert.deepEqual(listed.structuredContent, []);
 	assert.ok(Value.Check(descriptor.inputSchema, { name: "check", command: "echo ready" }));
 	assert.ok(!Value.Check(descriptor.inputSchema, { name: "check" }));
 	const result = await tool.execute(
