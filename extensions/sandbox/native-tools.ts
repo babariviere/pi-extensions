@@ -19,6 +19,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import type { SandboxController } from "./controller.ts";
 import { isInside } from "./policy.ts";
+import { withMise } from "./mise.ts";
 
 export const NATIVE_SANDBOX_TOOL_NAMES = ["read", "bash", "edit", "write", "find", "grep", "ls"] as const;
 
@@ -104,7 +105,11 @@ export function createNativeSandboxTools(
 			operations: {
 				exec: (command, directory, execution) => {
 					const sandbox = current();
-					return (sandbox.enforcing ? sandbox.bashOperations() : localBash).exec(command, directory, execution);
+					return (sandbox.enforcing ? sandbox.bashOperations() : localBash).exec(
+						withMise(command, directory, options.bash?.shellPath),
+						directory,
+						execution,
+					);
 				},
 			},
 		}),

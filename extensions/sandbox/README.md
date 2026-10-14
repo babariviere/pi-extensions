@@ -21,3 +21,22 @@ Read-only MCP policy uses explicit allow/deny lists, conservative tool-name clas
 Sibling overrides are not silently replaced. When a restricted core tool is owned by another extension, calls are refused rather than executing an unchecked override. Broad searches that could traverse a denied read directory are also refused; choose a narrower search path.
 
 These are accident-prevention guardrails, not a security boundary for arbitrary installed extensions. Trusted extension callbacks run with host permissions. The jobs extension requires this extension even when policy is off.
+
+## Mise project environments
+
+Native `bash` calls, including calls through codemode, automatically run through
+`mise exec -- <configured shell> -c <command>` when `mise.toml`, `.mise.toml`,
+`mise.local.toml`, or `.mise.local.toml` exists in the working directory or an
+ancestor. This loads mise's environment and tool versions for the entire command,
+including variable expansion, pipelines, and `shellCommandPrefix`. Detection runs
+on each call, so adding or removing a config takes effect immediately.
+
+This also applies when sandbox policy is off. With restricted policy, mise and
+the command both run inside the OS sandbox. Guardrail checks and fnox injection
+still process the original command before execution.
+
+Install mise on `PATH` and trust the project config yourself. Missing mise,
+untrusted configs, or mise setup errors fail the call rather than running with
+the wrong environment. No automatic trust or explicit install command is added.
+Projects without these configs keep their existing shell behavior. This does not
+change user `!` commands, background jobs, or sibling bash overrides.
