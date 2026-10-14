@@ -244,6 +244,12 @@ export default function subagents(pi: ExtensionAPI, deps: SubagentExtensionDeps 
 				try {
 					if (current !== generation || supervisor !== owner)
 						throw new Error("Subagents session is not initialized");
+					if (command.action === "quiesce" || command.action === "resumeTools") {
+						if (command.action === "quiesce") await owner.quiesce();
+						else owner.resumeTools();
+						answer({ requestId: command.requestId, ok: true });
+						return;
+					}
 					const name = validName(command.name);
 					if (command.action === "stop") await owner.stop(name);
 					else if (command.action === "send") {

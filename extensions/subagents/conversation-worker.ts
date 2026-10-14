@@ -53,6 +53,7 @@ export function installConversationWorker(host: WorkerHost, deps: WorkerDependen
 	let runtime: ConversationRuntime | undefined;
 	let initialization: Promise<void> | undefined;
 	let commands: Promise<void> = Promise.resolve();
+	let toolsRevision = 0;
 	let mode: "pause" | "cancel" | undefined;
 	let ending: Promise<void> | undefined;
 	let disconnected = false;
@@ -229,6 +230,22 @@ export function installConversationWorker(host: WorkerHost, deps: WorkerDependen
 	const onMessage = (message?: unknown) => {
 		if (!message || typeof message !== "object" || mode) return;
 		const packet = message as WorkerCommand;
+		if (packet.type === "resumeTools") {
+			toolsRevision = Math.max(toolsRevision, packet.revision);
+			runtime?.resumeTools();
+			return;
+		}
+		if (packet.type === "quiesce") {
+			toolsRevision = Math.max(toolsRevision, packet.revision);
+			void (async () => {
+				await initialization;
+				await commands;
+				if (!runtime || mode) throw new Error("Worker is unavailable");
+				if (toolsRevision === packet.revision) await runtime.quiesce();
+				await send({ type: "quiesced", id: packet.id, status: await runtime.status() });
+			})().catch((error) => send({ type: "error", id: packet.id, error: errorText(error) }).catch(() => {}));
+			return;
+		}
 		if (packet.type === "pause") {
 			onPause();
 			return;

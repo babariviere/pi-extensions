@@ -24,6 +24,8 @@ import {
 } from "@earendil-works/pi-durable";
 import type { WorkerAnswer, WorkerStatus } from "./worker-protocol.ts";
 
+import { ToolDrain } from "../../embedding/tool-drain.mjs";
+
 const context = BACKGROUND_CONTEXT;
 // Protocol interfaces are open to declaration merging. Persist a closed JSON shape.
 type DurableAnswer = Omit<WorkerAnswer, "answer"> & {
@@ -149,6 +151,7 @@ export interface ConversationRuntimeOptions {
 
 export class ConversationRuntime {
 	private closing?: Promise<void>;
+	private readonly toolDrain: ToolDrain;
 	private cancelled = false;
 	private cancelling?: Promise<void>;
 	private operations: Promise<unknown> = Promise.resolve();
@@ -158,7 +161,10 @@ export class ConversationRuntime {
 		readonly root: Conversation,
 		readonly child: Conversation,
 		private readonly registry: Registry,
-	) {}
+		toolDrain: ToolDrain,
+	) {
+		this.toolDrain = toolDrain;
+	}
 
 	get conversationId(): ConversationId {
 		return this.child.id;
@@ -197,11 +203,14 @@ export class ConversationRuntime {
 
 	static async open(storage: Storage, options: ConversationRuntimeOptions): Promise<ConversationRuntime> {
 		const registry = createRegistry();
+		const toolDrain = new ToolDrain();
 		// Arbitrary native tools are unsafe even if their annotations claim idempotence.
-		registry.install({
-			...options.extension,
-			tools: options.extension.tools?.map((tool) => ({ ...tool, replay: "unsafe", executionMode: "sequential" })),
-		});
+		registry.install(
+			toolDrain.prepare({
+				...options.extension,
+				tools: options.extension.tools?.map((tool) => ({ ...tool, replay: "unsafe", executionMode: "sequential" })),
+			}),
+		);
 		registry.install(RuntimeExtension);
 		const harness = await Harness.open(
 			storage,
@@ -229,7 +238,7 @@ export class ConversationRuntime {
 			const child = await harness.conversation(childId, context);
 			if (!child) throw new Error(`Missing durable child ${childId}`);
 			// Bind the native kernel before resume(), so reopened tools cannot race binding.
-			return new ConversationRuntime(harness, root, child, registry);
+			return new ConversationRuntime(harness, root, child, registry, toolDrain);
 		} catch (error) {
 			await harness.close(context);
 			throw error;
@@ -240,6 +249,13 @@ export class ConversationRuntime {
 		this.harness.resume();
 	}
 
+	quiesce(): Promise<void> {
+		return this.toolDrain.pause(this.harness, context);
+	}
+	resumeTools(): void {
+		this.toolDrain.resume();
+	}
+
 	/** Reuse persisted native input expansion on recovery, without rerunning input handlers. */
 	async admittedContent(requestId: string): Promise<string | undefined> {
 		const state = await this.harness.snapshot(RuntimeDoc, this.root.id, context);
@@ -248,10 +264,12 @@ export class ConversationRuntime {
 
 	/** Native MCP/tool_search loadout updates keep replay safety at this boundary. */
 	installExtension(extension: Extension): void {
-		this.registry.install({
-			...extension,
-			tools: extension.tools?.map((tool) => ({ ...tool, replay: "unsafe", executionMode: "sequential" })),
-		});
+		this.registry.install(
+			this.toolDrain.prepare({
+				...extension,
+				tools: extension.tools?.map((tool) => ({ ...tool, replay: "unsafe", executionMode: "sequential" })),
+			}),
+		);
 	}
 
 	/** Serialize admission and stop, including the gap between root and child commits. */

@@ -59,6 +59,7 @@
   },
   "exports": {
     "./profile": "./embedding/profile.mjs",
+    "./tool-drain": "./embedding/tool-drain.mjs",
     "./pilot": "./embedding/pilot.ts",
     "./child": "./embedding/child.ts",
     "./resource-loader": "./embedding/resource-loader.mjs",

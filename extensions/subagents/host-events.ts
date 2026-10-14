@@ -39,7 +39,9 @@ export interface SubagentHostSnapshot {
 
 export type SubagentHostCommand =
 	| { requestId: string; action: "send"; name: string; message: string; followUp?: boolean }
-	| { requestId: string; action: "stop"; name: string };
+	| { requestId: string; action: "stop"; name: string }
+	| { requestId: string; action: "quiesce" }
+	| { requestId: string; action: "resumeTools" };
 
 export interface SubagentHostCommandResult {
 	requestId: string;

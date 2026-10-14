@@ -122,6 +122,37 @@ test("named admissions are journaled before launch, deduplicated, and retain pin
 	});
 });
 
+test("host quiescence drains children without aborting or losing inputs queued while paused", async () => {
+	await fixture(async (_ref, fake, owner) => {
+		await owner.spawn("review", "first", "one", policy);
+		const child = fake.opened[0]!;
+		let release!: () => void;
+		const draining = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		let resumed = 0;
+		child.connection.quiesce = () => draining;
+		child.connection.resumeTools = () => {
+			resumed++;
+		};
+		const pause = owner.quiesce();
+		try {
+			await owner.send("review", "second", true, "two");
+			assert.equal(child.inputs.length, 1);
+			assert.equal(child.stops.length, 0);
+			release();
+			await pause;
+			owner.resumeTools();
+			await until(() => child.inputs.some((input) => input.message === "second"));
+			assert.equal(resumed, 1);
+			assert.equal(child.cancels, 0);
+		} finally {
+			release();
+			await pause;
+		}
+	});
+});
+
 test("artifact callbacks bind the actual parent and name and are revoked on suspension", async () => {
 	await fixture(async (ref, fake, owner) => {
 		await owner.spawn("review", "scope", "one", policy);
