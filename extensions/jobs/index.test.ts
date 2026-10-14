@@ -30,7 +30,7 @@ test("jobs are native codemode tools with sandbox service wrapping and shutdown 
 				openWorldHint: true,
 			});
 			assert.ok(tool.outputSchema);
-			assert.match(tool.namespace?.instructions ?? "", /tools\.jobs\(/);
+			assert.match(tool.namespace?.instructions ?? "", /Unclaimed completions are grouped while idle/);
 		}
 		const started = (await host.execute("jobs", { action: "start", name: "child", command: "sleep 30" }))
 			.structuredContent as { id: string };

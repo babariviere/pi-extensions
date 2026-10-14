@@ -7,13 +7,10 @@ failed policy services refuse launch rather than falling back to an unchecked sh
 
 ## Native tool
 
-Use jobs only for long-running commands. Use regular `bash` for short commands
-and `codemode` with `Promise.allSettled` to run independent tool calls in parallel.
-Parallelism alone is not a reason to start jobs. After starting jobs, do independent
-work. If only job completion remains, **end the turn**, even when the next step
-depends on it. Completion automatically wakes the agent to continue. Do not poll
-`wait`, `list`, `status`, output files, or use shell sleeps to keep the turn alive.
-Inspect logs after completion or when diagnosing a running job.
+Use jobs for long-running commands, `bash` for short ones, and `codemode` for
+independent tool calls. After launch, do independent work or **end the turn**, even
+if the next step depends on completion. Ending the turn leaves jobs running;
+completion wakes the agent automatically. Avoid polling or shell sleeps.
 
 - `jobs({ action: "start", name, command, cwd? })`: launch a named Bash command.
 - `jobs({ action: "list" })`: list live and recent handles, including `outputPath`.

@@ -465,16 +465,18 @@ test("jobs native tools retain structured output schemas and codemode exposure",
 	assert.equal(tool.exposure, "codemode");
 	assert.ok(tool.outputSchema);
 	assert.match(tool.description, /long-running commands only/);
-	assert.match(tool.description, /Use bash for short commands and codemode to run independent tool calls in parallel/);
-	assert.match(descriptor.description, /long-running shell command only/);
-	assert.match(descriptor.description, /codemode to run independent tool calls in parallel/);
-	assert.match(tool.namespace?.instructions ?? "", /Use jobs only for long-running shell commands/);
+	assert.match(tool.description, /Use bash for short commands/);
+	assert.match(descriptor.description, /capturing stdout\/stderr/);
 	assert.match(tool.namespace?.instructions ?? "", /codemode with Promise\.allSettled/);
-	assert.match(tool.namespace?.instructions ?? "", /Parallelism alone is not a reason to start jobs/);
+	assert.match(tool.namespace?.instructions ?? "", /parallelism alone does not require jobs/);
 	assert.doesNotMatch(tool.description + tool.namespace?.instructions, /long-running or parallel/);
 	assert.match(tool.description, /If only job completion remains, end your turn/);
 	assert.match(tool.description, /even when your next step depends on it/);
-	assert.match(tool.namespace?.instructions ?? "", /Do not repeatedly call wait, list, status, sleep/);
+	assert.match(tool.description, /Do not poll or use shell sleeps/);
+	assert.match(tool.namespace?.instructions ?? "", /Jobs survive turn end, but not shutdown\/reload/);
+	assert.match(tool.namespace?.instructions ?? "", /Terminal waits claim results; list\/status and log reads do not/);
+	assert.ok(tool.description.length < 1_000, "keep the always-listed tool description compact");
+	assert.ok((tool.namespace?.instructions?.length ?? 0) < 1_000, "avoid duplicating the action descriptions");
 	assert.match(tool.namespace?.instructions ?? "", /Use read or bash with rg\/tail/);
 	assert.deepEqual(
 		actions.map((action) => action.name),
@@ -487,10 +489,10 @@ test("jobs native tools retain structured output schemas and codemode exposure",
 		tool.execute("call", { action: "logs", id: "job" }, undefined, undefined, context),
 		/Unknown jobs action: logs/,
 	);
-	for (const name of ["list", "status", "wait"]) {
+	for (const name of ["start", "list", "wait"]) {
 		assert.match(actions.find((action) => action.name === name)!.description, /outputPath/);
 	}
-	assert.match(actions.find((action) => action.name === "wait")!.description, /Prefer ending your turn/);
+	assert.equal(actions.find((action) => action.name === "status")!.description, "Alias for list.");
 	assert.match(actions.find((action) => action.name === "wait")!.description, /Optional bounded wait/);
 	assert.doesNotMatch(
 		tool.description + tool.namespace?.instructions,

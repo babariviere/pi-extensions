@@ -84,8 +84,7 @@ const jobOutputSchema = {
 const descriptors: ActionDescriptor[] = [
 	{
 		name: "start",
-		description:
-			"Start a named long-running shell command only. Use bash for short commands and codemode to run independent tool calls in parallel. Unclaimed completions automatically notify the idle parent in one batch. Runs until exit, stop, session shutdown, or the 2-hour cap. Output is stored in a temporary file.",
+		description: "Launch a named command, capturing stdout/stderr in temporary outputPath.",
 		inputSchema: {
 			type: "object",
 			properties: { name: { type: "string" }, command: { type: "string" }, cwd: { type: "string" } },
@@ -96,21 +95,20 @@ const descriptors: ActionDescriptor[] = [
 	},
 	{
 		name: "list",
-		description:
-			"List running and recent shell jobs, including outputPath. Handles are local to this session runtime, not durable across reloads. Does not claim completions.",
+		description: "Running and recent jobs with outputPath; does not claim completions.",
 		inputSchema: { type: "object", properties: {}, additionalProperties: false },
 		outputSchema: { type: "array", items: jobOutputSchema },
 	},
 	{
 		name: "status",
-		description: "Alias for list: running and recent shell jobs, including outputPath. Does not claim completions.",
+		description: "Alias for list.",
 		inputSchema: { type: "object", properties: {}, additionalProperties: false },
 		outputSchema: { type: "array", items: jobOutputSchema },
 	},
 	{
 		name: "wait",
 		description:
-			"Optional bounded wait (default 30 seconds). Prefer ending your turn when only job completion remains; completion automatically wakes you. Includes outputPath. A terminal wait claims its result and suppresses the completion wake-up. Cancelling the wait does not stop the job.",
+			"Optional bounded wait (30s default, 120s max), with outputPath. A terminal result claims completion and suppresses its wake-up. Cancelling wait leaves the job running.",
 		inputSchema: {
 			type: "object",
 			properties: { id: { type: "string" }, waitMs: { type: "number" } },
@@ -121,7 +119,7 @@ const descriptors: ActionDescriptor[] = [
 	},
 	{
 		name: "stop",
-		description: "Stop a running job and its subprocess group. Stopped jobs never trigger a completion wake-up.",
+		description: "Cancel a job and its subprocess group; no completion wake-up.",
 		inputSchema: {
 			type: "object",
 			properties: { id: { type: "string" } },
@@ -148,17 +146,12 @@ const bounded = (value: unknown, fallback: number, max: number): number =>
 export class JobsProvider implements ActionProvider {
 	readonly name = "jobs";
 	readonly description =
-		"Session-owned background shell jobs for long-running commands only. Use bash for short commands and codemode to run independent tool calls in parallel. If only job completion remains, end your turn, even when your next step depends on it. Completion automatically wakes you; do not poll wait/list/status or sleep. Results include outputPath for reading or searching output files.";
+		"Session-owned shell jobs for long-running commands only. Use bash for short commands. If only job completion remains, end your turn, even when your next step depends on it; completion wakes you. Do not poll or use shell sleeps.";
 	readonly instructions = [
-		"Use jobs only for long-running shell commands. Use bash for short commands and codemode with Promise.allSettled to run independent tool calls in parallel. Parallelism alone is not a reason to start jobs.",
-		'Use tools.jobs({ action: "start", name, command, cwd? }) for long-running shell work that should outlive a tool call.',
-		"Jobs remain owned by this session and stop on explicit jobs.stop, shutdown/reload, command exit, or the two-hour cap. Ending the agent turn does not stop jobs.",
-		"After starting a job, do independent work. If only job completion remains, end your turn, even when your next step depends on it. Unclaimed completion automatically wakes you to continue. Do not repeatedly call wait, list, status, sleep, or read output files to poll progress.",
-		'Use tools.jobs({ action: "list" }) to recover current handles; status is an alias. Handles are runtime-local and disappear on reload/shutdown. An unknown handle cannot be waited on; list once, then use the recorded output path if it still exists. Do not retry an unknown handle.',
-		"Start, list, status, and wait return outputPath. Let jobs capture stdout/stderr instead of redirecting them to another file, so notifications point at useful logs. Use read or bash with rg/tail after completion or to diagnose a running job; do not poll the file.",
-		"Use wait for bounded synchronization or terminal-result acknowledgement, not polling. If it returns running, do other work or end your turn. Aborting a wait leaves the session-owned job running and unclaimed.",
-		"Pending unclaimed completions wake the idle parent together in one follow-up listing all finished jobs and their output paths, sent after a short quiet period so jobs finishing close together are grouped. Terminal waits suppress that wake-up; status calls and direct file reads do not. Stopped jobs never wake it.",
-		"Output files are temporary and disappear during session cleanup. The sandbox extension is required for every launch.",
+		"Use codemode with Promise.allSettled for independent tool calls; parallelism alone does not require jobs.",
+		"Jobs survive turn end, but not shutdown/reload; maximum lifetime is 2 hours. Handles are runtime-local. For an unknown handle, list once to recover current jobs; do not retry it.",
+		"Unclaimed completions are grouped while idle. Terminal waits claim results; list/status and log reads do not. Aborting wait leaves the job running and unclaimed.",
+		"Let jobs capture stdout/stderr. Use read or bash with rg/tail on outputPath; temporary logs are deleted on shutdown. Every launch requires the sandbox extension.",
 	].join("\n");
 	readonly #jobs = new Map<string, Job>();
 	#closing = false;
@@ -369,7 +362,7 @@ export class JobsProvider implements ActionProvider {
 			if (!job.finishedWriting) {
 				const waitMs = bounded(args.waitMs, 30_000, 120_000);
 				context.update?.(
-					`Waiting up to ${waitMs}ms for ${job.name} (${job.id}). Output: ${job.outputPath}. Prefer ending your turn; completion automatically wakes you.`,
+					`Waiting up to ${waitMs}ms for ${job.name} (${job.id}). Output: ${job.outputPath}. End your turn if only completion remains.`,
 				);
 				job.waiters++;
 				let timer: ReturnType<typeof setTimeout> | undefined;
