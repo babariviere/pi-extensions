@@ -8,5 +8,9 @@
     "noEmit": true,
     "allowImportingTsExtensions": true
   },
-  "include": ["extensions/**/*.ts", "cli/**/*.ts"]
+  "include": [
+    "extensions/**/*.ts",
+    "cli/**/*.ts",
+    "embedding/**/*.ts"
+  ]
 }

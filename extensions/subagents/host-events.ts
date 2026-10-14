@@ -3,14 +3,12 @@
  * The model-facing API stays the single `subagent` tool; these events never reach the model.
  */
 
-/** Emitted with a full {@link SubagentHostSnapshot} after every change, and on request. */
-export const SUBAGENTS_SNAPSHOT_EVENT = "subagents:snapshot";
-/** Ask the extension to emit a fresh snapshot now. No payload. */
-export const SUBAGENTS_REQUEST_SNAPSHOT_EVENT = "subagents:request-snapshot";
-/** Host command: {@link SubagentHostCommand}. Answered by exactly one command result. */
-export const SUBAGENTS_COMMAND_EVENT = "subagents:command";
-/** {@link SubagentHostCommandResult} for one command request ID. */
-export const SUBAGENTS_COMMAND_RESULT_EVENT = "subagents:command-result";
+export {
+	SUBAGENTS_SNAPSHOT_EVENT,
+	SUBAGENTS_REQUEST_SNAPSHOT_EVENT,
+	SUBAGENTS_COMMAND_EVENT,
+	SUBAGENTS_COMMAND_RESULT_EVENT,
+} from "../../embedding/profile.mjs";
 
 /** Display data for one named subagent. Never includes answer text or private policy. */
 export interface SubagentHostEntry {

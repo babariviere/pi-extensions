@@ -52,9 +52,24 @@
   },
   "scripts": {
     "pi-usage": "node cli/pi-usage.ts",
-    "test": "node --import tsx --test 'extensions/**/*.test.ts' 'cli/**/*.test.ts'",
+    "test": "node --import tsx --test 'extensions/**/*.test.ts' 'cli/**/*.test.ts' 'embedding/**/*.test.ts'",
     "typecheck": "tsgo -p tsconfig.json",
     "fmt": "biome format --write .",
     "fmt:check": "biome format ."
-  }
+  },
+  "exports": {
+    "./profile": "./embedding/profile.mjs",
+    "./pilot": "./embedding/pilot.ts",
+    "./child": "./embedding/child.ts",
+    "./resource-loader": "./embedding/resource-loader.mjs",
+    "./host-events": "./extensions/subagents/host-events.ts",
+    "./extensions/*": "./extensions/*/index.ts"
+  },
+  "files": [
+    "embedding",
+    "extensions",
+    "themes",
+    "cli",
+    "README.md"
+  ]
 }

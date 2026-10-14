@@ -24,6 +24,13 @@
 		"lineWidth": 120
 	},
 	"files": {
-		"includes": ["extensions/**/*.ts", "cli/**/*.ts", "!**/node_modules/**/*", "!!**/node_modules", "!!**/.pi"]
+		"includes": [
+			"extensions/**/*.ts",
+			"cli/**/*.ts",
+			"embedding/**",
+			"!**/node_modules/**/*",
+			"!!**/node_modules",
+			"!!**/.pi"
+		]
 	}
 }
