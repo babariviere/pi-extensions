@@ -84,8 +84,7 @@ const jobOutputSchema = {
 const descriptors: ActionDescriptor[] = [
 	{
 		name: "start",
-		description:
-			"Start a named long-running shell command only. Use bash for short commands and codemode to run independent tool calls in parallel. Unclaimed completions automatically notify the idle parent in one batch. Runs until exit, stop, session shutdown, or the 2-hour cap. Output is stored in a temporary file.",
+		description: "Launch a named command, capturing stdout/stderr in temporary outputPath.",
 		inputSchema: {
 			type: "object",
 			properties: { name: { type: "string" }, command: { type: "string" }, cwd: { type: "string" } },
@@ -95,16 +94,21 @@ const descriptors: ActionDescriptor[] = [
 		outputSchema: jobOutputSchema,
 	},
 	{
+		name: "list",
+		description: "Running and recent jobs with outputPath; does not claim completions.",
+		inputSchema: { type: "object", properties: {}, additionalProperties: false },
+		outputSchema: { type: "array", items: jobOutputSchema },
+	},
+	{
 		name: "status",
-		description:
-			"List running and recent shell jobs, including outputPath for reading or searching their output files.",
+		description: "Alias for list.",
 		inputSchema: { type: "object", properties: {}, additionalProperties: false },
 		outputSchema: { type: "array", items: jobOutputSchema },
 	},
 	{
 		name: "wait",
 		description:
-			"Wait only when the next step depends on this job; otherwise rely on automatic completion notifications, not polling. Returns running after waitMs (default 30 seconds). Includes outputPath for reading or searching the output file. A terminal wait claims its result and suppresses the completion wake-up.",
+			"Optional bounded wait (30s default, 120s max), with outputPath. A terminal result claims completion and suppresses its wake-up. Cancelling wait leaves the job running.",
 		inputSchema: {
 			type: "object",
 			properties: { id: { type: "string" }, waitMs: { type: "number" } },
@@ -115,7 +119,7 @@ const descriptors: ActionDescriptor[] = [
 	},
 	{
 		name: "stop",
-		description: "Stop a running job and its subprocess group. Stopped jobs never trigger a completion wake-up.",
+		description: "Cancel a job and its subprocess group; no completion wake-up.",
 		inputSchema: {
 			type: "object",
 			properties: { id: { type: "string" } },
@@ -127,11 +131,11 @@ const descriptors: ActionDescriptor[] = [
 ];
 
 for (const descriptor of descriptors) {
-	const readOnly = ["status", "wait"].includes(descriptor.name);
+	const readOnly = ["list", "status", "wait"].includes(descriptor.name);
 	descriptor.annotations = {
 		readOnlyHint: readOnly,
 		destructiveHint: !readOnly,
-		idempotentHint: ["status", "stop"].includes(descriptor.name),
+		idempotentHint: ["list", "status", "stop"].includes(descriptor.name),
 		openWorldHint: descriptor.name === "start",
 	};
 }
@@ -142,15 +146,12 @@ const bounded = (value: unknown, fallback: number, max: number): number =>
 export class JobsProvider implements ActionProvider {
 	readonly name = "jobs";
 	readonly description =
-		"Session-owned background shell jobs for long-running commands only. Use bash for short commands and codemode to run independent tool calls in parallel. Start a long-running job, do other work, and rely on automatic completion notifications instead of polling wait/status. Results include outputPath for reading or searching output files.";
+		"Session-owned shell jobs for long-running commands only. Use bash for short commands. If only job completion remains, end your turn, even when your next step depends on it; completion wakes you. Do not poll or use shell sleeps.";
 	readonly instructions = [
-		"Use jobs only for long-running shell commands. Use bash for short commands and codemode with Promise.allSettled to run independent tool calls in parallel. Parallelism alone is not a reason to start jobs.",
-		'Use tools.jobs({ action: "start", name, command, cwd? }) for long-running shell work that should outlive a tool call.',
-		"Jobs remain owned by this session and stop on shutdown/reload, cancellation, exit, or the two-hour cap.",
-		"After starting a job, do other work or finish the turn. Do not repeatedly call wait or status to poll progress.",
-		'Use tools.jobs({ action: "wait", id, waitMs? }) only when the next step depends on completion. Start, status, and wait return outputPath. Use read or bash with rg/tail to inspect that file after completion or diagnose a running job when needed; do not poll the file.',
-		"Pending unclaimed completions wake the idle parent together in one follow-up listing all finished jobs and their output paths, sent after a short quiet period so jobs finishing close together are grouped. Terminal waits suppress that wake-up; status calls and direct file reads do not. Stopped jobs never wake it.",
-		"Output files are temporary and disappear during session cleanup. The sandbox extension is required for every launch.",
+		"Use codemode with Promise.allSettled for independent tool calls; parallelism alone does not require jobs.",
+		"Jobs survive turn end, but not shutdown/reload; maximum lifetime is 2 hours. Handles are runtime-local. For an unknown handle, list once to recover current jobs; do not retry it.",
+		"Unclaimed completions are grouped while idle. Terminal waits claim results; list/status and log reads do not. Aborting wait leaves the job running and unclaimed.",
+		"Let jobs capture stdout/stderr. Use read or bash with rg/tail on outputPath; temporary logs are deleted on shutdown. Every launch requires the sandbox extension.",
 	].join("\n");
 	readonly #jobs = new Map<string, Job>();
 	#closing = false;
@@ -344,7 +345,8 @@ export class JobsProvider implements ActionProvider {
 			});
 			return this.#snapshot(job);
 		}
-		if (name === "status") return [...this.#jobs.values()].map((job) => this.#snapshot(job));
+		if (name === "list" || name === "status") return [...this.#jobs.values()].map((job) => this.#snapshot(job));
+		if (name !== "stop" && name !== "wait") throw new Error(`Unknown jobs action: ${name}`);
 		const job = this.#get(args.id);
 		if (name === "stop") {
 			if (job.state === "running") {
@@ -356,27 +358,33 @@ export class JobsProvider implements ActionProvider {
 			return this.#snapshot(job);
 		}
 		if (name === "wait") {
-			if (job.state === "running") {
+			if (context.signal?.aborted) return this.#snapshot(job);
+			if (!job.finishedWriting) {
+				const waitMs = bounded(args.waitMs, 30_000, 120_000);
+				context.update?.(
+					`Waiting up to ${waitMs}ms for ${job.name} (${job.id}). Output: ${job.outputPath}. End your turn if only completion remains.`,
+				);
 				job.waiters++;
 				let timer: ReturnType<typeof setTimeout> | undefined;
-				let onAbort: (() => void) | undefined;
+				const signal = context.signal;
+				let abort: (() => void) | undefined;
 				try {
-					await Promise.race([
-						job.finished,
-						new Promise<void>((resolve) => {
-							timer = setTimeout(resolve, bounded(args.waitMs, 30_000, 120_000));
-							onAbort = resolve;
-							context.signal?.addEventListener("abort", onAbort, { once: true });
-							if (context.signal?.aborted) resolve();
-						}),
-					]);
+					await new Promise<void>((resolve) => {
+						abort = resolve;
+						signal?.addEventListener("abort", abort, { once: true });
+						timer = setTimeout(resolve, waitMs);
+						void job.finished.then(resolve);
+						if (signal?.aborted) abort();
+					});
+					if (job.finishedWriting && !signal?.aborted) job.claimed = true;
 				} finally {
 					job.waiters--;
 					if (timer) clearTimeout(timer);
-					if (onAbort) context.signal?.removeEventListener("abort", onAbort);
+					if (abort) signal?.removeEventListener("abort", abort);
+					if (this.#pending().length) this.#scheduleAnnouncement();
 				}
 			}
-			if (job.endedAt) job.claimed = true;
+			if (job.finishedWriting && !context.signal?.aborted) job.claimed = true;
 			return this.#snapshot(job);
 		}
 		throw new Error(`Unknown jobs action: ${name}`);
@@ -384,7 +392,10 @@ export class JobsProvider implements ActionProvider {
 
 	#get(id: unknown): Job {
 		const job = typeof id === "string" ? this.#jobs.get(id) : undefined;
-		if (!job) throw new Error(`Unknown job: ${String(id)}`);
+		if (!job)
+			throw new Error(
+				`Unknown job: ${String(id)}. Use jobs({ action: "list" }) to find current handles; jobs do not survive reload/shutdown. Do not retry this handle.`,
+			);
 		return job;
 	}
 	#snapshot(job: Job): JobSnapshot {
