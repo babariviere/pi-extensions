@@ -461,6 +461,38 @@ function workerHost() {
 		},
 	};
 }
+
+test("worker tool quiescence can be cancelled during initialization without a late freeze", async () => {
+	const directory = await mkdtemp(join(tmpdir(), "worker-quiesce-"));
+	const { faux, options } = setup();
+	const host = workerHost();
+	let release!: () => void;
+	const initializing = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	faux.setResponses([fauxAssistantMessage("finished")]);
+	installConversationWorker(host.host, {
+		openStorage: openDurableStorage,
+		openAdapter: async () => {
+			await initializing;
+			return { ...options, bindHarness: () => {}, close: async () => {} };
+		},
+	});
+	try {
+		host.events.emit("message", launchFor(directory));
+		host.events.emit("message", { type: "quiesce", id: "old", revision: 1 });
+		host.events.emit("message", { type: "resumeTools", revision: 2 });
+		release();
+		await until(() => host.packets.some((p) => p.type === "quiesced"));
+		host.events.emit("message", input("continue"));
+		await until(() => answers(host).length === 1);
+		assert.equal(answers(host)[0]?.result.answer?.text, "finished");
+	} finally {
+		release();
+		await pause(host);
+		await rm(directory, { recursive: true, force: true });
+	}
+});
 function launchFor(directory: string) {
 	const request: RunRequest = {
 		agent: builtinAgent(),

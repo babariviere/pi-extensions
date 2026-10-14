@@ -24,6 +24,8 @@ export interface WorkerConnection {
 	status(): Promise<WorkerStatus>;
 	stop(id: string): Promise<WorkerStatus>;
 	pause(): Promise<void>;
+	quiesce?(): Promise<void>;
+	resumeTools?(): void;
 	cancel(): Promise<void>;
 }
 export type WorkerFactory = (spec: WorkerSpec, callbacks: WorkerCallbacks) => WorkerConnection;
@@ -76,7 +78,11 @@ export function openConversationWorker(
 	void ready.catch(() => {});
 	const pending = new Map<
 		string,
-		{ resolve(status: WorkerStatus): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> }
+		{
+			resolve(status: WorkerStatus): void;
+			reject(error: Error): void;
+			timer: ReturnType<typeof setTimeout> | undefined;
+		}
 	>();
 	let acceptClosed!: () => void;
 	const closed = new Promise<void>((resolve) => {
@@ -172,17 +178,21 @@ export function openConversationWorker(
 			}
 		}
 	});
+	let toolsRevision = 0;
 	const request = async (packet: Extract<WorkerCommand, { id: string }>, timeout = 20_000): Promise<WorkerStatus> => {
 		await ready;
 		if (pending.has(packet.id)) throw new Error("Duplicate in-flight worker request ID");
 		return new Promise((resolve, reject) => {
-			const timer = setTimeout(() => {
-				pending.delete(packet.id);
-				signal(child, "SIGKILL");
-				const error = new Error(`Subagent ${packet.type} acknowledgment timed out`);
-				reject(error);
-				end(error);
-			}, timeout);
+			const timer =
+				timeout === 0
+					? undefined
+					: setTimeout(() => {
+							pending.delete(packet.id);
+							signal(child, "SIGKILL");
+							const error = new Error(`Subagent ${packet.type} acknowledgment timed out`);
+							reject(error);
+							end(error);
+						}, timeout);
 			pending.set(packet.id, { resolve, reject, timer });
 			try {
 				send(packet);
@@ -225,6 +235,10 @@ export function openConversationWorker(
 		input: (id, message, followUp) => request({ type: "input", id, message, followUp }),
 		status: () => request({ type: "status", id: randomUUID() }),
 		stop: (id) => request({ type: "stop", id }, 5_000),
+		quiesce: async () => {
+			await request({ type: "quiesce", id: randomUUID(), revision: ++toolsRevision }, 0);
+		},
+		resumeTools: () => send({ type: "resumeTools", revision: ++toolsRevision }),
 		pause: () => close("pause"),
 		cancel: () => close("cancel"),
 	};

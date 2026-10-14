@@ -142,6 +142,7 @@ export class DurableSupervisor {
 	#closing?: Promise<void>;
 	#closed = false;
 	#pausing = false;
+	#updatePaused = false;
 	#failure?: Error;
 	#attempts = new Map<string, number>();
 	#retries = new Map<string, ReturnType<typeof setTimeout>>();
@@ -199,6 +200,35 @@ export class DurableSupervisor {
 		this.#sink = undefined;
 		this.#errorHandler = undefined;
 		this.#listeners.clear();
+	}
+	async quiesce(): Promise<void> {
+		this.#updatePaused = true;
+		for (const timer of this.#retries.values()) clearTimeout(timer);
+		this.#retries.clear();
+		for (const worker of this.#workers.values()) {
+			clearTimeout(worker.deadline);
+			clearTimeout(worker.park);
+		}
+		await Promise.all(
+			[...this.#workers.values()].map(async (worker) => {
+				if (!worker.connection.quiesce) throw new Error("Subagent worker cannot drain tools");
+				await worker.connection.quiesce();
+			}),
+		);
+		await Promise.all([...this.#serial.values()]);
+	}
+	resumeTools(): void {
+		this.#updatePaused = false;
+		for (const worker of this.#workers.values()) worker.connection.resumeTools?.();
+		for (const record of this.#records.values()) {
+			if (pending(record).length)
+				this.#background(
+					this.#locked(record.name, async () => {
+						for (const input of pending(this.#record(record.name))) await this.#dispatch(record, input.id);
+					}),
+				);
+			this.#arm(record.name);
+		}
 	}
 	list(): SubagentStatus[] {
 		return [...this.#records.values()].map((record) => asStatus(record, false));
@@ -414,6 +444,7 @@ export class DurableSupervisor {
 		});
 	}
 	async #dispatch(record: NamedRecord, inputId?: string): Promise<void> {
+		if (this.#updatePaused) return;
 		this.#healthy();
 		if (this.#closing) throw new Error("Subagents are shutting down");
 		if (record.retired) throw new Error("This night subagent has been retired");
@@ -447,7 +478,7 @@ export class DurableSupervisor {
 			this.#workers.set(record.id, live);
 			live.restored = (async () => {
 				await this.#statusChanged(record.name, await connection.ready);
-				if (this.#closing) return;
+				if (this.#closing || this.#updatePaused) return;
 				const current = this.#record(record.name);
 				if (current.stopRequested || (pending(current).length && current.deadlineAt! <= Date.now())) {
 					await this.#finishStop(
@@ -457,7 +488,7 @@ export class DurableSupervisor {
 					);
 				} else {
 					for (const input of pending(current)) {
-						if (this.#closing || this.#closed) return;
+						if (this.#closing || this.#closed || this.#updatePaused) return;
 						await this.#statusChanged(
 							current.name,
 							await connection.input(input.id, input.message, input.followUp),
@@ -469,7 +500,7 @@ export class DurableSupervisor {
 			await live.restored;
 		} else {
 			await live.restored;
-			if (this.#closing) return;
+			if (this.#closing || this.#updatePaused) return;
 			const current = this.#record(record.name);
 			if (current.stopRequested || (pending(current).length && current.deadlineAt! <= Date.now()))
 				await this.#finishStop(
@@ -544,7 +575,7 @@ export class DurableSupervisor {
 		this.#background(this.flushReports());
 	}
 	#arm(name: string): void {
-		if (this.#closing || this.#closed) return;
+		if (this.#closing || this.#closed || this.#updatePaused) return;
 		const record = this.#record(name);
 		const worker = this.#workers.get(record.id);
 		if (!worker) return;
