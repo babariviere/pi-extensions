@@ -44,11 +44,6 @@ const blocked: Array<[command: string, reason: RegExp]> = [
 	["(cd /tmp && rm -rf ~)", /home directory/],
 	["echo $(rm -rf ~)", /home directory/],
 	// Direct manual file mutation syntax.
-	['python -c \'from pathlib import Path; Path("x").write_text("y")\'', /inline 'python' program/],
-	['python -qc \'open("x", "w").write("y")\'', /inline 'python' program/],
-	['python3.12 -c \'open("x", "w").write("y")\'', /inline 'python3.12' program/],
-	["pypy3 -c 'print(1)'", /inline 'pypy3' program/],
-	["python - <<'PY'\nprint(1)\nPY", /inline 'python' program/],
 	["perl <<'PL'\nprint 1\nPL", /inline 'perl' program/],
 	['perl -e \'open my $fh, ">", "x"\'', /inline 'perl' program/],
 	["perl -pi -e 's/a/b/' file.txt", /inline 'perl' program/],
@@ -67,6 +62,8 @@ const blocked: Array<[command: string, reason: RegExp]> = [
 	['awk \'BEGIN { print "new" > "file.txt" }\'', /inline 'awk' program/],
 	["gawk -i inplace '{ sub(/a/, \"b\") }' file.txt", /'gawk' in-place edit/],
 	["bash -c 'echo nested > file.txt'", /shell output redirection/],
+	["python -c 'print(1)' > file.txt", /shell output redirection/],
+	["python -c 'print(1)' && rm -rf ~", /home directory/],
 	// Permissions, devices and machine control.
 	["chmod -R 777 /", /recursive 'chmod' on the filesystem root/],
 	["chmod -r 777 /", /recursive 'chmod'/],
@@ -94,6 +91,17 @@ const blocked: Array<[command: string, reason: RegExp]> = [
 ];
 
 const allowed = [
+	// Inline Python is allowed, including programs that may write files.
+	"python -c 'print(1)'",
+	'python -c \'from pathlib import Path; Path("x").write_text("y")\'',
+	'python -qc \'open("x", "w").write("y")\'',
+	'python3.12 -c \'open("x", "w").write("y")\'',
+	"pypy3 -c 'print(1)'",
+	"python - <<'PY'\nprint(1)\nPY",
+	"python3 <<'PY'\nprint(1)\nPY",
+	"printf 'print(1)' | python -",
+	"env FOO=1 /usr/bin/python3 -c 'print(1)'",
+	"bash -c \"python -c 'print(1)'\"",
 	// Interpreter files and modules are explicit automation, not inline edit workarounds.
 	"python scripts/rewrite.py",
 	"python -m pytest",
@@ -168,8 +176,8 @@ for (const command of allowed) {
 }
 
 test("literal argv checks mutations without treating arguments as shell syntax", () => {
-	assert.match(checkArgv(["python", "-c", 'open("x", "w")'], ctx)?.reason ?? "", /inline 'python'/);
-	assert.match(checkArgv(["python", "-"], ctx)?.reason ?? "", /inline 'python'/);
+	assert.equal(checkArgv(["python", "-c", 'open("x", "w")'], ctx), null);
+	assert.equal(checkArgv(["python", "-"], ctx), null);
 	assert.match(checkArgv(["sed", "-i", "s/a/b/", "file.txt"], ctx)?.reason ?? "", /in-place edit/);
 	assert.equal(checkArgv(["printf", ">", "file.txt"], ctx), null);
 	assert.equal(checkArgv(["python", "scripts/generate.py"], ctx), null);

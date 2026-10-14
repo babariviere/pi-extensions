@@ -359,8 +359,7 @@ function classifyTarget(target: string, ctx: GuardrailContext): string | null {
 	return null;
 }
 
-/** Interpreters whose command-string modes are too opaque for safe inline file edits. */
-const PYTHON_INTERPRETER = /^(?:python(?:\d+(?:\.\d+)*)?|pypy(?:\d+)?)$/;
+/** Interpreters with direct-edit restrictions. Python programs are intentionally allowed. */
 const PERL_INTERPRETER = /^perl(?:\d+(?:\.\d+)*)?$/;
 const AWK_INTERPRETER = /^(?:awk|gawk|mawk|nawk)$/;
 
@@ -373,13 +372,12 @@ function hasOption(args: string[], predicate: (arg: string) => boolean): boolean
 	return false;
 }
 
-function readsProgramFromStdin(args: string[], allowModule: boolean): boolean {
+function readsProgramFromStdin(args: string[]): boolean {
 	if (args.length === 0) return true;
 	for (let i = 0; i < args.length; i++) {
 		const arg = args[i];
 		if (arg === "--") return args[i + 1] === undefined || args[i + 1] === "-";
 		if (arg === "-" || arg.startsWith("<<")) return true;
-		if (allowModule && (arg === "-m" || arg.startsWith("-m"))) return false;
 		if (arg === "-W" || arg === "-X") {
 			i++;
 			continue;
@@ -464,14 +462,8 @@ function checkCommandSegment(segment: string, ctx: GuardrailContext, depth: numb
 	const hit = (reason: string): GuardrailHit => ({ reason, match: segment.trim() });
 
 	if (
-		PYTHON_INTERPRETER.test(cmd.name) &&
-		(hasOption(cmd.args, (arg) => /^-[^-]*c/.test(arg)) || readsProgramFromStdin(cmd.args, true))
-	) {
-		return hit(`inline '${cmd.name}' program; use the write or edit tool instead`);
-	}
-	if (
 		PERL_INTERPRETER.test(cmd.name) &&
-		(hasOption(cmd.args, (arg) => /^-[^-]*[eE]/.test(arg)) || readsProgramFromStdin(cmd.args, false))
+		(hasOption(cmd.args, (arg) => /^-[^-]*[eE]/.test(arg)) || readsProgramFromStdin(cmd.args))
 	) {
 		return hit(`inline '${cmd.name}' program; use the write or edit tool instead`);
 	}

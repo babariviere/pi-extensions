@@ -14,7 +14,7 @@ they run.
 | raw device writes | `dd of=/dev/rdisk0`, `echo x > /dev/sda`, `mkfs.ext4 ...`, `diskutil eraseDisk` |
 | shell self-harm | fork bombs, `curl ... \| sh`, `wget ... \| sudo -E bash` |
 | machine control | `shutdown`, `reboot`, `halt`, `poweroff`, `systemctl poweroff`, `init 0` |
-| inline interpreter edits | `python -c '...'`, `perl -e '...'` (use script files or `python -m` instead) |
+| inline Perl programs | `perl -e '...'`, `perl -pi -e '...'` (use script files instead) |
 | direct text edits | `sed -i`, `gawk -i inplace`, mutating inline `awk`, `tee file` |
 | output redirection to files outside `/tmp` or `$TMPDIR` | `> file`, `>> file`, `2>errors.log`, `&>all.log`, `<>state` |
 
@@ -32,9 +32,12 @@ Quoted text and `#` comments are inert, so `echo 'rm -rf ~ is bad'` and
 `rg 'curl .* | sh' docs/` are not blocked. Read-only filters, file-descriptor
 duplication, `/dev/null` output, redirects to fixed paths beneath `/tmp` or
 `$TMPDIR`, and ordinary here-doc input pass. Here-docs
-that feed an inline Python or Perl program are blocked. Interpreter script
-files and `python -m` modules also pass. Package and repository automation,
-tests, formatters, generators, migrations, and builds remain allowed. Examples
+that feed an inline Perl program are blocked. Inline Python is allowed, including
+`python -c`, heredocs, stdin programs, and PyPy. Interpreter script files and
+`python -m` modules also pass. Prefer `applyPatch` (or edit/write tools) for source
+edits; Python is available for local computation, parsing, and libraries.
+Package and repository automation, tests, formatters, generators, migrations,
+and builds remain allowed. Examples
 include `sed -n`, ordinary `awk`, `npm install`, `git checkout`, `cargo fmt`,
 `go generate`, and `npm run build`.
 
@@ -64,5 +67,9 @@ what a relative target means, and indirect mutations hidden inside allowed
 automation. System subtrees are not protected either, only the top-level
 directories themselves: `rm -rf /usr`
 blocks, `rm -rf /usr/bin` does not.
+
+Python programs are not inspected for file writes or destructive operations.
+Use the filesystem sandbox for actual write restrictions. Native codemode's
+QuickJS sandbox does not restrict the filesystem access of tools it calls.
 
 It catches mistakes, not adversaries.

@@ -32,12 +32,22 @@ test("blocks direct mutation through literal exec argv", () => {
 	assert.match(decision?.reason ?? "", /'sed' in-place edit/);
 });
 
-test("blocks an exec interpreter program supplied on stdin", () => {
+test("allows an exec Python program supplied on stdin", () => {
 	const decision = evaluateBashCall(event("exec", { argv: ["python", "-"], stdin: 'open("file.txt", "w")' }), {
 		enabled: true,
 		context,
 	});
-	assert.match(decision?.reason ?? "", /inline 'python' program/);
+	assert.equal(decision, undefined);
+});
+
+test("allows inline Python through bash, exec, and codemode-nested calls", () => {
+	for (const call of [
+		event("bash", { command: "python -c 'print(1)'" }),
+		event("exec", { argv: ["python3", "-c", "print(1)"] }),
+		{ ...event("bash", { command: "python - <<'PY'\nprint(1)\nPY" }), parentToolCallId: "codemode" },
+	]) {
+		assert.equal(evaluateBashCall(call, { enabled: true, context }), undefined);
+	}
 });
 
 test("allows exec script files and literal shell metacharacters", () => {
