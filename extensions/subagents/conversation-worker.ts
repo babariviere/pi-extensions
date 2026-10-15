@@ -23,6 +23,7 @@ export interface WorkerAdapter {
 	onToolsChanged?: (extension: Extension) => void;
 	bindHarness(harness: ConversationRuntime["harness"], conversationId: ConversationRuntime["conversationId"]): void;
 	prepareInput?(content: string): Promise<string>;
+	waitForSubscription?(signal?: AbortSignal): Promise<void>;
 	close(): Promise<void>;
 }
 export interface WorkerDependencies {
@@ -179,6 +180,7 @@ export function installConversationWorker(host: WorkerHost, deps: WorkerDependen
 			model: adapter.model,
 			thinkingLevel: adapter.thinkingLevel,
 			cwd: runCwd(launch.request, launch.context),
+			beforeToolAdmission: (context) => adapter!.waitForSubscription?.(context.abortSignal) ?? Promise.resolve(),
 		});
 		adapter.onToolsChanged = (extension) => runtime!.installExtension(extension);
 		adapter.bindHarness(runtime.harness, runtime.conversationId);

@@ -48,6 +48,7 @@ import { agentSandboxFloor } from "../sandbox/agent-floor.ts";
 import { runCwd, type RunContext, type RunRequest } from "./run.ts";
 import { EmbeddedResourceLoader } from "../../embedding/resource-loader.mjs";
 import { PILOT_EXTENSION_NAMES } from "../../embedding/profile.mjs";
+import { SubscriptionGate } from "../../embedding/subscription-gate.mjs";
 
 type LoaderOptions = ConstructorParameters<typeof DefaultResourceLoader>[0];
 function emitUserStart(runner: AgentSession["extensionRunner"], prompt: string) {
@@ -138,6 +139,8 @@ export class NativeAdapter {
 	#harness?: Harness;
 	#conversationId?: ConversationId;
 	#closed = false;
+	readonly #subscriptionGate = new SubscriptionGate();
+	#physicalSubscriptionProvider?: string;
 	#renderPrompt?: () => string;
 	#forcedPrompt?: string;
 	#startMessages: Message[] = [];
@@ -603,6 +606,10 @@ export class NativeAdapter {
 		return this.extension;
 	}
 
+	waitForSubscription(signal?: AbortSignal): Promise<void> {
+		return this.#subscriptionGate.wait(this.#physicalSubscriptionProvider ?? this.model.provider, signal);
+	}
+
 	private requestStream(
 		dispatch: () => AssistantMessageEventStream,
 		model: Parameters<Models["streamSimple"]>[0],
@@ -611,6 +618,7 @@ export class NativeAdapter {
 		const stream = createAssistantMessageEventStream();
 		void (async () => {
 			try {
+				await this.#subscriptionGate.wait(model.provider, signal);
 				if (this.#harness)
 					await this.sync(signal ? withAbortSignal(signal, BACKGROUND_CONTEXT) : BACKGROUND_CONTEXT);
 				this.assertOpen();
@@ -658,7 +666,11 @@ export class NativeAdapter {
 			onPayload: async (
 				payload: unknown,
 				model: Parameters<NonNullable<ModelsSimpleStreamOptions["onPayload"]>>[1],
-			) => runner.emitBeforeProviderRequest((await options?.onPayload?.(payload, model)) ?? payload),
+			) => {
+				this.#physicalSubscriptionProvider = model.provider;
+				await this.#subscriptionGate.wait(model.provider, options.signal);
+				return runner.emitBeforeProviderRequest((await options?.onPayload?.(payload, model)) ?? payload);
+			},
 			transformHeaders: async (headers) =>
 				runner.emitBeforeProviderHeaders((await options?.transformHeaders?.(headers)) ?? headers),
 			onResponse: async (response, model) => {

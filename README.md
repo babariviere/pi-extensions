@@ -77,6 +77,13 @@ Subagent workers use this loader when both `PILOT_PI_EXTENSIONS_PROFILE` and
 Without either variable, standalone Pi worker discovery is unchanged. The embedding package does not
 choose or install an auth provider itself; the host pins and supplies its required auth extension.
 
+`@babariviere/pi-extensions/subscription-gate` exports a host admission gate. Pilot supplies a private
+per-chat `PILOT_SUBSCRIPTION_POLICY` file, inherited by child workers. Native child model requests
+(including compaction and resolved virtual routes) and new tool admissions respect that policy.
+Already admitted tools finish normally. Missing/malformed configured policy holds work, and Stop
+cancels the wait. Window resets and explicit per-chat, per-window exemptions release admission.
+Standalone Pi without this host variable is unchanged; children do not poll providers or read credentials.
+
 ## Native codemode and MCP
 
 Pi owns `codemode`, `tool_search`, MCP connections, OAuth, discovery, QuickJS

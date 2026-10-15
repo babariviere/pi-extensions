@@ -1,5 +1,6 @@
 /** Harness owns the conversation, generation loop, and checkpointed delivery tasks. */
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import type { Context } from "@earendil-works/chord";
 import type { Models, ModelThinkingLevel } from "@earendil-works/pi-ai";
 import {
 	AgentDoc,
@@ -147,6 +148,7 @@ export interface ConversationRuntimeOptions {
 	cwd: string;
 	model: ModelRef;
 	thinkingLevel?: ModelThinkingLevel;
+	beforeToolAdmission?: (context: Context) => Promise<void>;
 }
 
 export class ConversationRuntime {
@@ -162,6 +164,7 @@ export class ConversationRuntime {
 		readonly child: Conversation,
 		private readonly registry: Registry,
 		toolDrain: ToolDrain,
+		private readonly beforeToolAdmission?: (context: Context) => Promise<void>,
 	) {
 		this.toolDrain = toolDrain;
 	}
@@ -206,10 +209,17 @@ export class ConversationRuntime {
 		const toolDrain = new ToolDrain();
 		// Arbitrary native tools are unsafe even if their annotations claim idempotence.
 		registry.install(
-			toolDrain.prepare({
-				...options.extension,
-				tools: options.extension.tools?.map((tool) => ({ ...tool, replay: "unsafe", executionMode: "sequential" })),
-			}),
+			toolDrain.prepare(
+				{
+					...options.extension,
+					tools: options.extension.tools?.map((tool) => ({
+						...tool,
+						replay: "unsafe",
+						executionMode: "sequential",
+					})),
+				},
+				options.beforeToolAdmission,
+			),
 		);
 		registry.install(RuntimeExtension);
 		const harness = await Harness.open(
@@ -238,7 +248,7 @@ export class ConversationRuntime {
 			const child = await harness.conversation(childId, context);
 			if (!child) throw new Error(`Missing durable child ${childId}`);
 			// Bind the native kernel before resume(), so reopened tools cannot race binding.
-			return new ConversationRuntime(harness, root, child, registry, toolDrain);
+			return new ConversationRuntime(harness, root, child, registry, toolDrain, options.beforeToolAdmission);
 		} catch (error) {
 			await harness.close(context);
 			throw error;
@@ -265,10 +275,13 @@ export class ConversationRuntime {
 	/** Native MCP/tool_search loadout updates keep replay safety at this boundary. */
 	installExtension(extension: Extension): void {
 		this.registry.install(
-			this.toolDrain.prepare({
-				...extension,
-				tools: extension.tools?.map((tool) => ({ ...tool, replay: "unsafe", executionMode: "sequential" })),
-			}),
+			this.toolDrain.prepare(
+				{
+					...extension,
+					tools: extension.tools?.map((tool) => ({ ...tool, replay: "unsafe", executionMode: "sequential" })),
+				},
+				this.beforeToolAdmission,
+			),
 		);
 	}
 

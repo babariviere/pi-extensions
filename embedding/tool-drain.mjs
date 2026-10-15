@@ -8,7 +8,7 @@ export class ToolDrain {
 	#release;
 	#resumed = Promise.resolve();
 
-	prepare(extension) {
+	prepare(extension, beforeAdmission) {
 		const wait = async (context) => {
 			while (this.#paused) await awaitWithContext(this.#resumed, context);
 		};
@@ -17,6 +17,8 @@ export class ToolDrain {
 			hooks: [
 				hook(ToolTask, {
 					beforeTool: async (_call, api, context) => {
+						// Quota waits precede admission, so a drain never waits on an unstarted tool.
+						if (beforeAdmission) await beforeAdmission(context);
 						// Record permission synchronously when open, before any await. beforeTool is
 						// before the unsafe intent checkpoint, so blocked calls survive reopen intact.
 						while (this.#paused) await awaitWithContext(this.#resumed, context);
