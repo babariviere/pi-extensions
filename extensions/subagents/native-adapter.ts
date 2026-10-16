@@ -52,13 +52,10 @@ import { SubscriptionGate } from "../../embedding/subscription-gate.mjs";
 
 type LoaderOptions = ConstructorParameters<typeof DefaultResourceLoader>[0];
 function emitUserStart(runner: AgentSession["extensionRunner"], prompt: string) {
-	const options = runner.createCommandContext().getSystemPromptOptions();
-	// Pi 1.1 takes (prompt, images, options); Pi 1.2 takes (trigger, options).
-	// Keep the compatibility cast at this boundary and preserve the runner receiver.
-	const emit = runner.emitBeforeAgentStart.bind(runner) as (
-		...args: unknown[]
-	) => ReturnType<AgentSession["extensionRunner"]["emitBeforeAgentStart"]>;
-	return emit.length === 3 ? emit(prompt, undefined, options) : emit({ messageType: "user", prompt }, options);
+	return runner.emitBeforeAgentStart(
+		{ messageType: "user", prompt },
+		runner.createCommandContext().getSystemPromptOptions(),
+	);
 }
 /** Optional dependency injection for offline tests and worker-owned SDK services. */
 export interface NativeAdapterOptions {
