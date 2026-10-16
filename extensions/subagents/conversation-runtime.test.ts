@@ -400,7 +400,7 @@ test("steering coalesces to one answer report; follow-up starts a separate run",
 		execute: async () => {
 			started = true;
 			await gate;
-			return { content: [{ type: "text", text: "done" }] };
+			return { output: [{ type: "text", text: "done" }] };
 		},
 	});
 	const { faux, options } = setup(defineExtension({ name: "test-native", tools: [tool] }));
@@ -754,7 +754,7 @@ test("native tools remain sequential even with parallel annotations and dynamic 
 		execute: async () => {
 			started++;
 			if (started === 1) await gate;
-			return { content: [{ type: "text", text: "done" }] };
+			return { output: [{ type: "text", text: "done" }] };
 		},
 	});
 	const { faux, options } = setup();

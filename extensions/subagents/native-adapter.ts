@@ -100,7 +100,7 @@ function metadata(details: unknown): NativeMetadata | undefined {
 function nativeResult(result: ToolExecutionResult): AgentToolResult<unknown> {
 	const meta = metadata(result.details);
 	return {
-		content: result.content ?? [],
+		content: result.output ?? [],
 		details: meta ? meta.details : result.details,
 		structuredContent: meta?.structuredContent,
 		isError: result.isError,
@@ -112,7 +112,7 @@ function durableResult(result: AgentToolResult<unknown>): ToolExecutionResult {
 	const details = json(result.details);
 	const structuredContent = json(result.structuredContent);
 	return {
-		content: result.content,
+		output: result.content,
 		...(result.isError === undefined ? {} : { isError: result.isError }),
 		...(structuredContent !== undefined
 			? {

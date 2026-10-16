@@ -44,7 +44,7 @@ test("drain waits for committed tool results, preserves not-yet-started calls an
 						started.resolve();
 						await finish.promise;
 					}
-					return { content: [{ type: "text", text: "saved" }] };
+					return { output: [{ type: "text", text: "saved" }] };
 				},
 			}),
 		],
