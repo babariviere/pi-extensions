@@ -5,7 +5,7 @@ export interface BrowserSettings {
 	port: number;
 	/** Close a page after this long without any action on it. */
 	idleTimeoutMs: number;
-	/** Fixed layout viewport for every page, in CSS pixels. */
+	/** Fixed layout viewport while hidden, in CSS pixels. Visible pages follow their window size. */
 	viewport: { width: number; height: number };
 	/** Upper bound for open, navigate, and back to load a page. */
 	navigationTimeoutMs: number;

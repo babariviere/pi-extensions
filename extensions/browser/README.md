@@ -26,7 +26,7 @@ image(shot.image);
 | `scroll` | | `direction`, `amount`, `ref` | Scroll the page, or scroll an element into view. |
 | `back` | | | Go back in the page's history. |
 | `eval` | `expression` | | Run JavaScript in the page; promises are awaited. |
-| `screenshot` | | `fullPage` | Capture the viewport (1280x800) or the whole page (capped at 10,000 px). |
+| `screenshot` | | `fullPage` | Capture the current viewport or the whole page (capped at 10,000 px). |
 | `list` | | | List this session's open pages. |
 | `close` | | | Close a page. |
 | `show` | | | Bring the browser on screen at that page, to watch or help (e.g. a CAPTCHA). |
@@ -51,6 +51,10 @@ sessions are never touched. The profile is persistent, so cookies survive betwee
 Pages are ordinary tabs in that instance, which runs hidden. Nothing appears on screen until `show`. `hide` minimizes
 the agent's windows and hides the app again; minimizing matters because macOS un-hides an app that has been shown
 once when it creates a new tab.
+
+Hidden pages use a fixed 1280x800 viewport. While shown, pages follow their actual window size, including changes
+from tiling window managers such as Karousel. This also applies to new tabs opened while visible. `hide` restores
+the fixed viewport. Scrolling and screenshots use the current viewport dimensions.
 
 ## Lifetime
 

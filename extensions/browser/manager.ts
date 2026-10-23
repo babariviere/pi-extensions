@@ -282,11 +282,7 @@ export class BrowserManager {
 		await session.call("Page.addScriptToEvaluateOnNewDocument", { source: SAME_TAB_SCRIPT });
 		// The window stays hidden; focus emulation keeps timers and rendering running.
 		await session.call("Emulation.setFocusEmulationEnabled", { enabled: true });
-		await session.call("Emulation.setDeviceMetricsOverride", {
-			...this.settings.viewport,
-			deviceScaleFactor: 1,
-			mobile: false,
-		});
+		await this.updateViewport(page);
 		return page;
 	}
 
@@ -486,7 +482,8 @@ export class BrowserManager {
 			);
 			if (!found) throw staleRef(params.ref);
 		} else {
-			const { width, height } = this.settings.viewport;
+			const { cssLayoutViewport } = await page.session.call("Page.getLayoutMetrics");
+			const { clientWidth: width, clientHeight: height } = cssLayoutViewport;
 			const direction = params.direction ?? "down";
 			const amount =
 				params.amount ?? Math.round((direction === "left" || direction === "right" ? width : height) * 0.8);
@@ -527,7 +524,7 @@ export class BrowserManager {
 				this.settings.maxScreenshotHeight,
 			);
 			params.captureBeyondViewport = true;
-			params.clip = { x: 0, y: 0, width: this.settings.viewport.width, height, scale: 1 };
+			params.clip = { x: 0, y: 0, width: metrics.cssLayoutViewport.clientWidth, height, scale: 1 };
 		}
 		const shot = await page.session.call("Page.captureScreenshot", params);
 		return { type: "image", data: shot.data, mimeType: "image/png" };
@@ -573,10 +570,25 @@ export class BrowserManager {
 
 	// --- window visibility -------------------------------------------------
 
+	private async updateViewport(page: Page): Promise<void> {
+		if (this.visible) {
+			// Let the compositor (including tiling window managers) size visible pages.
+			await page.session.call("Emulation.clearDeviceMetricsOverride");
+		} else {
+			await page.session.call("Emulation.setDeviceMetricsOverride", {
+				...this.settings.viewport,
+				deviceScaleFactor: 1,
+				mobile: false,
+			});
+		}
+	}
+
 	private async show(page: Page): Promise<void> {
 		const cdp = await this.connection();
 		this.visible = true;
 		this.revealed = true;
+		// A tab may close during the update; it must not block window visibility.
+		await Promise.allSettled([...this.pages.values()].map((page) => this.updateViewport(page)));
 		await cdp.call("Target.activateTarget", { targetId: page.targetId });
 		const { windowId } = await cdp.call("Browser.getWindowForTarget", { targetId: page.targetId });
 		await cdp.call("Browser.setWindowBounds", { windowId, bounds: { windowState: "normal" } }).catch(() => {});
@@ -586,6 +598,7 @@ export class BrowserManager {
 	private async hide(): Promise<void> {
 		const cdp = await this.connection();
 		this.visible = false;
+		await Promise.allSettled([...this.pages.values()].map((page) => this.updateViewport(page)));
 		// Minimize too: once the app has been activated, macOS un-hides it when a
 		// new tab is created, but tabs added to a minimized window stay put.
 		for (const page of this.pages.values()) {
