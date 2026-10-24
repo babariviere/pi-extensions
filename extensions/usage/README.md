@@ -33,6 +33,6 @@ updating means no pi process currently uses that provider.
 
 ## Commands
 
-`/usage` or `/usage status` shows provider usage, the current poller, and reset times. The Codex 5h and weekly windows are informational and do not block tool calls.
+`/usage` or `/usage status` shows provider usage, the current poller, and reset times. The windows are informational on their own: turning a limit into a pause is the night-mode extension's job, and it only does so for the provider behind the model in use.
 
 Usage polling reads OAuth credentials through pi's credential store, which refreshes expired tokens, then falls back to Claude Code's keychain entry or Codex CLI credentials. It calls the provider usage endpoints, does not use API keys, and the undocumented Codex endpoint may change or become unavailable.

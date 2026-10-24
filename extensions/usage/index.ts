@@ -4,7 +4,7 @@
  * republishes the shared cache on its own event bus.
  */
 
-import { type ExtensionAPI, getAgentDir, type ModelRegistry, type SessionEntry } from "@earendil-works/pi-coding-agent";
+import { type ExtensionAPI, getAgentDir, type ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { formatLocalDateTime } from "./format.ts";
 import {
 	FIVE_HOUR_LABEL,
@@ -15,13 +15,8 @@ import {
 	type UsageProvider,
 	type UsageSnapshot,
 	type UsageSnapshotEvent,
-	usageProviderForModel,
 } from "./protocol.ts";
-import {
-	latestRoutedPhysicalModel,
-	routedPhysicalModelFromMessage,
-	type RoutedPhysicalModel,
-} from "../shared/routed-model.ts";
+import { UsageModelTracker } from "../shared/usage-model.ts";
 import {
 	acquireLease,
 	fetchWithCache,
@@ -37,37 +32,7 @@ const UNAVAILABLE: UsageSnapshot = { windows: [] };
 
 const percent = (value: number | undefined): string => (value === undefined ? "unknown" : `${value.toFixed(1)}%`);
 
-type ModelRef = { provider?: string; id?: string; api?: string } | undefined;
-
-/** Tracks the selected model separately from the last physical model on the active branch. */
-export class UsageModelTracker {
-	private selected: ModelRef = undefined;
-	private physical: RoutedPhysicalModel | undefined;
-
-	startSession(selected: ModelRef, branch: readonly SessionEntry[]): void {
-		this.selected = selected;
-		this.physical = latestRoutedPhysicalModel(branch);
-	}
-
-	selectModel(selected: ModelRef): void {
-		this.selected = selected;
-	}
-
-	changeBranch(selected: ModelRef, branch: readonly SessionEntry[]): void {
-		this.startSession(selected, branch);
-	}
-
-	messageEnded(message: unknown): boolean {
-		const physical = routedPhysicalModelFromMessage(message);
-		if (!physical) return false;
-		this.physical = physical;
-		return true;
-	}
-
-	get currentModel(): ModelRef | RoutedPhysicalModel {
-		return this.selected?.api === "pi-virtual" ? (this.physical ?? this.selected) : this.selected;
-	}
-}
+export { UsageModelTracker };
 
 export default function (pi: ExtensionAPI): void {
 	let last: UsageSnapshotEvent | undefined;
@@ -81,7 +46,7 @@ export default function (pi: ExtensionAPI): void {
 	const agentDir = getAgentDir();
 
 	function provider(): UsageProvider | undefined {
-		return usageProviderForModel(modelTracker.currentModel);
+		return modelTracker.usageProvider;
 	}
 
 	function publish(snapshot: UsageSnapshot, fetchedAt = Date.now()): void {

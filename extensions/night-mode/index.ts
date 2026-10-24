@@ -29,9 +29,11 @@ import {
 	isUsageSnapshotEvent,
 	USAGE_REQUEST_EVENT,
 	USAGE_SNAPSHOT_EVENT,
+	type UsageProvider,
 	type UsageSnapshot,
 	WEEK_LABEL,
 } from "../usage/protocol.ts";
+import { UsageModelTracker } from "../shared/usage-model.ts";
 import {
 	formatDateTimeStamp,
 	NEEDS_HUMAN_HEADING,
@@ -69,6 +71,7 @@ import {
 	type NightWindow,
 	type PauseReason,
 	pauseReasonFor,
+	type ResumeCause,
 	RESUME_RETRY_MS,
 	shouldHoldCaffeinate,
 	WEEKLY_RETRY_MS,
@@ -136,16 +139,23 @@ export interface NightModeState {
 export default function (pi: ExtensionAPI): void {
 	let ctxRef: ExtensionContext | undefined;
 	let wakeLock: WakeLock | undefined;
-	let usage: UsageSnapshot | undefined;
+	/** The latest usage snapshot per subscription provider. */
+	const usageByProvider = new Map<UsageProvider, UsageSnapshot>();
+	/** Which model the session is really running on, for the provider-aware guard. */
+	const modelTracker = new UsageModelTracker();
 	let enabled = true;
 	let inWindow = false;
 	let paused = false;
 	/** Which window caused the current pause. */
 	let pausedReason: PauseReason | undefined;
+	/** Which subscription provider the current pause belongs to. */
+	let pausedProvider: UsageProvider | undefined;
 	/** When the current pause started, for the resume prompt. */
 	let pausedAt: Date | undefined;
 	/** True between `agent_start` and `agent_settled`. */
 	let agentBusy = false;
+	/** True while a pause transition runs, so evaluation cannot re-enter itself. */
+	let transitioning = false;
 	let resumeAt: number | undefined;
 	let resumeTimer: ReturnType<typeof setTimeout> | undefined;
 	let tickTimer: ReturnType<typeof setInterval> | undefined;
@@ -160,9 +170,25 @@ export default function (pi: ExtensionAPI): void {
 
 	const currentWindow = (): NightWindow => windowOverride ?? DEFAULT_WINDOW;
 
-	const fiveHour = () => findWindow(usage, FIVE_HOUR_LABEL);
+	/** The subscription provider backing the model in use, if there is one. */
+	const activeProvider = (): UsageProvider | undefined => modelTracker.usageProvider;
+
+	/**
+	 * The usage reading for the provider in use.
+	 *
+	 * The guard follows the model the session actually runs on. A snapshot for
+	 * another provider says nothing about the one in use, and a session on a
+	 * model with no subscription windows (local, API key, another provider) has
+	 * no limit to guard at all.
+	 */
+	const currentUsage = (): UsageSnapshot | undefined => {
+		const provider = activeProvider();
+		return provider ? usageByProvider.get(provider) : undefined;
+	};
+
+	const fiveHour = () => findWindow(currentUsage(), FIVE_HOUR_LABEL);
 	const usedPercent = () => fiveHour()?.usedPercent;
-	const week = () => findWindow(usage, WEEK_LABEL);
+	const week = () => findWindow(currentUsage(), WEEK_LABEL);
 	const weekPercent = () => week()?.usedPercent;
 
 	/** The window that should stop the run right now, weekly first. */
@@ -182,6 +208,9 @@ export default function (pi: ExtensionAPI): void {
 
 	const limitLabel = (reason: PauseReason | undefined): string =>
 		reason === "week" ? "weekly usage limit" : "5h usage window";
+
+	/** Human name of a subscription provider, for messages and the footer. */
+	const providerLabel = (provider: UsageProvider | undefined): string => (provider === "openai" ? "Codex" : "Claude");
 
 	// ── night run (prompt / instructions / report) ────────────────────────
 
@@ -830,12 +859,15 @@ export default function (pi: ExtensionAPI): void {
 		if (paused) return;
 		paused = true;
 		pausedReason = reason;
+		pausedProvider = activeProvider();
 		pausedAt = new Date();
 		scheduleResume();
 		const pct = Math.round(percentFor(reason) ?? 100);
+		const label = providerLabel(pausedProvider);
 		pi.appendEntry(PAUSE_ENTRY, {
 			status: "paused",
 			reason,
+			provider: pausedProvider,
 			at: pausedAt.toISOString(),
 			usedPercent: percentFor(reason),
 			resetsAt: reason === "week" ? undefined : fiveHour()?.resetsAt,
@@ -843,7 +875,7 @@ export default function (pi: ExtensionAPI): void {
 		});
 		report();
 		noteTimeline(
-			`⏸ paused: Claude ${limitLabel(reason)} at ${pct}%` +
+			`⏸ paused: ${label} ${limitLabel(reason)} at ${pct}%` +
 				(reason === "week"
 					? ", waiting for the week to roll over"
 					: resumeAt
@@ -851,7 +883,7 @@ export default function (pi: ExtensionAPI): void {
 						: ""),
 		);
 		ctxRef?.ui.notify(
-			`night-mode: Claude ${limitLabel(reason)} at ${pct}%, pausing` +
+			`night-mode: ${label} ${limitLabel(reason)} at ${pct}%, pausing` +
 				(reason === "week"
 					? " until the weekly window has room again"
 					: resumeAt
@@ -865,20 +897,21 @@ export default function (pi: ExtensionAPI): void {
 		if (!paused) return;
 		paused = false;
 		pausedReason = undefined;
+		pausedProvider = undefined;
 		pausedAt = undefined;
 		resumeAt = undefined;
 		clearResumeTimer();
 		report();
 	}
 
-	async function resume(): Promise<void> {
+	async function resume(cause: ResumeCause = "window"): Promise<void> {
 		resumeTimer = undefined;
 		if (!paused) return;
 
 		// Ask for a fresh reading before trusting the reset.
 		pi.events.emit(USAGE_REQUEST_EVENT, { reason: "night-mode-resume" });
 		const still = currentPauseReason();
-		if (still) {
+		if (still && cause === "window") {
 			// A 5h pause can turn into a weekly one while it waits, and the retry
 			// cadence differs, so re-read the reason instead of keeping the old one.
 			pausedReason = still;
@@ -889,24 +922,42 @@ export default function (pi: ExtensionAPI): void {
 
 		const reason = pausedReason ?? "5h";
 		const since = pausedAt;
+		const provider = pausedProvider;
+		const pct = percentFor(reason);
+		const label = providerLabel(provider);
 		paused = false;
 		pausedReason = undefined;
+		pausedProvider = undefined;
 		pausedAt = undefined;
 		resumeAt = undefined;
 		clearResumeTimer();
 		pi.appendEntry(PAUSE_ENTRY, {
 			status: "resumed",
 			reason,
+			provider,
 			at: new Date().toISOString(),
-			usedPercent: percentFor(reason),
+			usedPercent: pct,
 		});
 		report();
-		noteTimeline(reason === "week" ? "▶ resumed: weekly usage limit has room again" : "▶ resumed: 5h window reset");
-		ctxRef?.ui.notify(`night-mode: ${limitLabel(reason)} has room again, sending automated continue`, "info");
+		noteTimeline(
+			cause === "provider"
+				? `▶ resumed: the session moved off ${label}, so the usage guard no longer applies`
+				: reason === "week"
+					? "▶ resumed: weekly usage limit has room again"
+					: "▶ resumed: 5h window reset",
+		);
+		ctxRef?.ui.notify(
+			cause === "provider"
+				? `night-mode: the session moved off ${label}, resuming`
+				: `night-mode: ${label} ${limitLabel(reason)} has room again, sending automated continue`,
+			"info",
+		);
 		deliver(
 			composeResumePrompt({
 				reason,
 				now: new Date(),
+				cause,
+				...(provider ? { provider } : {}),
 				...(since ? { pausedAt: since } : {}),
 			}),
 		);
@@ -924,6 +975,7 @@ export default function (pi: ExtensionAPI): void {
 	}
 
 	function evaluate(): void {
+		if (transitioning) return;
 		void startPendingRun();
 		const active = enabled && !pendingStart && isWithinWindow(new Date(), currentWindow());
 		if (active !== inWindow) {
@@ -931,6 +983,17 @@ export default function (pi: ExtensionAPI): void {
 			if (!active) {
 				clearPause();
 				endRun("window closed");
+			}
+		}
+		if (inWindow && paused && pausedProvider !== activeProvider()) {
+			// The session moved to another model, so the limit that stopped the run
+			// says nothing about the model in use. Lift the pause and let the new
+			// provider's own reading decide whether it stops again.
+			transitioning = true;
+			try {
+				void resume("provider");
+			} finally {
+				transitioning = false;
 			}
 		}
 		if (inWindow && !paused) {
@@ -951,11 +1014,22 @@ export default function (pi: ExtensionAPI): void {
 			for (let i = entries.length - 1; i >= 0; i--) {
 				const entry = entries[i];
 				if (entry?.customType !== PAUSE_ENTRY) continue;
-				const data = entry.data as { status?: string; resumeAt?: number; reason?: string; at?: string } | undefined;
+				const data = entry.data as
+					| {
+							status?: string;
+							resumeAt?: number;
+							reason?: string;
+							at?: string;
+							provider?: string;
+					  }
+					| undefined;
 				// A pause from an older pacing-enabled session is no longer enforceable.
 				if (data?.status === "paused" && data.reason !== "pacing") {
 					paused = true;
 					pausedReason = data.reason === "week" ? "week" : "5h";
+					// Entries written before Codex limits were guarded name Claude,
+					// which was the only provider that could pause a run.
+					pausedProvider = data.provider === "openai" ? "openai" : "anthropic";
 					const at = data.at ? new Date(data.at) : undefined;
 					pausedAt = at && !Number.isNaN(at.getTime()) ? at : undefined;
 					armResume(Math.max(0, (data.resumeAt ?? Date.now()) - Date.now()));
@@ -987,8 +1061,15 @@ export default function (pi: ExtensionAPI): void {
 	// ── wiring ───────────────────────────────────────────────────────────
 
 	unsubscribeUsage = pi.events.on(USAGE_SNAPSHOT_EVENT, (data) => {
-		if (!isUsageSnapshotEvent(data) || data.snapshot.provider === "openai") return;
-		usage = data.snapshot;
+		if (!isUsageSnapshotEvent(data)) return;
+		const provider = data.snapshot.provider;
+		if (provider === "anthropic" || provider === "openai") {
+			usageByProvider.set(provider, data.snapshot);
+		} else {
+			// A snapshot without a provider means the active provider changed, so
+			// the readings on file belong to a model the session no longer uses.
+			usageByProvider.clear();
+		}
 		evaluate();
 	});
 
@@ -1035,6 +1116,7 @@ export default function (pi: ExtensionAPI): void {
 	pi.on("session_start", async (_event, ctx) => {
 		clearPendingStart();
 		ctxRef = ctx;
+		modelTracker.startSession(ctx.model, ctx.sessionManager.getBranch());
 		restore(ctx);
 		pi.events.emit(USAGE_REQUEST_EVENT, { reason: "night-mode-start" });
 		if (!tickTimer) {
@@ -1052,6 +1134,24 @@ export default function (pi: ExtensionAPI): void {
 
 	pi.on("agent_start", () => {
 		agentBusy = true;
+		evaluate();
+	});
+
+	// The budget guard follows the model in use, so every event that can change
+	// it re-evaluates: a session that moves from Claude to Codex (or to a model
+	// with no subscription windows) must stop being blocked by the old limit.
+	pi.on("model_select", async (event, ctx) => {
+		modelTracker.selectModel(event.model ?? ctx.model);
+		evaluate();
+	});
+
+	pi.on("message_end", (event) => {
+		if (!modelTracker.messageEnded(event.message)) return;
+		evaluate();
+	});
+
+	pi.on("session_tree", async (_event, ctx) => {
+		modelTracker.changeBranch(ctx.model, ctx.sessionManager.getBranch());
 		evaluate();
 	});
 
@@ -1148,6 +1248,10 @@ export default function (pi: ExtensionAPI): void {
 	pi.on("tool_call", (_event, ctx) => {
 		ctxRef = ctx;
 		if (!enabled || !inWindow || !paused) return;
+		// A pause belongs to the provider whose limit was hit. Once the session
+		// runs on another model, that limit no longer applies and the run is not
+		// blocked.
+		if (pausedProvider !== activeProvider()) return;
 		const until =
 			pausedReason === "week"
 				? "the weekly window has room again"
@@ -1158,7 +1262,7 @@ export default function (pi: ExtensionAPI): void {
 			block: true,
 			terminate: true,
 			reason:
-				`night-mode: Claude ${limitLabel(pausedReason)} at ${Math.round(percentFor(pausedReason) ?? 100)}% ` +
+				`night-mode: ${providerLabel(pausedProvider)} ${limitLabel(pausedReason)} at ${Math.round(percentFor(pausedReason) ?? 100)}% ` +
 				`(limit ${thresholdFor(pausedReason)}%). Stopping here until ${until}, ` +
 				"when an automated continue will be sent. Do not retry.",
 		};
@@ -1279,11 +1383,14 @@ export default function (pi: ExtensionAPI): void {
 				}
 				const reason = pausedReason ?? "5h";
 				const since = pausedAt;
+				const provider = pausedProvider;
 				clearPause();
 				deliver(
 					composeResumePrompt({
 						reason,
 						now: new Date(),
+						cause: "manual",
+						...(provider ? { provider } : {}),
 						...(since ? { pausedAt: since } : {}),
 					}),
 					ctx,
@@ -1294,14 +1401,16 @@ export default function (pi: ExtensionAPI): void {
 			const pct = usedPercent();
 			const weekly = weekPercent();
 			const resets = fiveHour()?.resetsAt;
+			const provider = activeProvider();
 			const lines = [
 				`night-mode: ${enabled ? "enabled" : "disabled"}`,
 				`window: ${formatWindow(currentWindow())} (${inWindow ? "inside" : "outside"}${windowOverride ? ", session override" : ""})`,
 				`wake lock: ${wakeLockLine()}`,
+				`usage provider: ${provider ? providerLabel(provider) : "none (the model in use has no subscription windows)"}`,
 				`5h usage: ${pct === undefined ? "unknown" : `${Math.round(pct)}% / ${DEFAULT_THRESHOLD_PERCENT}%`}`,
 				`5h reset: ${resets ? formatDuration(new Date(resets).getTime() - Date.now()) : "unknown"}`,
 				`week usage: ${weekly === undefined ? "unknown" : `${Math.round(weekly)}% / ${DEFAULT_WEEKLY_THRESHOLD_PERCENT}%`}`,
-				`paused: ${paused ? `yes (${limitLabel(pausedReason)}), resume in ${resumeAt ? formatDuration(resumeAt - Date.now()) : "?"}` : "no"}`,
+				`paused: ${paused ? `yes (${providerLabel(pausedProvider)} ${limitLabel(pausedReason)}), resume in ${resumeAt ? formatDuration(resumeAt - Date.now()) : "?"}` : "no"}`,
 				`phase: ${pendingStart ? `scheduled for ${formatDateTimeStamp(new Date(pendingStart.at))}` : run ? "executing" : "idle"}`,
 				`run: ${run ? `since ${formatDateTimeStamp(run.startedAt)}, report ${run.reportPath}` : "none"}`,
 				`working copy: ${run?.workspacePath ?? (run ? "session checkout (no clone)" : "n/a")}`,

@@ -15,6 +15,7 @@ import {
 	composeNudge,
 	composeLedgerReminder,
 	composeReportHeader,
+	composeResumePrompt,
 	hasInstructions,
 	ORCHESTRATOR_CONTRACT,
 	timelineLine,
@@ -349,6 +350,22 @@ describe("delegation rules earned from past nights", () => {
 		assert.match(ORCHESTRATOR_CONTRACT, /parent's physical model, pinned/);
 		assert.match(ORCHESTRATOR_CONTRACT, /Do not request a per-call model/);
 		assert.doesNotMatch(ORCHESTRATOR_CONTRACT, /claude-sonnet-5/);
+	});
+});
+
+describe("composeResumePrompt", () => {
+	const now = new Date(2026, 7, 29, 3, 12, 0, 0);
+
+	it("names the provider whose limit was hit", () => {
+		const claude = composeResumePrompt({ reason: "5h", now });
+		assert.match(claude, /the Claude 5h usage window has room again/);
+		const codex = composeResumePrompt({ reason: "5h", now, provider: "openai" });
+		assert.match(codex, /the Codex 5h usage window has room again/);
+	});
+
+	it("says the guard no longer applies when the session moved to another model", () => {
+		const prompt = composeResumePrompt({ reason: "5h", now, provider: "anthropic", cause: "provider" });
+		assert.match(prompt, /moved off Claude, so the 5h usage window guard no longer applies/);
 	});
 });
 

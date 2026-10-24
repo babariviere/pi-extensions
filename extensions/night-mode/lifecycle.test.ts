@@ -31,6 +31,9 @@ function createHarness(cwd: string, options: HarnessOptions = {}) {
 	const notifications: string[] = [];
 	const entries = options.entries ?? [];
 	const model = { provider: "test", id: "night" };
+	// The session runs on a Claude model, so the budget guard applies to the
+	// Anthropic snapshot the usage extension publishes.
+	const selectedModel = { provider: "anthropic", id: "claude-sonnet-4-5" };
 	let command: ((args: string, ctx: ExtensionContext) => Promise<void>) | undefined;
 
 	if (options.beforeBoundary) {
@@ -71,12 +74,13 @@ function createHarness(cwd: string, options: HarnessOptions = {}) {
 
 	const ctx = {
 		cwd,
-		model,
+		model: selectedModel,
 		mode: "tui",
 		hasUI: true,
 		isIdle: () => true,
 		sessionManager: {
 			getEntries: () => entries,
+			getBranch: () => [],
 			getSessionId: () => "night-test-session",
 			getSessionFile: () => join(cwd, "session.jsonl"),
 		},

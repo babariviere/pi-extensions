@@ -37,7 +37,7 @@ crash or forced kill can leave `disablesleep 1` enabled. Restore it manually wit
 `sudo -n /usr/bin/pmset -c disablesleep 0`. Multiple pi processes also share this
 global setting, so one process releasing its lock can restore sleep while another
 still runs.
-2. **Budget guard**: watches Claude's 5h and weekly subscription windows.
+2. **Budget guard**: watches the 5h and weekly subscription windows of the provider behind the model in use (Claude or Codex).
 3. **Automated resume**: once the window has room again, sends a `continue` prompt on its own.
 
 ## How pausing works
@@ -53,6 +53,28 @@ recovery and the resume prompt has to say so.
 The pause is recorded in the session as a `night-mode:pause` custom entry, so a
 `/reload` or session resume re-arms the timer instead of losing the state.
 
+### The guard follows the model in use
+
+A limit belongs to the provider being used, so the guard follows the model the
+session actually runs on:
+
+| Model in use | What stops the run |
+|---|---|
+| Claude (`anthropic`) | the Claude 5h or weekly window |
+| Codex / ChatGPT (`openai-codex`) | the Codex 5h or weekly window |
+| anything else (local model, API-key model, another provider) | nothing: there is no subscription window to guard |
+
+A snapshot from one provider never stops a session running on another one, so a
+Claude limit does not block a Codex session, and neither blocks a session on a
+model with no subscription windows.
+
+Switching models lifts a pause the old provider caused: the run is not blocked
+any more, and an automated resume prompt tells it to continue. If the new
+provider is at its own limit, the run pauses again on that limit.
+
+The provider behind a virtual model (the router) is the physical model that
+answered, so a routed session is guarded by the provider it really runs on.
+
 ## Resume prompt
 
 The injected message states explicitly that it is machine generated and is not a
@@ -66,6 +88,10 @@ user approval for anything that was pending, and it carries the **current day**:
 > 01:40.
 >
 > Continue the work you were interrupted on.
+
+The provider named in the message is the one whose limit was hit (Claude or
+Codex). When the pause was lifted because the session moved to another model,
+the message says so instead of claiming the window has room again.
 
 A 5h pause costs hours; a weekly one can cost days. An agent that resumes with a
 stale idea of "now" acts on branches, PRs and CI results that have moved since,

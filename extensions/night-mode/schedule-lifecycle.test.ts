@@ -32,7 +32,7 @@ function harness(entries: Entry[], options: Options = {}) {
 	} as unknown as ExtensionAPI;
 	const ctx = {
 		isIdle: options.idle ?? (() => true),
-		sessionManager: { getEntries: () => entries, getSessionId: () => "direct-night" },
+		sessionManager: { getEntries: () => entries, getBranch: () => [], getSessionId: () => "direct-night" },
 		modelRegistry: {
 			find: () => {
 				modelLookups++;

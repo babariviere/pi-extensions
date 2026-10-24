@@ -115,6 +115,16 @@ export function shouldPause(usedPercent: number | undefined, threshold: number =
 /** Which subscription window stopped the run. */
 export type PauseReason = "5h" | "week";
 
+/**
+ * Why a pause ended.
+ *
+ * - `window`: the subscription window itself has room again.
+ * - `provider`: the session moved to another model, so the limit that stopped
+ *   the run no longer applies to it.
+ * - `manual`: the user cleared the pause with `/night resume`.
+ */
+export type ResumeCause = "window" | "provider" | "manual";
+
 export interface PauseThresholds {
 	fiveHour?: number;
 	week?: number;
