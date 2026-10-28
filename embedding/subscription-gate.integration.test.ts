@@ -44,8 +44,8 @@ test("native child quota holds new requests/tools and does not deadlock a host t
 		usedPercent: 95,
 		resetsAt: new Date(Date.now() + 60_000).toISOString(),
 	};
-	const save = (windows: unknown[], forced: string[] = []) =>
-		writeFile(policyPath, JSON.stringify({ version: 1, windows, forced }));
+	const save = (windows: unknown[], force?: string[]) =>
+		writeFile(policyPath, JSON.stringify({ version: 1, windows, ...(force ? { force } : {}) }));
 	await save([]);
 	const started = gate(),
 		finish = gate();
@@ -143,7 +143,7 @@ test("native child quota holds new requests/tools and does not deadlock a host t
 		cancel.abort();
 		assert.equal((await compacting).stopReason, "aborted");
 		spy.mock.restore();
-		await save([window], [JSON.stringify(["openai", "5h", window.resetsAt])]);
+		await save([window], ["openai"]);
 		runtime.resumeTools();
 		await runtime.child.waitForIdle(BACKGROUND_CONTEXT);
 		assert.equal(calls, 2);

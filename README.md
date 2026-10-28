@@ -81,7 +81,7 @@ choose or install an auth provider itself; the host pins and supplies its requir
 per-chat `PILOT_SUBSCRIPTION_POLICY` file, inherited by child workers. Native child model requests
 (including compaction and resolved virtual routes) and new tool admissions respect that policy.
 Already admitted tools finish normally. Missing/malformed configured policy holds work, and Stop
-cancels the wait. Window resets and explicit per-chat, per-window exemptions release admission.
+cancels the wait. Window resets and an explicit per-chat, per-provider `force` list release admission.
 Standalone Pi without this host variable is unchanged; children do not poll providers or read credentials.
 
 ## Native codemode and MCP
