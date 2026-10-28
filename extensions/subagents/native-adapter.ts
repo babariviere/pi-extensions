@@ -84,6 +84,7 @@ const NativeState = defineDoc<{ entries: Array<{ customType: string; data?: Json
 	history: "latest",
 	fork: "current",
 	initial: () => ({ entries: [] }),
+	checkpointWhen: () => false,
 });
 const METADATA = "__piNativeAdapter";
 function json(value: unknown): JsonValue | undefined {

@@ -92,6 +92,7 @@ test("provider registers Flash without loading weights, full is opt-in, and inva
 				provider: "clef",
 				baseUrl: latest.baseUrl!,
 				contextWindow: 8192,
+				compat: undefined,
 			},
 			{ state: {}, questions: { q: { type: "choice", instructions: "", criteria: { a: "A" } } } },
 		);

@@ -23,6 +23,7 @@ const RegistryDoc = defineDoc<{ agents: Record<string, JsonValue> }>({
 	version: 1,
 	scope: "session",
 	initial: () => ({ agents: {} }),
+	checkpointWhen: () => false,
 });
 type Input = { id: string; message: string; followUp: boolean; state: "pending" | "done" | "aborted" | "failed" };
 type Notice = { id: string; text: string; error?: string; announced: boolean };

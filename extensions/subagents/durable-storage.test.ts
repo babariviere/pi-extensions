@@ -15,6 +15,7 @@ const Journal = defineDoc<{ sequence: number; entries: string[] }>({
 	version: 1,
 	scope: "session",
 	initial: () => ({ sequence: 0, entries: [] }),
+	checkpointWhen: () => false,
 });
 
 test("durable storage is private and refuses a second writer, including another process", async () => {
@@ -82,6 +83,7 @@ test("SIGKILL releases the OS owner lease and preserves committed session journa
 		const Journal = defineDoc({
 			kind: ${JSON.stringify(Journal.definition.kind)}, version: 1, scope: "session",
 			initial: () => ({ sequence: 0, entries: [] }),
+			checkpointWhen: () => false,
 		});
 		for (let sequence = 1; sequence <= 3; sequence++) {
 			await session.commit(async (tx) => {

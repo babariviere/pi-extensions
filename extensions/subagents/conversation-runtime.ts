@@ -55,6 +55,7 @@ const RuntimeDoc = defineDoc<{
 	history: "latest",
 	fork: "initial",
 	initial: () => ({ requests: {}, reports: {} }),
+	checkpointWhen: () => false,
 });
 const background = { ownership: { kind: "conversation" }, background: true } as const;
 const requestKey = (id: string) => `request:${id}`;
