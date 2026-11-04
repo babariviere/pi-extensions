@@ -1,5 +1,6 @@
 /** Native SDK resources and tool pipeline, without the SDK's model loop or persistent history. */
 import type { Context as TaskContext, JsonValue } from "@earendil-works/chord";
+import { execFile } from "node:child_process";
 import { BACKGROUND_CONTEXT, withAbortSignal } from "@earendil-works/chord/context";
 import {
 	contentText,
@@ -454,6 +455,42 @@ export class NativeAdapter {
 		} finally {
 			this.session.clearQueue();
 		}
+	}
+
+	/** Only a tool-drained worker may ask; list without claiming or stopping any job. */
+	async checkpointSafe(): Promise<void> {
+		this.assertOpen();
+		const definition = this.session.getToolDefinition("jobs");
+		if (definition) {
+			const info = this.session.getAllTools().find((tool) => tool.name === "jobs");
+			if (!info) throw new Error("Subagent jobs inspection is unavailable");
+			const tool = wrapRegisteredTool({ definition, sourceInfo: info.sourceInfo }, this.session.extensionRunner);
+			const result = await tool.execute("host:checkpoint", { action: "list" });
+			const jobs = result.structuredContent;
+			if (
+				result.isError ||
+				!Array.isArray(jobs) ||
+				jobs.some(
+					(job) =>
+						!job ||
+						typeof job !== "object" ||
+						!("state" in job) ||
+						typeof job.state !== "string" ||
+						!["done", "failed", "cancelled", "interrupted"].includes(job.state),
+				)
+			)
+				throw new Error("Subagent has running jobs or unknown job state");
+		}
+		// Child-owned shell processes (including unknown descendants behind transport wrappers)
+		// cannot be made safe by pausing tool admission. Keep them alive and refuse the handoff.
+		await new Promise<void>((resolve, reject) => {
+			execFile("pgrep", ["-P", String(process.pid)], { timeout: 5_000, maxBuffer: 64 * 1024 }, (error, stdout) => {
+				if ((error as { code?: unknown } | null)?.code === 1 && !stdout.trim()) resolve();
+				else if (error) reject(error);
+				else if (stdout.trim()) reject(new Error("Subagent has child processes"));
+				else resolve();
+			});
+		});
 	}
 
 	refreshTools(): Extension {

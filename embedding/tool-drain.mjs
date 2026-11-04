@@ -16,7 +16,11 @@ export class ToolDrain {
 			...extension,
 			hooks: [
 				hook(ToolTask, {
-					beforeTool: async (_call, api, context) => {
+					beforeTool: async (call, api, context) => {
+						// Nested calls belong to an already admitted script. Gating them deadlocks
+						// its drain; replacing the tracked parent also loses its settlement fence.
+						// Keep the outer task tracked until its complete result is committed.
+						if (call.parent) return;
 						// Quota waits precede admission, so a drain never waits on an unstarted tool.
 						if (beforeAdmission) await beforeAdmission(context);
 						// Record permission synchronously when open, before any await. beforeTool is
@@ -52,7 +56,9 @@ export class ToolDrain {
 			await Promise.race([
 				resumed,
 				new Promise((resolve, reject) => {
-					watch.start(async (graph) => {
+					watch.start(async (call) => {
+						if (call.kind !== "value") return;
+						const graph = call.value;
 						if (drained(graph)) resolve();
 					});
 					void watch.closed.then(() => reject(new Error("Tool drain closed before settlement")));

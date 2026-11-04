@@ -5,7 +5,6 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import {
-	Type,
 	InMemoryCredentialStore,
 	createAssistantMessageEventStream,
 	fauxProvider,
@@ -15,6 +14,8 @@ import {
 	type Message,
 	type Provider,
 } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
+
 import {
 	ModelRuntime,
 	SettingsManager,

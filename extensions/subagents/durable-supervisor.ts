@@ -144,6 +144,9 @@ export class DurableSupervisor {
 	#closed = false;
 	#pausing = false;
 	#updatePaused = false;
+	#toolsRevision = 0;
+	#checkpointing?: Promise<void>;
+	#checkpointFailure?: { error: unknown };
 	#failure?: Error;
 	#attempts = new Map<string, number>();
 	#retries = new Map<string, ReturnType<typeof setTimeout>>();
@@ -203,6 +206,7 @@ export class DurableSupervisor {
 		this.#listeners.clear();
 	}
 	async quiesce(): Promise<void> {
+		this.#toolsRevision++;
 		this.#updatePaused = true;
 		for (const timer of this.#retries.values()) clearTimeout(timer);
 		this.#retries.clear();
@@ -218,7 +222,35 @@ export class DurableSupervisor {
 		);
 		await Promise.all([...this.#serial.values()]);
 	}
-	resumeTools(): void {
+	/** Retire only drained, job-free children; pending inputs stay durable for recovery. */
+	checkpoint(): Promise<void> {
+		if (!this.#updatePaused) return Promise.reject(new Error("Subagents are not paused"));
+		if (this.#checkpointFailure) return Promise.reject(this.#checkpointFailure.error);
+		this.#checkpointing ??= (async () => {
+			try {
+				const results = await Promise.allSettled(
+					[...this.#workers.values()].map(async (worker) => {
+						if (!worker.connection.checkpoint) throw new Error("Subagent worker cannot checkpoint");
+						await worker.connection.checkpoint();
+					}),
+				);
+				const failed = results.find((result) => result.status === "rejected");
+				if (failed?.status === "rejected") throw failed.reason;
+			} catch (error) {
+				this.#checkpointFailure = { error };
+				throw error;
+			} finally {
+				this.#checkpointing = undefined;
+			}
+		})();
+		return this.#checkpointing;
+	}
+	async resumeTools(): Promise<void> {
+		const revision = ++this.#toolsRevision;
+		// A cancelled handoff cannot resume a child while its checkpoint is closing storage.
+		if (this.#checkpointing) await this.#checkpointing.catch(() => {});
+		if (revision !== this.#toolsRevision) return;
+		this.#checkpointFailure = undefined;
 		this.#updatePaused = false;
 		for (const worker of this.#workers.values()) worker.connection.resumeTools?.();
 		for (const record of this.#records.values()) {

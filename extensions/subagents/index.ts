@@ -1,5 +1,6 @@
 /** One native tool for reusable named background conversations. */
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
+
 import type { JsonValue } from "@earendil-works/chord";
 import {
 	truncateHead,
@@ -244,9 +245,14 @@ export default function subagents(pi: ExtensionAPI, deps: SubagentExtensionDeps 
 				try {
 					if (current !== generation || supervisor !== owner)
 						throw new Error("Subagents session is not initialized");
-					if (command.action === "quiesce" || command.action === "resumeTools") {
+					if (
+						command.action === "quiesce" ||
+						command.action === "checkpoint" ||
+						command.action === "resumeTools"
+					) {
 						if (command.action === "quiesce") await owner.quiesce();
-						else owner.resumeTools();
+						else if (command.action === "checkpoint") await owner.checkpoint();
+						else await owner.resumeTools();
 						answer({ requestId: command.requestId, ok: true });
 						return;
 					}

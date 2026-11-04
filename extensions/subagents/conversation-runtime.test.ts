@@ -7,7 +7,8 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
+
 import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
 import { getPackageDir } from "@earendil-works/pi-coding-agent";
@@ -76,8 +77,8 @@ test("deduplicates concurrent admission, passively reports once, and keeps child
 		const reports = await entries(runtime, true);
 		assert.equal(reports.length, 2);
 		assert.ok(reports.every((entry) => entry.kind === "subagents.report" && !entry.model));
-		const graph = await runtime.harness.taskGraph(ctx);
-		graph.dispose();
+		const graph = await runtime.harness.watchTaskGraph(ctx);
+		await graph.stop();
 		await runtime.root.waitForIdle(ctx);
 	} finally {
 		await runtime.close();
@@ -156,11 +157,11 @@ test("SQLite reopen resumes an unfinished model request, retaining child and Rep
 		const id = runtime.conversationId;
 		const pending = runtime.run("stable-input", "finish this").catch(() => undefined);
 		await until(() => faux.state.callCount === 1);
-		const graph = await runtime.harness.taskGraph(ctx);
+		const graph = await runtime.harness.watchTaskGraph(ctx);
 		const reporterId = Object.values(graph.value.tasks).find(
 			(task) => task.kind === "subagents.conversation-reporter",
 		)!.id;
-		graph.dispose();
+		await graph.stop();
 		await runtime.root.abort(ctx);
 		assert.equal(faux.state.callCount, 1, "root Esc leaves background child alone");
 		await runtime.close();
@@ -266,13 +267,15 @@ test("reopen between deliver and report resumes checkpoint without another gener
 				return async (...args: Parameters<Storage["commit"]>) => {
 					const seq = await target.commit(...args);
 					if (
-						args[0].some(
-							(write) =>
-								write.type === "task" &&
-								write.value.kind === "subagents.conversation-reporter" &&
-								write.value.state.status === "running" &&
-								(write.value.state.checkpoint as { phase?: string }).phase === "report",
-						)
+						args[0]
+							.flat()
+							.some(
+								(write) =>
+									write.type === "task" &&
+									write.value.kind === "subagents.conversation-reporter" &&
+									write.value.state.status === "running" &&
+									(write.value.state.checkpoint as { phase?: string }).phase === "report",
+							)
 					) {
 						queueMicrotask(() => {
 							closing = runtime.close();
@@ -938,12 +941,14 @@ for (const stopBeforeResume of [false, true]) {
 					return async (...args: Parameters<Storage["commit"]>) => {
 						const seq = await target.commit(...args);
 						if (
-							args[0].some(
-								(write) =>
-									write.type === "task" &&
-									write.value.kind === "subagents.conversation-reporter" &&
-									write.value.state.status === "pending",
-							)
+							args[0]
+								.flat()
+								.some(
+									(write) =>
+										write.type === "task" &&
+										write.value.kind === "subagents.conversation-reporter" &&
+										write.value.state.status === "pending",
+								)
 						) {
 							queueMicrotask(() => {
 								closing = runtime.close();

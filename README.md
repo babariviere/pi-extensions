@@ -43,7 +43,7 @@ pi update --extensions
 For a local checkout, run `pi install ./`. Individual extension paths can also be
 loaded through pi's normal configuration.
 
-Requires Node.js `>=24.0.0` and pi `>=1.4.0`. The host supplies
+Requires Node.js `>=24.0.0` and pi `>=1.5.0`. The host supplies
 `@earendil-works/pi-ai`, `@earendil-works/pi-coding-agent`, `@earendil-works/pi-tui`
 and `typebox` as peer dependencies. This package no longer installs its own
 native Pi SDK, MCP SDK or keyring implementation.
@@ -76,6 +76,10 @@ Subagent workers use this loader when both `PILOT_PI_EXTENSIONS_PROFILE` and
 `PILOT_ANTHROPIC_AUTH_EXTENSION` are inherited as absolute host paths. Supplying only one fails closed.
 Without either variable, standalone Pi worker discovery is unchanged. The embedding package does not
 choose or install an auth provider itself; the host pins and supplies its required auth extension.
+
+The tool-drain embedding API uses Pi 1.5 tagged task-graph watches. It waits for
+committed results without aborting tools. Nested calls of an already admitted
+script remain inside that admission, so pausing cannot strand the script.
 
 `@babariviere/pi-extensions/subscription-gate` exports a host admission gate. Pilot supplies a private
 per-chat `PILOT_SUBSCRIPTION_POLICY` file, inherited by child workers. Native child model requests
@@ -264,7 +268,7 @@ npm run fmt:check
 ```
 
 `npm run fmt` applies Biome formatting. CI runs `npm ci`, typechecking and tests on Node 24.
-CI explicitly tests the minimum Pi 1.4.0 APIs and the current Pi release. The SDK
+CI explicitly tests the minimum Pi 1.5.0 APIs and the current Pi release. The SDK
 packages remain host-provided peers, not bundled runtime dependencies.
 
 ## Documentation

@@ -1,6 +1,7 @@
 /** Host-capability fixture. No store or storage paths are available in the child. */
 import { randomUUID } from "node:crypto";
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
+
 import type { ExtensionAPI, AgentToolResult } from "@earendil-works/pi-coding-agent";
 
 export default function parentArtifact(pi: ExtensionAPI) {

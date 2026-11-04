@@ -4,7 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { fauxProvider, fauxAssistantMessage, fauxToolCall, InMemoryCredentialStore, Type } from "@earendil-works/pi-ai";
+import { fauxProvider, fauxAssistantMessage, fauxToolCall, InMemoryCredentialStore } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
+
 import { ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { MemoryStorage } from "@earendil-works/pi-durable";
 import { builtinAgent } from "../extensions/subagents/discovery.ts";

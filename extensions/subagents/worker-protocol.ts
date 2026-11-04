@@ -31,6 +31,7 @@ export type WorkerCommand =
 	| { type: "status"; id: string }
 	| { type: "artifact.result"; callId: string; result?: unknown; error?: string }
 	| { type: "quiesce"; id: string; revision: number }
+	| { type: "checkpoint"; id: string; revision: number }
 	| { type: "resumeTools"; revision: number }
 	| { type: "pause" }
 	| { type: "cancel" };
@@ -42,5 +43,6 @@ export type WorkerPacket =
 	| { type: "status"; id: string; status: WorkerStatus }
 	| { type: "stopped"; id: string; status: WorkerStatus }
 	| { type: "quiesced"; id: string; status: WorkerStatus }
+	| { type: "checkpointed"; id: string; status: WorkerStatus }
 	| { type: "paused" }
 	| { type: "error"; id?: string; error: string };

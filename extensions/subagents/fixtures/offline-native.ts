@@ -1,5 +1,6 @@
 /** Offline provider and native policy fixture used by the isolated worker tests. */
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
+
 import { getCurrentSystemPrompt } from "@earendil-works/pi-ai";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";

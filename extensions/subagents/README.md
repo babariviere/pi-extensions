@@ -1,7 +1,7 @@
 # Subagents
 
 Named persistent pi-durable conversations with native Pi tools, extensions,
-authentication, trust, sandbox, secrets and MCP. Requires Pi 1.4 and Node.js 24+.
+authentication, trust, sandbox, secrets and MCP. Requires Pi 1.5 and Node.js 24+.
 Durable execution is the only backend, with no Herdr panes or headless CLI fallback.
 
 ## Single tool
@@ -168,7 +168,10 @@ Pi host, including managed packages without a local SDK installation.
 
 Hosts that embed Pi (for example a desktop app) can display and control subagents
 through `pi.events`, without going through the model. The contract and payload
-types live in `host-events.ts`.
+types live in `host-events.ts`. Snapshots may also include the active or newest
+`operationId`, binding a child run to its host admission without exposing its prompt.
+Opt-in usage callbacks inherit the host accounting epoch; absent callbacks leave
+standalone usage behavior unchanged.
 
 | Event | Direction | Payload |
 | --- | --- | --- |

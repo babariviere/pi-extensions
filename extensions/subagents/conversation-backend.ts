@@ -25,6 +25,7 @@ export interface WorkerConnection {
 	stop(id: string): Promise<WorkerStatus>;
 	pause(): Promise<void>;
 	quiesce?(): Promise<void>;
+	checkpoint?(): Promise<void>;
 	resumeTools?(): void;
 	cancel(): Promise<void>;
 }
@@ -239,6 +240,24 @@ export function openConversationWorker(
 			await request({ type: "quiesce", id: randomUUID(), revision: ++toolsRevision }, 0);
 		},
 		resumeTools: () => send({ type: "resumeTools", revision: ++toolsRevision }),
+		checkpoint: async () => {
+			if (closing) throw new Error("Subagent worker is closing");
+			const checkpointed = (async () => {
+				// Unlike ordinary teardown, checkpoint must never kill on a deadline or infer
+				// success from exit alone. Require the durable ACK AND a clean observed exit.
+				await request({ type: "checkpoint", id: randomUUID(), revision: toolsRevision }, 0);
+				await closed;
+				if (child.exitCode !== 0 || child.signalCode !== null)
+					throw new Error(`Subagent checkpoint exit failed: ${child.exitCode}/${child.signalCode}`);
+			})();
+			closing = checkpointed;
+			try {
+				await checkpointed;
+			} catch (error) {
+				if (!ended) closing = undefined;
+				throw error;
+			}
+		},
 		pause: () => close("pause"),
 		cancel: () => close("cancel"),
 	};

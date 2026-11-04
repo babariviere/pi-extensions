@@ -5,7 +5,7 @@ import { buildNightContract } from "../night-mode/night-run.ts";
 import { ConversationRuntime, type ConversationRuntimeOptions, type ReporterHandle } from "./conversation-runtime.ts";
 import { openDurableStorage } from "./durable-storage.ts";
 import { runCwd, type RunContext, type RunRequest } from "./run.ts";
-import type { WorkerCommand, WorkerPacket, WorkerSpec } from "./worker-protocol.ts";
+import type { WorkerCommand, WorkerPacket, WorkerSpec, WorkerStatus } from "./worker-protocol.ts";
 
 export type { WorkerCommand, WorkerPacket } from "./worker-protocol.ts";
 type WorkerEvent = "message" | "disconnect" | "SIGTERM" | "SIGINT";
@@ -13,7 +13,7 @@ export interface WorkerHost {
 	on(event: WorkerEvent, listener: (message?: unknown) => void): void;
 	off(event: WorkerEvent, listener: (message?: unknown) => void): void;
 	send(packet: WorkerPacket): Promise<void>;
-	exit(code: number): void;
+	exit(code: number, checkpointed?: boolean): void;
 }
 export interface WorkerAdapter {
 	models: ConversationRuntimeOptions["models"];
@@ -25,6 +25,7 @@ export interface WorkerAdapter {
 	prepareInput?(content: string): Promise<string>;
 	waitForSubscription?(signal?: AbortSignal): Promise<void>;
 	close(): Promise<void>;
+	checkpointSafe?(): Promise<void>;
 }
 export interface WorkerDependencies {
 	openStorage(directory: string): Promise<{ storage: Storage; release(): void }>;
@@ -55,24 +56,29 @@ export function installConversationWorker(host: WorkerHost, deps: WorkerDependen
 	let initialization: Promise<void> | undefined;
 	let commands: Promise<void> = Promise.resolve();
 	let toolsRevision = 0;
+	let quiescedRevision: number | undefined;
 	let mode: "pause" | "cancel" | undefined;
 	let ending: Promise<void> | undefined;
 	let disconnected = false;
 	let exited = false;
 	const observing = new Set<string>();
-	const exit = (code: number) => {
+	const exit = (code: number, checkpointed = false) => {
 		if (exited) return;
 		exited = true;
 		host.off("message", onMessage);
 		host.off("disconnect", onDisconnect);
 		host.off("SIGTERM", onPause);
 		host.off("SIGINT", onPause);
-		host.exit(code);
+		host.exit(code, checkpointed);
 	};
 	const send = async (packet: WorkerPacket) => {
 		if (!disconnected && !exited) await host.send(packet);
 	};
-	const finish = (nextMode: NonNullable<typeof mode>, failure?: unknown): Promise<void> => {
+	const finish = (
+		nextMode: NonNullable<typeof mode>,
+		failure?: unknown,
+		checkpoint?: { id: string; status: WorkerStatus },
+	): Promise<void> => {
 		if (ending) return ending;
 		mode = nextMode;
 		ending = (async () => {
@@ -112,12 +118,13 @@ export function installConversationWorker(host: WorkerHost, deps: WorkerDependen
 			}
 			try {
 				if (cleanupError) await send({ type: "error", error: errorText(cleanupError) });
+				else if (checkpoint) await send({ type: "checkpointed", ...checkpoint });
 				else if (nextMode === "pause") await send({ type: "paused" });
 			} catch {
 				/* Parent disappeared during acknowledgment. Durable receipts remain available. */
 			} finally {
 				clearTimeout(watchdog);
-				exit(cleanupError ? 1 : 0);
+				exit(cleanupError ? 1 : 0, !!checkpoint && !cleanupError);
 			}
 		})();
 		return ending;
@@ -233,6 +240,7 @@ export function installConversationWorker(host: WorkerHost, deps: WorkerDependen
 		if (!message || typeof message !== "object" || mode) return;
 		const packet = message as WorkerCommand;
 		if (packet.type === "resumeTools") {
+			quiescedRevision = undefined;
 			toolsRevision = Math.max(toolsRevision, packet.revision);
 			runtime?.resumeTools();
 			return;
@@ -243,8 +251,24 @@ export function installConversationWorker(host: WorkerHost, deps: WorkerDependen
 				await initialization;
 				await commands;
 				if (!runtime || mode) throw new Error("Worker is unavailable");
-				if (toolsRevision === packet.revision) await runtime.quiesce();
+				if (toolsRevision === packet.revision) {
+					await runtime.quiesce();
+					if (toolsRevision === packet.revision) quiescedRevision = packet.revision;
+				}
 				await send({ type: "quiesced", id: packet.id, status: await runtime.status() });
+			})().catch((error) => send({ type: "error", id: packet.id, error: errorText(error) }).catch(() => {}));
+			return;
+		}
+		if (packet.type === "checkpoint") {
+			void (async () => {
+				await initialization;
+				await commands;
+				if (!runtime || !adapter?.checkpointSafe || mode || quiescedRevision !== packet.revision)
+					throw new Error("Subagent checkpoint requires an acknowledged tool drain");
+				await adapter.checkpointSafe();
+				const status = await runtime.status();
+				if (quiescedRevision !== packet.revision) throw new Error("Subagent pause changed");
+				await finish("pause", undefined, { id: packet.id, status });
 			})().catch((error) => send({ type: "error", id: packet.id, error: errorText(error) }).catch(() => {}));
 			return;
 		}
@@ -300,9 +324,9 @@ if (typeof process.send === "function") {
 				}
 				process.send!(packet, (error: Error | null) => (error ? reject(error) : resolve()));
 			}),
-		exit: (code) => {
+		exit: (code, checkpointed) => {
 			// Only kill a detached private process group, never the caller's inherited group.
-			if (process.platform !== "win32") {
+			if (!checkpointed && process.platform !== "win32") {
 				try {
 					process.kill(-process.pid, "SIGKILL");
 				} catch {
