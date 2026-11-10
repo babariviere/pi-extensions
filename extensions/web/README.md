@@ -34,7 +34,9 @@ not-found placeholders remain errors rather than usable page content.
 The fallback drives the first installed Chromium browser, in this order: Helium, Google Chrome, Chromium.
 It runs as a separate instance with a dedicated profile under
 `${XDG_CACHE_HOME:-~/.cache}/pi-web-extension/<browser>-profile`, so it never touches your everyday
-browser session. The instance stays warm on the CDP port between fetches.
+browser session. The instance stays warm on the CDP port between fetches. At session end, the extension quits
+the dedicated browser over CDP if no pages remain, including pages owned by other chat sessions. Shutdown
+checks are time-limited. Your normal browser is never quit.
 
 It is designed to stay out of sight:
 

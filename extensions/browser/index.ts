@@ -8,6 +8,7 @@
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { closeIdleBrowser } from "../shared/browser/shutdown.ts";
 import { BrowserManager } from "./manager.ts";
 import { DEFAULT_SETTINGS } from "./settings.ts";
 import { createBrowserTool } from "./tool.ts";
@@ -22,5 +23,6 @@ export default function browser(pi: ExtensionAPI): void {
 		const old = manager;
 		manager = new BrowserManager(settings);
 		await old.close();
+		await closeIdleBrowser(settings.port);
 	});
 }

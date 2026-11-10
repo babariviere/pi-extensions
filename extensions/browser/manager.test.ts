@@ -112,6 +112,21 @@ test("hidden tabs retain the configured fixed viewport", async (t) => {
 	);
 });
 
+test("session shutdown closes its targets before terminating the socket and is idempotent", async (t) => {
+	const { cdp, manager, open } = setup(t);
+	await open();
+	await open();
+	const closed: boolean[] = [];
+	t.mock.method(cdp, "close", (terminate: boolean) => {
+		assert.equal(cdp.calls.filter((call) => call.method === "Target.closeTarget").length, 2);
+		closed.push(terminate);
+	});
+	await manager.close();
+	await manager.close();
+	assert.deepEqual(closed, [true]);
+	await assert.rejects(manager.run({ action: "list" }), /session is closed/);
+});
+
 test("show and hide switch every tab, including tabs opened while visible", async (t) => {
 	const { cdp, manager, open } = setup(t);
 	const first = await open();

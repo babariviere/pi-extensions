@@ -199,7 +199,8 @@ export class BrowserManager {
 				),
 			);
 		}
-		cdp?.close();
+		// Do not leave a WebSocket close handshake keeping session teardown alive.
+		cdp?.close(true);
 	}
 
 	// --- connection and page registry -------------------------------------

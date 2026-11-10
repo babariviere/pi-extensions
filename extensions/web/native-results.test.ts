@@ -24,6 +24,7 @@ test("web registers one direct tool, no legacy aliases, and conservative native 
 			registered.push(tool.name);
 		},
 		registerCommand() {},
+		on() {},
 	} as unknown as ExtensionAPI);
 	assert.deepEqual(registered, ["web"]);
 	const tool = createWebTool(settings);

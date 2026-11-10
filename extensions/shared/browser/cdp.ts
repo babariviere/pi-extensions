@@ -26,6 +26,8 @@ export interface CdpSession {
 }
 
 export interface CdpOptions {
+	/** Maximum time to establish the WebSocket connection. */
+	connectTimeoutMs?: number;
 	/** Aborting closes the connection and rejects every pending call. */
 	signal?: AbortSignal;
 	/** Default per-call timeout. Unset means calls wait until the socket closes. */
@@ -64,7 +66,10 @@ export class Cdp {
 	connect(): Promise<void> {
 		return new Promise((resolve, reject) => {
 			if (this.options.signal?.aborted) return reject(new CdpError("Browser operation aborted"));
-			const ws = new WebSocket(this.url, { perMessageDeflate: false });
+			const ws = new WebSocket(this.url, {
+				perMessageDeflate: false,
+				handshakeTimeout: this.options.connectTimeoutMs,
+			});
 			this.ws = ws;
 			let opened = false;
 			ws.on("open", () => {
@@ -161,12 +166,13 @@ export class Cdp {
 		this.close();
 	}
 
-	close(): void {
+	close(terminate = false): void {
 		if (this.closed) return;
 		this.closed = true;
 		this.options.signal?.removeEventListener("abort", this.onAbort);
 		try {
-			this.ws?.close();
+			if (terminate) this.ws?.terminate();
+			else this.ws?.close();
 		} catch {
 			// already closed
 		}

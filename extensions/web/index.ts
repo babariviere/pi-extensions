@@ -17,6 +17,7 @@
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { closeIdleBrowser } from "../shared/browser/shutdown.ts";
 import { getKagiToken, kagiSearch } from "./search/kagi.ts";
 import { DEFAULT_SETTINGS } from "./settings.ts";
 import { createWebTool } from "./tool.ts";
@@ -25,6 +26,7 @@ export default function (pi: ExtensionAPI) {
 	const settings = DEFAULT_SETTINGS;
 
 	pi.registerTool(createWebTool(settings));
+	pi.on("session_shutdown", () => closeIdleBrowser(settings.browserCdpPort));
 
 	pi.registerCommand("kagi-status", {
 		description: "Validate the Kagi session token used by web search",

@@ -58,9 +58,11 @@ the fixed viewport. Scrolling and screenshots use the current viewport dimension
 
 ## Lifetime
 
-Pages stay open between calls. A page closes on `close`, after 15 idle minutes, or at session end. The browser
-itself stays running, warm for the next call. If the pi process dies without a clean shutdown, its tabs remain in the
-background browser until it quits.
+Pages stay open between calls. A page closes on `close`, after 15 idle minutes, or at session end. At session end,
+the extension also quits the dedicated browser over CDP if no pages remain. Pages from other chat sessions,
+including hidden web fetch targets, keep it running. Your normal browser is never quit. Shutdown checks are
+time-limited, so an unresponsive browser cannot hold up chat teardown. If the pi process dies without a clean
+shutdown, its tabs can remain in the background browser until it quits.
 
 Defaults (port, viewport, timeouts, snapshot caps, idle timeout) live in [`settings.ts`](./settings.ts).
 
