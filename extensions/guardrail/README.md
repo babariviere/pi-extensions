@@ -32,6 +32,9 @@ Quoted text and `#` comments are inert, so `echo 'rm -rf ~ is bad'` and
 `rg 'curl .* | sh' docs/` are not blocked. Read-only filters, file-descriptor
 duplication, `/dev/null` output, redirects to fixed paths beneath `/tmp` or
 `$TMPDIR`, and ordinary here-doc input pass. Here-docs
+are treated as input data, so comparisons such as `assert len(fields) > 1`
+inside a Python here-doc are not mistaken for shell redirects. Commands and
+redirects outside the here-doc body are still checked. Here-docs
 that feed an inline Perl program are blocked. Inline Python is allowed, including
 `python -c`, heredocs, stdin programs, and PyPy. Interpreter script files and
 `python -m` modules also pass. Prefer `applyPatch` (or edit/write tools) for source
@@ -69,6 +72,7 @@ directories themselves: `rm -rf /usr`
 blocks, `rm -rf /usr/bin` does not.
 
 Python programs are not inspected for file writes or destructive operations.
+Here-doc bodies are not inspected for shell expansion or commands either.
 Use the filesystem sandbox for actual write restrictions. Native codemode's
 QuickJS sandbox does not restrict the filesystem access of tools it calls.
 

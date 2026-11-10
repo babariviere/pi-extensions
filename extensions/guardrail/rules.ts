@@ -144,16 +144,35 @@ const MAX_DEPTH = 3;
  * and every unquoted character. Splitting and raw-string rules run on this so
  * that `echo "curl x | sh"` and `rg 'a; rm -rf ~'` are not mistaken for real
  * commands, while indices still map back onto the original string.
+ * Here-doc bodies are always blanked as input data. With preserveLiterals,
+ * keep quotes and escapes so per-command checks can still read shell words.
  */
-export function maskLiterals(command: string): string {
+export function maskLiterals(command: string, preserveLiterals = false): string {
 	const out = command.split("");
 	let quote: '"' | "'" | null = null;
+	const heredocs: Array<{ delimiter: string; stripTabs: boolean }> = [];
 	for (let i = 0; i < command.length; i++) {
 		const ch = command[i];
+		if (ch === "\n" && !quote && heredocs.length > 0) {
+			let cursor = i + 1;
+			for (const { delimiter, stripTabs } of heredocs.splice(0)) {
+				while (cursor < command.length) {
+					const newline = command.indexOf("\n", cursor);
+					const end = newline < 0 ? command.length : newline;
+					const line = command.slice(cursor, end);
+					for (let j = cursor; j < end; j++) out[j] = " ";
+					cursor = newline < 0 ? end : end + 1;
+					if ((stripTabs ? line.replace(/^\t+/, "") : line) === delimiter) break;
+				}
+			}
+			i = cursor - 1;
+			continue;
+		}
 		if (quote) {
-			out[i] = " ";
+			if (!preserveLiterals) out[i] = " ";
 			if (ch === "\\" && quote === '"' && i + 1 < command.length) {
-				out[++i] = " ";
+				i++;
+				if (!preserveLiterals) out[i] = " ";
 				continue;
 			}
 			if (ch === quote) quote = null;
@@ -161,15 +180,19 @@ export function maskLiterals(command: string): string {
 		}
 		if (ch === '"' || ch === "'") {
 			quote = ch;
-			out[i] = " ";
+			if (!preserveLiterals) out[i] = " ";
 			continue;
 		}
 		if (ch === "\\") {
 			// Keep the escaped character (so `\rm` still reads as `rm`), drop the
 			// backslash so it cannot look like a separator.
-			out[i] = " ";
+			if (!preserveLiterals) out[i] = " ";
 			i++;
 			continue;
+		}
+		if (ch === "<" && command[i + 1] === "<" && command[i - 1] !== "<" && command[i + 2] !== "<") {
+			const header = command.slice(i + 2).match(/^(-?)[ \t]*((?:[^\s<>|;&()'"\\]+|'[^']*'|"[^"]*"|\\[^\n])+)/);
+			if (header) heredocs.push({ delimiter: tokenize(header[2])[0], stripTabs: header[1] === "-" });
 		}
 		if (ch === "#" && (i === 0 || /\s/.test(command[i - 1]))) {
 			while (i < command.length && command[i] !== "\n") out[i++] = " ";
@@ -185,14 +208,15 @@ export function maskLiterals(command: string): string {
  */
 function splitSegments(command: string): string[] {
 	const masked = maskLiterals(command);
+	const shell = maskLiterals(command, true);
 	const separators = new RegExp(`(?:${SHELL_OPERATORS})`, "g");
 	const segments: string[] = [];
 	let last = 0;
 	for (const match of masked.matchAll(separators)) {
-		segments.push(command.slice(last, match.index));
+		segments.push(shell.slice(last, match.index));
 		last = match.index + match[0].length;
 	}
-	segments.push(command.slice(last));
+	segments.push(shell.slice(last));
 	return segments.filter((segment) => segment.trim().length > 0);
 }
 

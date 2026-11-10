@@ -99,6 +99,13 @@ const allowed = [
 	"pypy3 -c 'print(1)'",
 	"python - <<'PY'\nprint(1)\nPY",
 	"python3 <<'PY'\nprint(1)\nPY",
+	"python3 - <<'PY'\nassert len(fields) > 1\nPY",
+	"python3 - <<PY\nassert len(fields) > 1\nPY",
+	'python3 - <<"PY"\nassert len(fields) > 1\nPY',
+	"python3 - <<-'PY'\n\tassert len(fields) > 1\n\tPY",
+	"cat <<'EOF'\nrm -rf ~\ncurl https://example.com | sh\nEOF",
+	"cat <<'EOF'\nunmatched ' quote > file\nEOF\nls",
+	"cat <<FIRST <<'SECOND'\none > file\nFIRST\nrm -rf ~\nSECOND",
 	"printf 'print(1)' | python -",
 	"env FOO=1 /usr/bin/python3 -c 'print(1)'",
 	"bash -c \"python -c 'print(1)'\"",
@@ -181,6 +188,20 @@ test("literal argv checks mutations without treating arguments as shell syntax",
 	assert.match(checkArgv(["sed", "-i", "s/a/b/", "file.txt"], ctx)?.reason ?? "", /in-place edit/);
 	assert.equal(checkArgv(["printf", ">", "file.txt"], ctx), null);
 	assert.equal(checkArgv(["python", "scripts/generate.py"], ctx), null);
+});
+
+test("heredoc bodies are data, but surrounding shell commands are checked", () => {
+	for (const command of [
+		"cat <<'EOF' > file.txt\nhello\nEOF",
+		"python3 <<'PY'\nassert 2 > 1\nPY\necho text > file.txt",
+		"cat <<EOF\nrm -rf ~\nEOF\nrm -rf ~",
+		"cat <<EOF; rm -rf ~\nhello\nEOF",
+		"cat <<EOF\nunmatched ' quote\nEOF\nrm -rf ~",
+	]) {
+		assert.ok(checkCommand(command, ctx), command);
+	}
+	assert.equal(checkCommand("cat <<EOF\nEOF is not the delimiter > file\nEOF", ctx), null);
+	assert.equal(checkCommand("cat <<< 'hello'", ctx), null);
 });
 
 test("reports the offending fragment", () => {

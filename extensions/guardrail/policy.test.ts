@@ -50,6 +50,21 @@ test("allows inline Python through bash, exec, and codemode-nested calls", () =>
 	}
 });
 
+test("allows the CODEOWNERS validation heredoc from a nested bash call", () => {
+	const command = `python3 - <<'PY'
+from pathlib import Path
+import re
+lines = Path('.github/CODEOWNERS').read_text().splitlines()
+for line in lines:
+    fields = line.split()
+    if fields and not fields[0].startswith('#'):
+        assert len(fields) > 1 and all(re.fullmatch(r'@[^/\\s]+/[^/\\s]+', owner) for owner in fields[1:]), line
+print('Verified all CODEOWNERS entries reference teams')
+PY`;
+	const call = { ...event("bash", { command }), parentToolCallId: "codemode" };
+	assert.equal(evaluateBashCall(call, { enabled: true, context }), undefined);
+});
+
 test("allows exec script files and literal shell metacharacters", () => {
 	assert.equal(
 		evaluateBashCall(event("exec", { argv: ["python", "scripts/generate.py"] }), { enabled: true, context }),
