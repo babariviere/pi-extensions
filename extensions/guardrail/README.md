@@ -59,6 +59,13 @@ configuration required.
 
 ## Command
 
+`@babariviere/pi-extensions/filesystem-guard` adds the existing unsafe `rm`
+target checks to root-search blocking. It protects home directories (including
+other users beneath `/Users` and `/home`), root, top-level system directories,
+repository metadata, broad wildcards and unsafe variable targets. Scoped build
+cleanup and manual edits still pass. Bash, exec, jobs start and nested Code Mode
+calls use the same policy. This entry has no disable command.
+
 Embedding hosts can load `@babariviere/pi-extensions/root-search` to block only
 root searches through bash, exec, and jobs start (including nested Code Mode calls). This
 entry does not enable edit or destructive-command restrictions and does not

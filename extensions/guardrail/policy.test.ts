@@ -59,6 +59,49 @@ test("root-search scope leaves other command rules unchanged", () => {
 	}
 });
 
+test("filesystem scope protects home, system, metadata and variable deletion targets", () => {
+	for (const command of [
+		"rm -rf ~",
+		"rm -rf /",
+		"rm -rf /Users/bob",
+		"rm -rf /home/bob",
+		"rm -rf /usr",
+		"rm -rf /*",
+		"rm -rf $HOME/*",
+		"rm -rf .git",
+		"rm -rf .jj",
+		"rm -rf $DIR",
+		"bash -c 'rm -rf ~'",
+		"find /",
+		"fd . /",
+	]) {
+		for (const call of [
+			event("bash", { command }),
+			event("jobs", { action: "start", command }),
+			event("exec", { argv: ["sh", "-c", command] }),
+		]) {
+			const decision = evaluateBashCall(call, { enabled: true, context, scope: "filesystem" });
+			assert.equal(decision?.block, true, command);
+			assert.doesNotMatch(decision?.reason ?? "", /guardrail off/);
+		}
+	}
+	for (const command of [
+		"rm -rf ./build",
+		"rm -rf /Users/bob/src/project/build",
+		"find . -name x",
+		"sed -i s/a/b/ file",
+		"echo x > file",
+		"perl -e 'print 1'",
+		"chmod -R 755 scripts",
+	]) {
+		assert.equal(
+			evaluateBashCall(event("bash", { command }), { enabled: true, context, scope: "filesystem" }),
+			undefined,
+			command,
+		);
+	}
+});
+
 test("allows an ordinary bash call", () => {
 	const decision = evaluateBashCall(event("bash", { command: "rm -rf node_modules" }), { enabled: true, context });
 	assert.equal(decision, undefined);

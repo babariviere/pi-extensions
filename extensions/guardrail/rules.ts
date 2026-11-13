@@ -26,7 +26,7 @@ export interface GuardrailHit {
 }
 
 /** Embedding hosts can enable root-search prevention without the other command rules. */
-export type GuardrailScope = "all" | "root-search";
+export type GuardrailScope = "all" | "root-search" | "filesystem";
 
 export function defaultContext(): GuardrailContext {
 	return { home: homedir(), cwd: process.cwd() };
@@ -468,6 +468,7 @@ function classifyTarget(target: string, ctx: GuardrailContext): string | null {
 
 	if (expanded === "/") return "the filesystem root";
 	if (expanded === ctx.home) return "your home directory";
+	if (/^\/(?:Users|home)\/[^/]+$/.test(expanded)) return `the home directory '${expanded}'`;
 	if (SYSTEM_DIRS.has(expanded)) return `the system directory '${expanded}'`;
 	if (/\/\.(git|jj)$/.test(expanded)) return `repository metadata ('${expanded}')`;
 	return null;
@@ -577,7 +578,13 @@ function checkCommandSegment(
 ): GuardrailHit | null {
 	const cmd = parseCommand(segment);
 	if (!cmd) return null;
-	if (scope === "root-search" && !["find", "fd", "fdfind"].includes(cmd.name) && !SHELLS.has(cmd.name)) return null;
+	if (
+		scope !== "all" &&
+		!["find", "fd", "fdfind"].includes(cmd.name) &&
+		!(scope === "filesystem" && cmd.name === "rm") &&
+		!SHELLS.has(cmd.name)
+	)
+		return null;
 	const { flags, operands } = splitArgs(cmd.args);
 	const hit = (reason: string): GuardrailHit => ({ reason, match: segment.trim() });
 

@@ -35,7 +35,9 @@ export function evaluateBashCall(event: ToolCallEvent, options: PolicyOptions): 
 	let hit: GuardrailHit | null;
 	if (
 		isToolCallEventType("bash", event) ||
-		(options.scope === "root-search" && event.toolName === "jobs" && event.input.action === "start")
+		((options.scope === "root-search" || options.scope === "filesystem") &&
+			event.toolName === "jobs" &&
+			event.input.action === "start")
 	) {
 		const command = event.input.command;
 		if (typeof command !== "string") return undefined;
@@ -56,7 +58,9 @@ export function evaluateBashCall(event: ToolCallEvent, options: PolicyOptions): 
 			`Offending fragment: ${hit.match}`,
 			options.scope === "root-search"
 				? "Use a project or a specific directory instead of the filesystem root."
-				: "If this really is intended, ask the user to run it themselves or to disable the guardrail with /guardrail off.",
+				: options.scope === "filesystem"
+					? "Choose a specific search directory or a safe deletion target. Ask the user to handle protected deletions themselves."
+					: "If this really is intended, ask the user to run it themselves or to disable the guardrail with /guardrail off.",
 		].join("\n"),
 	};
 }
