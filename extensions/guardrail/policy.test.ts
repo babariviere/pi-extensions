@@ -18,6 +18,21 @@ test("blocks a destructive bash call and explains why", () => {
 	assert.match(decision?.reason ?? "", /\/guardrail off/);
 });
 
+test("blocks root searches through bash, exec, and codemode-nested calls", () => {
+	for (const call of [
+		event("bash", { command: "find / -name x" }),
+		event("bash", { command: "fd /" }),
+		event("exec", { argv: ["fd", ".", "/"] }),
+		{ ...event("bash", { command: "find /" }), parentToolCallId: "codemode" },
+		event("bash", { command: "fd foo", cwd: "/" }),
+	]) {
+		const decision = evaluateBashCall(call, { enabled: true, context });
+		assert.equal(decision?.block, true);
+		assert.match(decision?.reason ?? "", /choose a project or a specific directory/);
+		assert.equal(evaluateBashCall(call, { enabled: false, context }), undefined);
+	}
+});
+
 test("allows an ordinary bash call", () => {
 	const decision = evaluateBashCall(event("bash", { command: "rm -rf node_modules" }), { enabled: true, context });
 	assert.equal(decision, undefined);

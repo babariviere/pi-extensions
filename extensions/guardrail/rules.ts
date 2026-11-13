@@ -331,6 +331,93 @@ function splitArgs(args: string[]): { flags: Set<string>; operands: string[] } {
 	return { flags, operands };
 }
 
+/** Search options whose following argument is data, not a search directory. */
+const FD_VALUE_FLAGS = new Set([
+	"-d",
+	"--max-depth",
+	"--min-depth",
+	"--exact-depth",
+	"-t",
+	"--type",
+	"-e",
+	"--extension",
+	"-E",
+	"--exclude",
+	"-j",
+	"--threads",
+	"-S",
+	"--size",
+	"--changed-within",
+	"--changed-before",
+	"--newer",
+	"--older",
+	"--owner",
+	"--format",
+	"--path-separator",
+	"--max-results",
+	"--ignore-file",
+	"--color",
+	"-c",
+]);
+
+/** Detect explicit root searches without mistaking find predicates or fd option values for paths. */
+function searchesRoot(cmd: Command, ctx: GuardrailContext): boolean {
+	const isRoot = (arg: string, context = ctx) => expand(arg.replace(/[);}]+$/, ""), context) === "/";
+	if (cmd.name === "find") {
+		let hasPath = false;
+		for (let i = 0; i < cmd.args.length; i++) {
+			const arg = cmd.args[i];
+			if (["-H", "-L", "-P", "-X", "-d", "--"].includes(arg)) continue;
+			if (arg === "-f") {
+				hasPath = true;
+				if (cmd.args[i + 1] && isRoot(cmd.args[++i])) return true;
+				continue;
+			}
+			// Expressions start here. A slash in '-name /' is not a search root.
+			if (arg.startsWith("-") || arg === "!" || arg === "(") break;
+			hasPath = true;
+			if (isRoot(arg)) return true;
+		}
+		return !hasPath && isRoot(".");
+	}
+
+	let positional = 0;
+	let endOptions = false;
+	const paths: string[] = [];
+	let base = ctx;
+	for (let i = 0; i < cmd.args.length; i++) {
+		const arg = cmd.args[i];
+		if (!endOptions && arg === "--") {
+			endOptions = true;
+			continue;
+		}
+		if (!endOptions && (arg === "-x" || arg === "--exec" || arg === "-X" || arg === "--exec-batch")) break;
+		if (!endOptions && (arg === "--search-path" || arg.startsWith("--search-path="))) {
+			const path = arg === "--search-path" ? cmd.args[++i] : arg.slice("--search-path=".length);
+			if (path) paths.push(path);
+			continue;
+		}
+		if (!endOptions && (arg === "--base-directory" || arg.startsWith("--base-directory="))) {
+			const path = arg === "--base-directory" ? cmd.args[++i] : arg.slice("--base-directory=".length);
+			if (path) base = { ...ctx, cwd: expand(path, ctx) };
+			continue;
+		}
+		if (!endOptions && FD_VALUE_FLAGS.has(arg)) {
+			i++;
+			continue;
+		}
+		if (!endOptions && arg.startsWith("-")) continue;
+		// The first positional is fd's pattern, not a path. Still reject the
+		// common 'fd /' mistake, as well as actual root search directories.
+		if (positional++ === 0) {
+			if (/^[/]+$/u.test(arg.replace(/[);}]+$/, ""))) return true;
+		} else {
+			paths.push(arg);
+		}
+	}
+	return (paths.length ? paths : ["."]).some((path) => isRoot(path, base));
+}
+
 function hasFlag(flags: Set<string>, ...names: string[]): boolean {
 	return names.some((name) => flags.has(name));
 }
@@ -519,6 +606,12 @@ function checkCommandSegment(segment: string, ctx: GuardrailContext, depth: numb
 	}
 
 	switch (cmd.name) {
+		case "find":
+		case "fd":
+		case "fdfind":
+			return searchesRoot(cmd, ctx)
+				? hit(`'${cmd.name}' searching the filesystem root; choose a project or a specific directory instead`)
+				: null;
 		case "rm": {
 			for (const operand of operands) {
 				const why = classifyTarget(operand, ctx);

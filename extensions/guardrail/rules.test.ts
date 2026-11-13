@@ -182,6 +182,73 @@ for (const command of allowed) {
 	});
 }
 
+test("blocks filesystem-wide searches and the common fd slash mistake", () => {
+	for (const command of [
+		"find /",
+		"find -L '/' -name '*.ts'",
+		"find . / -type f",
+		"find -f / -name x",
+		"find /tmp/.. -maxdepth 2",
+		"find ../../../..",
+		"find //",
+		"find /.",
+		"fd /",
+		"(fd /)",
+		"(fd . /)",
+		"fd foo . --base-directory=/",
+		"fd --search-path . --base-directory=/ foo",
+		"fd --hidden foo /",
+		"fd . /",
+		"fdfind -H . /",
+		"fd --search-path / foo",
+		"fd --search-path=/ foo",
+		"fd --base-directory=/ foo",
+		"fd -- . /",
+		"/usr/bin/find / -name x",
+		"timeout 5 fd . /",
+		"env FOO=1 find /",
+		"bash -c 'find / -name x'",
+		"echo ok; find /",
+		"(find /)",
+		"find / | head -n 1",
+	]) {
+		assert.match(checkCommand(command, ctx)?.reason ?? "", /filesystem root/, command);
+	}
+	assert.match(checkArgv(["fd", ".", "/"], ctx)?.reason ?? "", /filesystem root/);
+});
+
+test("allows scoped searches and slash characters used as data", () => {
+	for (const command of [
+		"find . -name /",
+		"find /tmp -path /",
+		"find /usr/bin -name node",
+		"fd foo",
+		"fd . src",
+		"fd -E / foo src",
+		"fd --exclude=/ foo src",
+		"fd --path-separator / foo src",
+		"fd --search-path src foo",
+		"fd --base-directory /tmp foo",
+		"fd foo tmp --base-directory=/",
+		"fd foo src -x echo /",
+		"echo 'find /'",
+		"rg 'fd /' docs",
+		"cat <<'EOF'\nfind /\nfd /\nEOF",
+	]) {
+		assert.equal(checkCommand(command, ctx), null, command);
+	}
+});
+
+test("implicit root searches respect the supplied cwd", () => {
+	const root = { ...ctx, cwd: "/" };
+	for (const command of ["find", "find -name x", "find .", "fd", "fd foo", "fd . ."]) {
+		assert.match(checkCommand(command, root)?.reason ?? "", /filesystem root/, command);
+	}
+	for (const command of ["find /tmp -name x", "fd foo /tmp", "fd --search-path /tmp foo"]) {
+		assert.equal(checkCommand(command, root), null, command);
+	}
+});
+
 test("literal argv checks mutations without treating arguments as shell syntax", () => {
 	assert.equal(checkArgv(["python", "-c", 'open("x", "w")'], ctx), null);
 	assert.equal(checkArgv(["python", "-"], ctx), null);

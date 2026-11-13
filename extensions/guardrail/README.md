@@ -8,6 +8,7 @@ they run.
 
 | Category | Examples |
 |----------|----------|
+| filesystem-wide searches | `find /`, `fd /`, `fd . /`, `fdfind . /`, `fd --search-path /` |
 | `rm` on a fatal target | `rm -rf ~`, `rm -rf /`, `rm -rf /*`, `rm -rf $HOME`, `rm -rf /usr`, `rm -rf .git` |
 | unset-variable wipes | `rm -rf $BUILD_DIR`, `rm -rf $DIR/out` (expands under `/` when unset) |
 | recursive permission changes | `chmod -R 777 /`, `chown -R user ~` |
@@ -44,6 +45,12 @@ and builds remain allowed. Examples
 include `sed -n`, ordinary `awk`, `npm install`, `git checkout`, `cargo fmt`,
 `go generate`, and `npm run build`.
 
+Root searches include normalized paths such as `/tmp/..` and implicit searches
+when the tool's working directory is `/`. Choose a project or a specific directory
+instead. Scoped searches such as `find .`, `find /usr/bin`, and `fd foo src` pass.
+The common `fd /` mistake is blocked even though fd treats its first positional
+argument as a pattern. Find predicates and fd option values are not search roots.
+
 Literal `exec` argv is checked without treating metacharacters as shell syntax.
 An exec call such as `["printf", ">", "file"]` passes, while `["sed", "-i",
 "s/a/b/", "file"]` blocks. Nested `bash` and `exec` calls made through Code Mode
@@ -65,7 +72,7 @@ Set `PI_GUARDRAIL=off` to start with it disabled.
 
 This is not a security boundary. Matching is token-based, not a real shell
 parse, so plenty slips through: `eval`, base64 payloads, a destructive script
-file, `find / -delete`, `mv ~ /tmp`, a `cd` earlier in the pipeline that changes
+file, `find scoped-dir -delete`, `mv ~ /tmp`, a `cd` earlier in the pipeline that changes
 what a relative target means, and indirect mutations hidden inside allowed
 automation. System subtrees are not protected either, only the top-level
 directories themselves: `rm -rf /usr`
