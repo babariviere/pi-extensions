@@ -5,12 +5,20 @@
 
 import type { ToolCallEvent } from "@earendil-works/pi-coding-agent";
 import { isToolCallEventType } from "@earendil-works/pi-coding-agent";
-import { checkArgv, checkCommand, defaultContext, type GuardrailContext, type GuardrailHit } from "./rules";
+import {
+	checkArgv,
+	checkCommand,
+	defaultContext,
+	type GuardrailContext,
+	type GuardrailHit,
+	type GuardrailScope,
+} from "./rules";
 
 export type GuardrailDecision = { block: true; reason: string } | undefined;
 
 export interface PolicyOptions {
 	enabled: boolean;
+	scope?: GuardrailScope;
 	/** Overrides the ambient home/cwd, mainly for tests. */
 	context?: GuardrailContext;
 }
@@ -25,14 +33,17 @@ export function evaluateBashCall(event: ToolCallEvent, options: PolicyOptions): 
 	const cwd = (event.input as { cwd?: unknown }).cwd;
 	const context = typeof cwd === "string" && cwd ? { ...base, cwd } : base;
 	let hit: GuardrailHit | null;
-	if (isToolCallEventType("bash", event)) {
+	if (
+		isToolCallEventType("bash", event) ||
+		(options.scope === "root-search" && event.toolName === "jobs" && event.input.action === "start")
+	) {
 		const command = event.input.command;
 		if (typeof command !== "string") return undefined;
-		hit = checkCommand(command, context);
+		hit = checkCommand(command, context, 0, options.scope);
 	} else if (event.toolName === "exec") {
 		const argv = (event.input as { argv?: unknown }).argv;
 		if (!Array.isArray(argv) || !argv.every((arg): arg is string => typeof arg === "string")) return undefined;
-		hit = checkArgv(argv, context);
+		hit = checkArgv(argv, context, options.scope);
 	} else {
 		return undefined;
 	}
@@ -43,7 +54,9 @@ export function evaluateBashCall(event: ToolCallEvent, options: PolicyOptions): 
 		reason: [
 			`Guardrail blocked this command: ${hit.reason}.`,
 			`Offending fragment: ${hit.match}`,
-			"If this really is intended, ask the user to run it themselves or to disable the guardrail with /guardrail off.",
+			options.scope === "root-search"
+				? "Use a project or a specific directory instead of the filesystem root."
+				: "If this really is intended, ask the user to run it themselves or to disable the guardrail with /guardrail off.",
 		].join("\n"),
 	};
 }

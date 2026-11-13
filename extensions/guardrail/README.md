@@ -59,6 +59,11 @@ configuration required.
 
 ## Command
 
+Embedding hosts can load `@babariviere/pi-extensions/root-search` to block only
+root searches through bash, exec, and jobs start (including nested Code Mode calls). This
+entry does not enable edit or destructive-command restrictions and does not
+register the full guardrail's commands or honor `PI_GUARDRAIL`.
+
 ```
 /guardrail              # show state
 /guardrail off          # disable for this session

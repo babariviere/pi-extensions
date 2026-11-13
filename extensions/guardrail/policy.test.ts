@@ -33,6 +33,32 @@ test("blocks root searches through bash, exec, and codemode-nested calls", () =>
 	}
 });
 
+test("root-search scope leaves other command rules unchanged", () => {
+	for (const command of [
+		"rm -rf /",
+		"sed -i s/a/b/ file",
+		"echo x > file",
+		"perl -e 'print 1'",
+		"bash -c 'rm -rf /'",
+	]) {
+		assert.equal(
+			evaluateBashCall(event("bash", { command }), { enabled: true, context, scope: "root-search" }),
+			undefined,
+		);
+	}
+	for (const call of [
+		event("bash", { command: "rm -rf /; find /" }),
+		event("bash", { command: "find / > file" }),
+		event("exec", { argv: ["bash", "-c", "fd . /"] }),
+		event("jobs", { action: "start", command: "find /" }),
+	]) {
+		assert.match(
+			evaluateBashCall(call, { enabled: true, context, scope: "root-search" })?.reason ?? "",
+			/filesystem root/,
+		);
+	}
+});
+
 test("allows an ordinary bash call", () => {
 	const decision = evaluateBashCall(event("bash", { command: "rm -rf node_modules" }), { enabled: true, context });
 	assert.equal(decision, undefined);

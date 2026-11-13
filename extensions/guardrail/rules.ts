@@ -25,6 +25,9 @@ export interface GuardrailHit {
 	match: string;
 }
 
+/** Embedding hosts can enable root-search prevention without the other command rules. */
+export type GuardrailScope = "all" | "root-search";
+
 export function defaultContext(): GuardrailContext {
 	return { home: homedir(), cwd: process.cwd() };
 }
@@ -566,9 +569,15 @@ function checkRaw(command: string, masked: string): GuardrailHit | null {
 }
 
 /** Rules evaluated per command in the pipeline. */
-function checkCommandSegment(segment: string, ctx: GuardrailContext, depth: number): GuardrailHit | null {
+function checkCommandSegment(
+	segment: string,
+	ctx: GuardrailContext,
+	depth: number,
+	scope: GuardrailScope,
+): GuardrailHit | null {
 	const cmd = parseCommand(segment);
 	if (!cmd) return null;
+	if (scope === "root-search" && !["find", "fd", "fdfind"].includes(cmd.name) && !SHELLS.has(cmd.name)) return null;
 	const { flags, operands } = splitArgs(cmd.args);
 	const hit = (reason: string): GuardrailHit => ({ reason, match: segment.trim() });
 
@@ -599,7 +608,7 @@ function checkCommandSegment(segment: string, ctx: GuardrailContext, depth: numb
 		const index = cmd.args.findIndex((arg) => arg === "-c" || /^-[a-zA-Z]*c$/.test(arg));
 		const inner = index >= 0 ? cmd.args[index + 1] : undefined;
 		if (inner) {
-			const nested = checkCommand(inner, ctx, depth + 1);
+			const nested = checkCommand(inner, ctx, depth + 1, scope);
 			if (nested) return { reason: nested.reason, match: segment.trim() };
 		}
 		return null;
@@ -671,10 +680,14 @@ function checkCommandSegment(segment: string, ctx: GuardrailContext, depth: numb
 }
 
 /** Check a literal argv call without treating its arguments as shell syntax. */
-export function checkArgv(argv: string[], ctx: GuardrailContext = defaultContext()): GuardrailHit | null {
+export function checkArgv(
+	argv: string[],
+	ctx: GuardrailContext = defaultContext(),
+	scope: GuardrailScope = "all",
+): GuardrailHit | null {
 	if (argv.length === 0) return null;
 	const quoted = argv.map((arg) => `'${arg.replaceAll("'", `'\\''`)}'`).join(" ");
-	return checkCommand(quoted, ctx);
+	return checkCommand(quoted, ctx, 0, scope);
 }
 
 /**
@@ -685,12 +698,13 @@ export function checkCommand(
 	command: string,
 	ctx: GuardrailContext = defaultContext(),
 	depth = 0,
+	scope: GuardrailScope = "all",
 ): GuardrailHit | null {
 	if (!command.trim()) return null;
-	const raw = checkRaw(command, maskLiterals(command));
+	const raw = scope === "all" ? checkRaw(command, maskLiterals(command)) : null;
 	if (raw) return raw;
 	for (const segment of splitSegments(command)) {
-		const hit = checkCommandSegment(segment, ctx, depth);
+		const hit = checkCommandSegment(segment, ctx, depth, scope);
 		if (hit) return hit;
 	}
 	return null;
