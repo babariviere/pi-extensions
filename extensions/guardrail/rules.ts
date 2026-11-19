@@ -519,37 +519,8 @@ function awkInlineProgram(args: string[]): string | undefined {
 	return undefined;
 }
 
-/** Find shell output redirects whose destination is a file rather than an fd or /dev/null. */
-function checkFileRedirect(command: string, masked: string): GuardrailHit | null {
-	const redirect = /(^|[^<>=&])(?:\d+|\{[A-Za-z_][A-Za-z0-9_]*\})?(?:&>>|&>|>>|>\||<>|>)(?![>&(=])/g;
-	for (const match of masked.matchAll(redirect)) {
-		const operatorStart = match.index + match[1].length;
-		const operatorText = command.slice(operatorStart, match.index + match[0].length);
-		// The destination word ends at the first unquoted separator, so
-		// `> /dev/null; done` still reads as `/dev/null` rather than `/dev/null;`.
-		// Quoted spans are blank in the mask, keeping separators inside them inert.
-		let end = match.index + match[0].length;
-		while (end < masked.length && !/[;|&()`]/.test(masked[end])) end++;
-		const target = tokenize(command.slice(match.index + match[0].length, end))[0];
-		const normalizedTarget = target && isAbsolute(target) ? normalize(target) : undefined;
-		const isLiteralTmpFile = normalizedTarget?.startsWith("/tmp/") && !/[\$`*?[\]{}()]/.test(target);
-		const tmpdirRelative = target?.match(/^\$(?:TMPDIR|\{TMPDIR\})\/(.+)$/)?.[1];
-		const isTmpdirFile =
-			tmpdirRelative !== undefined &&
-			normalize(`/tmp/${tmpdirRelative}`).startsWith("/tmp/") &&
-			!/[\$`*?[\]{}()]/.test(tmpdirRelative);
-		if (!target || /^&(?:\d+|-)$/.test(target) || target === "/dev/null" || isLiteralTmpFile || isTmpdirFile)
-			continue;
-		return {
-			reason: "shell output redirection writing directly to a file; use the write or edit tool instead",
-			match: `${operatorText}${JSON.stringify(target)}`,
-		};
-	}
-	return null;
-}
-
 /**
- * Rules evaluated on the whole command: pipelines, redirects, fork bombs.
+ * Rules evaluated on the whole command: pipelines, raw device redirects, fork bombs.
  * Matching runs on the masked string so quoted text and comments are inert,
  * while the reported fragment comes from the original.
  */
@@ -566,7 +537,7 @@ function checkRaw(command: string, masked: string): GuardrailHit | null {
 		const match = regex.exec(masked);
 		if (match) return { reason, match: command.slice(match.index, match.index + match[0].length) };
 	}
-	return checkFileRedirect(command, masked);
+	return null;
 }
 
 /** Rules evaluated per command in the pipeline. */

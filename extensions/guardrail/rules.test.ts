@@ -53,16 +53,8 @@ const blocked: Array<[command: string, reason: RegExp]> = [
 	["sed --in-place 's/a/b/' file.txt", /'sed' in-place edit/],
 	["printf x | tee file.txt", /'tee' writing directly to a file/],
 	["tee -a one.txt two.txt", /'tee' writing directly to a file/],
-	["echo text > file.txt", /shell output redirection/],
-	["echo text>file.txt", /shell output redirection/],
-	["echo text >> 'file with spaces.txt'", /shell output redirection/],
-	["command 2>errors.log", /shell output redirection/],
-	["command &>all.log", /shell output redirection/],
-	["command <>state.txt", /shell output redirection/],
 	['awk \'BEGIN { print "new" > "file.txt" }\'', /inline 'awk' program/],
 	["gawk -i inplace '{ sub(/a/, \"b\") }' file.txt", /'gawk' in-place edit/],
-	["bash -c 'echo nested > file.txt'", /shell output redirection/],
-	["python -c 'print(1)' > file.txt", /shell output redirection/],
 	["python -c 'print(1)' && rm -rf ~", /home directory/],
 	// Permissions, devices and machine control.
 	["chmod -R 777 /", /recursive 'chmod' on the filesystem root/],
@@ -133,6 +125,17 @@ const allowed = [
 	"echo text > $TMPDIR/output.txt",
 	"echo text >> ${TMPDIR}/nested/output.txt",
 	"cat <<'EOF'\nhello\nEOF",
+	// Ordinary file redirects are allowed, including in nested shells and with here-doc input.
+	"echo text > file.txt; true",
+	"echo text>file.txt",
+	"echo text >> 'file with spaces.txt'",
+	"command 2>errors.log",
+	"command &>all.log",
+	"command <>state.txt",
+	'echo text > "$OUTPUT_FILE"',
+	"bash -c 'echo nested > file.txt'",
+	"python -c 'print(1)' > file.txt",
+	"cat <<'EOF' > file.txt\nhello\nEOF",
 	// Normal automation may mutate files through its own established interface.
 	"npm install",
 	"pnpm test",
@@ -259,15 +262,15 @@ test("literal argv checks mutations without treating arguments as shell syntax",
 
 test("heredoc bodies are data, but surrounding shell commands are checked", () => {
 	for (const command of [
-		"cat <<'EOF' > file.txt\nhello\nEOF",
-		"python3 <<'PY'\nassert 2 > 1\nPY\necho text > file.txt",
+		"cat <<'EOF' > /dev/sda\nhello\nEOF",
+		"python3 <<'PY'\nassert 2 > 1\nPY\necho text > /dev/sda",
 		"cat <<EOF\nrm -rf ~\nEOF\nrm -rf ~",
 		"cat <<EOF; rm -rf ~\nhello\nEOF",
 		"cat <<EOF\nunmatched ' quote\nEOF\nrm -rf ~",
 	]) {
 		assert.ok(checkCommand(command, ctx), command);
 	}
-	assert.equal(checkCommand("cat <<EOF\nEOF is not the delimiter > file\nEOF", ctx), null);
+	assert.equal(checkCommand("cat <<EOF\nEOF is not the delimiter > /dev/sda\nEOF", ctx), null);
 	assert.equal(checkCommand("cat <<< 'hello'", ctx), null);
 });
 
@@ -285,25 +288,6 @@ test("relative targets follow the supplied cwd", () => {
 	const atRoot: GuardrailContext = { home: "/Users/alice", cwd: "/" };
 	assert.match(checkCommand("rm -rf usr", atRoot)?.reason ?? "", /system directory '\/usr'/);
 	assert.equal(checkCommand("rm -rf usr", ctx), null);
-});
-
-test("only literal files beneath /tmp are exempt from redirect blocking", () => {
-	assert.match(checkCommand("echo text > /tmpfile", ctx)?.reason ?? "", /shell output redirection/);
-	assert.match(checkCommand("echo text > /tmp", ctx)?.reason ?? "", /shell output redirection/);
-	assert.match(checkCommand("echo text > /tmp/../output.txt", ctx)?.reason ?? "", /shell output redirection/);
-	assert.match(checkCommand("echo text > /tmp/$FILE", ctx)?.reason ?? "", /shell output redirection/);
-	assert.match(checkCommand("echo text > $TMPDIR", ctx)?.reason ?? "", /shell output redirection/);
-	assert.match(checkCommand("echo text > $TMPDIR/../output.txt", ctx)?.reason ?? "", /shell output redirection/);
-	assert.match(checkCommand("echo text > $TMPDIR/$FILE", ctx)?.reason ?? "", /shell output redirection/);
-});
-
-test("a redirect destination ends at the next separator, not just whitespace", () => {
-	assert.equal(checkCommand("for i in a b; do echo $i > /dev/null; done", ctx), null);
-	assert.equal(checkCommand("if true; then cmd 2>/dev/null; fi", ctx), null);
-	assert.equal(checkCommand("cmd >/dev/null&&cmd2", ctx), null);
-	assert.equal(checkCommand("cmd >/dev/null|grep x", ctx), null);
-	const hit = checkCommand("echo text > file.txt;true", ctx);
-	assert.equal(hit?.match, '>"file.txt"');
 });
 
 test("a long fork-bomb lookalike does not blow up the matcher", () => {

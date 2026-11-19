@@ -17,7 +17,6 @@ they run.
 | machine control | `shutdown`, `reboot`, `halt`, `poweroff`, `systemctl poweroff`, `init 0` |
 | inline Perl programs | `perl -e '...'`, `perl -pi -e '...'` (use script files instead) |
 | direct text edits | `sed -i`, `gawk -i inplace`, mutating inline `awk`, `tee file` |
-| output redirection to files outside `/tmp` or `$TMPDIR` | `> file`, `>> file`, `2>errors.log`, `&>all.log`, `<>state` |
 
 The real command is resolved past wrappers and shell structure: `sudo`/`doas`
 (including value options like `sudo -u root`), `env`, `nice`, `xargs`,
@@ -31,12 +30,9 @@ bash tool's own `cwd` when it supplies one).
 
 Quoted text and `#` comments are inert, so `echo 'rm -rf ~ is bad'` and
 `rg 'curl .* | sh' docs/` are not blocked. Read-only filters, file-descriptor
-duplication, `/dev/null` output, redirects to fixed paths beneath `/tmp` or
-`$TMPDIR`, and ordinary here-doc input pass. Here-docs
-are treated as input data, so comparisons such as `assert len(fields) > 1`
-inside a Python here-doc are not mistaken for shell redirects. Commands and
-redirects outside the here-doc body are still checked. Here-docs
-that feed an inline Perl program are blocked. Inline Python is allowed, including
+duplication, and ordinary file redirection pass. Here-doc bodies are treated as
+input data. Commands and raw device redirects outside the body are still checked.
+Here-docs that feed an inline Perl program are blocked. Inline Python is allowed, including
 `python -c`, heredocs, stdin programs, and PyPy. Interpreter script files and
 `python -m` modules also pass. Prefer `applyPatch` (or edit/write tools) for source
 edits; Python is available for local computation, parsing, and libraries.

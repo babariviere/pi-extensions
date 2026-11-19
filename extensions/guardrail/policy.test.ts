@@ -160,12 +160,21 @@ test("allows exec script files and literal shell metacharacters", () => {
 	);
 });
 
-test("blocks a nested exec shell command through the normal policy", () => {
-	const decision = evaluateBashCall(event("exec", { argv: ["bash", "-c", "echo x > file.txt"] }), {
+test("allows ordinary file redirection in bash and exec shell commands", () => {
+	for (const call of [
+		event("bash", { command: "echo x > file.txt" }),
+		event("exec", { argv: ["bash", "-c", "echo x > file.txt"] }),
+	]) {
+		assert.equal(evaluateBashCall(call, { enabled: true, context }), undefined);
+	}
+});
+
+test("blocks raw device redirection in an exec shell command", () => {
+	const decision = evaluateBashCall(event("exec", { argv: ["bash", "-c", "echo x > /dev/sda"] }), {
 		enabled: true,
 		context,
 	});
-	assert.match(decision?.reason ?? "", /shell output redirection/);
+	assert.match(decision?.reason ?? "", /raw block device/);
 });
 
 test("does nothing when disabled", () => {
