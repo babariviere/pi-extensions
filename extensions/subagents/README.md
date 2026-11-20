@@ -87,9 +87,8 @@ Read `~/.pi/agent/subagents.json` (or Pi's configured agent directory), then mer
   choice is pinned at spawn for subsequent sends and recovery. `model` is
   rejected on `send`, `stop` and `status`. `defaultThinking` is host policy.
   No persona overrides exist.
-- Selection may use any provider. It must pass `enabledModels`, catalog and price guards.
-  Unavailable/unpriced models or reference prices fail closed. The price ceiling
-  is the higher input-plus-output rate of `claude-opus-5-5` and `gpt-6.1-sol`.
+- Selection may use any available provider. The model must be in the available
+  catalog and match `enabledModels` when configured. There is no price limit.
 - `waitMs` and `backend` are retired. Invalid JSON fails explicitly; invalid
   supported field values fall back to defaults. No user settings change automatically.
 

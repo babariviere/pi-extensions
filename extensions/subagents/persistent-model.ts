@@ -1,6 +1,5 @@
 /** Subagent model authorization. Host defaults and caller-selected spawn models pass the same guards. */
 import type { Model } from "@earendil-works/pi-ai";
-import { subagentModelPriceError } from "./model-policy.ts";
 import { qualifyModel, stripThinkingSuffix } from "./pi-args.ts";
 import { readEnabledModels } from "./settings.ts";
 
@@ -14,13 +13,17 @@ export interface HostModel {
 export function validateHostModel(choice: HostModel, cwd: string, projectTrusted = false): HostModel {
 	const model = qualifyModel(choice.model, choice.parentProvider);
 	if (!model) throw new Error("Subagents require a host defaultModel or a resolved parent model");
+	const bare = stripThinkingSuffix(model);
 	const enabled = readEnabledModels(cwd, projectTrusted);
-	if (
-		enabled.length &&
-		!enabled.some((id) => qualifyModel(stripThinkingSuffix(id), choice.parentProvider) === stripThinkingSuffix(model))
-	)
+	if (enabled.length && !enabled.some((id) => qualifyModel(stripThinkingSuffix(id), choice.parentProvider) === bare))
 		throw new Error(`Subagent model '${model}' is not in enabledModels.`);
-	const error = choice.models ? subagentModelPriceError(model, choice.models, choice.parentProvider) : undefined;
-	if (error) throw new Error(error);
+	const candidate = bare.toLowerCase();
+	if (
+		choice.models &&
+		!choice.models.some(
+			({ id, provider }) => id.toLowerCase() === candidate || `${provider}/${id}`.toLowerCase() === candidate,
+		)
+	)
+		throw new Error(`Subagent model '${model}' is unavailable.`);
 	return { ...choice, model };
 }
