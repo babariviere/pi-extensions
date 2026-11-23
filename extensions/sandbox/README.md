@@ -12,7 +12,7 @@
 }
 ```
 
-Modes: `off`, `read-only`, `workspace-write`, `full`. `off` restores configuration, it does not override a night-run or subagent floor. Existing night-mode policy events remain supported. Move the old `code-mode.json` sandbox fields to the root of this file, and its MCP permission block under `mcp`. Server connections and OAuth belong to pi's native `mcp.json`, not this file.
+Modes: `off`, `read-only`, `workspace-write`, `full`. `off` restores configuration, it does not override a subagent floor. Move the old `code-mode.json` sandbox fields to the root of this file, and its MCP permission block under `mcp`. Server connections and OAuth belong to pi's native `mcp.json`, not this file.
 
 Core read/search/edit/write operations and the separate `applyPatch` extension enforce path policy on both direct calls and native codemode's nested calls. Shell commands and background jobs use the same macOS Seatbelt wrapper. Restricted shell calls fail closed if OS enforcement cannot start. Filesystem restriction is macOS-only; networking is unrestricted. `/dev/null` remains a permitted output destination.
 

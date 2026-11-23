@@ -1,12 +1,5 @@
 /**
- * Night read-only MCP mode: the mechanical guard that refuses a write-shaped
- * MCP tool call before it reaches the server.
- *
- * An unattended night run is told in prose never to post to Slack, never to move
- * a Linear ticket, never to touch a Datadog monitor. Prose is not enforcement: a
- * confused subagent can still post to a customer channel. This module is the
- * enforcement, applied by the sandbox extension's native `tool_call` hook.
- * Pi owns MCP transport, discovery, authentication and execution.
+ * The native tool_call hook enforces read-only MCP policy before server calls.
  *
  * Classification never asks the model at call time. It is decided, in order, by:
  *
@@ -16,7 +9,7 @@
  *  4. `unknownToolPolicy`, which defaults to `deny`.
  *
  * Defaulting the unknown case to `deny` is the whole point: a server that grows a
- * new tool overnight, or a server nobody wrote a profile for, must fail closed.
+ * new tool, or a server nobody wrote a profile for, must fail closed.
  * The cost is a read that gets refused with a message saying exactly which line
  * of `sandbox.json` would allow it; the alternative cost is a message sent to a
  * customer at 3am. Set `unknownToolPolicy: "allow-reads"` to fall back on the
@@ -40,9 +33,7 @@ export interface McpServerPolicy {
 	 * Upsert tools allowed only while the payload carries no identifier.
 	 *
 	 * Some servers spell create and update as one tool (Linear's `save_issue`),
-	 * so the name cannot separate "file a new ticket", which a night run is
-	 * expected to do, from "edit the ticket someone is working in", which it must
-	 * never do. Allowing the tool wholesale permits both; denying it permits
+	 * so the name cannot separate creating a ticket from editing one. Allowing the tool wholesale permits both; denying it permits
 	 * neither. The identifier in the arguments is the only place the difference
 	 * exists, so it is decided there.
 	 */
@@ -53,7 +44,7 @@ export interface McpServerPolicy {
 
 /** The `mcp` block of `sandbox.json`. Declarative on purpose: one reviewable place. */
 export interface McpReadOnlyConfig {
-	/** Master switch. A night run turns it on for its participants. */
+	/** Master switch for read-only MCP policy. */
 	readOnly: boolean;
 	unknownToolPolicy: McpUnknownToolPolicy;
 	/** Applied to a server with no profile of its own. */
@@ -109,10 +100,7 @@ export const BUILTIN_MCP_SERVER_POLICIES: Readonly<Record<string, McpServerPolic
 	},
 	linear: {
 		default: "deny-writes",
-		// Linear's issue write is an upsert: no id creates a ticket, an id edits
-		// someone's existing one. A night run is expected to file what it found and
-		// must not touch what is already there, and that difference is in the
-		// payload, not in the name.
+		// Linear's issue write is an upsert: no id creates a ticket, an id edits it.
 		createOnly: ["save_issue"],
 		allow: [
 			"get_attachment",
@@ -155,8 +143,7 @@ export const BUILTIN_MCP_SERVER_POLICIES: Readonly<Record<string, McpServerPolic
 		],
 		deny: [
 			// `save_issue` is not here: it is the upsert `createOnly` above decides on
-			// its payload. A deny entry would win over that and refuse filing tickets,
-			// which the night contract asks for.
+			// its payload. A deny entry would also block creating tickets.
 			"save_comment",
 			"delete_comment",
 			"save_document",
@@ -601,7 +588,7 @@ export class McpReadOnlyGate {
 		const scope = decision.server ?? "<server>";
 		throw new Error(
 			`MCP call ${label} is refused: read-only MCP mode is on and ${decision.reason}. ` +
-				"An unattended night run may read from MCP servers but must not write. " +
+				"The MCP policy restricts writes to this server. " +
 				`Use a read tool instead, report the intended change in your final message, or add '${decision.tool}' to ` +
 				`mcp.servers.${scope}.allow in sandbox.json.`,
 		);
@@ -651,11 +638,3 @@ export const normalizeMcpReadOnlyConfig = (input: unknown): McpReadOnlyConfig =>
 		servers,
 	};
 };
-
-/**
- * The night floor: a run that asked for read-only MCP turns it on, and nothing
- * in `sandbox.json` can turn it back off for the duration. Mirrors how the
- * filesystem sandbox treats a night request (see `sandbox/resolve.ts`).
- */
-export const effectiveMcpReadOnlyConfig = (config: McpReadOnlyConfig, nightReadOnly: boolean): McpReadOnlyConfig =>
-	nightReadOnly && !config.readOnly ? { ...config, readOnly: true } : config;

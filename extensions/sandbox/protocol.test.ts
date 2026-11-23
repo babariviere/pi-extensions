@@ -5,11 +5,11 @@ import { parseSandboxRequestEvent } from "./protocol.ts";
 test("a well-formed request is accepted, with its roots", () => {
 	const parsed = parseSandboxRequestEvent({
 		policy: { mode: "workspace-write", allowWrite: ["/a", " ", "/b"], denyRead: ["/todos", " "] },
-		reason: "night run started",
+		reason: "policy changed",
 	});
 	assert.deepEqual(parsed, {
 		policy: { mode: "workspace-write", allowWrite: ["/a", "/b"], denyRead: ["/todos"] },
-		reason: "night run started",
+		reason: "policy changed",
 	});
 });
 

@@ -3,9 +3,7 @@
  *
  * The selected model is not always the model that answers: a virtual model
  * (the router) dispatches to a physical one, and a session can switch models
- * mid-run. Usage polling and the night-mode budget guard both have to follow
- * the same physical model, so the tracking lives here rather than in one
- * extension.
+ * mid-run. Usage polling follows the last successful physical response.
  *
  * Pure state, no pi imports beyond the session entry type, so it can be unit
  * tested directly.

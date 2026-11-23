@@ -132,10 +132,10 @@ test("native todo tools can manage the store while direct child access is denied
 		await invoke("update", { id: created.id, title: "Unlocked" });
 		assert.equal(existsSync(lockPath), false);
 
-		const night = await invoke("create", { title: "Night evidence", tags: ["night"] });
-		await assert.rejects(invoke("update", { id: night.id, status: "closed" }), /Evidence/);
-		assert.equal((await invoke("get", { id: night.id })).status, "open");
-		await invoke("delete", { id: night.id });
+		const tagged = await invoke("create", { title: "Tagged todo", tags: ["night"] });
+		await invoke("update", { id: tagged.id, status: "closed" });
+		assert.equal((await invoke("get", { id: tagged.id })).status, "closed");
+		await invoke("delete", { id: tagged.id });
 		assert.equal((await invoke("delete", { id: created.id })).id, created.id);
 		assert.deepEqual(await invoke("listAll"), []);
 		assert.deepEqual(emissions, []);

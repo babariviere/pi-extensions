@@ -6,6 +6,7 @@ import test from "node:test";
 import { isOpenAIModel, usageProviderForModel } from "./protocol.ts";
 import {
 	acquireLease,
+	fetchUsageSnapshot,
 	LEASE_TTL_MS,
 	loadToken,
 	parseOpenAIUsage,
@@ -42,6 +43,17 @@ test("parses Codex usage windows by duration", () => {
 		{ label: "Week", usedPercent: 12.5, resetsAt: "2027-01-15T08:00:00.000Z" },
 		{ label: "5h", usedPercent: 4, resetsAt: "2023-11-14T22:13:20.000Z" },
 	]);
+});
+
+test("keeps the Claude weekly reset time", async (t) => {
+	const resetsAt = "2027-01-15T08:00:00.000Z";
+	t.mock.method(globalThis, "fetch", async () =>
+		Response.json({ seven_day: { utilization: 100, resets_at: resetsAt } }),
+	);
+	assert.deepEqual(await fetchUsageSnapshot("anthropic", "sk-ant-oat-test"), {
+		provider: "anthropic",
+		windows: [{ label: "Week", usedPercent: 100, resetsAt }],
+	});
 });
 
 test("caches are scoped to the agent directory", (t) => {

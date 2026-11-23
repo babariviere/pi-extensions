@@ -5,6 +5,7 @@
  */
 
 import { type ExtensionAPI, getAgentDir, type ModelRegistry } from "@earendil-works/pi-coding-agent";
+import { waitForClaudeUsage } from "./claude-limit.ts";
 import { formatLocalDateTime } from "./format.ts";
 import {
 	FIVE_HOUR_LABEL,
@@ -155,6 +156,8 @@ export default function (pi: ExtensionAPI): void {
 		await refresh();
 	});
 
+	pi.on("before_provider_request", (_event, ctx) => waitForClaudeUsage(ctx, () => last?.snapshot));
+
 	pi.registerCommand("usage", {
 		description: "Show subscription usage (status)",
 		getArgumentCompletions: (prefix) =>
@@ -168,14 +171,15 @@ export default function (pi: ExtensionAPI): void {
 			const week = findWindow(last?.snapshot, WEEK_LABEL);
 			const fiveHour = findWindow(last?.snapshot, FIVE_HOUR_LABEL);
 			const source = provider();
+			const label = source === "anthropic" ? "Claude" : "Codex";
 			const lease = source ? readLease(source, agentDir) : undefined;
 			const poller = !lease ? "none" : lease.pid === process.pid ? "this session" : `pid ${lease.pid}`;
 			ctx.ui.notify(
 				[
 					`usage provider: ${last?.snapshot.provider ?? "unknown"}`,
 					`usage poller: ${poller}`,
-					`Codex week: ${percent(week?.usedPercent)}${week?.resetsAt ? `, resets ${formatLocalDateTime(week.resetsAt)}` : ""}`,
-					`Codex 5h: ${fiveHour ? percent(fiveHour.usedPercent) : "none"}`,
+					`${label} week: ${percent(week?.usedPercent)}${week?.resetsAt ? `, resets ${formatLocalDateTime(week.resetsAt)}` : ""}`,
+					`${label} 5h: ${fiveHour ? percent(fiveHour.usedPercent) : "none"}`,
 				].join("\n"),
 				"info",
 			);

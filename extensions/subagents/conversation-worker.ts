@@ -1,10 +1,9 @@
 /** Persistent IPC-only native kernel. Harness history, not files, is canonical. */
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { Extension, Storage } from "@earendil-works/pi-durable";
-import { buildNightContract } from "../night-mode/night-run.ts";
 import { ConversationRuntime, type ConversationRuntimeOptions, type ReporterHandle } from "./conversation-runtime.ts";
 import { openDurableStorage } from "./durable-storage.ts";
-import { runCwd, type RunContext, type RunRequest } from "./run.ts";
+import { assertSupportedWorker, type RunContext, type RunRequest } from "./run.ts";
 import type { WorkerCommand, WorkerPacket, WorkerSpec, WorkerStatus } from "./worker-protocol.ts";
 
 export type { WorkerCommand, WorkerPacket } from "./worker-protocol.ts";
@@ -36,16 +35,6 @@ const dependencies: WorkerDependencies = {
 	openAdapter: async (request, context) => (await import("./native-adapter.ts")).NativeAdapter.open(request, context),
 };
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
-
-function frameInput(message: string, spec: WorkerSpec): string {
-	const { request, context } = spec;
-	if (!context.nightRun) return message;
-	const artifacts =
-		request.cwd && request.artifactsDir
-			? `\nDeliverables directory: \`${request.artifactsDir}\`. Write files that must outlive this workspace there and cite that path as evidence. Your working directory is temporary.\n`
-			: "";
-	return `${buildNightContract(context.nightRun, request.cwd)}${artifacts}\n${message}`;
-}
 
 /** Exported for offline IPC/lifecycle tests with a faux native kernel. */
 export function installConversationWorker(host: WorkerHost, deps: WorkerDependencies = dependencies): void {
@@ -150,8 +139,7 @@ export function installConversationWorker(host: WorkerHost, deps: WorkerDependen
 		})();
 	};
 	const initialize = async (launch: WorkerSpec) => {
-		if (launch.request.night && !launch.context.nightRun)
-			throw new Error("Active night contract unavailable; refusing to resume without its policies");
+		assertSupportedWorker(launch.request, launch.context);
 		// Wait for a closing owner's lease, never steal it or open a concurrent native kernel.
 		const waitUntil = Math.min(launch.context.deadlineAt ?? Infinity, Date.now() + 2_000);
 		while (!owned) {
@@ -186,7 +174,7 @@ export function installConversationWorker(host: WorkerHost, deps: WorkerDependen
 			extension: adapter.extension,
 			model: adapter.model,
 			thinkingLevel: adapter.thinkingLevel,
-			cwd: runCwd(launch.request, launch.context),
+			cwd: launch.context.cwd,
 			beforeToolAdmission: (context) => adapter!.waitForSubscription?.(context.abortSignal) ?? Promise.resolve(),
 		});
 		adapter.onToolsChanged = (extension) => runtime!.installExtension(extension);
@@ -209,10 +197,7 @@ export function installConversationWorker(host: WorkerHost, deps: WorkerDependen
 		if (packet.type === "input") {
 			const persisted = await runtime.admittedContent(packet.id);
 			const content =
-				persisted ??
-				(adapter.prepareInput
-					? await adapter.prepareInput(frameInput(packet.message, spec))
-					: frameInput(packet.message, spec));
+				persisted ?? (adapter.prepareInput ? await adapter.prepareInput(packet.message) : packet.message);
 			if (mode) return;
 			const handle = await runtime.admit(packet.id, content, packet.followUp);
 			if (mode) return;

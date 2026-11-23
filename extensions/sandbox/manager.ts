@@ -4,8 +4,7 @@
  * through it.
  *
  * Everything here is stateless with respect to the *current* policy. The
- * state lives in `SandboxController`, because the mode can change mid-session
- * (a night run turning enforcement on), and the tool definitions pi builds at
+ * state lives in `SandboxController`, because the mode can change mid-session, and the tool definitions pi builds at
  * session start must keep working across that change.
  *
  * There is no optional dependency and no graceful degradation any more: an

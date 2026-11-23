@@ -4,13 +4,11 @@ import { dirname, join, resolve } from "node:path";
 import type { JsonValue } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { createSession, defineDoc, type Storage } from "@earendil-works/pi-durable";
-import { readActiveNightRun, isNightRunParticipant, type ActiveNightRun } from "../night-mode/night-run.ts";
-import type { AgentWorkspace } from "../night-mode/agent-workspace.ts";
 import { builtinAgent } from "./discovery.ts";
 import { openDurableStorage } from "./durable-storage.ts";
 import { openConversationWorker, type WorkerConnection, type WorkerFactory } from "./conversation-backend.ts";
 import type { SubagentHostEntry } from "./host-events.ts";
-import { allocateNightWorkspaces, releaseNightWorkspaces, relocateWorkspacePaths } from "./night-workspace.ts";
+import { isLegacyNightWorker } from "./run.ts";
 import { sanitizeSegment } from "./paths.ts";
 import { validateHostModel, type HostModel } from "./persistent-model.ts";
 import type { LastAnswer, WorkerAnswer, WorkerSpec, WorkerStatus } from "./worker-protocol.ts";
@@ -42,7 +40,6 @@ interface NamedRecord {
 	notices: Notice[];
 	/** Exact answer IDs returned by named status, including receipts not yet received. */
 	observedAnswers?: string[];
-	workspaces: AgentWorkspace[];
 	retired?: boolean;
 }
 export interface SubagentStatus {
@@ -116,17 +113,6 @@ export function durableDirectory(ref: SessionRef): string {
 	return resolve(`${ref.sessionFile}.subagents-durable`, identity);
 }
 
-/** Night policy comes from the active host contract, never caller names or messages. */
-export function activeNightForSession(ref: SessionRef, run = readActiveNightRun()): ActiveNightRun | undefined {
-	if (!run) {
-		if (process.env.PI_NIGHT_RUN === "1")
-			throw new Error("Active night contract unavailable; refusing an unprotected subagent");
-		return undefined;
-	}
-	if (!isNightRunParticipant(run, ref)) return undefined;
-	return copy(run);
-}
-
 export class DurableSupervisor {
 	readonly format = "named-conversations-v3";
 	readonly #session;
@@ -169,11 +155,17 @@ export class DurableSupervisor {
 			}, ctx);
 			const snapshot = await supervisor.#session.snapshot(RegistryDoc, ctx);
 			supervisor.#records = new Map(
-				Object.entries(snapshot!.agents).map(([key, value]) => [key, value as unknown as NamedRecord]),
+				Object.entries(snapshot!.agents).map(([key, value]) => [key, copy(value as unknown as NamedRecord)]),
 			);
-			for (const record of supervisor.#records.values())
+			for (const record of supervisor.#records.values()) {
+				if (isLegacyNightWorker(record.spec.request, record.spec.context)) {
+					record.retired = true;
+					record.stopRequested = undefined;
+					for (const input of pending(record)) input.state = "aborted";
+				}
 				if (!record.retired && (pending(record).length || record.stopRequested))
 					supervisor.#background(supervisor.#dispatch(record));
+			}
 			return supervisor;
 		} catch (error) {
 			await supervisor.#session.close(ctx).catch(() => {});
@@ -325,9 +317,6 @@ export class DurableSupervisor {
 		return this.#locked(name, async () => {
 			this.#healthy();
 			if (this.#closing) throw new Error("Subagents are shutting down");
-			const night = activeNightForSession(this.ref);
-			if (night && cwd !== undefined)
-				throw new Error("Night subagent placement is host-controlled; cwd is not allowed");
 			const placement = await resolveSpawnDirectory(cwd, this.ref);
 			const existing = this.#records.get(keyOf(name));
 			if (existing) {
@@ -349,9 +338,7 @@ export class DurableSupervisor {
 				task: message,
 				index: 0,
 				overrides: { model: model.model, ...(model.thinking ? { thinking: model.thinking } : {}) },
-				...(night ? { night: true } : {}),
 			};
-			const workspaces = await allocateNightWorkspaces([request], id, this.ref.cwd, night);
 			const now = Date.now();
 			const record: NamedRecord = {
 				name,
@@ -360,7 +347,6 @@ export class DurableSupervisor {
 				createdAt: now,
 				inputs: [{ id: callId, message, followUp: false, state: "pending" }],
 				notices: [],
-				workspaces,
 				deadlineAt: now + policy.timeoutMs,
 				spec: {
 					name,
@@ -379,21 +365,13 @@ export class DurableSupervisor {
 						sessionFile: this.ref.sessionFile,
 						runId: id,
 						timeoutMs: policy.timeoutMs,
-						...(night ? { nightRun: night } : {}),
 					},
 				},
 			};
-			try {
-				if (this.#closing) throw new Error("Subagents are shutting down");
-				if (JSON.stringify(activeNightForSession(this.ref)) !== JSON.stringify(night))
-					throw new Error("Night contract changed during subagent admission");
-				await this.#change((records) => {
-					records.set(keyOf(name), record);
-				});
-			} catch (error) {
-				await releaseNightWorkspaces(workspaces);
-				throw error;
-			}
+			if (this.#closing) throw new Error("Subagents are shutting down");
+			await this.#change((records) => {
+				records.set(keyOf(name), record);
+			});
 			await this.#dispatch(this.#record(name), callId);
 			return asStatus(this.#record(name));
 		});
@@ -403,9 +381,7 @@ export class DurableSupervisor {
 			this.#healthy();
 			if (this.#closing) throw new Error("Subagents are shutting down");
 			let record = this.#record(name);
-			const currentNight = activeNightForSession(this.ref);
-			if (record.retired || JSON.stringify(currentNight) !== JSON.stringify(record.spec.context.nightRun))
-				throw new Error("This subagent belongs to a different night run; spawn a new named worker.");
+			if (record.retired) throw new Error("This subagent has been retired; spawn a new named worker.");
 			const repeated = record.inputs.find((input) => input.id === callId);
 			if (repeated) {
 				if (repeated.message !== message || repeated.followUp !== followUp)
@@ -480,7 +456,7 @@ export class DurableSupervisor {
 		if (this.#updatePaused) return;
 		this.#healthy();
 		if (this.#closing) throw new Error("Subagents are shutting down");
-		if (record.retired) throw new Error("This night subagent has been retired");
+		if (record.retired) throw new Error("This subagent has been retired");
 		let live = this.#workers.get(record.id);
 		if (!live) {
 			const spec = copy(record.spec);
@@ -722,7 +698,7 @@ export class DurableSupervisor {
 				this.#retries.clear();
 				if (!options.preserveRuns && !this.#failure)
 					await this.#change((records) => {
-						for (const record of records.values()) record.stopRequested = randomUUID();
+						for (const record of records.values()) if (!record.retired) record.stopRequested = randomUUID();
 					});
 				for (const worker of this.#workers.values()) {
 					if (worker.deadline) clearTimeout(worker.deadline);
@@ -736,25 +712,10 @@ export class DurableSupervisor {
 				await Promise.allSettled([...this.#serial.values()]);
 				this.#workers.clear();
 				if (!options.preserveRuns && !this.#failure) {
-					for (const record of this.#records.values()) await releaseNightWorkspaces(record.workspaces);
 					await this.#change((records) => {
 						for (const record of records.values()) {
 							for (const input of pending(record)) input.state = "aborted";
-							if (record.lastAnswer)
-								record.lastAnswer.text = relocateWorkspacePaths(
-									{ output: record.lastAnswer.text },
-									record.workspaces,
-								).output;
-							if (record.workspaces.length) {
-								record.spec.request.cwd = undefined;
-								record.spec.request.artifactsDir = undefined;
-							}
-							record.workspaces = [];
 							record.deadlineAt = undefined;
-							if (record.spec.context.nightRun) {
-								record.retired = true;
-								record.stopRequested = undefined;
-							}
 							// Preserve stop intent for parked/crashed kernels whose abort could not be committed.
 						}
 					});

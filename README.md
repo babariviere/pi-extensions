@@ -18,7 +18,6 @@ The manifest discovers `extensions/*/index.ts` and `themes/*.json`.
 | `guardrail` | `/guardrail` controls checks for obvious catastrophic shell commands and direct shell-edit patterns. |
 | `jobs` | Native `jobs({ action, ... })` manages session-owned background shell jobs through the sandbox extension. |
 | `linear` | `/linear` lists current-sprint issues or starts work on a ticket. |
-| `night-mode` | `/night` starts unattended overnight work directly, with a ledger, usage guards, reports, optional private working copies and wake locks. |
 | `pr` | `/review-comments`, `/autofix`, and `/autofix-stop` integrate GitHub reviews and CI. |
 | `router` | Opt-in `router/auto` virtual model with scoped, authenticated, cost-aware physical routing. |
 | `preview-system-prompt` | `/system-prompt` shows the assembled prompt. |
@@ -27,7 +26,7 @@ The manifest discovers `extensions/*/index.ts` and `themes/*.json`.
 | `subagents` | One native `subagent` tool manages named persistent background conversations, automatic answers, steering, stop and durable recovery. |
 | `todos` | Native `todo({ action, ... })` manages file-backed todos; `/todos` provides the interactive manager. |
 | `tool-substitute` | Search guidance and jj-aware Git-write checks. |
-| `usage` | `/usage` polls Claude and Codex/ChatGPT subscription windows. |
+| `usage` | `/usage` polls subscription windows and pauses Claude OAuth chats at the limit. |
 | `web` | `web({ action: "search" | "fetch", ... })` searches Kagi, fetches pages, or summarizes Git repositories; `/kagi-status` checks credentials. |
 | `workspaces` | `/workspace` manages jj workspaces, with optional Herdr integration. |
 
@@ -143,13 +142,11 @@ Names identify conversations, not Markdown personas. `send` steers by default;
 conversation. Answers arrive automatically; named status exposes the latest
 completed `lastAnswer: { id, text }` and acknowledges its pending notification,
 without deleting the answer. All-agent status stays compact and acknowledges
-nothing. Model/thinking, deadlines and workspaces are host policy.
+nothing. Model/thinking, deadlines and child working directories are host policy.
 
 The old `agents_*` tools, batch/wait handles, per-call `output`, `reads`, `task`,
 `model`, `thinking` and night arguments, and automatic Markdown outputs are removed.
-Put scope, briefs, permissions and requested deliverables in `message`. Night
-children inherit the active run's sandbox and MCP policy. Night runs start
-directly, without a planning tool or approval checklist.
+Put scope, briefs, permissions and requested deliverables in `message`.
 Old handles cannot map to names: pending
 old jobs are safely retired and journals retained, not replayed. See the
 [upgrade and recovery caveats](extensions/subagents/README.md).
@@ -181,7 +178,7 @@ old jobs are safely retired and journals retained, not replayed. See the
 
 | Location | Purpose |
 | --- | --- |
-| `~/.pi/agent/settings.json` and trusted `.pi/settings.json` | Pi settings, resource paths and night-mode configuration. |
+| `~/.pi/agent/settings.json` and trusted `.pi/settings.json` | Pi settings and resource paths. |
 | `~/.pi/agent/mcp.json` and trusted `.pi/mcp.json` | Native MCP servers. Native OAuth uses the agent directory's `mcp-auth.json`. |
 | `~/.pi/agent/subagents.json` and trusted `.pi/subagents.json` | `maxPerExecution`, `timeoutMs`, `defaultModel` and `defaultThinking` host policy. No `waitMs` or backend selection. |
 | `~/.pi/agent/router.json` and trusted `.pi/router.json` | Optional cheap, strong and direct physical models for `router/auto`. |
@@ -189,11 +186,10 @@ old jobs are safely retired and journals retained, not replayed. See the
 | `~/.pi/agent/sandbox.json` and trusted `.pi/sandbox.json` | Filesystem and native MCP permission policy. |
 | `~/.pi/agent/secrets.json` | Per-machine Kagi/Linear values, not the fnox secrets extension's source. |
 | Nearest `fnox.toml` | Source for shell secret injection and reversible references. |
-| `~/.pi/agent/night/` | Default night prompts, instructions, reports, archive, todos and sandboxes. |
 | `~/.herdr/workspaces` | Default managed jj workspace root. |
 
 Useful controls include `PI_CODING_AGENT_DIR`, `PI_TODO_PATH`, `PI_GUARDRAIL=off`
-and `HERDR_SOCKET_PATH`. Child-run and night markers are internal; do not set them casually.
+and `HERDR_SOCKET_PATH`. Child-run markers are internal; do not set them casually.
 
 Keep credentials out of this repository. `secrets.json` accepts either
 `{"NAME":"value"}` or `{"secrets":{"NAME":"value"}}`. Web and Linear also read the
@@ -203,9 +199,11 @@ Pattern masking is defense in depth, not a guarantee against every indirect leak
 
 ## Safety and operational caveats
 
+- Stop any active `/night` run before upgrading. The command is removed.
+  Existing reports, ledgers and workspaces are left in place.
+
 - Guardrail catches known destructive command shapes, not arbitrary scripts.
-- Sandbox is off by default for ordinary sessions. Night runs and sandboxed child
-  agents impose floors that cannot be loosened through `/sandbox`.
+- Sandbox is off by default for ordinary sessions. Sandboxed child agents impose floors that cannot be loosened through `/sandbox`.
 - Restricted shells and jobs use macOS Seatbelt. They fail closed if enforcement
   cannot start. Networking is unrestricted; this is filesystem accident prevention,
   not isolation from malicious installed extensions.
@@ -279,7 +277,6 @@ packages remain host-provided peers, not bundled runtime dependencies.
 - [Jobs](extensions/jobs/README.md)
 - [Web](extensions/web/README.md)
 - [Browser](extensions/browser/README.md)
-- [Night mode](extensions/night-mode/README.md)
 - [Guardrail](extensions/guardrail/README.md)
 - [Secrets](extensions/secrets/README.md)
 - [Usage](extensions/usage/README.md)

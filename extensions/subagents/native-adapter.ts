@@ -46,7 +46,7 @@ import {
 	type JsonObject,
 } from "@earendil-works/pi-durable";
 import { agentSandboxFloor } from "../sandbox/agent-floor.ts";
-import { runCwd, type RunContext, type RunRequest } from "./run.ts";
+import { assertSupportedWorker, type RunContext, type RunRequest } from "./run.ts";
 import { EmbeddedResourceLoader } from "../../embedding/resource-loader.mjs";
 import { PILOT_EXTENSION_NAMES } from "../../embedding/profile.mjs";
 import { SubscriptionGate } from "../../embedding/subscription-gate.mjs";
@@ -207,7 +207,8 @@ export class NativeAdapter {
 		const floor = agentSandboxFloor();
 		if (request.agent.config.sandbox && floor?.mode !== request.agent.config.sandbox)
 			throw new Error("Requested sandbox floor is missing or differs from worker argv");
-		const cwd = runCwd(request, context);
+		assertSupportedWorker(request, context);
+		const cwd = context.cwd;
 		const agentDir = options.agentDir ?? getAgentDir();
 		const settingsManager = options.settingsManager ?? SettingsManager.create(cwd, agentDir);
 		settingsManager.applyOverrides({
@@ -298,7 +299,7 @@ export class NativeAdapter {
 			});
 			if (errors.length) throw new Error(`Native extension startup failed: ${errors.join("; ")}`);
 			if (
-				(floor || request.agent.config.sandbox || context.nightRun?.sandbox || context.nightRun?.mcp?.readOnly) &&
+				(floor || request.agent.config.sandbox) &&
 				!loader
 					.getExtensions()
 					.extensions.some(

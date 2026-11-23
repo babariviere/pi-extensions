@@ -33,6 +33,17 @@ updating means no pi process currently uses that provider.
 
 ## Commands
 
-`/usage` or `/usage status` shows provider usage, the current poller, and reset times. The windows are informational on their own: turning a limit into a pause is the night-mode extension's job, and it only does so for the provider behind the model in use.
+`/usage` or `/usage status` shows provider usage, the current poller, and reset times.
 
 Usage polling reads OAuth credentials through pi's credential store, which refreshes expired tokens, then falls back to Claude Code's keychain entry or Codex CLI credentials. It calls the provider usage endpoints, does not use API keys, and the undocumented Codex endpoint may change or become unavailable.
+
+## Claude subscription limits
+
+When the selected model uses Anthropic OAuth, Pi holds the next chat request
+if the latest usage snapshot reports 100% or more on either the 5h or weekly
+window. The pending request continues at reset or when polling reports room
+again. Press Esc to cancel the wait. Requests already sent are not interrupted.
+
+This guard does not apply to API keys, routed models, or Codex. With no usage
+snapshot, Pi proceeds normally. Hosts that set `PILOT_SUBSCRIPTION_POLICY`
+keep control of their own pauses.

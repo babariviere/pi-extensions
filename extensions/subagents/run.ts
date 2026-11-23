@@ -1,6 +1,5 @@
 /** Host-only inputs for a persistent native worker. */
 import type { DiscoveredAgent } from "./discovery.ts";
-import type { ActiveNightRun } from "../night-mode/night-run.ts";
 
 export interface RunRequest {
 	agent: DiscoveredAgent;
@@ -8,10 +7,8 @@ export interface RunRequest {
 	index: number;
 	/** Model and thinking are pinned by host policy, never tool arguments. */
 	overrides?: { model?: string; thinking?: string };
+	/** Legacy persisted marker. These workers must not resume without their sandbox policy. */
 	night?: boolean;
-	/** Private night workspace and surviving deliverables, allocated by the host. */
-	cwd?: string;
-	artifactsDir?: string;
 }
 export interface RunContext {
 	sessionId: string | undefined;
@@ -20,13 +17,18 @@ export interface RunContext {
 	cwd: string;
 	timeoutMs: number;
 	deadlineAt?: number;
-	nightRun?: ActiveNightRun;
+	nightRun?: unknown;
 	projectTrusted?: boolean;
 	signal?: AbortSignal;
 }
-export function runCwd(request: RunRequest, context: RunContext): string {
-	return request.cwd ?? context.cwd;
-}
 export function withChildConfigHome(configHome: string | undefined, base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 	return configHome ? { ...base, XDG_CONFIG_HOME: configHome } : base;
+}
+
+export function isLegacyNightWorker(request: RunRequest, context: RunContext): boolean {
+	return request.night === true || context.nightRun !== undefined;
+}
+
+export function assertSupportedWorker(request: RunRequest, context: RunContext): void {
+	if (isLegacyNightWorker(request, context)) throw new Error("Night workers are retired; spawn a new named worker.");
 }

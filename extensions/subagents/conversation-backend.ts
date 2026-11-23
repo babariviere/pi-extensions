@@ -1,14 +1,13 @@
 /** Isolated persistent kernels. Only the worker Harness may generate or execute tools. */
 import { spawn } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import { getPackageDir } from "@earendil-works/pi-coding-agent";
-import { nightChildEnv } from "../night-mode/night-run.ts";
-import { prepareConfigHome } from "../night-mode/sandbox-clone.ts";
+import { prepareConfigHome } from "./config-home.ts";
 import { SANDBOX_MODE_FLAG } from "./constants.ts";
-import { runCwd, withChildConfigHome } from "./run.ts";
+import { assertSupportedWorker, withChildConfigHome } from "./run.ts";
 import { signalProcessTree } from "./process-tree.ts";
 import type { WorkerAnswer, WorkerCommand, WorkerPacket, WorkerSpec, WorkerStatus } from "./worker-protocol.ts";
 
@@ -46,21 +45,16 @@ export function openConversationWorker(
 ): WorkerConnection {
 	const signal = deps.signalProcessTree ?? signalProcessTree;
 	mkdirSync(spec.directory, { recursive: true, mode: 0o700 });
-	const night = spec.request.night ? spec.context.nightRun : undefined;
-	if (spec.request.night && !night)
-		throw new Error("Active night contract unavailable; refusing an unprotected worker");
-	const nightSnapshot = night ? join(spec.directory, "night-contract.json") : undefined;
-	if (nightSnapshot) writeFileSync(nightSnapshot, JSON.stringify(night), { mode: 0o600 });
-	const configHome = night ? undefined : prepareConfigHome(join(spec.directory, "config-home")).path;
+	assertSupportedWorker(spec.request, spec.context);
+	const configHome = prepareConfigHome(join(spec.directory, "config-home")).path;
 	const args = [fileURLToPath(new URL("./worker-bootstrap.mjs", import.meta.url))];
 	if (spec.request.agent.config.sandbox) args.push(`--${SANDBOX_MODE_FLAG}`, spec.request.agent.config.sandbox);
 	const child = (deps.spawn ?? spawn)(process.execPath, args, {
-		cwd: runCwd(spec.request, spec.context),
+		cwd: spec.context.cwd,
 		detached: true,
 		stdio: ["ignore", "ignore", "pipe", "ipc"],
 		env: {
-			...withChildConfigHome(configHome, night ? nightChildEnv(night) : process.env),
-			...(nightSnapshot ? { PI_DURABLE_NIGHT_RUN_FILE: nightSnapshot } : {}),
+			...withChildConfigHome(configHome, process.env),
 			PI_CODE_MODE_SUBAGENT: "1",
 			PI_SUBAGENT_HOST_PACKAGE_DIR: getPackageDir(),
 		},

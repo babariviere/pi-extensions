@@ -1,11 +1,6 @@
 /**
  * Event contract for changing the sandbox mode mid-session.
  *
- * The mode cannot be decided once at startup: an unattended run wants
- * enforcement that an interactive session would find obstructive, and it starts
- * long after the session did. So another extension (night-mode) asks for a
- * policy over pi's event bus, and Code Mode answers with the resulting state.
- *
  * This is extension-level trust, not model-level: Pi's extension event bus is
  * not reachable from native codemode scripts, so they cannot loosen policy.
  */
@@ -25,8 +20,7 @@ export interface SandboxRequest {
 
 /**
  * A request to change the sandbox. `policy: null` (or absent) reverts to what
- * `sandbox.json` configures, which is how a night run releases enforcement when
- * it ends.
+ * `sandbox.json` configures, subject to the subagent floor.
  */
 export interface SandboxRequestEvent {
 	policy: SandboxRequest | null;

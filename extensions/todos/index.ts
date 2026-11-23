@@ -59,9 +59,6 @@ import {
 	type TodoRecord,
 } from "./storage.ts";
 import { updateTodoPromptSection } from "./todo-prompt.ts";
-import { validateClosure } from "../night-mode/evidence.ts";
-import { NIGHT_TAG } from "../night-mode/ledger.ts";
-import { isNightRunParticipant, readActiveNightRun } from "../night-mode/night-run.ts";
 import {
 	Container,
 	type Focusable,
@@ -137,22 +134,6 @@ function validateTodoId(id: string): { id: string } | { error: string } {
 
 function displayTodoId(id: string): string {
 	return formatTodoId(normalizeTodoId(id));
-}
-
-/**
- * Why a night ledger item may not be written in this state, if it may not.
- *
- * Only `night`-tagged todos are held to this: a project todo stays a free-form
- * note. The rule is enforced at the write rather than at the read, because the
- * next night reads the store and cannot tell a finished item from an abandoned
- * one without it. Four consecutive night reports carried items that were done
- * and looked open, purely for a missing `Evidence:` line.
- */
-function nightClosureError(todo: { tags?: string[]; status?: string; body?: string }): string | undefined {
-	const tags = todo.tags ?? [];
-	if (!tags.some((tag) => tag.toLowerCase() === NIGHT_TAG)) return undefined;
-	const check = validateClosure({ status: todo.status ?? "open", body: todo.body ?? "" });
-	return check.ok ? undefined : check.error;
 }
 
 function isTodoClosed(status: string): boolean {
@@ -681,40 +662,12 @@ class TodoDetailOverlayComponent {
 	}
 }
 
-/**
- * Ledger store of an active night run, when this process is one of its
- * participants and was not handed `PI_TODO_PATH`.
- *
- * Night runs point every participant at one store (see `night-mode/ledger.ts`),
- * normally through the environment. Panes started by the herdr backend cannot be
- * given an environment, so they qualify by running inside the run's working copy
- * instead. A session you open in your own checkout while a run is in flight is
- * not a participant and keeps its own store.
- */
-function nightLedgerDir(cwd: string): string | undefined {
-	const run = readActiveNightRun();
-	if (!run?.ledgerDir) return undefined;
-	return isNightRunParticipant(run, { cwd }) ? run.ledgerDir : undefined;
-}
-
 function getTodosDir(cwd: string): string {
 	const overridePath = process.env[TODO_PATH_ENV];
 	if (overridePath && overridePath.trim()) {
 		return path.resolve(cwd, overridePath.trim());
 	}
-	const ledger = nightLedgerDir(cwd);
-	if (ledger) return path.resolve(ledger);
 	return path.resolve(cwd, TODO_DIR_NAME);
-}
-
-function getTodosDirLabel(cwd: string): string {
-	const overridePath = process.env[TODO_PATH_ENV];
-	if (overridePath && overridePath.trim()) {
-		return path.resolve(cwd, overridePath.trim());
-	}
-	const ledger = nightLedgerDir(cwd);
-	if (ledger) return path.resolve(ledger);
-	return TODO_DIR_NAME;
 }
 
 function getTodoSettingsPath(todosDir: string): string {
@@ -1632,8 +1585,6 @@ function createTodoActions(): ActionProvider {
 						status: (args.status as string | undefined) ?? "open",
 						body: (args.body as string | undefined) ?? "",
 					};
-					const closureError = nightClosureError(candidate);
-					if (closureError) throw new Error(closureError);
 					try {
 						return structuredTodo(await createTodo(todosDir, candidate));
 					} catch (error) {
@@ -1656,8 +1607,6 @@ function createTodoActions(): ActionProvider {
 						if (args.tags !== undefined) existing.tags = args.tags as string[];
 						if (args.body !== undefined) existing.body = args.body as string;
 						if (!existing.created_at) existing.created_at = new Date().toISOString();
-						const closureError = nightClosureError(existing);
-						if (closureError) return { error: closureError } as const;
 						clearAssignmentIfClosed(existing);
 						await writeTodoFile(filePath, existing);
 						return existing;

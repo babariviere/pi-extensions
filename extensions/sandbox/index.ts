@@ -1,19 +1,11 @@
 /** Filesystem and read-only MCP policy for native Pi tools, independent of codemode. */
 import type { ExtensionAPI, ExtensionContext, ToolInfo } from "@earendil-works/pi-coding-agent";
 import { resolve } from "node:path";
-import { applyNightRunEnv } from "../night-mode/night-run.ts";
 import { parseApplyPatch } from "../apply-patch/apply-patch-parser.ts";
 import { readExtensionConfig } from "../shared/config.ts";
 import { agentSandboxFloor } from "./agent-floor.ts";
 import { SandboxController, type SandboxSource } from "./controller.ts";
-import { activeNightSandboxRequest } from "./night-bridge.ts";
-import { activeNightMcpReadOnly } from "./night-mcp.ts";
-import {
-	effectiveMcpReadOnlyConfig,
-	McpReadOnlyGate,
-	normalizeMcpReadOnlyConfig,
-	type McpReadOnlyConfig,
-} from "./mcp-policy.ts";
+import { McpReadOnlyGate, normalizeMcpReadOnlyConfig, type McpReadOnlyConfig } from "./mcp-policy.ts";
 import { assertNativeReadPath, createNativeSandboxTools, NATIVE_SANDBOX_TOOL_NAMES } from "./native-tools.ts";
 import { isSandboxMode, policyEnvironment, resolveSandboxPolicy, SANDBOX_MODES, type SandboxPolicy } from "./policy.ts";
 import {
@@ -24,7 +16,6 @@ import {
 	type SandboxStateEvent,
 } from "./protocol.ts";
 import { effectiveSandbox, type SandboxSettings } from "./resolve.ts";
-import { runNightPreflight } from "./preflight-bridge.ts";
 import {
 	SANDBOX_WRAP_COMMAND_EVENT,
 	SANDBOX_WRITE_GUARD_EVENT,
@@ -81,7 +72,7 @@ export class SandboxSession {
 	#controller: SandboxController | undefined;
 	#request: SandboxRequest | undefined;
 	#floor: SandboxRequest | undefined;
-	#ref: { cwd: string; sessionId?: string } = { cwd: process.cwd() };
+	#cwd = process.cwd();
 	#tail: Promise<unknown> = Promise.resolve();
 	#generation = 0;
 	readonly #owned = new Map<string, string>();
@@ -112,11 +103,7 @@ export class SandboxSession {
 					throw new Error("sandbox: powershell is not supported by the OS adapter; use bash");
 				if (event.toolName.startsWith("mcp__")) {
 					if (!info) throw new Error("sandbox: MCP tool is absent from the registered catalog");
-					assertNativeMcpCall(
-						effectiveMcpReadOnlyConfig(this.#settings!.mcp, activeNightMcpReadOnly(this.#ref)),
-						info,
-						event.input,
-					);
+					assertNativeMcpCall(this.#settings!.mcp, info, event.input);
 				}
 			} catch (error) {
 				return { block: true, reason: error instanceof Error ? error.message : String(error) };
@@ -153,14 +140,12 @@ export class SandboxSession {
 	}
 	resolve() {
 		if (!this.#settings) throw new Error("Sandbox session is not initialized");
-		applyNightRunEnv(this.#ref);
 		const effective = effectiveSandbox({
 			settings: this.#settings.filesystem,
 			requested: this.#request,
-			night: activeNightSandboxRequest(this.#ref),
 			agent: this.#floor,
 		});
-		return { effective, policy: resolveSandboxPolicy(effective, policyEnvironment(this.#ref.cwd)) };
+		return { effective, policy: resolveSandboxPolicy(effective, policyEnvironment(this.#cwd)) };
 	}
 	async initialize(ctx: ExtensionContext): Promise<void> {
 		await this.close();
@@ -168,7 +153,7 @@ export class SandboxSession {
 		this.#context = ctx;
 		this.#settings = settings(ctx);
 		this.#floor = agentSandboxFloor();
-		this.#ref = { cwd: ctx.cwd, sessionId: ctx.sessionManager.getSessionId() || undefined };
+		this.#cwd = ctx.cwd;
 		const { policy, effective } = this.resolve();
 		this.#controller = this.createController(policy, effective.source === "config" ? "config" : "request");
 		const applied = this.#controller.apply(policy, effective.source === "config" ? "config" : "request");
@@ -245,11 +230,6 @@ export class SandboxSession {
 					`${controller.describe()}${effective.refused ? ` (${effective.source} floor refused '${effective.refused.asked}')` : ""}${reason ? ` (${reason})` : ""}`,
 					effective.refused ? "warning" : "info",
 				);
-			void runNightPreflight({
-				cwd: ctx.cwd,
-				sessionId: this.#ref.sessionId,
-				wrap: (command) => controller.wrapCommand(command),
-			}).catch(() => {});
 			return state;
 		});
 		this.#tail = applied.catch(() => {});

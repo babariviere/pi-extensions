@@ -35,10 +35,7 @@ export function resolveShellPath(): string {
 	return "/bin/bash";
 }
 
-/**
- * Single-quote `value` for a shell word. Twin of `night-mode/preflight.ts`'s
- * `shellQuote`; kept as a local copy rather than an import across extensions.
- */
+/** Single-quote `value` for a shell word. */
 export function shellQuote(value: string): string {
 	return `'${value.replaceAll("'", "'\\''")}'`;
 }

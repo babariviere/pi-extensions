@@ -5,15 +5,13 @@ import {
 	classifyMcpToolName,
 	DEFAULT_MCP_READ_ONLY_CONFIG,
 	decideMcpCall,
-	effectiveMcpReadOnlyConfig,
 	McpReadOnlyGate,
 	mcpToolNameVariants,
 	normalizeMcpReadOnlyConfig,
 } from "./mcp-policy.ts";
 
 /** Night mode: the master switch on, everything else at its default. */
-const nightGate = (): McpReadOnlyGate =>
-	McpReadOnlyGate.of(effectiveMcpReadOnlyConfig(DEFAULT_MCP_READ_ONLY_CONFIG, true));
+const nightGate = (): McpReadOnlyGate => McpReadOnlyGate.of({ ...DEFAULT_MCP_READ_ONLY_CONFIG, readOnly: true });
 
 const allowed = (tool: string, server?: string): boolean => nightGate().decide(tool, server).allowed;
 
@@ -181,15 +179,6 @@ test("a refusal names the tool, the server and the way out", () => {
 			return true;
 		},
 	);
-});
-
-test("the night floor cannot be loosened by configuration", () => {
-	const config = normalizeMcpReadOnlyConfig({ readOnly: false, unknownToolPolicy: "allow" });
-	assert.equal(config.readOnly, false);
-	const night = effectiveMcpReadOnlyConfig(config, true);
-	assert.equal(night.readOnly, true);
-	// `unknownToolPolicy: "allow"` stays configurable; only the switch is a floor.
-	assert.equal(McpReadOnlyGate.of(night).decide("slack_send_message", "slack").allowed, false);
 });
 
 test("normalization ignores junk and keeps the defaults", () => {

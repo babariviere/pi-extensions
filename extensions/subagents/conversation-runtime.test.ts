@@ -784,63 +784,12 @@ test("native tools remain sequential even with parallel annotations and dynamic 
 	}
 });
 
-test("host night framing excludes the output rider and requires a host workspace for artifacts", async () => {
-	const directory = await mkdtemp(join(tmpdir(), "persistent-night-"));
-	const { faux, options } = setup();
-	faux.setResponses([fauxAssistantMessage("night answer"), fauxAssistantMessage("next night answer")]);
-	const command = launchFor(directory);
-	command.spec.request.night = true;
-	command.spec.request.artifactsDir = join(directory, "artifacts");
-	command.spec.context.nightRun = {
-		startedAt: Date.now(),
-		reportPath: join(directory, "night-report.md"),
-		maxPullRequests: 2,
-	};
-	let prepared = "";
-	const deps = {
-		openStorage: openDurableStorage,
-		openAdapter: async () => ({
-			...options,
-			bindHarness() {},
-			close: async () => {},
-			prepareInput: async (content: string) => {
-				prepared = content;
-				return content;
-			},
-		}),
-	};
-	const first = workerHost();
-	const second = workerHost();
-	try {
-		installConversationWorker(first.host, deps);
-		first.events.emit("message", command);
-		first.events.emit("message", input("night", "do night work"));
-		await until(() => answers(first).length === 1);
-		assert.match(prepared, /\[night-mode\]/);
-		assert.match(prepared, /Never ask a question/);
-		assert.match(prepared, /do night work/);
-		assert.doesNotMatch(prepared, /Approved ledger scope/);
-		assert.doesNotMatch(prepared, /Deliverables directory|Output:|Task:|complete findings/);
-		await pause(first);
-		command.spec.request.cwd = directory;
-		installConversationWorker(second.host, deps);
-		second.events.emit("message", command);
-		second.events.emit("message", input("night-next", "next"));
-		await until(() => answers(second).some((p) => p.id === "night-next"));
-		assert.match(prepared, /Deliverables directory/);
-		assert.match(prepared, /your own workspace/);
-	} finally {
-		await pause(first);
-		await pause(second);
-		await rm(directory, { recursive: true, force: true });
-	}
-});
-
-test("missing active host night contract fails closed before kernel startup", async () => {
+test("retired night worker fails closed before kernel startup", async () => {
 	const { options } = setup();
 	const host = workerHost();
 	const command = launchFor(process.cwd());
 	command.spec.request.night = true;
+	command.spec.context.nightRun = {};
 	let opened = 0;
 	installConversationWorker(host.host, {
 		openStorage: async () => ({ storage: new MemoryStorage(), release() {} }),

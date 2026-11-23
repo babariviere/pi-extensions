@@ -2,8 +2,7 @@
  * The session's live sandbox state.
  *
  * pi builds its tool definitions once, at session start, and bakes the
- * operations objects in. The sandbox mode, however, can change later: a night
- * run asks for enforcement hours after the session began. So the operations this
+ * operations objects in. The sandbox mode, however, can change later. The operations this
  * controller hands out are stable objects whose closures read the *current*
  * policy on every call, and `apply` swaps the policy underneath them.
  *

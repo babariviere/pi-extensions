@@ -2,7 +2,7 @@
 
 File-based task tracking with the `/todos` manager and native Pi tools. Each todo
 is a markdown file with JSON front matter in `<cwd>/.pi/todos`, or the directory
-selected by `PI_TODO_PATH`. Night-run participants use the run's ledger store.
+selected by `PI_TODO_PATH`.
 
 ## Native tool
 
@@ -43,9 +43,6 @@ list. When open todos exist, the agent receives native tool workflow guidance.
 
 Mutations preserve file locks and assignment checks. `force` overrides assignment,
 not the file lock. Stale locks require interactive confirmation before removal.
-Closing a `night`-tagged todo requires valid evidence (or a reason for skipping).
-The night sandbox can deny direct access to
-the store while trusted host-side todo tools continue managing it.
 
 `<todo-dir>/settings.json` controls startup garbage collection: `gc` defaults to
 `true`, and `gcDays` defaults to `7` for closed todos.

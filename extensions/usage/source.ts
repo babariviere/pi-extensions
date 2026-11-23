@@ -201,7 +201,7 @@ async function fetchUsage(provider: UsageProvider, token: string): Promise<Fetch
 
 		const usage = data as {
 			five_hour?: { utilization?: number; resets_at?: string };
-			seven_day?: { utilization?: number };
+			seven_day?: { utilization?: number; resets_at?: string };
 			extra_usage?: { is_enabled?: boolean; used_credits?: number; monthly_limit?: number; utilization?: number };
 		};
 		const windows: RateWindow[] = [];
@@ -209,7 +209,7 @@ async function fetchUsage(provider: UsageProvider, token: string): Promise<Fetch
 			windows.push({ label: "5h", usedPercent: usage.five_hour.utilization, resetsAt: usage.five_hour.resets_at });
 		}
 		if (usage.seven_day?.utilization !== undefined)
-			windows.push({ label: "Week", usedPercent: usage.seven_day.utilization });
+			windows.push({ label: "Week", usedPercent: usage.seven_day.utilization, resetsAt: usage.seven_day.resets_at });
 		if (usage.extra_usage?.is_enabled) {
 			const extra = usage.extra_usage;
 			const used = extra.used_credits || 0;

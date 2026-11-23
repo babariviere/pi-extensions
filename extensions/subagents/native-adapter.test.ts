@@ -549,21 +549,6 @@ test("native finalized assistant replacements are canonical before tools and rep
 	});
 });
 
-test("saved night sandbox and MCP policies require the native policy extension", async () => {
-	await fixture(async ({ open, runContext, directory }) => {
-		runContext.nightRun = {
-			startedAt: 1,
-			reportPath: join(directory, "report.md"),
-			maxPullRequests: 1,
-			sandbox: { mode: "read-only" },
-			mcp: { readOnly: true },
-		};
-		await assert.rejects(open(), /sandbox extension is absent/);
-		delete runContext.nightRun.sandbox;
-		await assert.rejects(open(), /sandbox extension is absent/, "MCP-only night policy also fails closed");
-	});
-});
-
 test("native structured prompts, forced prompts and context changes are request-local", async () => {
 	await fixture(async ({ open, start, faux, request }) => {
 		request.agent.systemPrompt = "persona";

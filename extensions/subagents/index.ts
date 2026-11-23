@@ -46,7 +46,7 @@ export const SubagentParameters = Type.Object(
 		cwd: Type.Optional(
 			Type.String({
 				description:
-					"Spawn only. Existing directory, relative to the parent cwd or absolute. Defaults to the parent cwd. Fixed for sends and recovery; unavailable during night runs.",
+					"Spawn only. Existing directory, relative to the parent cwd or absolute. Defaults to the parent cwd. Fixed for sends and recovery.",
 			}),
 		),
 	},
@@ -160,7 +160,7 @@ export default function subagents(pi: ExtensionAPI, deps: SubagentExtensionDeps 
 			label: "Subagent",
 			exposure: "codemode",
 			description:
-				"Manage persistent background subagents. spawn needs name and message and accepts an optional cwd (relative to the parent or absolute, fixed for this conversation) and an optional model (fixed for this conversation; any available provider, subject to enabledModels); send needs name and message and steers unless followUp is true; stop aborts current/queued work but keeps the conversation usable; status takes a name for its latest completed answer and acknowledges that answer's pending notification, or no name for compact summaries. Unread answers arrive automatically. Names identify conversations, not Markdown agent definitions. Default model/thinking and lifetime are host policy. Night runs inherit the active host contract, control placement and reject cwd; use ordinary conversation names. Children cannot launch subagents or jobs.",
+				"Manage persistent background subagents. spawn needs name and message and accepts an optional cwd (relative to the parent or absolute, fixed for this conversation) and an optional model (fixed for this conversation; any available provider, subject to enabledModels); send needs name and message and steers unless followUp is true; stop aborts current/queued work but keeps the conversation usable; status takes a name for its latest completed answer and acknowledges that answer's pending notification, or no name for compact summaries. Unread answers arrive automatically. Names identify conversations, not Markdown agent definitions. Default model/thinking and lifetime are host policy. Children cannot launch subagents or jobs.",
 			parameters: SubagentParameters,
 			annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
 			execute: async (callId, args, signal) => {

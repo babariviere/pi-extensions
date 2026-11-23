@@ -29,7 +29,7 @@ export interface SubagentHostEntry {
 	/** Latest completed answer identity; the text stays available through named status. */
 	lastAnswerId?: string;
 	error?: string;
-	/** A night conversation retired at a host lifecycle boundary. It cannot accept new messages. */
+	/** A legacy conversation retired by the host. It cannot accept new messages. */
 	retired?: boolean;
 }
 

@@ -5,7 +5,7 @@ import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import usage, { UsageModelTracker } from "./index.ts";
 import { usageProviderForModel } from "./protocol.ts";
 
-test("usage is informational and no longer registers a tool guard or pacing commands", async () => {
+test("usage guards Claude requests without registering a tool guard or pacing commands", async () => {
 	const events: string[] = [];
 	let command: Parameters<ExtensionAPI["registerCommand"]>[1] | undefined;
 	usage({
@@ -19,6 +19,7 @@ test("usage is informational and no longer registers a tool guard or pacing comm
 	} as unknown as ExtensionAPI);
 
 	assert.equal(events.includes("tool_call"), false);
+	assert.equal(events.includes("before_provider_request"), true);
 	assert.deepEqual(command?.getArgumentCompletions?.("pacing"), []);
 	assert.deepEqual(command?.getArgumentCompletions?.("sta"), [{ value: "status", label: "status" }]);
 	const notices: Array<[string, string]> = [];

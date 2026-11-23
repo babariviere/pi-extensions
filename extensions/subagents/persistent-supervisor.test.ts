@@ -3,11 +3,11 @@ import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import type { JsonValue } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { writeActiveNightRun, clearActiveNightRun, type ActiveNightRun } from "../night-mode/night-run.ts";
+import { createSession, defineDoc } from "@earendil-works/pi-durable";
 import type { WorkerCallbacks, WorkerConnection, WorkerFactory } from "./conversation-backend.ts";
 import {
-	activeNightForSession,
 	acquireDurableSupervisor,
 	closeDurableSupervisor,
 	durableDirectory,
@@ -122,6 +122,46 @@ test("named admissions are journaled before launch, deduplicated, and retain pin
 	});
 });
 
+test("saved night workers retain their last answer but cannot replay pending work", async () => {
+	await fixture(async (ref, fake, owner) => {
+		await owner.spawn("legacy", "pending", "first", policy);
+		await owner.close({ preserveRuns: true });
+		const storage = await openDurableStorage(durableDirectory(ref));
+		const session = createSession(storage.storage);
+		const registry = defineDoc<{ agents: Record<string, JsonValue> }>({
+			kind: "pi.subagents.named-conversations",
+			version: 1,
+			scope: "session",
+			initial: () => ({ agents: {} }),
+			checkpointWhen: () => false,
+		});
+		try {
+			await session.commit(async (tx) => {
+				const doc = await tx.doc(registry);
+				const record = doc.agents["agent:legacy"] as {
+					spec: { request: { night?: boolean } };
+					lastAnswer?: JsonValue;
+				};
+				record.spec.request.night = true;
+				record.lastAnswer = { id: "1", text: "saved answer" };
+			}, BACKGROUND_CONTEXT);
+		} finally {
+			await session.close(BACKGROUND_CONTEXT);
+			storage.release();
+		}
+		const reopened = await DurableSupervisor.open(ref, fake.factory);
+		try {
+			await assert.rejects(reopened.send("legacy", "must not resume", false, "second"), /retired/);
+			const status = await reopened.status("legacy");
+			assert.equal(status.state, "idle");
+			assert.equal(status.lastAnswer?.text, "saved answer");
+			assert.equal(fake.opened.length, 1);
+		} finally {
+			await reopened.close();
+		}
+	});
+});
+
 test("host quiescence drains children without aborting or losing inputs queued while paused", async () => {
 	await fixture(async (_ref, fake, owner) => {
 		await owner.spawn("review", "first", "one", policy);
@@ -199,7 +239,6 @@ test("spawn cwd is pinned across sends, stop/resume and supervisor recovery", as
 		const kernel = fake.opened[0]!;
 		assert.equal(kernel.spec.context.cwd, await realpath(target));
 		assert.equal(kernel.spec.context.projectTrusted, false);
-		assert.equal(kernel.spec.request.cwd, undefined, "caller placement must not masquerade as a night workspace");
 		assert.equal(kernel.spec.context.sessionFile, ref.sessionFile);
 		await owner.spawn("other", "first", "one", policy, target);
 		await assert.rejects(owner.spawn("other", "first", "one", policy, "."), /different cwd/);
@@ -419,43 +458,6 @@ test("closing wins over not-yet-started admissions without launching a child", a
 	});
 });
 
-test("night participants inherit a host policy snapshot without name or ledger restrictions", () => {
-	const ref = { cwd: "/repo", sessionId: "parent" };
-	const base: ActiveNightRun = {
-		startedAt: 1,
-		reportPath: "/report",
-		maxPullRequests: 1,
-		sessionId: "parent",
-		sandbox: { mode: "read-only", allowWrite: [], denyRead: [] },
-		mcp: { readOnly: true },
-	};
-	const snapshot = activeNightForSession(ref, base);
-	assert.deepEqual(snapshot, base);
-	base.sandbox!.denyRead!.push("/private");
-	assert.deepEqual(snapshot?.sandbox?.denyRead, [], "admission pins a copy of the host policy");
-	const writable = { ...base, sandbox: { mode: "workspace-write" as const } };
-	assert.deepEqual(activeNightForSession(ref, writable), writable);
-	assert.equal(activeNightForSession({ ...ref, sessionId: "other" }, base), undefined);
-});
-
-test("missing active night contracts refuse spawn and send before admitting new work", async () => {
-	await fixture(async (_ref, fake, owner) => {
-		await owner.spawn("existing", "before night", "before", policy);
-		const old = process.env.PI_NIGHT_RUN;
-		process.env.PI_NIGHT_RUN = "1";
-		try {
-			await assert.rejects(owner.spawn("unprotected", "work", "spawn", policy), /Active night contract unavailable/);
-			await assert.rejects(owner.send("existing", "work", false, "send"), /Active night contract unavailable/);
-			assert.equal(owner.list().length, 1);
-			assert.equal(fake.opened.length, 1);
-			assert.equal(fake.opened[0]!.inputs.length, 1);
-		} finally {
-			if (old === undefined) delete process.env.PI_NIGHT_RUN;
-			else process.env.PI_NIGHT_RUN = old;
-		}
-	});
-});
-
 test("failed notification sinks consume one durable receipt without losing named status", async () => {
 	await fixture(async (ref, fake, owner) => {
 		await owner.spawn("receipt", "work", "one", policy);
@@ -543,74 +545,6 @@ test("unacknowledged stop keeps durable intent and a later send aborts before ad
 			fake.opened[1]!.inputs.map((item) => item.id),
 			["two"],
 		);
-	});
-});
-
-test("direct night runs admit named workers and reject pre-night, ended and replaced policies on send", async () => {
-	await fixture(async (ref, fake, owner) => {
-		await owner.spawn("before-night", "before night", "before", policy);
-		const run: ActiveNightRun = {
-			startedAt: 1,
-			sessionId: ref.sessionId,
-			reportPath: "/report",
-			maxPullRequests: 1,
-			sandbox: { mode: "workspace-write" },
-			mcp: { readOnly: true },
-		};
-		writeActiveNightRun(run);
-		try {
-			await assert.rejects(owner.spawn("read-ci", "work", "cwd", policy, "."), /host-controlled/);
-			await assert.rejects(
-				owner.send("before-night", "cannot reuse pre-night", false, "denied"),
-				/different night run/,
-			);
-			await owner.spawn("read-ci", "read CI", "admitted", policy);
-			const kernel = fake.opened.at(-1)!;
-			assert.deepEqual(kernel.spec.context.nightRun, run);
-			writeActiveNightRun({ ...run, mcp: { readOnly: false } });
-			await assert.rejects(owner.send("read-ci", "changed policy", false, "changed"), /different night run/);
-			writeActiveNightRun(run);
-			await owner.send("read-ci", "follow-up", true, "allowed");
-			clearActiveNightRun();
-			await assert.rejects(owner.send("read-ci", "ended", false, "ended"), /different night run/);
-			writeActiveNightRun({ ...run, startedAt: 2 });
-			await assert.rejects(owner.send("read-ci", "replaced", false, "replaced"), /different night run/);
-			assert.equal(kernel.inputs.length, 2);
-			await owner.stop("read-ci");
-		} finally {
-			clearActiveNightRun();
-		}
-	});
-});
-
-test("night workers inherit read-only policies and are retired at a cancelling host boundary", async () => {
-	await fixture(async (ref, fake, owner) => {
-		const run: ActiveNightRun = {
-			startedAt: 1,
-			sessionId: ref.sessionId,
-			reportPath: "/report",
-			maxPullRequests: 1,
-			sandbox: { mode: "read-only", allowWrite: [], denyRead: [] },
-			mcp: { readOnly: true },
-		};
-		writeActiveNightRun(run);
-		try {
-			await assert.rejects(owner.spawn("explorer", "read only", "cwd", policy, "."), /host-controlled/);
-			assert.equal(fake.opened.length, 0);
-			await owner.spawn("explorer", "read only", "one", policy);
-			assert.deepEqual(fake.opened[0]!.spec.context.nightRun, run);
-			await owner.close();
-			const reopened = await DurableSupervisor.open(ref, fake.factory);
-			try {
-				await assert.rejects(reopened.send("explorer", "retired", false, "two"), /different night run/);
-				assert.equal((await reopened.status("explorer")).state, "idle");
-				assert.equal(fake.opened.length, 1, "retired kernel must not reopen in a released workspace");
-			} finally {
-				await reopened.close();
-			}
-		} finally {
-			clearActiveNightRun();
-		}
 	});
 });
 
