@@ -474,8 +474,6 @@ function classifyTarget(target: string, ctx: GuardrailContext): string | null {
 	return null;
 }
 
-/** Interpreters with direct-edit restrictions. Python programs are intentionally allowed. */
-const PERL_INTERPRETER = /^perl(?:\d+(?:\.\d+)*)?$/;
 const AWK_INTERPRETER = /^(?:awk|gawk|mawk|nawk)$/;
 
 function hasOption(args: string[], predicate: (arg: string) => boolean): boolean {
@@ -485,22 +483,6 @@ function hasOption(args: string[], predicate: (arg: string) => boolean): boolean
 		if (!arg.startsWith("-") || arg === "-") return false;
 	}
 	return false;
-}
-
-function readsProgramFromStdin(args: string[]): boolean {
-	if (args.length === 0) return true;
-	for (let i = 0; i < args.length; i++) {
-		const arg = args[i];
-		if (arg === "--") return args[i + 1] === undefined || args[i + 1] === "-";
-		if (arg === "-" || arg.startsWith("<<")) return true;
-		if (arg === "-W" || arg === "-X") {
-			i++;
-			continue;
-		}
-		if (/^(?:-h|--help|-V|--version)$/.test(arg)) return false;
-		if (!arg.startsWith("-")) return false;
-	}
-	return true;
 }
 
 function awkInlineProgram(args: string[]): string | undefined {
@@ -559,15 +541,6 @@ function checkCommandSegment(
 	const { flags, operands } = splitArgs(cmd.args);
 	const hit = (reason: string): GuardrailHit => ({ reason, match: segment.trim() });
 
-	if (
-		PERL_INTERPRETER.test(cmd.name) &&
-		(hasOption(cmd.args, (arg) => /^-[^-]*[eE]/.test(arg)) || readsProgramFromStdin(cmd.args))
-	) {
-		return hit(`inline '${cmd.name}' program; use the write or edit tool instead`);
-	}
-	if (cmd.name === "sed" && hasOption(cmd.args, (arg) => arg === "--in-place" || /^-[^-]*i/.test(arg))) {
-		return hit("'sed' in-place edit; use the edit tool instead");
-	}
 	if (cmd.name === "tee") {
 		const fileOperands = operands.filter((operand) => operand !== "-" && operand !== "/dev/null");
 		if (fileOperands.length > 0) return hit("'tee' writing directly to a file; use the write or edit tool instead");

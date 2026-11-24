@@ -15,8 +15,7 @@ they run.
 | raw device writes | `dd of=/dev/rdisk0`, `echo x > /dev/sda`, `mkfs.ext4 ...`, `diskutil eraseDisk` |
 | shell self-harm | fork bombs, `curl ... \| sh`, `wget ... \| sudo -E bash` |
 | machine control | `shutdown`, `reboot`, `halt`, `poweroff`, `systemctl poweroff`, `init 0` |
-| inline Perl programs | `perl -e '...'`, `perl -pi -e '...'` (use script files instead) |
-| direct text edits | `sed -i`, `gawk -i inplace`, mutating inline `awk`, `tee file` |
+| direct text edits | `gawk -i inplace`, mutating inline `awk`, `tee file` |
 
 The real command is resolved past wrappers and shell structure: `sudo`/`doas`
 (including value options like `sudo -u root`), `env`, `nice`, `xargs`,
@@ -32,10 +31,9 @@ Quoted text and `#` comments are inert, so `echo 'rm -rf ~ is bad'` and
 `rg 'curl .* | sh' docs/` are not blocked. Read-only filters, file-descriptor
 duplication, and ordinary file redirection pass. Here-doc bodies are treated as
 input data. Commands and raw device redirects outside the body are still checked.
-Here-docs that feed an inline Perl program are blocked. Inline Python is allowed, including
-`python -c`, heredocs, stdin programs, and PyPy. Interpreter script files and
-`python -m` modules also pass. Prefer `applyPatch` (or edit/write tools) for source
-edits; Python is available for local computation, parsing, and libraries.
+The guardrail allows in-place `sed` edits and inline Perl and Python programs,
+including programs supplied on stdin. Interpreter script files and
+`python -m` modules also pass.
 Package and repository automation, tests, formatters, generators, migrations,
 and builds remain allowed. Examples
 include `sed -n`, ordinary `awk`, `npm install`, `git checkout`, `cargo fmt`,
@@ -49,7 +47,7 @@ argument as a pattern. Find predicates and fd option values are not search roots
 
 Literal `exec` argv is checked without treating metacharacters as shell syntax.
 An exec call such as `["printf", ">", "file"]` passes, while `["sed", "-i",
-"s/a/b/", "file"]` blocks. Nested `bash` and `exec` calls made through Code Mode
+"s/a/b/", "file"]` also passes. Nested `bash` and `exec` calls made through Code Mode
 are covered by the same normal `tool_call` lifecycle hook, with no Code Mode
 configuration required.
 
@@ -86,7 +84,7 @@ automation. System subtrees are not protected either, only the top-level
 directories themselves: `rm -rf /usr`
 blocks, `rm -rf /usr/bin` does not.
 
-Python programs are not inspected for file writes or destructive operations.
+`sed`, Perl, and Python programs are not inspected for file writes or destructive operations.
 Here-doc bodies are not inspected for shell expansion or commands either.
 Use the filesystem sandbox for actual write restrictions. Native codemode's
 QuickJS sandbox does not restrict the filesystem access of tools it calls.

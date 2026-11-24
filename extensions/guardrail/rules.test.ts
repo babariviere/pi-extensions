@@ -44,13 +44,6 @@ const blocked: Array<[command: string, reason: RegExp]> = [
 	["(cd /tmp && rm -rf ~)", /home directory/],
 	["echo $(rm -rf ~)", /home directory/],
 	// Direct manual file mutation syntax.
-	["perl <<'PL'\nprint 1\nPL", /inline 'perl' program/],
-	['perl -e \'open my $fh, ">", "x"\'', /inline 'perl' program/],
-	["perl -pi -e 's/a/b/' file.txt", /inline 'perl' program/],
-	["sed -i 's/a/b/' file.txt", /'sed' in-place edit/],
-	["sed -i.bak 's/a/b/' file.txt", /'sed' in-place edit/],
-	["sed -Ei.bak 's/a/b/' file.txt", /'sed' in-place edit/],
-	["sed --in-place 's/a/b/' file.txt", /'sed' in-place edit/],
 	["printf x | tee file.txt", /'tee' writing directly to a file/],
 	["tee -a one.txt two.txt", /'tee' writing directly to a file/],
 	['awk \'BEGIN { print "new" > "file.txt" }\'', /inline 'awk' program/],
@@ -106,6 +99,14 @@ const allowed = [
 	"python -m pytest",
 	"python3 -m build",
 	"perl scripts/filter.pl input.txt",
+	// Inline Perl and in-place sed edits are allowed.
+	"perl <<'PL'\nprint 1\nPL",
+	'perl -e \'open my $fh, ">", "x"\'',
+	"perl -pi -e 's/a/b/' file.txt",
+	"sed -i 's/a/b/' file.txt",
+	"sed -i.bak 's/a/b/' file.txt",
+	"sed -Ei.bak 's/a/b/' file.txt",
+	"sed --in-place 's/a/b/' file.txt",
 	// Read-only filters and output sinks remain usable.
 	"sed -n '1,20p' file.txt",
 	"awk '{ print $1 }' file.txt",
@@ -255,7 +256,7 @@ test("implicit root searches respect the supplied cwd", () => {
 test("literal argv checks mutations without treating arguments as shell syntax", () => {
 	assert.equal(checkArgv(["python", "-c", 'open("x", "w")'], ctx), null);
 	assert.equal(checkArgv(["python", "-"], ctx), null);
-	assert.match(checkArgv(["sed", "-i", "s/a/b/", "file.txt"], ctx)?.reason ?? "", /in-place edit/);
+	assert.equal(checkArgv(["sed", "-i", "s/a/b/", "file.txt"], ctx), null);
 	assert.equal(checkArgv(["printf", ">", "file.txt"], ctx), null);
 	assert.equal(checkArgv(["python", "scripts/generate.py"], ctx), null);
 });

@@ -108,12 +108,28 @@ test("allows an ordinary bash call", () => {
 });
 
 test("blocks direct mutation through literal exec argv", () => {
-	const decision = evaluateBashCall(event("exec", { argv: ["sed", "-i", "s/a/b/", "file.txt"] }), {
-		enabled: true,
-		context,
-	});
+	const decision = evaluateBashCall(
+		event("exec", { argv: ["gawk", "-i", "inplace", '{ sub(/a/, "b") }', "file.txt"] }),
+		{
+			enabled: true,
+			context,
+		},
+	);
 	assert.equal(decision?.block, true);
-	assert.match(decision?.reason ?? "", /'sed' in-place edit/);
+	assert.match(decision?.reason ?? "", /'gawk' in-place edit/);
+});
+
+test("allows in-place sed edits and inline Perl through tool calls", () => {
+	for (const call of [
+		event("bash", { command: "sed -i 's/a/b/' file.txt" }),
+		event("bash", { command: "perl -pi -e 's/a/b/' file.txt" }),
+		event("exec", { argv: ["sed", "-i", "s/a/b/", "file.txt"] }),
+		event("exec", { argv: ["perl", "-e", "print 1"] }),
+		event("exec", { argv: ["perl", "-"], stdin: "print 1" }),
+		{ ...event("bash", { command: "perl <<'PL'\nprint 1\nPL" }), parentToolCallId: "codemode" },
+	]) {
+		assert.equal(evaluateBashCall(call, { enabled: true, context }), undefined);
+	}
 });
 
 test("allows an exec Python program supplied on stdin", () => {
